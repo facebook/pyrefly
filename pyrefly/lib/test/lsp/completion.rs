@@ -12,14 +12,40 @@ use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
 use crate::state::lsp::ImportFormat;
+use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
+use crate::test::util::mk_multi_file_state;
 
 #[derive(Default)]
 struct ResultsFilter {
     include_keywords: bool,
     include_builtins: bool,
+}
+
+#[test]
+fn completion_magic_methods_in_class() {
+    let code = r#"
+class Foo:
+    def __
+#       ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let trimmed = report.trim();
+    for expected in [
+        "- (Method) __eq__",
+        "- (Method) __len__",
+        "- (Method) __str__",
+        "- (Method) __hash__",
+    ] {
+        assert!(
+            trimmed.contains(expected),
+            "missing {expected} in completions:\n{trimmed}"
+        );
+    }
 }
 
 fn get_default_test_report() -> impl Fn(&State, &Handle, TextSize) -> String {
@@ -44,7 +70,7 @@ fn get_test_report(
             ..
         } in state
             .transaction()
-            .completion(handle, position, import_format)
+            .completion(handle, position, import_format, true)
         {
             let is_deprecated = if let Some(tags) = tags {
                 tags.contains(&lsp_types::CompletionItemTag::DEPRECATED)
@@ -149,9 +175,42 @@ foo.
 11 | foo.
          ^
 Completion Results:
-- (Field) [DEPRECATED] also_not_ok: int
-- (Method) [DEPRECATED] not_ok: def not_ok(self: Foo) -> None
 - (Field) x: int
+- (Field) [DEPRECATED] also_not_ok: int
+- (Method) [DEPRECATED] not_ok: def not_ok(self: Foo) -> None: ...
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_deprecated_top_level_function() {
+    let code = r#"
+from typing import *
+from warnings import deprecated
+
+@deprecated("this is deprecated")
+def test1() -> None:
+    ...
+
+def test2() -> None:
+    ...
+
+te
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+12 | te
+       ^
+Completion Results:
+- (Class) deprecated: type[deprecated]
+- (Function) test2: () -> None
+- (Function) [DEPRECATED] test1: () -> None
 "#
         .trim(),
         report.trim(),
@@ -204,9 +263,9 @@ foo.
 10 | foo.
          ^
 Completion Results:
-- (Method) class_method: def class_method(cls: type[Foo]) -> None
-- (Method) method: def method(self: Foo) -> None
-- (Function) static_method: def static_method() -> None
+- (Method) class_method: def class_method(cls: type[Foo]) -> None: ...
+- (Method) method: def method(self: Foo) -> None: ...
+- (Function) static_method: def static_method() -> None: ...
 - (Field) x: int
 "#
         .trim(),
@@ -410,7 +469,7 @@ class Foo:
 5 |   x.
         ^
 Completion Results:
-- (Field) magic
+- (Field) magic: Unknown
 
 
 # lib.py
@@ -520,7 +579,6 @@ Completion Results:
                         ^
 Completion Results:
 - (Variable) deprecated
-- (Variable) [DEPRECATED] func_not_ok
 - (Variable) func_ok
 - (Variable) __annotations__
 - (Variable) __builtins__
@@ -534,6 +592,7 @@ Completion Results:
 - (Variable) __package__
 - (Variable) __path__
 - (Variable) __spec__
+- (Variable) [DEPRECATED] func_not_ok
 
 
 # foo.py
@@ -1393,7 +1452,7 @@ def foo(x: B) -> None:
 9 |     x.
           ^
 Completion Results:
-- (Method) foo: def foo(self: B) -> int
+- (Method) foo: def foo(self: B) -> int: ...
 "#
         .trim(),
         report.trim(),
@@ -1550,6 +1609,43 @@ Completion Results:
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn autoimport_completions_set_label_details() {
+    let code = r#"
+T = foooooo
+#       ^
+"#;
+    let files = [("main", code), ("bar", "foooooo = 1")];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+
+    // Label details supported
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+    let autoimport = completions
+        .into_iter()
+        .find(|item| item.label == "foooooo")
+        .expect("expected foooooo to be in completions");
+    let label_details = autoimport
+        .label_details
+        .expect("auto import completion should include label details");
+    assert_eq!(label_details.detail.as_deref(), Some(" (import bar)"));
+    assert_eq!(label_details.description.as_deref(), Some("bar"));
+
+    // Label details unsupported
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, false);
+    completions
+        .into_iter()
+        .find(|item| item.label == "foooooo (import bar)")
+        .expect("expected foooooo to be in completions");
 }
 
 #[test]
@@ -2067,7 +2163,7 @@ f.
 8 | f.
       ^
 Completion Results:
-- (Method) method: def method(self: Foo) -> int
+- (Method) method: def method(self: Foo) -> int: ...
 This is a method docstring.
 "#
         .trim(),
@@ -2099,9 +2195,9 @@ f.
 12 | f.
        ^
 Completion Results:
-- (Method) first: def first(self: Foo) -> int
+- (Method) first: def first(self: Foo) -> int: ...
 First method documentation.
-- (Method) second: def second(self: Foo) -> str
+- (Method) second: def second(self: Foo) -> str: ...
 Second method documentation.
 "#
         .trim(),
@@ -2163,9 +2259,9 @@ f.
 13 | f.
        ^
 Completion Results:
-- (Method) documented: def documented(self: Foo) -> str
+- (Method) documented: def documented(self: Foo) -> str: ...
 This has documentation.
-- (Method) undocumented: def undocumented(self: Foo) -> int
+- (Method) undocumented: def undocumented(self: Foo) -> int: ...
 - (Field) x: int
 "#
         .trim(),
@@ -2181,8 +2277,11 @@ This has documentation.
 fn dot_complete_var_crash_regression() {
     let code = r#"
 class C[T]:
-    def m(self):
-        pass
+    def m(self) -> None: ...
+
+    @property
+    def p(self) -> T: ...
+
 def f[T]() -> C[T]: ...
 f().
 #   ^
@@ -2192,10 +2291,11 @@ f().
     assert_eq!(
         r#"
 # main.py
-6 | f().
+9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[Unknown]) -> None
+- (Method) m: def m(self: C[Unknown]) -> None: ...
+- (Field) p: Unknown
 "#
         .trim(),
         report.trim(),

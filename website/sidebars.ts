@@ -61,6 +61,22 @@ let docsSidebar = [
         items: ['IDE', 'IDE-features'],
     },
     {
+        type: 'category' as const,
+        label: 'Third-Party Extensions',
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'pydantic',
+                label: 'Pydantic Support',
+            },
+            {
+                type: 'doc' as const,
+                id: 'django',
+                label: 'Django Support',
+            },
+        ],
+    },
+    {
         type: 'doc' as const,
         id: 'error-suppressions',
         label: 'Error Suppressions',
@@ -77,11 +93,6 @@ let docsSidebar = [
     },
     {
         type: 'doc' as const,
-        id: 'pydantic',
-        label: 'Pydantic Support',
-    },
-    {
-        type: 'doc' as const,
         id: 'autotype',
         label: 'Automating Type Annotations',
     },
@@ -92,7 +103,7 @@ let docsSidebar = [
     },
 ];
 
-if (process.env.INTERNAL_STATIC_DOCS) {
+if (process.env.INTERNAL_STATIC_DOCS === '1') {
     docsSidebar.push({
         type: 'category' as const,
         label: 'Internal Docs',

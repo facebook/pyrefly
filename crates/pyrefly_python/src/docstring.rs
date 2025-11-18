@@ -7,6 +7,7 @@
 
 use std::cmp::min;
 
+use ruff_python_ast::Expr;
 use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -20,7 +21,7 @@ impl Docstring {
     pub fn range_from_stmts(xs: &[Stmt]) -> Option<TextRange> {
         if let Some(stmt) = xs.first()
             && let Stmt::Expr(expr_stmt) = stmt
-            && let ruff_python_ast::Expr::StringLiteral(_) = &*expr_stmt.value
+            && let Expr::StringLiteral(_) = &*expr_stmt.value
         {
             return Some(stmt.range());
         }

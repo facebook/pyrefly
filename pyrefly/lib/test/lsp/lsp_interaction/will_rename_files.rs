@@ -8,6 +8,7 @@
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_types::Url;
+use serde_json::json;
 
 use crate::commands::lsp::IndexingMode;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -36,7 +37,7 @@ fn test_will_rename_files_changes_open_files_when_indexing_disabled() {
     // Expect a response with edits to update imports in foo.py using "changes" format
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "changes": {
                 Url::from_file_path(&foo_path).unwrap().to_string(): [
                     {
@@ -90,7 +91,7 @@ fn test_will_rename_files_with_marker_file_no_config() {
     // it should still work and provide rename edits
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "changes": {
                 Url::from_file_path(&foo_path).unwrap().to_string(): [
                     {
@@ -138,7 +139,7 @@ fn test_will_rename_files_changes_folder() {
     // Expect a response with edits to update imports in foo.py using "changes" format
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "changes": {
                 Url::from_file_path(&foo_path).unwrap().to_string(): [
                     {
@@ -179,7 +180,7 @@ fn test_will_rename_files_changes_nothing_when_no_files_open() {
     // Expect a response with no edits since indexing only happens once a file in a config is open
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!(null)),
+        result: Some(json!(null)),
         error: None,
     });
 
@@ -212,7 +213,7 @@ fn test_will_rename_files_changes_everything_when_indexed() {
     // Expect a response with edits to update imports in foo.py, with_synthetic_bindings.py, and various_imports.py using "changes" format
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "changes": {
                 Url::from_file_path(&foo_path).unwrap().to_string(): [
                     {
@@ -274,7 +275,7 @@ fn test_will_rename_files_without_config() {
     // Expect a response with edits to update imports in foo.py using "changes" format
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "changes": {
                 Url::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string(): [
                     {
@@ -322,7 +323,7 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
     // Expect a response with edits to update imports in foo.py and foo_relative.py using "changes" format
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "changes": {
                 Url::from_file_path(root_path.join("foo.py")).unwrap().to_string(): [
                     {
@@ -364,7 +365,7 @@ fn test_will_rename_files_document_changes() {
     interaction.set_root(root.path().to_path_buf());
 
     let settings = InitializeSettings {
-        capabilities: Some(serde_json::json!({
+        capabilities: Some(json!({
             "workspace": {
                 "workspaceEdit": {
                     "documentChanges": true
@@ -395,7 +396,7 @@ fn test_will_rename_files_document_changes() {
     // Files are returned in alphabetical order by URI
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "documentChanges": [
                 {
                     "textDocument": {

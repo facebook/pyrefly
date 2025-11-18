@@ -19,7 +19,10 @@ fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
         report.push_str(name);
         report.push_str(".py\n");
         let handle = handles.get(name).unwrap();
-        let tokens = state.transaction().semantic_tokens(handle, None).unwrap();
+        let tokens = state
+            .transaction()
+            .semantic_tokens(handle, None, None)
+            .unwrap();
 
         let mut start_line: usize = 0;
         let mut start_col: usize = 0;
@@ -142,7 +145,7 @@ line: 3, column: 6, length: 3, text: Foo
 token-type: class
 
 line: 4, column: 6, length: 3, text: bar
-token-type: function
+token-type: method
 
 line: 4, column: 10, length: 4, text: self
 token-type: parameter
@@ -170,6 +173,47 @@ token-type: class
 
 line: 12, column: 13, length: 3, text: bar
 token-type: method
+"#,
+    );
+}
+
+#[test]
+fn deprecated_token_for_disabled_branch() {
+    let code = r#"
+import sys
+
+if sys.version_info < (3, 9):
+    class Legacy:
+        value = 1
+else:
+    class Modern:
+        value = 2
+"#;
+
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 7, length: 3, text: sys
+token-type: namespace
+
+line: 3, column: 3, length: 3, text: sys
+token-type: namespace
+
+line: 3, column: 7, length: 12, text: version_info
+token-type: property
+
+line: 4, column: 10, length: 6, text: Legacy
+token-type: class
+
+line: 5, column: 8, length: 5, text: value
+token-type: variable
+
+line: 7, column: 10, length: 6, text: Modern
+token-type: class
+
+line: 8, column: 8, length: 5, text: value
+token-type: variable
 "#,
     );
 }
@@ -240,7 +284,7 @@ line: 1, column: 6, length: 4, text: Test
 token-type: class
 
 line: 2, column: 8, length: 3, text: foo
-token-type: function
+token-type: method
 
 line: 2, column: 12, length: 4, text: self
 token-type: parameter
@@ -249,7 +293,7 @@ line: 2, column: 21, length: 3, text: int
 token-type: class, token-modifiers: [defaultLibrary]
 
 line: 3, column: 8, length: 3, text: bar
-token-type: function
+token-type: method
 
 line: 3, column: 12, length: 4, text: self
 token-type: parameter
@@ -543,7 +587,7 @@ line: 1, column: 6, length: 3, text: Foo
 token-type: class
 
 line: 2, column: 8, length: 3, text: foo
-token-type: function
+token-type: method
 
 line: 2, column: 12, length: 4, text: self
 token-type: parameter

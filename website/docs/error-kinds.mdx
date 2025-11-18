@@ -752,6 +752,10 @@ In this example, `os.bacarat` is treated as a module name, so failing to find it
 Pyrefly was able to find a stubs package but no corresponding source package. For example, this can
 happen if you install the `types-requests` package but forget to install `requests`.
 
+## missing-source-for-stubs
+
+Pyrefly has bundled stubs for a package, but no corresponding source package was found.
+
 ## no-access
 
 The `no-access` error indicates that an attribute exists, but it cannot be used in this way.
@@ -846,6 +850,37 @@ x = 1  # Or some other value
 for val in x:  # not-iterable
   ...
 ```
+
+## open-unpacking
+
+This error is reported on an attempt to unpack an
+[open](https://typing.python.org/en/latest/spec/glossary.html#term-open) TypedDict that potentially
+has items incompatible with the TypedDict it is being unpacked into.
+
+Example:
+```python
+from typing import TypedDict
+
+class OpenTypedDict(TypedDict):
+    x: int
+
+class UnpackingTarget(TypedDict):
+    x: int
+    y: str
+
+def f(o: OpenTypedDict) -> UnpackingTarget:
+    # Error: `o` could be an instance of a subclass of `OpenTypedDict` with an
+    # item `y` with an incompatible type.
+    return {"y": "", **o}
+```
+
+To fix this error, close the open TypedDict to indicate it does not contain any unknown items:
+```python
+class OpenTypedDict(TypedDict, closed=True): ...
+```
+
+Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions` rather than
+`typing` to use the `closed` feature.
 
 ## parse-error
 

@@ -31,6 +31,7 @@ use lsp_types::request::Request as _;
 use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
 use serde_json::Value;
+use serde_json::json;
 
 use crate::commands::lsp::IndexingMode;
 use crate::commands::lsp::LspArgs;
@@ -80,6 +81,12 @@ impl TestServer {
         }
     }
 
+    pub fn drop_connection(&mut self) {
+        // Replace the sender with a dummy closed channel
+        let (dummy_sender, _) = bounded(0);
+        drop(std::mem::replace(&mut self.sender, dummy_sender));
+    }
+
     pub fn expect_stop(&self) {
         let start = std::time::Instant::now();
         while let Some(thread) = &self.server_thread
@@ -114,7 +121,7 @@ impl TestServer {
     pub fn send_initialized(&self) {
         self.send_message(Message::Notification(Notification {
             method: "initialized".to_owned(),
-            params: serde_json::json!({}),
+            params: json!({}),
         }));
     }
 
@@ -122,14 +129,14 @@ impl TestServer {
         self.send_message(Message::Request(Request {
             id,
             method: lsp_types::request::Shutdown::METHOD.to_owned(),
-            params: serde_json::json!(null),
+            params: json!(null),
         }));
     }
 
     pub fn send_exit(&self) {
         self.send_message(Message::Notification(Notification {
             method: Exit::METHOD.to_owned(),
-            params: serde_json::json!(null),
+            params: json!(null),
         }));
     }
 
@@ -139,7 +146,7 @@ impl TestServer {
         self.send_message(Message::Request(Request {
             id,
             method: "textDocument/typeDefinition".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string(),
                 },
@@ -157,7 +164,25 @@ impl TestServer {
         self.send_message(Message::Request(Request {
             id,
             method: "textDocument/definition".to_owned(),
-            params: serde_json::json!({
+            params: json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&path).unwrap().to_string(),
+                },
+                "position": {
+                    "line": line,
+                    "character": col,
+                },
+            }),
+        }));
+    }
+
+    pub fn implementation(&mut self, file: &'static str, line: u32, col: u32) {
+        let path = self.get_root_or_panic().join(file);
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/implementation".to_owned(),
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string(),
                 },
@@ -173,7 +198,7 @@ impl TestServer {
         let path = self.get_root_or_panic().join(file);
         self.send_message(Message::Notification(Notification {
             method: "textDocument/didOpen".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string(),
                     "languageId": "python",
@@ -184,11 +209,25 @@ impl TestServer {
         }));
     }
 
+    pub fn did_open_uri(&self, uri: &Url, language_id: &str, text: impl Into<String>) {
+        self.send_message(Message::Notification(Notification {
+            method: "textDocument/didOpen".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": uri.to_string(),
+                    "languageId": language_id,
+                    "version": 1,
+                    "text": text.into(),
+                },
+            }),
+        }));
+    }
+
     pub fn did_change(&self, file: &str, contents: &str) {
         let path = self.get_root_or_panic().join(file);
         self.send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string(),
                     "languageId": "python",
@@ -204,7 +243,7 @@ impl TestServer {
     pub fn did_change_configuration(&self) {
         self.send_message(Message::Notification(Notification {
             method: lsp_types::notification::DidChangeConfiguration::METHOD.to_owned(),
-            params: serde_json::json!({"settings": {}}),
+            params: json!({"settings": {}}),
         }));
     }
 
@@ -214,7 +253,7 @@ impl TestServer {
         self.send_message(Message::Request(Request {
             id,
             method: "textDocument/completion".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string()
                 },
@@ -232,7 +271,7 @@ impl TestServer {
         self.send_message(Message::Request(Request {
             id,
             method: "textDocument/diagnostic".to_owned(),
-            params: serde_json::json!({
+            params: json!({
             "textDocument": {
                 "uri": Url::from_file_path(&path).unwrap().to_string()
             }}),
@@ -245,7 +284,7 @@ impl TestServer {
         self.send_message(Message::Request(Request {
             id,
             method: "textDocument/hover".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string()
                 },
@@ -263,7 +302,7 @@ impl TestServer {
         self.send_message(Message::Request(Request {
             id,
             method: "types/provide-type".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string()
                 },
@@ -281,7 +320,7 @@ impl TestServer {
         self.send_message(Message::Request(Request {
             id,
             method: "textDocument/references".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string()
                 },
@@ -309,7 +348,7 @@ impl TestServer {
         self.send_message(Message::Request(Request {
             id,
             method: "textDocument/inlayHint".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string()
                 },
@@ -343,7 +382,7 @@ impl TestServer {
         self.send_message(Message::Request(Request {
             id,
             method: "workspace/willRenameFiles".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "files": [{
                     "oldUri": Url::from_file_path(&old_path).unwrap().to_string(),
                     "newUri": Url::from_file_path(&new_path).unwrap().to_string()
@@ -357,7 +396,7 @@ impl TestServer {
         let path = self.get_root_or_panic().join(file);
         self.send_message(Message::Notification(Notification {
             method: "workspace/didChangeWatchedFiles".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "changes": [{
                     "uri": Url::from_file_path(&path).unwrap().to_string(),
                     "type": 1,  // FileChangeType::CREATED
@@ -371,7 +410,7 @@ impl TestServer {
         let path = self.get_root_or_panic().join(file);
         self.send_message(Message::Notification(Notification {
             method: "workspace/didChangeWatchedFiles".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "changes": [{
                     "uri": Url::from_file_path(&path).unwrap().to_string(),
                     "type": 2,  // FileChangeType::CHANGED
@@ -385,7 +424,7 @@ impl TestServer {
         let path = self.get_root_or_panic().join(file);
         self.send_message(Message::Notification(Notification {
             method: "workspace/didChangeWatchedFiles".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "changes": [{
                     "uri": Url::from_file_path(&path).unwrap().to_string(),
                     "type": 3,  // FileChangeType::DELETED
@@ -395,7 +434,7 @@ impl TestServer {
     }
 
     pub fn get_initialize_params(&self, settings: &InitializeSettings) -> Value {
-        let mut params: Value = serde_json::json!({
+        let mut params: Value = json!({
             "rootPath": "/",
             "processId": std::process::id(),
             "trace": "verbose",
@@ -416,20 +455,20 @@ impl TestServer {
         });
 
         if let Some(folders) = &settings.workspace_folders {
-            params["capabilities"]["workspace"]["workspaceFolders"] = serde_json::json!(true);
-            params["workspaceFolders"] = serde_json::json!(
+            params["capabilities"]["workspace"]["workspaceFolders"] = json!(true);
+            params["workspaceFolders"] = json!(
                 folders
                     .iter()
-                    .map(|(name, path)| serde_json::json!({"name": name, "uri": path.to_string()}))
+                    .map(|(name, path)| json!({"name": name, "uri": path.to_string()}))
                     .collect::<Vec<_>>()
             );
         }
         if settings.file_watch {
             params["capabilities"]["workspace"]["didChangeWatchedFiles"] =
-                serde_json::json!({"dynamicRegistration": true});
+                json!({"dynamicRegistration": true});
         }
         if settings.configuration.is_some() {
-            params["capabilities"]["workspace"]["configuration"] = serde_json::json!(true);
+            params["capabilities"]["workspace"]["configuration"] = json!(true);
         }
 
         // Merge custom capabilities if provided
@@ -495,6 +534,10 @@ impl TestClient {
             root: None,
             request_idx,
         }
+    }
+
+    pub fn drop_connection(self) {
+        drop(self.receiver);
     }
 
     pub fn expect_message_helper<F>(&self, validator: F, description: &str)
@@ -611,6 +654,35 @@ impl TestClient {
         );
     }
 
+    pub fn expect_publish_diagnostics_exact_uri(&self, expected_uri: &str, count: usize) {
+        self.expect_message_helper(
+            |msg| match msg {
+                Message::Notification(Notification { method, params })
+                    if method == "textDocument/publishDiagnostics" =>
+                {
+                    if params.get("uri").and_then(|v| v.as_str()) == Some(expected_uri) {
+                        if let Some(diagnostics) = params.get("diagnostics")
+                            && let Some(diagnostics_array) = diagnostics.as_array()
+                        {
+                            if diagnostics_array.len() == count {
+                                return ValidationResult::Pass;
+                            } else {
+                                return ValidationResult::Skip;
+                            }
+                        } else {
+                            panic!("publishDiagnostics notification malformed: missing or invalid 'diagnostics' field");
+                        }
+                    }
+                    ValidationResult::Skip
+                }
+                _ => ValidationResult::Skip,
+            },
+            &format!(
+                "publishDiagnostics notification with uri {expected_uri} containing {count} errors"
+            ),
+        );
+    }
+
     pub fn expect_definition_response_absolute(
         &self,
         file: String,
@@ -621,7 +693,7 @@ impl TestClient {
     ) {
         self.expect_response(Response {
             id: RequestId::from(*self.request_idx.lock().unwrap()),
-            result: Some(serde_json::json!(
+            result: Some(json!(
             {
                 "uri": Url::from_file_path(file).unwrap().to_string(),
                 "range": {
@@ -643,7 +715,7 @@ impl TestClient {
     ) {
         self.expect_response(Response {
             id: RequestId::from(*self.request_idx.lock().unwrap()),
-            result: Some(serde_json::json!(
+            result: Some(json!(
             {
                 "uri": Url::from_file_path(self.get_root_or_panic().join(file)).unwrap().to_string(),
                 "range": {
@@ -651,6 +723,30 @@ impl TestClient {
                     "end": {"line": line_end, "character": char_end}
                 },
                 })),
+            error: None,
+        })
+    }
+
+    pub fn expect_implementation_response_from_root(
+        &self,
+        implementations: Vec<(&'static str, u32, u32, u32, u32)>,
+    ) {
+        let locations: Vec<_> = implementations
+            .into_iter()
+            .map(|(file, line_start, char_start, line_end, char_end)| {
+                json!({
+                    "uri": Url::from_file_path(self.get_root_or_panic().join(file)).unwrap().to_string(),
+                    "range": {
+                        "start": {"line": line_start, "character": char_start},
+                        "end": {"line": line_end, "character": char_end}
+                    },
+                })
+            })
+            .collect();
+
+        self.expect_response(Response {
+            id: RequestId::from(*self.request_idx.lock().unwrap()),
+            result: Some(json!(locations)),
             error: None,
         })
     }
@@ -732,7 +828,7 @@ impl TestClient {
         let expected_msg = Message::Request(Request {
             id: RequestId::from(id),
             method: WorkspaceConfiguration::METHOD.to_owned(),
-            params: serde_json::json!(ConfigurationParams { items }),
+            params: json!(ConfigurationParams { items }),
         });
         let expected_str = serde_json::to_string(&expected_msg).unwrap();
         self.expect_message_helper(
@@ -876,7 +972,7 @@ impl LspInteraction {
 
         self.client.expect_response(Response {
             id: shutdown_id,
-            result: Some(serde_json::json!(null)),
+            result: Some(json!(null)),
             error: None,
         });
 
@@ -886,5 +982,317 @@ impl LspInteraction {
     pub fn set_root(&mut self, root: PathBuf) {
         self.server.root = Some(root.clone());
         self.client.root = Some(root);
+    }
+
+    /// Opens a notebook document with the given cell contents.
+    /// Each string in `cell_contents` becomes a separate code cell in the notebook.
+    pub fn open_notebook(&mut self, file_name: &str, cell_contents: Vec<&str>) {
+        let root = self.server.get_root_or_panic();
+        let notebook_path = root.join(file_name);
+        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+
+        let mut cells = Vec::new();
+        let mut cell_text_documents = Vec::new();
+
+        for (i, text) in cell_contents.iter().enumerate() {
+            let cell_uri = self.cell_uri(file_name, &format!("cell{}", i + 1));
+            cells.push(json!({
+                "kind": 2,
+                "document": cell_uri,
+            }));
+            cell_text_documents.push(json!({
+                "uri": cell_uri,
+                "languageId": "python",
+                "version": 1,
+                "text": *text
+            }));
+        }
+
+        self.server
+            .send_message(Message::Notification(Notification {
+                method: "notebookDocument/didOpen".to_owned(),
+                params: json!({
+                    "notebookDocument": {
+                        "uri": notebook_uri,
+                        "notebookType": "jupyter-notebook",
+                        "version": 1,
+                        "metadata": {
+                            "language_info": {
+                                "name": "python"
+                            }
+                        },
+                        "cells": cells
+                    },
+                    "cellTextDocuments": cell_text_documents
+                }),
+            }));
+    }
+
+    pub fn close_notebook(&mut self, file_name: &str) {
+        let root = self.server.get_root_or_panic();
+        let notebook_path = root.join(file_name);
+        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+        self.server
+            .send_message(Message::Notification(Notification {
+                method: "notebookDocument/didClose".to_owned(),
+                params: json!({
+                    "notebookDocument": { "uri": notebook_uri },
+                    "cellTextDocuments": [],
+                }),
+            }));
+    }
+
+    /// Updates a notebook document with the specified changes.
+    /// This sends a notebookDocument/didChange notification with the change event.
+    pub fn change_notebook(
+        &mut self,
+        file_name: &str,
+        version: i32,
+        change_event: serde_json::Value,
+    ) {
+        let root = self.server.get_root_or_panic();
+        let notebook_path = root.join(file_name);
+        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+
+        self.server
+            .send_message(Message::Notification(Notification {
+                method: "notebookDocument/didChange".to_owned(),
+                params: json!({
+                    "notebookDocument": {
+                        "version": version,
+                        "uri": notebook_uri,
+                    },
+                    "change": change_event
+                }),
+            }));
+    }
+
+    pub fn diagnostic_for_cell(&mut self, file: &str, cell: &str) {
+        let id = self.server.next_request_id();
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/diagnostic".to_owned(),
+            params: json!({
+            "textDocument": {
+                "uri": self.cell_uri(file, cell)
+            }}),
+        }));
+    }
+
+    /// Returns the URI for a notebook cell
+    pub fn cell_uri(&self, file_name: &str, cell_name: &str) -> String {
+        let root = self.server.get_root_or_panic();
+        // Parse this as a file to preserve the C: prefix for windows
+        let cell_uri =
+            Url::from_file_path(format!("{}", root.join(file_name).to_string_lossy())).unwrap();
+        // Replace the scheme & add the cell name as a fragment
+        format!(
+            "{}#{}",
+            cell_uri
+                .to_string()
+                .replace("file://", "vscode-notebook-cell://"),
+            cell_name
+        )
+    }
+
+    /// Sends a hover request for a notebook cell at the specified position
+    pub fn hover_cell(&mut self, file_name: &str, cell_name: &str, line: u32, col: u32) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = self.server.next_request_id();
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/hover".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": cell_uri
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                }
+            }),
+        }));
+    }
+
+    /// Sends a signature help request for a notebook cell at the specified position
+    pub fn signature_help_cell(&mut self, file_name: &str, cell_name: &str, line: u32, col: u32) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = {
+            let mut idx = self.server.request_idx.lock().unwrap();
+            *idx += 1;
+            RequestId::from(*idx)
+        };
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/signatureHelp".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": cell_uri
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                }
+            }),
+        }));
+    }
+
+    /// Sends a definition request for a notebook cell at the specified position
+    pub fn definition_cell(&mut self, file_name: &str, cell_name: &str, line: u32, col: u32) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = self.server.next_request_id();
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/definition".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": cell_uri
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                }
+            }),
+        }));
+    }
+
+    /// Sends a references request for a notebook cell at the specified position
+    pub fn references_cell(
+        &mut self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+        include_declaration: bool,
+    ) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = self.server.next_request_id();
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/references".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": cell_uri,
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                },
+                "context": {
+                    "includeDeclaration": include_declaration,
+                },
+            }),
+        }));
+    }
+
+    pub fn completion_cell(&mut self, file_name: &str, cell_name: &str, line: u32, col: u32) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = self.server.next_request_id();
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/completion".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": cell_uri,
+                },
+                "position": {
+                    "line": line,
+                    "character": col
+                }
+            }),
+        }));
+    }
+
+    /// Sends an inlay hint request for a notebook cell in the specified range
+    pub fn inlay_hint_cell(
+        &mut self,
+        file_name: &str,
+        cell_name: &str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = {
+            let mut idx = self.server.request_idx.lock().unwrap();
+            *idx += 1;
+            RequestId::from(*idx)
+        };
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/inlayHint".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": cell_uri
+                },
+                "range": {
+                    "start": {
+                        "line": start_line,
+                        "character": start_char
+                    },
+                    "end": {
+                        "line": end_line,
+                        "character": end_char
+                    }
+                }
+            }),
+        }));
+    }
+
+    /// Sends a full semantic tokens request for a notebook cell
+    pub fn semantic_tokens_cell(&mut self, file_name: &str, cell_name: &str) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = {
+            let mut idx = self.server.request_idx.lock().unwrap();
+            *idx += 1;
+            RequestId::from(*idx)
+        };
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/semanticTokens/full".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": cell_uri
+                }
+            }),
+        }));
+    }
+
+    /// Sends a ranged semantic tokens request for a notebook cell
+    pub fn semantic_tokens_ranged_cell(
+        &mut self,
+        file_name: &str,
+        cell_name: &str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = {
+            let mut idx = self.server.request_idx.lock().unwrap();
+            *idx += 1;
+            RequestId::from(*idx)
+        };
+        self.server.send_message(Message::Request(Request {
+            id,
+            method: "textDocument/semanticTokens/range".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": cell_uri
+                },
+                "range": {
+                    "start": {
+                        "line": start_line,
+                        "character": start_char
+                    },
+                    "end": {
+                        "line": end_line,
+                        "character": end_char
+                    }
+                }
+            }),
+        }));
     }
 }

@@ -67,7 +67,7 @@ jobs:
             # necessary for glibc 2.31
             container: ubuntu:20.04
             github_env: $GITHUB_ENV
-          - os: macos-13
+          - os: macos-14
             platform: darwin
             arch: x64
             github_env: $GITHUB_ENV

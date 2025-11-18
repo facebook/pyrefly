@@ -41,7 +41,8 @@ async function updateStatusBar() {
   const document = vscode.window.activeTextEditor?.document;
   if (
     document == null ||
-    document.uri.scheme !== 'file' ||
+    (document.uri.scheme !== 'file' &&
+      document.uri.scheme !== 'vscode-notebook-cell' && document.uri.scheme !== 'untitled') ||
     document.languageId !== 'python'
   ) {
     statusBarItem?.hide();
@@ -101,6 +102,82 @@ No errors will be shown even if there is a [\`pyrefly.toml\`](https://pyrefly.or
       return;
   }
   statusBarItem.show();
+}
+
+async function getDocstringRanges(
+  document: vscode.TextDocument,
+): Promise<vscode.Range[]> {
+  const identifier = client.code2ProtocolConverter.asTextDocumentIdentifier(
+    document,
+  );
+  const response = (await client.sendRequest(
+    'pyrefly/textDocument/docstringRanges',
+    identifier,
+  )) as Array<{
+    start: {line: number; character: number};
+    end: {line: number; character: number};
+  }> | null;
+
+  if (!response) {
+    return [];
+  }
+
+  return response.map(range => client.protocol2CodeConverter.asRange(range));
+}
+
+async function runDocstringFoldingCommand(
+  commandId: 'editor.fold' | 'editor.unfold',
+): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (
+    editor == null ||
+    editor.document.uri.scheme !== 'file' ||
+    editor.document.languageId !== 'python'
+  ) {
+    return;
+  }
+
+  try {
+    const ranges = await getDocstringRanges(editor.document);
+    if (ranges.length === 0) {
+      return;
+    }
+
+    const seen = new Set<string>();
+    const uniqueRanges = ranges.filter(range => {
+      const key = `${range.start.line}:${range.start.character}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+
+    const selectionLines = uniqueRanges
+      .map(range => {
+        if (range.start.line === range.end.line) {
+          return null;
+        }
+        return range.start.line;
+      })
+      .filter((line): line is number => line != null)
+      .filter((line, index, arr) => arr.indexOf(line) === index)
+      .sort((a, b) => a - b);
+
+    if (selectionLines.length === 0) {
+      return;
+    }
+
+    await vscode.commands.executeCommand(commandId, {
+      selectionLines,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : `Unknown error: ${String(error)}`;
+    outputChannel?.appendLine(
+      `Failed to ${commandId === 'editor.fold' ? 'fold' : 'unfold'} docstrings: ${message}`,
+    );
+  }
 }
 
 /**
@@ -180,8 +257,24 @@ export async function activate(context: ExtensionContext) {
   // Options to control the language client
   let clientOptions: LanguageClientOptions = {
     initializationOptions: rawInitialisationOptions,
-    // Register the server for Starlark documents
-    documentSelector: [{scheme: 'file', language: 'python'}],
+    // Register the server for Python documents
+    documentSelector: [
+      {scheme: 'file', language: 'python'},
+      // Support for unsaved/untitled files
+      {scheme: 'untitled', language: 'python'},
+      // Support for notebook cells
+      {scheme: 'vscode-notebook-cell', language: 'python'},
+    ],
+    // Support for notebooks
+    // @ts-ignore
+    notebookDocumentSync: {
+      notebookSelector: [
+        {
+          notebook: {notebookType: 'jupyter-notebook'},
+          cells: [{language: 'python'}],
+        },
+      ],
+    },
     outputChannel: outputChannel,
     middleware: {
       workspace: {
@@ -250,6 +343,18 @@ export async function activate(context: ExtensionContext) {
         clientOptions,
       );
       await client.start();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('pyrefly.foldAllDocstrings', async () => {
+      await runDocstringFoldingCommand('editor.fold');
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('pyrefly.unfoldAllDocstrings', async () => {
+      await runDocstringFoldingCommand('editor.unfold');
     }),
   );
 

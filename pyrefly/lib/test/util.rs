@@ -48,6 +48,7 @@ use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::module::finder::find_import;
 use crate::state::errors::Errors;
+use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::subscriber::TestSubscriber;
@@ -98,7 +99,7 @@ fn default_path(module: ModuleName) -> PathBuf {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestEnv {
-    modules: Vec<(ModuleName, ModulePath, Option<Arc<String>>)>,
+    modules: Vec<(ModuleName, ModulePath, Option<Arc<FileContents>>)>,
     version: PythonVersion,
     untyped_def_behavior: UntypedDefBehavior,
     infer_with_first_use: bool,
@@ -106,6 +107,7 @@ pub struct TestEnv {
     implicitly_defined_attribute_error: bool,
     implicit_any_error: bool,
     implicit_abstract_class_error: bool,
+    open_unpacking_error: bool,
     default_require_level: Require,
 }
 
@@ -122,6 +124,7 @@ impl TestEnv {
             implicitly_defined_attribute_error: false,
             implicit_any_error: false,
             implicit_abstract_class_error: false,
+            open_unpacking_error: false,
             default_require_level: Require::Exports,
         }
     }
@@ -165,6 +168,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_open_unpacking_error(mut self) -> Self {
+        self.open_unpacking_error = true;
+        self
+    }
+
     pub fn with_default_require_level(mut self, level: Require) -> Self {
         self.default_require_level = level;
         self
@@ -183,15 +191,18 @@ impl TestEnv {
         self.modules.push((
             ModuleName::from_str(name),
             ModulePath::memory(PathBuf::from(path)),
-            Some(Arc::new(code.to_owned())),
+            Some(Arc::new(FileContents::from_source(code.to_owned()))),
         ));
     }
 
     pub fn add(&mut self, name: &str, code: &str) {
         let module_name = ModuleName::from_str(name);
         let relative_path = ModulePath::memory(default_path(module_name));
-        self.modules
-            .push((module_name, relative_path, Some(Arc::new(code.to_owned()))));
+        self.modules.push((
+            module_name,
+            relative_path,
+            Some(Arc::new(FileContents::from_source(code.to_owned()))),
+        ));
     }
 
     pub fn one(name: &str, code: &str) -> Self {
@@ -216,7 +227,7 @@ impl TestEnv {
         SysInfo::new(self.version, PythonPlatform::linux())
     }
 
-    pub fn get_memory(&self) -> Vec<(PathBuf, Option<Arc<String>>)> {
+    pub fn get_memory(&self) -> Vec<(PathBuf, Option<Arc<FileContents>>)> {
         self.modules
             .iter()
             .filter_map(|(_, path, contents)| match path.details() {
@@ -245,6 +256,9 @@ impl TestEnv {
         }
         if self.implicit_abstract_class_error {
             errors.set_error_severity(ErrorKind::ImplicitAbstractClass, Severity::Error);
+        }
+        if self.open_unpacking_error {
+            errors.set_error_severity(ErrorKind::OpenUnpacking, Severity::Error);
         }
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for (name, path, _) in self.modules.iter() {
@@ -526,7 +540,7 @@ pub fn testcase_for_macro(
             );
             t.set_memory(vec![(
                 PathBuf::from(file),
-                Some(Arc::new(contents.clone())),
+                Some(Arc::new(FileContents::from_source(contents.clone()))),
             )]);
             t.run(&[h.dupe()], Require::Everything);
             let errors = t.get_errors([&h]);

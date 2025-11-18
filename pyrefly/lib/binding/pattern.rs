@@ -22,6 +22,7 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExpect;
+use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
@@ -34,6 +35,7 @@ use crate::binding::narrow::expr_to_subjects;
 use crate::binding::scope::FlowStyle;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
+use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::types::facet::FacetKind;
 
@@ -113,7 +115,7 @@ impl<'a> BindingsBuilder<'a> {
                         Binding::Narrow(
                             subject_idx,
                             Box::new(NarrowOp::Atomic(None, narrow_op.clone())),
-                            x.range(),
+                            NarrowUseLocation::Span(x.range()),
                         ),
                     );
                     narrow_ops.and_all(NarrowOps::from_single_narrow_op_for_subject(
@@ -220,7 +222,7 @@ impl<'a> BindingsBuilder<'a> {
                     Binding::Narrow(
                         subject_idx,
                         Box::new(NarrowOp::Atomic(None, narrow_op.clone())),
-                        x.cls.range(),
+                        NarrowUseLocation::Span(x.cls.range()),
                     ),
                 );
                 let mut narrow_ops = if let Some(ref subject) = match_subject {
@@ -241,6 +243,34 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     NarrowOps::new()
                 };
+
+                // Check if this is a single-positional-slot builtin type
+                // These types (bool, bytearray, bytes, dict, float, frozenset, int, list, set, str, tuple)
+                // bind the entire narrowed value when used with a single positional pattern
+                let is_single_slot_builtin = if let Expr::Name(name) = x.cls.as_ref() {
+                    SpecialExport::new(&name.id)
+                        .map(|se| se.is_single_positional_slot_builtin())
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                // Handle positional patterns
+                if is_single_slot_builtin
+                    && x.arguments.patterns.len() == 1
+                    && x.arguments.keywords.is_empty()
+                {
+                    // For single-positional-slot builtins with exactly one positional pattern,
+                    // bind the pattern directly to the narrowed subject (like MatchAs)
+                    let pattern = x.arguments.patterns.into_iter().next().unwrap();
+                    narrow_ops.and_all(self.bind_pattern(
+                        match_subject.clone(),
+                        pattern,
+                        subject_idx,
+                    ));
+                    return narrow_ops;
+                }
+                // Normal MatchClass handling
                 // TODO: narrow class type vars based on pattern arguments
                 x.arguments
                     .patterns
@@ -329,14 +359,26 @@ impl<'a> BindingsBuilder<'a> {
             if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
                 exhaustive = true;
             }
-            self.bind_narrow_ops(&negated_prev_ops, case.range, &Usage::Narrowing(None));
+            self.bind_narrow_ops(
+                &negated_prev_ops,
+                NarrowUseLocation::Start(case.range),
+                &Usage::Narrowing(None),
+            );
             let mut new_narrow_ops =
                 self.bind_pattern(match_narrowing_subject.clone(), case.pattern, subject_idx);
-            self.bind_narrow_ops(&new_narrow_ops, case.range, &Usage::Narrowing(None));
+            self.bind_narrow_ops(
+                &new_narrow_ops,
+                NarrowUseLocation::Span(case.range),
+                &Usage::Narrowing(None),
+            );
             if let Some(mut guard) = case.guard {
                 self.ensure_expr(&mut guard, &mut Usage::Narrowing(None));
                 let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));
-                self.bind_narrow_ops(&guard_narrow_ops, case.range, &Usage::Narrowing(None));
+                self.bind_narrow_ops(
+                    &guard_narrow_ops,
+                    NarrowUseLocation::Span(guard.range()),
+                    &Usage::Narrowing(None),
+                );
                 self.insert_binding(Key::Anon(guard.range()), Binding::Expr(None, *guard));
                 new_narrow_ops.and_all(guard_narrow_ops)
             }

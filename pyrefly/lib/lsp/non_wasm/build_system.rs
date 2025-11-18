@@ -22,11 +22,13 @@ use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use tracing::info;
 
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
+use crate::state::load::LspFile;
 use crate::state::state::State;
 
 pub fn should_requery_build_system(events: &CategorizedEvents) -> bool {
@@ -58,7 +60,7 @@ pub fn queue_source_db_rebuild_and_recheck(
     invalidated_configs: Arc<Mutex<SmallSet<ArcId<ConfigFile>>>>,
     sourcedb_queue: HeavyTaskQueue,
     lsp_queue: LspQueue,
-    open_files: Arc<RwLock<HashMap<PathBuf, Arc<String>>>>,
+    open_files: Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
 ) {
     sourcedb_queue.queue_task(Box::new(move || {
         let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> =
@@ -81,7 +83,7 @@ pub fn queue_source_db_rebuild_and_recheck(
             .filter(|(c, files)| match c.requery_source_db(files) {
                 Ok(reloaded) => reloaded,
                 Err(error) => {
-                    eprintln!("Error reloading source database for config: {error}");
+                    info!("Error reloading source database for config: {error}");
                     false
                 }
             })

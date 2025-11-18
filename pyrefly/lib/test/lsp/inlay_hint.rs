@@ -22,7 +22,7 @@ fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> Strin
         report.push_str(name);
         report.push_str(".py\n");
         let handle = handles.get(name).unwrap();
-        for (pos, hint) in state
+        for (pos, hint, _) in state
             .transaction()
             .inlay_hints(handle, hint_config)
             .unwrap()
@@ -51,6 +51,8 @@ def g() -> int:
 
 def h(*args):
     return args[0]
+
+i = h()
 "#;
     assert_eq!(
         r#"

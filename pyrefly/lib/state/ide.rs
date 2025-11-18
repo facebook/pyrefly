@@ -131,9 +131,14 @@ fn create_intermediate_definition_from(
             Binding::Function(idx, ..) => {
                 let func = bindings.get(*idx);
                 let undecorated = bindings.get(func.undecorated_idx);
+                let symbol_kind = if undecorated.class_key.is_some() {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                };
                 return Some(IntermediateDefinition::Local(Export {
                     location: undecorated.def.name.range,
-                    symbol_kind: Some(SymbolKind::Function),
+                    symbol_kind: Some(symbol_kind),
                     docstring_range: func.docstring_range,
                     is_deprecated: false,
                     special_export: None,
@@ -184,7 +189,7 @@ pub fn insert_import_edit(
     handle_to_import_from: Handle,
     export_name: &str,
     import_format: ImportFormat,
-) -> (TextSize, String) {
+) -> (TextSize, String, String) {
     let use_absolute_import = match import_format {
         ImportFormat::Absolute => true,
         ImportFormat::Relative => {
@@ -221,7 +226,7 @@ pub fn insert_import_edit_with_forced_import_format(
     handle_to_import_from: Handle,
     export_name: &str,
     use_absolute_import: bool,
-) -> (TextSize, String) {
+) -> (TextSize, String, String) {
     let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
         first_stmt.range().start()
     } else {
@@ -242,7 +247,7 @@ pub fn insert_import_edit_with_forced_import_format(
         module_name_to_import.as_str(),
         export_name
     );
-    (position, insert_text)
+    (position, insert_text, module_name_to_import.to_string())
 }
 
 /// Some handles must be imported in absolute style,

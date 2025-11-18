@@ -187,17 +187,15 @@ class B(A):
 // Ref https://github.com/facebook/pyrefly/issues/370
 // Ref https://github.com/facebook/pyrefly/issues/522
 testcase!(
-    bug =
-        "Attributes initialized in `__new__` and `__init_subclass__` should not be instance-only.",
     test_cls_attribute_in_constructor,
     r#"
 from typing import ClassVar
 class A:
     def __new__(cls, x: int):
-        cls.x = x # E: Instance-only attribute `x` of class `A` is not visible on the class
+        cls.x = x
 class B:
     def __init_subclass__(cls, x: int):
-        cls.x = x # E: Instance-only attribute `x` of class `B` is not visible on the class
+        cls.x = x
 class C:
     x: ClassVar[int]
     def __new__(cls, x: int):
@@ -217,6 +215,28 @@ class MyTestCase:
         self.x = 5
     def run(self):
         assert self.x == 5
+    "#,
+);
+
+testcase!(
+    bug = "Attributes assigned in TestCase.setUpClass should be available on the class",
+    test_class_attribute_in_setup_class,
+    r#"
+from unittest import TestCase
+
+class Base(TestCase):
+    shared: int
+
+class Child(Base):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.shared = 1
+
+    def test_shared(self) -> None:
+        assert self.shared == 1
+
+Child.shared
     "#,
 );
 
@@ -497,13 +517,9 @@ assert_type(x, int)
     "#,
 );
 
-// We currently treat `Callable` as not having method binding behavior. This is
-// not compatible with Pyright and mypy, both of which assume in the face of
-// ambiguity that the callable is probably a function or lambda.
-//
+// To align with mypy & pyright, ClassVar[Callable] attributes should have method binding behavior
 // See https://discuss.python.org/t/when-should-we-assume-callable-types-are-method-descriptors/92938
 testcase!(
-    bug = "We probably need to treat `f` as a method here.",
     test_callable_as_class_var,
     r#"
 from typing import assert_type, Callable, ClassVar
@@ -511,8 +527,7 @@ def get_callback() -> Callable[[object, int], int]: ...
 class C:
     f: ClassVar[Callable[[object, int], int]] = get_callback()
 assert_type(C.f(None, 1), int)
-# We probably should to be treating f as a bound method here.
-assert_type(C().f(None, 1), int)
+assert_type(C().f(1), int)
 "#,
 );
 
@@ -957,7 +972,7 @@ testcase!(
     test_illegal_type_variable_with_name_shadowing,
     r#"
 class C[R]:
-    def __init__[R](self, field: R):
+    def __init__[R](self, field: R):  # E: Type parameter `R` shadows a type parameter of the same name from an enclosing scope
         self.field = field  # E: Attribute `field` cannot depend on type variable `R`, which is not in the scope of class `C`
 "#,
 );
@@ -1738,4 +1753,34 @@ def f(g: Callable[P, T], ts: tuple[*Ts], *args: P.args, **kwargs: P.kwargs):
     ty(P.args).__origin__
     ty(Ts).__name__
 "#,
+);
+
+testcase!(
+    test_type_never,
+    r#"
+from typing import Never, assert_type, reveal_type
+def f() -> type[Never]: ...
+reveal_type(f().mro) # E: BoundMethod[type, (self: type) -> list[type]]
+assert_type(f().wut, Never)
+    "#,
+);
+
+// See https://github.com/facebook/pyrefly/issues/1448 for what this tests
+// and discussion of approaches to handling `@functools.wraps` with return
+// type inference.
+testcase!(
+    test_inferred_returns_from_functools_wraps,
+    r#"
+from typing import assert_type, Any
+from functools import wraps
+def decorator(func):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        return func(self, *args, **kwargs)
+    return wrapper
+class C:
+    @decorator
+    def f(self) -> int: ...
+assert_type(C().f(), Any)
+    "#,
 );

@@ -175,27 +175,23 @@ impl RuleOverrides {
     /// Consume the RuleOverrides to turn it into an ErrorDisplayConfig map.
     pub fn to_config(self) -> Option<ErrorDisplayConfig> {
         let mut map = HashMap::new();
+        let mut add = |value, kind| {
+            if let Some(value) = value {
+                map.insert(
+                    kind,
+                    if value {
+                        Severity::Error
+                    } else {
+                        Severity::Ignore
+                    },
+                );
+            }
+        };
         // For each ErrorKind, there are one or more RuleOverrides fields.
         // The ErrorDisplayConfig map has an entry for an ErrorKind if at least one of the RuleOverrides for that ErrorKind is present.
         // The value of that ErrorKind's entry is found by or'ing together the present RuleOverrides.
-        if let Some(import_error) = [
-            self.report_missing_imports,
-            self.report_missing_module_source,
-        ]
-        .into_iter()
-        .flatten()
-        .reduce(|acc, x| acc | x)
-        {
-            map.insert(
-                ErrorKind::MissingImport,
-                if import_error {
-                    Severity::Error
-                } else {
-                    Severity::Ignore
-                },
-            );
-        }
-
+        add(self.report_missing_imports, ErrorKind::MissingImport);
+        add(self.report_missing_module_source, ErrorKind::MissingSource);
         if map.is_empty() {
             None
         } else {
@@ -272,6 +268,10 @@ mod tests {
                         .python_environment
                         .interpreter_site_package_path
                         .clone(),
+                    interpreter_stdlib_path: config
+                        .python_environment
+                        .interpreter_stdlib_path
+                        .clone(),
                 },
                 root: ConfigBase {
                     infer_with_first_use: Some(false),
@@ -311,6 +311,10 @@ mod tests {
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
+                        .clone(),
+                    interpreter_stdlib_path: config
+                        .python_environment
+                        .interpreter_stdlib_path
                         .clone(),
                 },
                 root: ConfigBase {

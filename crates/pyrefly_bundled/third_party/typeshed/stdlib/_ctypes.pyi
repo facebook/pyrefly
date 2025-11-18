@@ -1,3 +1,5 @@
+"""Create and manipulate C compatible data types in Python."""
+
 import _typeshed
 import sys
 from _typeshed import ReadableBuffer, StrOrBytesPath, WriteableBuffer
@@ -47,10 +49,16 @@ if sys.platform == "win32":
     def FreeLibrary(handle: int, /) -> None: ...
 
 else:
-    def dlclose(handle: int, /) -> None: ...
+    def dlclose(handle: int, /) -> None:
+        """dlclose a library"""
+        ...
     # The default for flag is RTLD_GLOBAL|RTLD_LOCAL, which is platform dependent.
-    def dlopen(name: StrOrBytesPath, flag: int = ..., /) -> int: ...
-    def dlsym(handle: int, name: str, /) -> int: ...
+    def dlopen(name: StrOrBytesPath, flag: int = ..., /) -> int:
+        """dlopen(name, flag={RTLD_GLOBAL|RTLD_LOCAL}) open a shared library"""
+        ...
+    def dlsym(handle: int, name: str, /) -> int:
+        """find symbol in shared library"""
+        ...
 
 if sys.version_info >= (3, 13):
     # This class is not exposed. It calls itself _ctypes.CType_Type.
@@ -97,6 +105,7 @@ class _PyCSimpleType(_CTypeBaseType):
         def __rmul__(self: type[_CT], value: int, /) -> type[Array[_CT]]: ...  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
 
 class _SimpleCData(_CData, Generic[_T], metaclass=_PyCSimpleType):
+    """XXX to be provided"""
     value: _T
     # The TypeVar can be unsolved here,
     # but we can't use overloads without creating many, many mypy false-positive errors
@@ -124,6 +133,7 @@ class _PyCPointerType(_CTypeBaseType):
         def __rmul__(cls: type[_CT], other: int) -> type[Array[_CT]]: ...  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
 
 class _Pointer(_PointerLike, _CData, Generic[_CT], metaclass=_PyCPointerType):
+    """XXX to be provided"""
     _type_: type[_CT]
     contents: _CT
     @overload
@@ -131,10 +141,16 @@ class _Pointer(_PointerLike, _CData, Generic[_CT], metaclass=_PyCPointerType):
     @overload
     def __init__(self, arg: _CT) -> None: ...
     @overload
-    def __getitem__(self, key: int, /) -> Any: ...
+    def __getitem__(self, key: int, /) -> Any:
+        """Return self[key]."""
+        ...
     @overload
-    def __getitem__(self, key: slice, /) -> list[Any]: ...
-    def __setitem__(self, key: int, value: Any, /) -> None: ...
+    def __getitem__(self, key: slice, /) -> list[Any]:
+        """Return self[key]."""
+        ...
+    def __setitem__(self, key: int, value: Any, /) -> None:
+        """Set self[key] to value."""
+        ...
 
 if sys.version_info < (3, 14):
     @overload
@@ -152,7 +168,13 @@ if sys.version_info >= (3, 14):
     def byref(obj: _CData | _CDataType, offset: int = 0, /) -> _CArgObject: ...
 
 else:
-    def byref(obj: _CData | _CDataType, offset: int = 0) -> _CArgObject: ...
+    def byref(obj: _CData | _CDataType, offset: int = 0) -> _CArgObject:
+        """
+        byref(C instance[, offset=0]) -> byref-object
+        Return a pointer lookalike to a C instance, only usable
+        as function argument
+        """
+        ...
 
 _ECT: TypeAlias = Callable[[_CData | _CDataType | None, CFuncPtr, tuple[_CData | _CDataType, ...]], _CDataType]
 _PF: TypeAlias = tuple[int] | tuple[int, str | None] | tuple[int, str | None, Any]
@@ -171,6 +193,7 @@ class _PyCFuncPtrType(_CTypeBaseType):
         def __rmul__(cls: type[_CT], other: int) -> type[Array[_CT]]: ...  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
 
 class CFuncPtr(_PointerLike, _CData, metaclass=_PyCFuncPtrType):
+    """Function Pointer"""
     restype: type[_CDataType] | Callable[[int], Any] | None
     argtypes: Sequence[type[_CDataType]]
     errcheck: _ECT
@@ -190,7 +213,9 @@ class CFuncPtr(_PointerLike, _CData, metaclass=_PyCFuncPtrType):
             cls, vtbl_index: int, name: str, paramflags: tuple[_PF, ...] | None = ..., iid: _CData | _CDataType | None = ..., /
         ) -> Self: ...
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Call self as a function."""
+        ...
 
 _GetT = TypeVar("_GetT")
 _SetT = TypeVar("_SetT")
@@ -232,6 +257,7 @@ class _UnionType(_CTypeBaseType):
         def __rmul__(cls: type[_CT], other: int) -> type[Array[_CT]]: ...  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
 
 class Union(_CData, metaclass=_UnionType):
+    """Union base class"""
     _fields_: ClassVar[Sequence[tuple[str, type[_CDataType]] | tuple[str, type[_CDataType], int]]]
     _pack_: ClassVar[int]
     _anonymous_: ClassVar[Sequence[str]]
@@ -240,7 +266,9 @@ class Union(_CData, metaclass=_UnionType):
 
     def __init__(self, *args: Any, **kw: Any) -> None: ...
     def __getattr__(self, name: str) -> Any: ...
-    def __setattr__(self, name: str, value: Any) -> None: ...
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Implement setattr(self, name, value)."""
+        ...
 
 # This class is not exposed. It calls itself _ctypes.PyCStructType.
 @type_check_only
@@ -260,6 +288,7 @@ class _PyCStructType(_CTypeBaseType):
         def __rmul__(cls: type[_CT], other: int) -> type[Array[_CT]]: ...  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
 
 class Structure(_CData, metaclass=_PyCStructType):
+    """Structure base class"""
     _fields_: ClassVar[Sequence[tuple[str, type[_CDataType]] | tuple[str, type[_CDataType], int]]]
     _pack_: ClassVar[int]
     _anonymous_: ClassVar[Sequence[str]]
@@ -268,7 +297,9 @@ class Structure(_CData, metaclass=_PyCStructType):
 
     def __init__(self, *args: Any, **kw: Any) -> None: ...
     def __getattr__(self, name: str) -> Any: ...
-    def __setattr__(self, name: str, value: Any) -> None: ...
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Implement setattr(self, name, value)."""
+        ...
 
 # This class is not exposed. It calls itself _ctypes.PyCArrayType.
 @type_check_only
@@ -284,6 +315,7 @@ class _PyCArrayType(_CTypeBaseType):
         def __rmul__(cls: type[_CT], other: int) -> type[Array[_CT]]: ...  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
 
 class Array(_CData, Generic[_CT], metaclass=_PyCArrayType):
+    """XXX to be provided"""
     @property
     @abstractmethod
     def _length_(self) -> int: ...
@@ -314,28 +346,61 @@ class Array(_CData, Generic[_CT], metaclass=_PyCArrayType):
     # the array element type would belong are annotated with Any instead.
     def __init__(self, *args: Any) -> None: ...
     @overload
-    def __getitem__(self, key: int, /) -> Any: ...
+    def __getitem__(self, key: int, /) -> Any:
+        """Return self[key]."""
+        ...
     @overload
-    def __getitem__(self, key: slice, /) -> list[Any]: ...
+    def __getitem__(self, key: slice, /) -> list[Any]:
+        """Return self[key]."""
+        ...
     @overload
-    def __setitem__(self, key: int, value: Any, /) -> None: ...
+    def __setitem__(self, key: int, value: Any, /) -> None:
+        """Set self[key] to value."""
+        ...
     @overload
-    def __setitem__(self, key: slice, value: Iterable[Any], /) -> None: ...
+    def __setitem__(self, key: slice, value: Iterable[Any], /) -> None:
+        """Set self[key] to value."""
+        ...
     def __iter__(self) -> Iterator[Any]: ...
     # Can't inherit from Sized because the metaclass conflict between
     # Sized and _CData prevents using _CDataMeta.
-    def __len__(self) -> int: ...
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __len__(self) -> int:
+        """Return len(self)."""
+        ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """See PEP 585"""
+        ...
 
-def addressof(obj: _CData | _CDataType, /) -> int: ...
-def alignment(obj_or_type: _CData | _CDataType | type[_CData | _CDataType], /) -> int: ...
+def addressof(obj: _CData | _CDataType, /) -> int:
+    """
+    addressof(C instance) -> integer
+    Return the address of the C instance internal buffer
+    """
+    ...
+def alignment(obj_or_type: _CData | _CDataType | type[_CData | _CDataType], /) -> int:
+    """
+    alignment(C type) -> integer
+    alignment(C instance) -> integer
+    Return the alignment requirements of a C instance
+    """
+    ...
 def get_errno() -> int: ...
-def resize(obj: _CData | _CDataType, size: int, /) -> None: ...
+def resize(obj: _CData | _CDataType, size: int, /) -> None:
+    """Resize the memory buffer of a ctypes instance"""
+    ...
 def set_errno(value: int, /) -> int: ...
-def sizeof(obj_or_type: _CData | _CDataType | type[_CData | _CDataType], /) -> int: ...
+def sizeof(obj_or_type: _CData | _CDataType | type[_CData | _CDataType], /) -> int:
+    """
+    sizeof(C type) -> integer
+    sizeof(C instance) -> integer
+    Return the size in bytes of a C instance
+    """
+    ...
 def PyObj_FromPtr(address: int, /) -> Any: ...
 def Py_DECREF(o: _T, /) -> _T: ...
 def Py_INCREF(o: _T, /) -> _T: ...
-def buffer_info(o: _CData | _CDataType | type[_CData | _CDataType], /) -> tuple[str, int, tuple[int, ...]]: ...
+def buffer_info(o: _CData | _CDataType | type[_CData | _CDataType], /) -> tuple[str, int, tuple[int, ...]]:
+    """Return buffer interface information"""
+    ...
 def call_cdeclfunction(address: int, arguments: tuple[Any, ...], /) -> Any: ...
 def call_function(address: int, arguments: tuple[Any, ...], /) -> Any: ...

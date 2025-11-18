@@ -32,6 +32,19 @@ def foo(x: A | B) -> None:
 );
 
 testcase!(
+    test_union_not_callable,
+    r#"
+from typing import assert_type
+class A:
+    def foo(self) -> int: ...
+class B:
+    foo: str
+def foo(x: A | B) -> None:
+    x.foo()  # E: Expected a callable, got `str`
+"#,
+);
+
+testcase!(
     test_distribute_type_over_union,
     r#"
 from typing import assert_type
@@ -719,6 +732,31 @@ class A:
         return i
 def f(a: A):
     return a["oops"]  # E: Argument `Literal['oops']` is not assignable to parameter `i` with type `int`
+    "#,
+);
+
+testcase!(
+    test_literal_string_subscript_precision,
+    r#"
+from typing import Literal, assert_type
+s: Literal["abcde"] = "abcde"
+ss: Literal["こんにちは"] = "こんにちは"
+em: Literal["\U0001F44D\U0001F3FC"] = "\U0001F44D\U0001F3FC"
+assert_type(s[0], Literal["a"])
+assert_type(s[0:2], Literal["ab"])
+assert_type(s[-1], Literal["e"])
+assert_type(s[2:], Literal["cde"])
+assert_type(s[::-1], Literal["edcba"])
+assert_type(s[3:0:-2], Literal["db"])
+assert_type(ss[0], Literal["こ"])
+assert_type(ss[-1], Literal["は"])
+assert_type(ss[2:], Literal["にちは"])
+assert_type(ss[:1], Literal["こ"])
+assert_type(ss[::-1], Literal["はちにんこ"])
+assert_type(em[0], Literal["\U0001F44D"])
+assert_type(em[-1], Literal["\U0001F3FC"])
+assert_type(em[:1], Literal["\U0001F44D"])
+assert_type(em[::-1], Literal["\U0001F3FC\U0001F44D"])
     "#,
 );
 
@@ -1854,6 +1892,21 @@ Z = Annotated[0, 'not a type']  # E: Expected a type form, got instance of `Lite
 );
 
 testcase!(
+    test_typing_annotated_alias,
+    r#"
+from typing import Annotated, assert_type
+
+Alias = Annotated
+
+def takes_alias(x: Alias[int, "meta"]) -> None:
+    assert_type(x, int)
+
+takes_alias(1)
+takes_alias("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+    "#,
+);
+
+testcase!(
     test_starred_empty_tuple_no_panic,
     r#"
 (),*()
@@ -1881,5 +1934,16 @@ testcase!(
     r#"
 from typing import SupportsIndex
 x: SupportsIndex = 3
+    "#,
+);
+
+// A request from Apache Airflow: make sure we don't add logic that complains on
+// an unused bitshift expression - some linters dislike this, but Airflow uses it
+// as a side-effecting operation to express DAG dependencies.
+testcase!(
+    test_bitshift_as_side_effect_does_not_error,
+    r#"
+def f(x: int, y: int):
+    x >> y
     "#,
 );

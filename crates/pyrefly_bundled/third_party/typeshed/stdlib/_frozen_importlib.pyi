@@ -41,7 +41,9 @@ class ModuleSpec:
     loader_state: Any
     cached: str | None
     @property
-    def parent(self) -> str | None: ...
+    def parent(self) -> str | None:
+        """The name of the module's parent."""
+        ...
     has_location: bool
     def __eq__(self, other: object) -> bool: ...
     __hash__: ClassVar[None]  # type: ignore[assignment]

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use lsp_types::Url;
 use lsp_types::WorkspaceFoldersChangeEvent;
+use pyrefly_config::config::FallbackSearchPath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::arc_id::WeakArcId;
 use pyrefly_util::lock::Mutex;
@@ -21,6 +22,7 @@ use serde_json::Value;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
+use tracing::info;
 
 use crate::commands::config_finder::ConfigConfigurer;
 use crate::commands::config_finder::standard_config_finder;
@@ -60,6 +62,7 @@ pub struct Workspace {
     python_info: Option<PythonInfo>,
     search_path: Option<Vec<PathBuf>>,
     pub disable_language_services: bool,
+    pub disabled_language_services: Option<DisabledLanguageServices>,
     pub display_type_errors: Option<DisplayTypeErrors>,
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
 }
@@ -84,16 +87,18 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                 if let Some(search_path) = w.search_path.clone() {
                     config.search_path_from_args = search_path;
                 }
-                // If we already have a fallback search path (meaning no config was found
+                // If we already have a static fallback search path (meaning no config was found
                 // and we're already using heuristics), insert workspace root as first
                 // fallback_search_path so our handles (which are created from first fallback)
                 // are created correctly for workspaces
-                if !config.fallback_search_path.is_empty()
+                if let FallbackSearchPath::Explicit(fallback_search_path) =
+                    &config.fallback_search_path
                     && let Some(workspace_root) = workspace_root
                 {
-                    config
-                        .fallback_search_path
-                        .insert(0, workspace_root.to_path_buf());
+                    let mut new_fallback_search_path = (**fallback_search_path).clone();
+                    new_fallback_search_path.insert(0, workspace_root.to_path_buf());
+                    config.fallback_search_path =
+                        FallbackSearchPath::Explicit(Arc::new(new_fallback_search_path));
                 }
                 if let Some(PythonInfo {
                     interpreter,
@@ -146,7 +151,7 @@ impl WeakConfigCache {
         let mut configs = self.0.lock();
         let purged_config_count = configs.extract_if(|c| c.vacant()).count();
         if purged_config_count != 0 {
-            eprintln!("Cleared {purged_config_count} dropped configs from config cache");
+            info!("Cleared {purged_config_count} dropped configs from config cache");
         }
         SmallSet::from_iter(configs.iter().filter_map(|c| c.upgrade()))
     }
@@ -158,6 +163,10 @@ struct PyreflyClientConfig {
     display_type_errors: Option<DisplayTypeErrors>,
     disable_language_services: Option<bool>,
     extra_paths: Option<Vec<PathBuf>>,
+    #[serde(default, deserialize_with = "deserialize_analysis")]
+    analysis: Option<LspAnalysisConfig>,
+    #[serde(default)]
+    disabled_language_services: Option<DisabledLanguageServices>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -167,6 +176,66 @@ pub enum DiagnosticMode {
     Workspace,
     #[serde(rename = "openFilesOnly")]
     OpenFilesOnly,
+}
+
+/// Configuration for which language services should be disabled
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisabledLanguageServices {
+    #[serde(default)]
+    pub definition: bool,
+    #[serde(default)]
+    pub declaration: bool,
+    #[serde(default)]
+    pub type_definition: bool,
+    #[serde(default)]
+    pub code_action: bool,
+    #[serde(default)]
+    pub completion: bool,
+    #[serde(default)]
+    pub document_highlight: bool,
+    #[serde(default)]
+    pub references: bool,
+    #[serde(default)]
+    pub rename: bool,
+    #[serde(default)]
+    pub signature_help: bool,
+    #[serde(default)]
+    pub hover: bool,
+    #[serde(default)]
+    pub inlay_hint: bool,
+    #[serde(default)]
+    pub document_symbol: bool,
+    #[serde(default)]
+    pub semantic_tokens: bool,
+    #[serde(default)]
+    pub implementation: bool,
+}
+
+impl DisabledLanguageServices {
+    /// Check if a language service is disabled based on the LSP request METHOD string
+    /// Uses the METHOD constants from lsp_types::request::* types
+    pub fn is_disabled(&self, method: &str) -> bool {
+        match method {
+            "textDocument/definition" => self.definition,
+            "textDocument/declaration" => self.declaration,
+            "textDocument/typeDefinition" => self.type_definition,
+            "textDocument/codeAction" => self.code_action,
+            "textDocument/completion" => self.completion,
+            "textDocument/documentHighlight" => self.document_highlight,
+            "textDocument/references" => self.references,
+            "textDocument/rename" => self.rename,
+            "textDocument/signatureHelp" => self.signature_help,
+            "textDocument/hover" => self.hover,
+            "textDocument/inlayHint" => self.inlay_hint,
+            "textDocument/documentSymbol" => self.document_symbol,
+            "textDocument/semanticTokens/full" | "textDocument/semanticTokens/range" => {
+                self.semantic_tokens
+            }
+            "textDocument/implementation" => self.implementation,
+            _ => false, // Unknown methods are not disabled
+        }
+    }
 }
 
 /// https://code.visualstudio.com/docs/python/settings-reference#_pylance-language-server
@@ -186,7 +255,7 @@ where
     match Option::<LspAnalysisConfig>::deserialize(deserializer) {
         Ok(value) => Ok(value),
         Err(e) => {
-            eprintln!("Could not decode analysis config: {e}");
+            info!("Could not decode analysis config: {e}");
             Ok(None)
         }
     }
@@ -270,7 +339,7 @@ impl Workspaces {
     ) {
         let config = match serde_json::from_value::<LspConfig>(config.clone()) {
             Err(e) => {
-                eprintln!(
+                info!(
                     "Could not decode `LspConfig` from {config:?}, skipping client configuration request: {e}."
                 );
                 return;
@@ -289,8 +358,16 @@ impl Workspaces {
             if let Some(disable_language_services) = pyrefly.disable_language_services {
                 self.update_disable_language_services(scope_uri, disable_language_services);
             }
+            if let Some(disabled_language_services) = pyrefly.disabled_language_services {
+                self.update_disabled_language_services(scope_uri, disabled_language_services);
+            }
             self.update_display_type_errors(modified, scope_uri, pyrefly.display_type_errors);
+            // Handle analysis config nested under pyrefly (e.g., pyrefly.analysis)
+            if let Some(analysis) = pyrefly.analysis {
+                self.update_ide_settings(modified, scope_uri, analysis);
+            }
         }
+        // Always handle analysis at top level (no longer conditional on analysis_handled)
         if let Some(analysis) = config.analysis {
             self.update_ide_settings(modified, scope_uri, analysis);
         }
@@ -310,6 +387,25 @@ impl Workspaces {
                 }
             }
             None => self.default.write().disable_language_services = disable_language_services,
+        }
+    }
+
+    /// Update disabledLanguageServices setting for scope_uri, None if default workspace
+    fn update_disabled_language_services(
+        &self,
+        scope_uri: &Option<Url>,
+        disabled_language_services: DisabledLanguageServices,
+    ) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                    workspace.disabled_language_services = Some(disabled_language_services);
+                }
+            }
+            None => {
+                self.default.write().disabled_language_services = Some(disabled_language_services);
+            }
         }
     }
 

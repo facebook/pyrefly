@@ -14,6 +14,7 @@ use crate::commands::dump_config::DumpConfigArgs;
 use crate::commands::infer::InferArgs;
 use crate::commands::init::InitArgs;
 use crate::commands::lsp::LspArgs;
+use crate::commands::report::ReportArgs;
 use crate::commands::tsp::TspArgs;
 use crate::commands::util::CommandExitStatus;
 
@@ -44,6 +45,8 @@ pub enum Command {
     Tsp(TspArgs),
     /// Automatically add type annotations to a file or directory.
     Infer(InferArgs),
+    /// Generate reports from pyrefly type checking results.
+    Report(ReportArgs),
 }
 
 impl Command {
@@ -57,6 +60,7 @@ impl Command {
             Command::Init(args) => args.run(),
             Command::Infer(args) => args.run(),
             Command::DumpConfig(args) => args.run(),
+            Command::Report(args) => args.run(),
         }
     }
 }

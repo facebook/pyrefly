@@ -20,6 +20,7 @@ use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::visit::Visit;
+use regex::RegexBuilder;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
@@ -74,7 +75,29 @@ fn hash(x: &[u8]) -> String {
 }
 
 fn join_names(base_name: &str, name: &str) -> String {
-    base_name.to_owned() + "." + name
+    if base_name.is_empty() {
+        name.to_owned()
+    } else {
+        base_name.to_owned() + "." + name
+    }
+}
+
+fn all_modules(module_name: ModuleName) -> impl Iterator<Item = String> {
+    module_name
+        .components()
+        .into_iter()
+        .scan("".to_owned(), |module, component| {
+            *module = join_names(module, component.as_str());
+            Some(module.to_owned())
+        })
+}
+
+fn all_modules_with_range(module_id: &Identifier) -> impl Iterator<Item = (String, TextRange)> {
+    let offset = module_id.range().start();
+    all_modules(ModuleName::from_parts(module_id.id().split("."))).map(move |name| {
+        let range = TextRange::at(offset, TextSize::try_from(name.len()).unwrap());
+        (name, range)
+    })
 }
 
 fn range_without_decorators(range: TextRange, decorators: &[Decorator]) -> TextRange {
@@ -250,36 +273,78 @@ impl GleanState<'_> {
         digest::FileDigest::new(self.file_fact(), digest)
     }
 
-    fn all_modules(&mut self, module_name: ModuleName) -> Vec<ModuleName> {
-        let mut module_names = vec![];
-        let components = module_name.components();
-        let mut module = None;
-        for component in components.into_iter() {
-            let name = module.map_or(ModuleName::from_name(&component), |x: ModuleName| {
-                x.append(&component)
-            });
-            self.record_name(name.to_string());
-            module = Some(name);
-            module_names.push(name);
-        }
+    fn gencode_fact(&mut self) -> Option<gencode::GenCode> {
+        let generated_pattern = RegexBuilder::new(
+            r"^.*@(?P<tag>(partially-)?generated)( SignedSource<<(?P<sign>[0-9a-f]+)>>)?$",
+        )
+        .multi_line(true)
+        .build()
+        .unwrap();
 
-        module_names
+        let codegen_pattern = RegexBuilder::new(
+            r"^.*@codegen-(?P<key>(command|class|source))\s*.*?\s+(?P<value>[A-Za-z0-9_\/\.\-\\\\]+)\n?$",
+        )
+        .multi_line(true)
+        .build()
+        .unwrap();
+
+        let contents = self.module.contents();
+        let generated_tag_match = generated_pattern.captures(contents);
+        generated_tag_match.map(|tag_match| {
+            let codegen_details = codegen_pattern
+                .captures_iter(contents)
+                .filter_map(|codegen_match| {
+                    codegen_match.name("key").and_then(|key| {
+                        codegen_match
+                            .name("value")
+                            .map(|value| (key.as_str().to_owned(), value.as_str().to_owned()))
+                    })
+                })
+                .collect::<HashMap<String, String>>();
+
+            let tag = tag_match.name("tag").map(|x| x.as_str());
+
+            let variant = if Some(&"generated") == tag.as_ref() {
+                gencode::GenCodeVariant::Full
+            } else {
+                gencode::GenCodeVariant::Partial
+            };
+
+            let signature = tag_match
+                .name("sign")
+                .map(|x| gencode::GenCodeSignature::new(x.as_str().to_owned()));
+
+            let source = codegen_details
+                .get("source")
+                .map(|x| src::File::new(x.to_owned()));
+
+            let class_ = codegen_details
+                .get("class")
+                .map(|x| gencode::GenCodeClass::new(x.to_owned()));
+
+            let command = codegen_details
+                .get("command")
+                .map(|x| gencode::GenCodeCommand::new(x.to_owned()));
+
+            gencode::GenCode::new(
+                self.file_fact(),
+                variant,
+                source,
+                command,
+                class_,
+                signature,
+            )
+        })
     }
 
     fn module_facts(&mut self, range: TextRange) {
         let module_docstring_range = self.transaction.get_module_docstring_range(self.handle);
-        let components = self.module_name.components();
-        let mut module = None;
 
-        for component in components.into_iter() {
-            let name = module.map_or(ModuleName::from_name(&component), |x: ModuleName| {
-                x.append(&component)
-            });
-            self.record_name(name.to_string());
+        for name in all_modules(self.module_name) {
+            self.record_name(name.clone());
             self.facts
                 .modules
-                .push(python::Module::new(python::Name::new(name.to_string())));
-            module = Some(name);
+                .push(python::Module::new(python::Name::new(name)));
         }
 
         let mod_decl_info = DeclarationInfo {
@@ -404,13 +469,6 @@ impl GleanState<'_> {
         self.record_name_with_position(join_names(&scope, name), name.range.start())
     }
 
-    fn make_fq_names_for_expr(&self, expr: &Expr) -> Vec<python::Name> {
-        self.fq_names_for_name_or_attr(expr)
-            .into_iter()
-            .map(python::Name::new)
-            .collect()
-    }
-
     fn fq_name_for_xref_definition(
         &self,
         def_range: TextRange,
@@ -435,8 +493,9 @@ impl GleanState<'_> {
         }
     }
 
-    fn fq_names_for_name_or_attr(&self, expr: &Expr) -> Vec<String> {
+    fn fq_names_for_expr(&self, expr: &Expr) -> Vec<String> {
         match expr {
+            Expr::Subscript(expr_subscript) => self.fq_names_for_expr(&expr_subscript.value),
             Expr::Attribute(attr) => self.fq_names_for_attribute(attr),
             Expr::Name(name) => self.fq_name_for_expr_name(name).map_or(vec![], |x| vec![x]),
             _ => vec![],
@@ -452,7 +511,7 @@ impl GleanState<'_> {
         let definition = self.transaction.find_definition_for_name_use(
             self.handle,
             &identifier,
-            &FindPreference::default(),
+            FindPreference::default(),
         );
 
         definition
@@ -516,7 +575,7 @@ impl GleanState<'_> {
         {
             self.transaction
                 .ad_hoc_solve(self.handle, |solver| match base_type {
-                    Type::Union(tys) | Type::Intersect(tys) => tys
+                    Type::Union(tys) | Type::Intersect(box (tys, _)) => tys
                         .into_iter()
                         .filter(|ty: &Type| {
                             solver
@@ -533,8 +592,11 @@ impl GleanState<'_> {
         };
 
         if base_types.is_empty() {
-            let base_fq_names = self.fq_names_for_name_or_attr(base_expr);
-            base_fq_names.into_iter().map(|base| base + name).collect()
+            let base_fq_names = self.fq_names_for_expr(base_expr);
+            base_fq_names
+                .into_iter()
+                .map(|base| join_names(&base, name))
+                .collect()
         } else {
             base_types
                 .into_iter()
@@ -570,8 +632,11 @@ impl GleanState<'_> {
             arguments
                 .args
                 .iter()
-                .flat_map(|expr| self.fq_names_for_name_or_attr(expr))
-                .map(|name| python::ClassDeclaration::new(python::Name::new(name), None))
+                .flat_map(|expr| {
+                    self.fq_names_for_expr(expr)
+                        .into_iter()
+                        .map(|name| python::ClassDeclaration::new(python::Name::new(name), None))
+                })
                 .collect()
         } else {
             vec![]
@@ -908,7 +973,7 @@ impl GleanState<'_> {
     fn find_fqname_definition_at_position(&self, position: TextSize) -> Vec<String> {
         let definitions =
             self.transaction
-                .find_definition(self.handle, position, &FindPreference::default());
+                .find_definition(self.handle, position, FindPreference::default());
 
         definitions
             .into_iter()
@@ -956,31 +1021,6 @@ impl GleanState<'_> {
         }
     }
 
-    fn make_import_facts_for_module(
-        &mut self,
-        import_module: &Identifier,
-        top_level_declaration: &python::Declaration,
-    ) -> Vec<DeclarationInfo> {
-        let parts = import_module.id().split(".");
-
-        self.all_modules(ModuleName::from_parts(parts))
-            .into_iter()
-            .map(|module| {
-                let range = TextRange::empty(import_module.range().start())
-                    .add_end(TextSize::from(module.as_str().len().to_u32().unwrap()));
-
-                self.make_import_fact(
-                    module.as_str(),
-                    range,
-                    module.as_str(),
-                    range,
-                    top_level_declaration,
-                    false,
-                )
-            })
-            .collect()
-    }
-
     fn import_facts(
         &mut self,
         import: &StmtImport,
@@ -992,6 +1032,16 @@ impl GleanState<'_> {
             .flat_map(|import| {
                 let from_name = &import.name;
                 if let Some(as_name) = &import.asname {
+                    let mut it = all_modules_with_range(from_name).peekable();
+                    while let Some((module, range)) = it.next() {
+                        if it.peek().is_some() {
+                            self.record_name(module.clone());
+                            self.add_xref(python::XRefViaName {
+                                target: python::Name::new(module),
+                                source: to_span(range),
+                            });
+                        }
+                    }
                     vec![self.make_import_fact(
                         from_name.as_str(),
                         from_name.range(),
@@ -1001,7 +1051,18 @@ impl GleanState<'_> {
                         true,
                     )]
                 } else {
-                    self.make_import_facts_for_module(&import.name, top_level_declaration)
+                    all_modules_with_range(from_name)
+                        .map(|(module, range)| {
+                            self.make_import_fact(
+                                &module,
+                                range,
+                                &module,
+                                range,
+                                top_level_declaration,
+                                false,
+                            )
+                        })
+                        .collect()
                 }
             })
             .collect()
@@ -1070,7 +1131,7 @@ impl GleanState<'_> {
                     .push(python::ImportStarLocation::new(
                         import_star,
                         self.facts.file.clone(),
-                        to_span(import.range),
+                        to_span(import_from.range),
                     ));
             } else {
                 let from_name_string = from_module
@@ -1143,12 +1204,12 @@ impl GleanState<'_> {
 
     fn callee_to_caller_facts(&mut self, call: &ExprCall, caller: &python::FunctionDeclaration) {
         let caller_fact = &caller.key.name;
-        let callee_names = self.make_fq_names_for_expr(call.func.as_ref());
-        for callee_fact in callee_names {
+        let callee_names = self.fq_names_for_expr(call.func.as_ref());
+        for callee_name in callee_names {
             self.facts
                 .callee_to_callers
                 .push(python::CalleeToCaller::new(
-                    callee_fact,
+                    python::Name::new(callee_name),
                     caller_fact.clone(),
                 ));
         }
@@ -1363,6 +1424,8 @@ impl Glean {
         glean_state.generate_facts(&ast.body, ast.range());
 
         let file_fact = glean_state.file_fact();
+        let gencode_fact = glean_state.gencode_fact();
+
         let facts = glean_state.facts;
 
         let xrefs_via_name_by_file_fact =
@@ -1447,6 +1510,10 @@ impl Glean {
             GleanEntry::Predicate {
                 predicate: python::NameToSName::GLEAN_name(),
                 facts: facts.name_to_sname.into_iter().map(json).collect(),
+            },
+            GleanEntry::Predicate {
+                predicate: gencode::GenCode::GLEAN_name(),
+                facts: gencode_fact.map_or(vec![], |f| vec![json(f)]),
             },
         ];
         Glean { entries }

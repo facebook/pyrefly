@@ -173,7 +173,7 @@ impl TypeCheckKind {
                 },
                 ctx.display(want),
             ),
-            Self::TypedDictUnpacking => format!(
+            Self::TypedDictUnpacking | Self::TypedDictOpenUnpacking => format!(
                 "Unpacked `{}` is not assignable to `{}`",
                 ctx.display(got),
                 ctx.display(want)

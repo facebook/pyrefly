@@ -23,7 +23,7 @@ use crate::types::types::Var;
 // Soft type hints are used for `e1 or e1` expressions.
 pub struct Hint<'a>(Type, Option<&'a ErrorCollector>);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct HintRef<'a, 'b>(&'b Type, Option<&'a ErrorCollector>);
 
 impl<'a> Hint<'a> {
@@ -46,6 +46,11 @@ impl<'a> Hint<'a> {
 impl<'a, 'b> HintRef<'a, 'b> {
     pub fn new(hint: &'b Type, errors: Option<&'a ErrorCollector>) -> Self {
         Self(hint, errors)
+    }
+
+    /// Construct a "soft" type hint that doesn't report an error when the hint is incompatible.
+    pub fn soft(hint: &'b Type) -> Self {
+        Self(hint, None)
     }
 
     pub fn ty(&self) -> &Type {

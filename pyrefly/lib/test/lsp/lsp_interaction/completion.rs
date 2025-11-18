@@ -11,6 +11,7 @@ use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_types::Url;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -31,7 +32,7 @@ fn test_completion_basic() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
                     "languageId": "python",
@@ -91,7 +92,7 @@ fn test_completion_sorted_in_sorttext_order() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
                     "languageId": "python",
@@ -167,7 +168,7 @@ fn test_completion_keywords() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
                     "languageId": "python",
@@ -219,6 +220,62 @@ fn test_completion_keywords() {
 }
 
 #[test]
+fn test_import_completion_skips_hidden_directories() {
+    let root = get_test_files_root();
+    let workspace = root.path().join("basic");
+    let hidden_dir = workspace.join(".hiddenpkg");
+    std::fs::create_dir_all(&hidden_dir).unwrap();
+    std::fs::write(hidden_dir.join("__init__.py"), "").unwrap();
+
+    let foo_path = workspace.join("foo.py");
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(workspace);
+    interaction.initialize(InitializeSettings::default());
+
+    interaction.server.did_open("foo.py");
+
+    interaction
+        .server
+        .send_message(Message::Notification(Notification {
+            method: "textDocument/didChange".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                    "languageId": "python",
+                    "version": 2
+                },
+                "contentChanges": [{
+                    "text": "import ".to_owned()
+                }],
+            }),
+        }));
+
+    interaction.server.completion("foo.py", 0, 7);
+
+    interaction.client.expect_response_with(
+        |response| {
+            if response.id != RequestId::from(2) {
+                return false;
+            }
+            if let Some(result) = &response.result
+                && let Some(items) = result.get("items")
+                && let Some(items_array) = items.as_array()
+            {
+                let contains_hidden = items_array.iter().any(|item| {
+                    item.get("label").and_then(|label| label.as_str()) == Some(".hiddenpkg")
+                });
+                return !items_array.is_empty() && !contains_hidden;
+            }
+            false
+        },
+        "Expected completion response without suggestions from hidden directories",
+    );
+
+    interaction.shutdown();
+}
+
+#[test]
 fn test_completion_with_autoimport() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
@@ -236,7 +293,7 @@ fn test_completion_with_autoimport() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&file).unwrap().to_string(),
                     "languageId": "python",
@@ -267,7 +324,7 @@ fn test_completion_with_autoimport() {
                         && let Some(additional_text_edits) = item.get("additionalTextEdits")
                         && let Some(edits_array) = additional_text_edits.as_array()
                     {
-                        label_str == "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
+                        label_str == "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search (import autoimport_provider)"
                             && detail_str.contains("from autoimport_provider import")
                             && !edits_array.is_empty()
                     } else {
@@ -303,7 +360,7 @@ fn test_completion_with_autoimport_without_config() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
                     "languageId": "python",
@@ -357,7 +414,7 @@ fn test_completion_with_autoimport_in_defined_module() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&file).unwrap().to_string(),
                     "languageId": "python",
@@ -372,7 +429,7 @@ fn test_completion_with_autoimport_in_defined_module() {
     interaction.server.send_message(Message::Request(Request {
         id: RequestId::from(2),
         method: "textDocument/completion".to_owned(),
-        params: serde_json::json!({
+        params: json!({
             "textDocument": {
                 "uri": Url::from_file_path(&file).unwrap().to_string()
             },
@@ -462,7 +519,7 @@ fn test_module_completion() {
 
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "isIncomplete": false,
             "items": [{
                 "label": "bar",
@@ -491,7 +548,7 @@ fn test_module_completion_reexports_sorted_lower() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&test_path).unwrap().to_string(),
                     "languageId": "python",
@@ -571,7 +628,7 @@ fn test_relative_module_completion() {
 
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "isIncomplete": false,
             "items": [],
         })),
@@ -597,7 +654,7 @@ fn test_stdlib_submodule_completion() {
     interaction.server.completion("foo.py", 0, 13);
 
     interaction.client.expect_response_with_item(
-        serde_json::json!({
+        json!({
             "label": "errors",
             "detail": "email.errors",
             "kind": 9,
@@ -625,8 +682,8 @@ fn test_stdlib_class_completion() {
     interaction.server.completion("foo.py", 0, 11);
 
     interaction.client.expect_response_with_item(
-        serde_json::json!({
-            "label": "FirstHeaderLineIsContinuationDefect",
+        json!({
+            "label": "FirstHeaderLineIsContinuationDefect (import email.errors)",
             "detail": "from email.errors import FirstHeaderLineIsContinuationDefect\n",
             "kind": 7,
             "sortText": "4",

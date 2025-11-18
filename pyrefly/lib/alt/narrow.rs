@@ -7,6 +7,8 @@
 
 use num_traits::ToPrimitive;
 use pyrefly_python::ast::Ast;
+use pyrefly_types::class::Class;
+use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
@@ -23,9 +25,12 @@ use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::FacetOrigin;
+use crate::binding::narrow::FacetSubject;
 use crate::binding::narrow::NarrowOp;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
@@ -74,6 +79,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    fn disjoint_base<'b>(&'b self, t: &'b Type) -> &'b Class {
+        // TODO: Implement the full disjoint base spec: https://peps.python.org/pep-0800/#specification.
+        match t {
+            Type::ClassType(cls)
+                if let cls = cls.class_object()
+                    && self.get_metadata_for_class(cls).is_disjoint_base() =>
+            {
+                cls
+            }
+            Type::Tuple(_) => self.stdlib.tuple_object(),
+            _ => self.stdlib.object().class_object(),
+        }
+    }
+
+    fn intersect_impl(&self, left: &Type, right: &Type, fallback: &dyn Fn() -> Type) -> Type {
+        let is_literal =
+            |t: &Type| matches!(t, Type::Literal(_) | Type::LiteralString | Type::None);
+        if self.is_subset_eq(right, left) {
+            right.clone()
+        } else if self.is_subset_eq(left, right) {
+            left.clone()
+        } else if is_literal(left) || is_literal(right) {
+            // The only inhabited intersections of literals are things like
+            // `Literal[0] & Literal[0]` or `Literal[0] & int` that would have already been
+            // intercepted by the is_subset_eq checks above. type(None) cannot be subclassed.
+            Type::never()
+        } else {
+            let fallback = fallback();
+            if fallback.is_never() {
+                fallback
+            } else {
+                let left_base = self.disjoint_base(left);
+                let right_base = self.disjoint_base(right);
+                if self.has_superclass(left_base, right_base)
+                    || self.has_superclass(right_base, left_base)
+                {
+                    intersect(vec![left.clone(), right.clone()], fallback)
+                } else {
+                    // A common subclass of these two classes cannot exist.
+                    Type::never()
+                }
+            }
+        }
+    }
+
     /// Get our best approximation of ty & right.
     ///
     /// If the intersection is empty - which does not necessarily indicate
@@ -82,23 +132,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         left: &Type,
         right: &Type,
-        fallback: impl Fn() -> Type,
+        fallback: &dyn Fn() -> Type,
     ) -> Type {
         self.distribute_over_union(left, |l| {
-            self.distribute_over_union(right, |r| {
-                if self.is_subset_eq(r, l) {
-                    r.clone()
-                } else if self.is_subset_eq(l, r) {
-                    l.clone()
-                } else {
-                    fallback()
-                }
-            })
+            self.distribute_over_union(right, |r| self.intersect_impl(l, r, fallback))
         })
     }
 
     fn intersect(&self, left: &Type, right: &Type) -> Type {
-        self.intersect_with_fallback(left, right, Type::never)
+        self.intersect_with_fallback(left, right, &Type::never)
     }
 
     /// Calculate the intersection of a number of types
@@ -157,7 +199,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
             if let Some(right) = self.unwrap_class_object_silently(&right) {
-                res.push(self.intersect_with_fallback(left, &right, || right.clone()))
+                res.push(self.intersect_with_fallback(left, &right, &|| right.clone()))
             } else {
                 res.push(left.clone());
             }
@@ -354,7 +396,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn atomic_narrow(
+    fn atomic_narrow(
         &self,
         ty: &Type,
         op: &AtomicNarrowOp,
@@ -598,7 +640,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AtomicNarrowOp::GetAttr(_, _) => ty.clone(),
             AtomicNarrowOp::NotGetAttr(_, _) => ty.clone(),
             AtomicNarrowOp::TypeGuard(t, arguments) => {
-                if let Some(call_target) = self.as_call_target(t.clone()) {
+                if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
                     let ret =
@@ -611,7 +653,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::NotTypeGuard(_, _) => ty.clone(),
             AtomicNarrowOp::TypeIs(t, arguments) => {
-                if let Some(call_target) = self.as_call_target(t.clone()) {
+                if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
                     let ret =
@@ -623,7 +665,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ty.clone()
             }
             AtomicNarrowOp::NotTypeIs(t, arguments) => {
-                if let Some(call_target) = self.as_call_target(t.clone()) {
+                if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
                     let ret =
@@ -738,7 +780,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match first_facet {
             FacetKind::Attribute(first_attr_name) => match remaining_facets.split_first() {
                 None => match base.type_at_facet(first_facet) {
-                    Some(ty) => ty.clone(),
+                    Some(ty) => self.force_for_narrowing(ty),
                     None => self.narrowable_for_attr(base.ty(), first_attr_name, range, errors),
                 },
                 Some((next_name, remaining_facets)) => {
@@ -762,7 +804,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
                 match remaining_facets.split_first() {
                     None => match base.type_at_facet(first_facet) {
-                        Some(ty) => ty.clone(),
+                        Some(ty) => self.force_for_narrowing(ty),
                         None => self.subscript_infer_for_type(
                             base.ty(),
                             &synthesized_slice,
@@ -788,7 +830,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let synthesized_slice = Ast::str_expr(key, TextRange::empty(TextSize::from(0)));
                 match remaining_facets.split_first() {
                     None => match base.type_at_facet(first_facet) {
-                        Some(ty) => ty.clone(),
+                        Some(ty) => self.force_for_narrowing(ty),
                         None => self.subscript_infer_for_type(
                             base.ty(),
                             &synthesized_slice,
@@ -821,15 +863,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match op {
             NarrowOp::Atomic(subject, AtomicNarrowOp::HasAttr(attr)) => {
                 let base_ty = match subject {
-                    Some(facet_chain) => self.get_facet_chain_type(type_info, facet_chain, range),
-                    None => type_info.ty().clone(),
+                    Some(facet_subject) => {
+                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
+                    }
+                    None => self.force_for_narrowing(type_info.ty()),
                 };
                 // We only narrow the attribute to `Any` if the attribute does not exist
                 if !self.has_attr(&base_ty, attr) {
                     let attr_facet = FacetKind::Attribute(attr.clone());
                     let facets = match subject {
-                        Some(chain) => {
-                            let mut new_facets = chain.facets().clone();
+                        Some(facet_subject) => {
+                            let mut new_facets = facet_subject.chain.facets().clone();
                             new_facets.push(attr_facet);
                             new_facets
                         }
@@ -851,15 +895,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return type_info.clone();
                 }
                 let base_ty = match subject {
-                    Some(facet_chain) => self.get_facet_chain_type(type_info, facet_chain, range),
-                    None => type_info.ty().clone(),
+                    Some(facet_subject) => {
+                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
+                    }
+                    None => self.force_for_narrowing(type_info.ty()),
                 };
                 let attr_ty =
                     self.attr_infer_for_type(&base_ty, attr, range, &suppress_errors, None);
                 let attr_facet = FacetKind::Attribute(attr.clone());
                 let facets = match subject {
-                    Some(chain) => {
-                        let mut new_facets = chain.facets().clone();
+                    Some(facet_subject) => {
+                        let mut new_facets = facet_subject.chain.facets().clone();
                         new_facets.push(attr_facet);
                         new_facets
                     }
@@ -881,19 +927,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             NarrowOp::Atomic(None, op) => {
-                let ty = self.atomic_narrow(type_info.ty(), op, range, errors);
-                type_info.clone().with_ty(ty)
-            }
-            NarrowOp::Atomic(Some(facet_chain), op) => {
                 let ty = self.atomic_narrow(
-                    &self.get_facet_chain_type(type_info, facet_chain, range),
+                    &self.force_for_narrowing(type_info.ty()),
                     op,
                     range,
                     errors,
                 );
-                let mut narrowed = type_info.with_narrow(facet_chain.facets(), ty);
+                type_info.clone().with_ty(ty)
+            }
+            NarrowOp::Atomic(Some(facet_subject), op) => {
+                if facet_subject.origin == FacetOrigin::GetMethod
+                    && !self.supports_dict_get_subject(type_info, facet_subject, range)
+                {
+                    return type_info.clone();
+                }
+                let ty = self.atomic_narrow(
+                    &self.get_facet_chain_type(type_info, &facet_subject.chain, range),
+                    op,
+                    range,
+                    errors,
+                );
+                let mut narrowed = type_info.with_narrow(facet_subject.chain.facets(), ty);
                 // For certain types of narrows, we can also narrow the parent of the current subject
-                if let Some((last, prefix)) = facet_chain.facets().split_last() {
+                if let Some((last, prefix)) = facet_subject.chain.facets().split_last() {
                     match Vec1::try_from(prefix) {
                         Ok(prefix_facets) => {
                             let prefix_chain = FacetChain::new(prefix_facets);
@@ -938,5 +994,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 JoinStyle::SimpleMerge,
             ),
         }
+    }
+
+    /// We only narrow `x.get("key")` if `x` resolves to a `dict`
+    fn supports_dict_get_subject(
+        &self,
+        type_info: &TypeInfo,
+        subject: &FacetSubject,
+        range: TextRange,
+    ) -> bool {
+        let base_ty = if subject.chain.facets().len() == 1 {
+            type_info.ty().clone()
+        } else {
+            let prefix: Vec<_> = subject
+                .chain
+                .facets()
+                .iter()
+                .take(subject.chain.facets().len() - 1)
+                .cloned()
+                .collect();
+            match Vec1::try_from_vec(prefix) {
+                Ok(vec1) => {
+                    let prefix_chain = FacetChain::new(vec1);
+                    self.get_facet_chain_type(type_info, &prefix_chain, range)
+                }
+                Err(_) => return false,
+            }
+        };
+        self.is_dict_like(&base_ty)
     }
 }

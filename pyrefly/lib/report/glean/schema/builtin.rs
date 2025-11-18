@@ -18,7 +18,7 @@ use serde_repr::*;
 use crate::report::glean::schema::*;
 // Schema version
 pub const VERSION: i64 = 1;
-pub const SCHEMA_ID: &str = "e58db6a216a862a9e127d2986d1c377f";
+pub const SCHEMA_ID: &str = "b53ee776cd31801ec9f22ea9787a58ad";
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Unit {}

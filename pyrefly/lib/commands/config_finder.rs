@@ -13,6 +13,8 @@ use std::sync::LazyLock;
 use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::base::ConfigBase;
+use pyrefly_config::config::DirectoryRelativeFallbackSearchPathCache;
+use pyrefly_config::config::FallbackSearchPath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
@@ -131,16 +133,23 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
     // A cache where path `p` maps to config file with `search_path = [p]`. If we can find the root.
     let cache_one: Arc<Mutex<SmallMap<PathBuf, ArcId<ConfigFile>>>> =
         Arc::new(Mutex::new(SmallMap::new()));
-    // A cache where path `p` maps to config file with `search_path = [p, p/.., p/../.., ...]`.
+    // A cache where path `p` maps to config file with
+    // `fallback_search_path = [p, p/.., p/../.., ...]`.
     let cache_parents: Arc<Mutex<SmallMap<PathBuf, ArcId<ConfigFile>>>> =
         Arc::new(Mutex::new(SmallMap::new()));
+    // A cache where path `p` maps to search paths from `p` to the nearest on-disk config,
+    // marker file, or filesystem root. Used as the `fallback_search_path` in `cache_parents`.
+    let cache_ancestors: Arc<DirectoryRelativeFallbackSearchPathCache> =
+        Arc::new(DirectoryRelativeFallbackSearchPathCache::new(None));
 
     let clear_extra_caches = {
         let cache_one = cache_one.dupe();
         let cache_parents = cache_parents.dupe();
+        let cache_ancestors = cache_ancestors.dupe();
         Box::new(move || {
             cache_one.lock().clear();
             cache_parents.lock().clear();
+            cache_ancestors.clear();
         })
     };
 
@@ -201,14 +210,13 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
                     .lock()
                     .entry(parent.to_owned())
                     .or_insert_with(|| {
+                        let fallback_search_path =
+                            FallbackSearchPath::Explicit(cache_ancestors.get_ancestors(parent));
                         let mut config = ConfigFile {
                             project_includes: ConfigFile::default_project_includes(),
                             // We use `fallback_search_path` because otherwise a user with `/sys` on their
                             // computer (all of them) will override `sys.version` in preference to typeshed.
-                            fallback_search_path: parent
-                                .ancestors()
-                                .map(|x| x.to_owned())
-                                .collect::<Vec<_>>(),
+                            fallback_search_path,
                             root: ConfigBase::default_for_ide_without_config(),
                             ..Default::default()
                         };
@@ -344,7 +352,7 @@ mod tests {
             config_file.search_path().cloned().collect::<Vec<_>>(),
             vec![root.join("with_config")]
         );
-        assert_eq!(config_file.fallback_search_path, Vec::<PathBuf>::new());
+        assert_eq!(config_file.fallback_search_path, FallbackSearchPath::Empty);
 
         // we should get a synthetic config with a search path = project_root/..
         let config_file = finder(
@@ -359,7 +367,7 @@ mod tests {
         );
         assert_eq!(
             config_file.fallback_search_path,
-            vec![root.join("no_config")]
+            FallbackSearchPath::Explicit(Arc::new(vec![root.join("no_config")])),
         );
 
         // check invalid module path parent
@@ -393,10 +401,12 @@ mod tests {
         assert_eq!(config_file.search_path_from_file, Vec::<PathBuf>::new());
         assert_eq!(
             config_file.fallback_search_path,
-            [root.join("no_config/foo"), root.join("no_config")]
-                .into_iter()
-                .chain(root.ancestors().map(PathBuf::from))
-                .collect::<Vec<PathBuf>>(),
+            FallbackSearchPath::Explicit(Arc::new(
+                [root.join("no_config/foo"), root.join("no_config")]
+                    .into_iter()
+                    .chain(root.ancestors().map(PathBuf::from))
+                    .collect::<Vec<PathBuf>>()
+            )),
         );
 
         // check filesystem/memory
@@ -409,10 +419,12 @@ mod tests {
         assert_eq!(config_file.search_path_from_file, Vec::<PathBuf>::new());
         assert_eq!(
             config_file.fallback_search_path,
-            [root.join("no_config/foo"), root.join("no_config")]
-                .into_iter()
-                .chain(root.ancestors().map(PathBuf::from))
-                .collect::<Vec<PathBuf>>(),
+            FallbackSearchPath::Explicit(Arc::new(
+                [root.join("no_config/foo"), root.join("no_config")]
+                    .into_iter()
+                    .chain(root.ancestors().map(PathBuf::from))
+                    .collect::<Vec<PathBuf>>()
+            )),
         );
     }
 }

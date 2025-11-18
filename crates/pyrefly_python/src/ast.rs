@@ -87,20 +87,23 @@ impl<'a> SourceOrderVisitor<'a> for CoveringNodeVisitor<'a> {
 }
 
 impl Ast {
-    pub fn parse(contents: &str) -> (ModModule, Vec<ParseError>, Vec<UnsupportedSyntaxError>) {
-        Ast::parse_with_version(contents, PythonVersion::default())
+    pub fn parse(
+        contents: &str,
+        source_type: PySourceType,
+    ) -> (ModModule, Vec<ParseError>, Vec<UnsupportedSyntaxError>) {
+        Ast::parse_with_version(contents, PythonVersion::default(), source_type)
     }
 
     pub fn parse_with_version(
         contents: &str,
         version: PythonVersion,
+        source_type: PySourceType,
     ) -> (ModModule, Vec<ParseError>, Vec<UnsupportedSyntaxError>) {
         // PySourceType of Python vs Stub doesn't actually change the parsing
-        let options =
-            ParseOptions::from(PySourceType::Python).with_target_version(RuffPythonVersion {
-                major: version.major as u8,
-                minor: version.minor as u8,
-            });
+        let options = ParseOptions::from(source_type).with_target_version(RuffPythonVersion {
+            major: version.major as u8,
+            minor: version.minor as u8,
+        });
         let res = parse_unchecked(contents, options)
             .try_into_module()
             .unwrap();

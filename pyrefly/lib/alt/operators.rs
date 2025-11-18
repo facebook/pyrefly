@@ -46,7 +46,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         opname: &Name,
         call_arg_type: &Type,
     ) -> Type {
-        self.record_overload_trace_from_type(range, method_type.clone());
+        self.record_resolved_trace(range, method_type.clone());
         let callable = self.as_call_target_or_error(
             method_type,
             CallStyle::Method(opname),
@@ -131,9 +131,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 elements.extend(r.clone());
                 Type::Tuple(Tuple::Concrete(elements))
             }
-            (Tuple::Unbounded(l), Tuple::Unbounded(r)) => Type::Tuple(Tuple::Unbounded(Box::new(
-                self.union((**l).clone(), (**r).clone()),
-            ))),
+            (Tuple::Unbounded(l), Tuple::Unbounded(r)) => {
+                Type::Tuple(Tuple::unbounded(self.union((**l).clone(), (**r).clone())))
+            }
             (Tuple::Concrete(l), r @ Tuple::Unbounded(_)) => Type::Tuple(Tuple::unpacked(
                 l.clone(),
                 Type::Tuple(r.clone()),

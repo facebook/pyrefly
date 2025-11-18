@@ -83,11 +83,17 @@ class Node(xml.dom.Node):
     attributes: NamedNodeMap | None  # non-null only for Element
 
     @property
-    def firstChild(self) -> _NodesThatAreChildren | None: ...
+    def firstChild(self) -> _NodesThatAreChildren | None:
+        """First child node, or None."""
+        ...
     @property
-    def lastChild(self) -> _NodesThatAreChildren | None: ...
+    def lastChild(self) -> _NodesThatAreChildren | None:
+        """Last child node, or None."""
+        ...
     @property
-    def localName(self) -> str | None: ...  # non-null only for Element and Attr
+    def localName(self) -> str | None:
+        """Namespace-local name of this node."""
+        ...
     def __bool__(self) -> Literal[True]: ...
     @overload
     def toxml(self, encoding: str, standalone: bool | None = None) -> bytes: ...
@@ -165,14 +171,20 @@ class DocumentFragment(Node):
     previousSibling: None
     childNodes: NodeList[_DocumentFragmentChildren]
     @property
-    def firstChild(self) -> _DocumentFragmentChildren | None: ...
+    def firstChild(self) -> _DocumentFragmentChildren | None:
+        """First child node, or None."""
+        ...
     @property
-    def lastChild(self) -> _DocumentFragmentChildren | None: ...
+    def lastChild(self) -> _DocumentFragmentChildren | None:
+        """Last child node, or None."""
+        ...
 
     namespaceURI: None
     prefix: None
     @property
-    def localName(self) -> None: ...
+    def localName(self) -> None:
+        """Namespace-local name of this node."""
+        ...
     def __init__(self) -> None: ...
     def insertBefore(  # type: ignore[override]
         self, newChild: _DFChildrenPlusFragment, refChild: _DocumentFragmentChildren | None
@@ -199,14 +211,20 @@ class Attr(Node):
     previousSibling: None
     childNodes: NodeList[_AttrChildren]
     @property
-    def firstChild(self) -> _AttrChildren | None: ...
+    def firstChild(self) -> _AttrChildren | None:
+        """First child node, or None."""
+        ...
     @property
-    def lastChild(self) -> _AttrChildren | None: ...
+    def lastChild(self) -> _AttrChildren | None:
+        """Last child node, or None."""
+        ...
 
     namespaceURI: str | None
     prefix: str | None
     @property
-    def localName(self) -> str: ...
+    def localName(self) -> str:
+        """Namespace-local name of this attribute."""
+        ...
 
     name: str
     value: str
@@ -218,9 +236,13 @@ class Attr(Node):
     ) -> None: ...
     def unlink(self) -> None: ...
     @property
-    def isId(self) -> bool: ...
+    def isId(self) -> bool:
+        """True if this attribute is an ID."""
+        ...
     @property
-    def schemaType(self) -> TypeInfo: ...
+    def schemaType(self) -> TypeInfo:
+        """Schema type for this attribute."""
+        ...
     def insertBefore(self, newChild: _AttrChildrenPlusFragment, refChild: _AttrChildren | None) -> _AttrChildrenPlusFragment: ...  # type: ignore[override]
     def appendChild(self, node: _AttrChildrenPlusFragment) -> _AttrChildrenPlusFragment: ...  # type: ignore[override]
     @overload  # type: ignore[override]
@@ -235,7 +257,9 @@ class NamedNodeMap:
     __slots__ = ("_attrs", "_attrsNS", "_ownerElement")
     def __init__(self, attrs: dict[str, Attr], attrsNS: dict[_NSName, Attr], ownerElement: Element) -> None: ...
     @property
-    def length(self) -> int: ...
+    def length(self) -> int:
+        """Number of nodes in the NamedNodeMap."""
+        ...
     def item(self, index: int) -> Node | None: ...
     def items(self) -> list[tuple[str, str]]: ...
     def itemsNS(self) -> list[tuple[_NSName, str]]: ...
@@ -291,21 +315,29 @@ class Element(Node):
     nodeName: str  # same as Element.tagName
     nodeValue: None
     @property
-    def attributes(self) -> NamedNodeMap: ...  # type: ignore[override]
+    def attributes(self) -> NamedNodeMap:
+        """NamedNodeMap of attributes on the element."""
+        ...
 
     parentNode: Document | Element | DocumentFragment | None
     nextSibling: _DocumentChildren | _ElementChildren | _DocumentFragmentChildren | None
     previousSibling: _DocumentChildren | _ElementChildren | _DocumentFragmentChildren | None
     childNodes: NodeList[_ElementChildren]
     @property
-    def firstChild(self) -> _ElementChildren | None: ...
+    def firstChild(self) -> _ElementChildren | None:
+        """First child node, or None."""
+        ...
     @property
-    def lastChild(self) -> _ElementChildren | None: ...
+    def lastChild(self) -> _ElementChildren | None:
+        """Last child node, or None."""
+        ...
 
     namespaceURI: str | None
     prefix: str | None
     @property
-    def localName(self) -> str: ...
+    def localName(self) -> str:
+        """Namespace-local name of this element."""
+        ...
 
     schemaType: TypeInfo
     tagName: str
@@ -383,7 +415,9 @@ class ProcessingInstruction(Childless, Node):
     namespaceURI: None
     prefix: None
     @property
-    def localName(self) -> None: ...
+    def localName(self) -> None:
+        """Namespace-local name of this node."""
+        ...
 
     target: str
     data: str
@@ -401,14 +435,18 @@ class CharacterData(Childless, Node):
     previousSibling: _NodesThatAreChildren | None
 
     @property
-    def localName(self) -> None: ...
+    def localName(self) -> None:
+        """Namespace-local name of this node."""
+        ...
 
     ownerDocument: Document | None
     data: str
 
     def __init__(self) -> None: ...
     @property
-    def length(self) -> int: ...
+    def length(self) -> int:
+        """Length of the string data."""
+        ...
     def __len__(self) -> int: ...
     def substringData(self, offset: int, count: int) -> str: ...
     def appendData(self, arg: str) -> None: ...
@@ -435,16 +473,22 @@ class Text(CharacterData):
     namespaceURI: None
     prefix: None
     @property
-    def localName(self) -> None: ...
+    def localName(self) -> None:
+        """Namespace-local name of this node."""
+        ...
 
     data: str
     def splitText(self, offset: int) -> Self: ...
     def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None: ...
     def replaceWholeText(self, content: str) -> Self | None: ...
     @property
-    def isWhitespaceInElementContent(self) -> bool: ...
+    def isWhitespaceInElementContent(self) -> bool:
+        """True iff this text node contains only whitespace and is in element content."""
+        ...
     @property
-    def wholeText(self) -> str: ...
+    def wholeText(self) -> str:
+        """The text of all logically-adjacent text nodes."""
+        ...
 
 class Comment(CharacterData):
     nodeType: ClassVar[Literal[8]]
@@ -464,7 +508,9 @@ class Comment(CharacterData):
     namespaceURI: None
     prefix: None
     @property
-    def localName(self) -> None: ...
+    def localName(self) -> None:
+        """Namespace-local name of this node."""
+        ...
     def __init__(self, data: str) -> None: ...
     def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None: ...
 
@@ -494,7 +540,9 @@ class ReadOnlySequentialNamedNodeMap(Generic[_N]):
     def setNamedItem(self, node: Node) -> NoReturn: ...
     def setNamedItemNS(self, node: Node) -> NoReturn: ...
     @property
-    def length(self) -> int: ...
+    def length(self) -> int:
+        """Number of entries in the NamedNodeMap."""
+        ...
 
 class Identified:
     __slots__ = ("publicId", "systemId")
@@ -519,7 +567,9 @@ class DocumentType(Identified, Childless, Node):
     namespaceURI: None
     prefix: None
     @property
-    def localName(self) -> None: ...
+    def localName(self) -> None:
+        """Namespace-local name of this node."""
+        ...
 
     name: str | None
     internalSubset: str | None
@@ -541,14 +591,20 @@ class Entity(Identified, Node):
     previousSibling: None
     childNodes: NodeList[_EntityChildren]
     @property
-    def firstChild(self) -> _EntityChildren | None: ...
+    def firstChild(self) -> _EntityChildren | None:
+        """First child node, or None."""
+        ...
     @property
-    def lastChild(self) -> _EntityChildren | None: ...
+    def lastChild(self) -> _EntityChildren | None:
+        """Last child node, or None."""
+        ...
 
     namespaceURI: None
     prefix: None
     @property
-    def localName(self) -> None: ...
+    def localName(self) -> None:
+        """Namespace-local name of this node."""
+        ...
 
     actualEncoding: str | None
     encoding: str | None
@@ -579,7 +635,9 @@ class Notation(Identified, Childless, Node):
     namespaceURI: None
     prefix: None
     @property
-    def localName(self) -> None: ...
+    def localName(self) -> None:
+        """Namespace-local name of this node."""
+        ...
     def __init__(self, name: str, publicId: str | None, systemId: str | None) -> None: ...
 
 class DOMImplementation(DOMImplementationLS):
@@ -613,14 +671,20 @@ class Document(Node, DocumentLS):
     nextSibling: None
     childNodes: NodeList[_DocumentChildren]
     @property
-    def firstChild(self) -> _DocumentChildren | None: ...
+    def firstChild(self) -> _DocumentChildren | None:
+        """First child node, or None."""
+        ...
     @property
-    def lastChild(self) -> _DocumentChildren | None: ...
+    def lastChild(self) -> _DocumentChildren | None:
+        """Last child node, or None."""
+        ...
 
     namespaceURI: None
     prefix: None
     @property
-    def localName(self) -> None: ...
+    def localName(self) -> None:
+        """Namespace-local name of this node."""
+        ...
 
     implementation: DOMImplementation
     actualEncoding: str | None

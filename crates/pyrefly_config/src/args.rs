@@ -36,6 +36,17 @@ fn absolute_path_parser(s: &str) -> Result<PathBuf, String> {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone, Default)]
 pub struct ConfigOverrideArgs {
+    /// Configures Pyrefly to replace `project-excludes` fully rather than
+    /// append whatever is in your configuration or passed by CLI to Pyrefly's
+    /// defaults.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1,
+    )]
+    disable_project_excludes_heuristics: Option<bool>,
+
     /// The list of directories where imports are imported from, including
     /// type checked files.
     #[arg(long, value_parser = absolute_path_parser)]
@@ -49,7 +60,7 @@ pub struct ConfigOverrideArgs {
         long,
         default_missing_value = "true",
         require_equals = true,
-        num_args = 0..=1
+        num_args = 0..=1,
     )]
     disable_search_path_heuristics: Option<bool>,
 
@@ -156,6 +167,9 @@ pub struct ConfigOverrideArgs {
     /// Do not emit diagnostics for this rule. Can be used multiple times.
     #[arg(long, hide_possible_values = true)]
     ignore: Vec<ErrorKind>,
+    /// Force this rule to emit an info-level diagnostic. Can be used multiple times.
+    #[arg(long, hide_possible_values = true)]
+    info: Vec<ErrorKind>,
 }
 
 impl ConfigOverrideArgs {
@@ -173,6 +187,7 @@ impl ConfigOverrideArgs {
         let ignored_errors = &self.ignore.iter().collect::<HashSet<_>>();
         let warn_errors = &self.warn.iter().collect::<HashSet<_>>();
         let error_errors = self.error.iter().collect::<HashSet<_>>();
+        let info_errors = self.info.iter().collect::<HashSet<_>>();
         let error_ignore_conflicts: Vec<_> = error_errors.intersection(ignored_errors).collect();
         if !error_ignore_conflicts.is_empty() {
             return Err(anyhow::anyhow!(
@@ -194,6 +209,27 @@ impl ConfigOverrideArgs {
                 display::commas_iter(|| ignore_warn_conflicts.iter().map(|&&s| s))
             ));
         }
+        let error_info_conflicts: Vec<_> = error_errors.intersection(&info_errors).collect();
+        if !error_info_conflicts.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Error types are specified for both --info and --error: [{}]",
+                display::commas_iter(|| error_info_conflicts.iter().map(|&&s| s))
+            ));
+        }
+        let warn_info_conflicts: Vec<_> = warn_errors.intersection(&info_errors).collect();
+        if !warn_info_conflicts.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Error types are specified for both --info and --warn: [{}]",
+                display::commas_iter(|| warn_info_conflicts.iter().map(|&&s| s))
+            ));
+        }
+        let ignore_info_conflicts: Vec<_> = ignored_errors.intersection(&info_errors).collect();
+        if !ignore_info_conflicts.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Error types are specified for both --info and --ignore: [{}]",
+                display::commas_iter(|| ignore_info_conflicts.iter().map(|&&s| s))
+            ));
+        }
         Ok(())
     }
 
@@ -209,6 +245,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.disable_search_path_heuristics {
             config.disable_search_path_heuristics = *x;
+        }
+        if let Some(x) = &self.disable_project_excludes_heuristics {
+            config.disable_project_excludes_heuristics = *x;
         }
         if let Some(x) = &self.site_package_path {
             config.python_environment.site_package_path = Some(x.clone());
@@ -291,6 +330,9 @@ impl ConfigOverrideArgs {
             for error_kind in &self.ignore {
                 apply_severity(error_kind, Severity::Ignore);
             }
+            for error_kind in &self.info {
+                apply_severity(error_kind, Severity::Info);
+            }
             missing_source_severity
         };
         let root_errors = config.root.errors.get_or_insert_default();
@@ -319,5 +361,9 @@ impl ConfigOverrideArgs {
         }
         let errors = config.configure();
         (ArcId::new(config), errors)
+    }
+
+    pub fn disable_project_excludes_heuristics(&self) -> Option<bool> {
+        self.disable_project_excludes_heuristics
     }
 }

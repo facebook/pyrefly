@@ -38,6 +38,7 @@ use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
+use ruff_python_ast::StringLiteralValue;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -47,7 +48,6 @@ use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
-use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
@@ -69,6 +69,7 @@ use crate::types::facet::FacetKind;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::param_spec::ParamSpec;
+use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
@@ -108,17 +109,18 @@ impl<'a> TypeOrExpr<'a> {
         }
     }
 
-    pub fn materialize<Ans: LookupAnswer>(
+    pub fn transform<Ans: LookupAnswer>(
         &self,
         solver: &AnswersSolver<Ans>,
         errors: &ErrorCollector,
         owner: &'a Owner<Type>,
+        transformation: impl Fn(&Type) -> Type,
     ) -> (Self, bool) {
         let ty = self.infer(solver, errors);
-        let materialized = ty.materialize();
-        let changed = ty != materialized;
+        let transformed = transformation(&ty);
+        let changed = ty != transformed;
         (
-            TypeOrExpr::Type(owner.push(materialized), self.range()),
+            TypeOrExpr::Type(owner.push(transformed), self.range()),
             changed,
         )
     }
@@ -542,6 +544,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let callee_ty = self.expr_infer(&x.func, errors);
                 if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
                     self.dict_infer(&d, hint, x.range, errors)
+                } else if let Some((obj_ty, key)) =
+                    self.is_dict_get_with_literal(&x.func, &x.arguments, errors)
+                {
+                    obj_ty
+                        .at_facet(&FacetKind::Key(key.to_string()), || {
+                            self.expr_call_infer(x, callee_ty.clone(), hint, errors)
+                        })
+                        .into_ty()
                 } else {
                     self.expr_call_infer(x, callee_ty, hint, errors)
                 }
@@ -589,12 +599,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect::<Vec<_>>();
                 self.specialize(&self.stdlib.slice_class_object(), elts, x.range(), errors)
             }
-            Expr::IpyEscapeCommand(x) => self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::Unsupported),
-                "IPython escapes are not supported".to_owned(),
-            ),
+            Expr::IpyEscapeCommand(x) => {
+                if self.module().is_notebook() {
+                    Type::any_implicit()
+                } else {
+                    self.error(
+                        errors,
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::Unsupported),
+                        "IPython escapes are not supported".to_owned(),
+                    )
+                }
+            }
         }
     }
 
@@ -640,7 +656,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if !nontuples.is_empty() {
                 // The non-tuple options may contain a type like Sequence[T] that provides an additional default hint.
-                let nontuple_hint = self.unions(nontuples.into_iter().cloned().collect());
+                // Filter out top-level Vars: they don't provide any hints, and we don't want to pin them.
+                let nontuple_hint = self.unions(
+                    nontuples
+                        .into_iter()
+                        .filter(|t| !matches!(t, Type::Var(_)))
+                        .cloned()
+                        .collect(),
+                );
                 let nontuple_element_hint =
                     self.decompose_tuple(HintRef::new(&nontuple_hint, hint.errors()));
                 if let Some(nontuple_element_hint) = nontuple_element_hint {
@@ -748,7 +771,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .collect();
                     Type::Tuple(Tuple::unpacked(
                         prefix,
-                        Type::Tuple(Tuple::Unbounded(Box::new(self.unions(middle_types)))),
+                        Type::Tuple(Tuple::unbounded(self.unions(middle_types))),
                         suffix,
                     ))
                 }
@@ -971,6 +994,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    // Is this a call to `dict.get` with a single string literal argument
+    fn is_dict_get_with_literal(
+        &self,
+        func: &Expr,
+        args: &Arguments,
+        errors: &ErrorCollector,
+    ) -> Option<(TypeInfo, StringLiteralValue)> {
+        let Expr::Attribute(attr_expr) = func else {
+            return None;
+        };
+        if attr_expr.attr.id.as_str() != "get" {
+            return None;
+        }
+        if args.args.len() != 1 {
+            return None;
+        }
+        let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = &args.args[0] else {
+            return None;
+        };
+        let obj_ty = self.expr_infer_type_info_with_hint(&attr_expr.value, None, errors);
+        if self.is_dict_like(obj_ty.ty()) {
+            Some((obj_ty, key.clone()))
+        } else {
+            None
+        }
+    }
+
+    // Is this type a `TypedDict` or subtype of `dict`, but not `Any`?
+    pub fn is_dict_like(&self, ty: &Type) -> bool {
+        if ty.is_any() {
+            return false;
+        }
+        if ty.is_typed_dict() {
+            return true;
+        }
+        let dict_type = self
+            .stdlib
+            .dict(Type::any_implicit(), Type::any_implicit())
+            .to_type();
+        self.is_subset_eq(ty, &dict_type)
+    }
+
     /// Determine the boolean behavior of a type:
     /// - `Some(true)` or `Some(false)` when it is known to be statically truthy
     ///   or falsey (as determined by some baked in rules for literals
@@ -1011,9 +1076,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (i, value) in values.iter().enumerate() {
             // If there isn't a hint for the overall expression, use the preceding branches as a "soft" hint
             // for the next one. Most useful for expressions like `optional_list or []`.
-            let hint = hint.or_else(|| Some(HintRef::new(&t_acc, None)));
+            let hint = hint.or_else(|| {
+                if t_acc.is_never() {
+                    None
+                } else {
+                    Some(HintRef::soft(&t_acc))
+                }
+            });
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
+            // If this is not the last entry, we have to make a type-dependent decision and also narrow the
+            // result; both operations require us to force `Var` first or they become unpredictable.
+            if i < last_index {
+                t = self.force_for_narrowing(&t);
+            }
             if i < last_index && should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);
                 break;
@@ -1690,35 +1766,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Apply a decorator. This effectively synthesizes a function call.
-    pub fn apply_decorator(
-        &self,
-        decorator: Type,
-        decoratee: Type,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Type {
-        if matches!(&decoratee, Type::ClassDef(cls) if cls.has_toplevel_qname("typing", "TypeVar"))
-        {
-            // Avoid recursion in TypeVar, which is decorated with `@final`, whose type signature
-            // itself depends on a TypeVar.
-            return decoratee;
-        }
-        if matches!(&decoratee, Type::ClassDef(_)) {
-            // TODO: don't blanket ignore class decorators.
-            return decoratee;
-        }
-        let call_target = self.as_call_target_or_error(
-            decorator.clone(),
-            CallStyle::FreeForm,
-            range,
-            errors,
-            None,
-        );
-        let arg = CallArg::ty(&decoratee, range);
-        self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
-    }
-
     /// Helper to infer element types for a list or set.
     fn elts_infer(
         &self,
@@ -1772,6 +1819,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn is_enum_class_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => {
+                self.has_superclass(cls.class_object(), self.stdlib.enum_class().class_object())
+            }
+            Type::Union(variants) => variants
+                .iter()
+                .all(|variant| self.is_enum_class_type(variant)),
+            _ => false,
+        }
+    }
+
+    fn is_restricted_to_enum_class_def_type(&self, quantified: &Quantified) -> bool {
+        match quantified.restriction() {
+            Restriction::Unrestricted => false,
+            Restriction::Bound(bound) => self.is_enum_class_type(bound),
+            Restriction::Constraints(constraints) => {
+                !constraints.is_empty()
+                    && constraints
+                        .iter()
+                        .all(|constraint| self.is_enum_class_type(constraint))
+            }
+        }
+    }
+
     pub fn subscript_infer_for_type(
         &self,
         base: &Type,
@@ -1787,6 +1859,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if matches!(&base, Type::ClassDef(t) if t.name() == "tuple") {
                 base = Type::type_form(Type::SpecialForm(SpecialForm::Tuple));
+            }
+            if let Type::Intersect(x) = base {
+                // TODO: Handle subscription of intersections properly.
+                base = x.1;
             }
             match base {
                 Type::Forall(forall) => {
@@ -1903,6 +1979,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ))
                     }
                 }
+                Type::Type(box Type::Quantified(quantified)) if quantified.is_type_var() => {
+                    let quantified = *quantified;
+                    let base_display_ty =
+                        Type::Type(Box::new(Type::Quantified(Box::new(quantified.clone()))));
+                    if self.is_restricted_to_enum_class_def_type(&quantified) {
+                        if self.is_subset_eq(
+                            &self.expr(slice, None, errors),
+                            &self.stdlib.str().clone().to_type(),
+                        ) {
+                            quantified.to_type()
+                        } else {
+                            self.error(
+                                errors,
+                                slice.range(),
+                                ErrorInfo::Kind(ErrorKind::BadIndex),
+                                format!(
+                                    "Enum type `{}` can only be indexed by strings",
+                                    self.for_display(base_display_ty)
+                                ),
+                            )
+                        }
+                    } else {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                            format!(
+                                "`{}` is not subscriptable",
+                                self.for_display(base_display_ty)
+                            ),
+                        )
+                    }
+                }
+                Type::Type(inner) if self.is_enum_class_type(inner.as_ref()) => {
+                    let base_display_ty = Type::Type(inner.clone());
+                    let enum_value_ty = *inner;
+                    if self.is_subset_eq(
+                        &self.expr(slice, None, errors),
+                        &self.stdlib.str().clone().to_type(),
+                    ) {
+                        enum_value_ty
+                    } else {
+                        self.error(
+                            errors,
+                            slice.range(),
+                            ErrorInfo::Kind(ErrorKind::BadIndex),
+                            format!(
+                                "Enum type `{}` can only be indexed by strings",
+                                self.for_display(base_display_ty)
+                            ),
+                        )
+                    }
+                }
                 Type::Type(box Type::SpecialForm(special)) => {
                     self.apply_special_form(special, slice, range, errors)
                 }
@@ -1930,9 +2059,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
-                Type::LiteralString | Type::Literal(Lit::Str(_)) if xs.len() <= 3 => {
+                Type::LiteralString if xs.len() <= 3 => {
                     // We could have a more precise type here, but this matches Pyright.
                     self.stdlib.str().clone().to_type()
+                }
+                Type::Literal(Lit::Str(ref value)) if xs.len() <= 3 => {
+                    let base_ty = Type::Literal(Lit::Str(value.clone()));
+                    let context = || ErrorContext::Index(self.for_display(base_ty.clone()));
+                    self.subscript_str_literal(
+                        value.as_str(),
+                        &base_ty,
+                        slice,
+                        errors,
+                        range,
+                        Some(&context),
+                    )
                 }
                 Type::ClassType(ref cls) | Type::SelfType(ref cls)
                     if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) =>
@@ -2102,6 +2243,191 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 }
             }
+        }
+    }
+
+    fn subscript_str_literal(
+        &self,
+        value: &str,
+        base_type: &Type,
+        index_expr: &Expr,
+        errors: &ErrorCollector,
+        range: TextRange,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> Type {
+        let fallback = || {
+            self.call_method_or_error(
+                base_type,
+                &dunder::GETITEM,
+                range,
+                &[CallArg::expr(index_expr)],
+                &[],
+                errors,
+                context,
+            )
+        };
+
+        if matches!(index_expr, Expr::Tuple(_)) {
+            return fallback();
+        }
+
+        let literal_index = |expr: &Expr| -> Option<i64> {
+            match self.expr_infer(expr, errors) {
+                Type::Literal(ref lit) => lit.as_index_i64(),
+                _ => None,
+            }
+        };
+
+        let chars: Vec<char> = value.chars().collect();
+        let len_usize = chars.len();
+        if len_usize > i64::MAX as usize {
+            return fallback();
+        }
+        let len = len_usize as i64;
+
+        if let Expr::Slice(slice) = index_expr {
+            let step = match slice.step.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) if value != 0 => value,
+                    _ => return fallback(),
+                },
+                None => 1,
+            };
+
+            if step == i64::MIN {
+                return fallback();
+            }
+
+            let mut start = match slice.lower.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) => value,
+                    None => return fallback(),
+                },
+                None => {
+                    if step < 0 {
+                        len.saturating_sub(1)
+                    } else {
+                        0
+                    }
+                }
+            };
+
+            let mut stop = match slice.upper.as_deref() {
+                Some(expr) => match literal_index(expr) {
+                    Some(value) => value,
+                    None => return fallback(),
+                },
+                None => {
+                    if step < 0 {
+                        match len.checked_add(1) {
+                            Some(v) => -v,
+                            None => return fallback(),
+                        }
+                    } else {
+                        len
+                    }
+                }
+            };
+
+            if step > 0 {
+                if start < 0 {
+                    start += len;
+                    if start < 0 {
+                        start = 0;
+                    }
+                } else if start > len {
+                    start = len;
+                }
+
+                if stop < 0 {
+                    stop += len;
+                    if stop < 0 {
+                        stop = 0;
+                    }
+                } else if stop > len {
+                    stop = len;
+                }
+            } else {
+                if start < 0 {
+                    start += len;
+                    if start < 0 {
+                        start = -1;
+                    }
+                } else if start >= len {
+                    start = len.saturating_sub(1);
+                }
+
+                if stop < 0 {
+                    stop += len;
+                    if stop < 0 {
+                        stop = -1;
+                    }
+                } else if stop >= len {
+                    stop = len.saturating_sub(1);
+                }
+            }
+
+            let slice_length = if step < 0 {
+                if stop < start {
+                    (start - stop - 1) / (-step) + 1
+                } else {
+                    0
+                }
+            } else if start < stop {
+                (stop - start - 1) / step + 1
+            } else {
+                0
+            };
+
+            if slice_length <= 0 {
+                return Type::Literal(Lit::Str("".into()));
+            }
+
+            if slice_length as usize as i64 != slice_length {
+                return fallback();
+            }
+
+            let mut result = String::new();
+            let mut idx = start;
+            for _ in 0..slice_length as usize {
+                if idx < 0 || idx >= len {
+                    return fallback();
+                }
+                let Some(&ch) = chars.get(idx as usize) else {
+                    return fallback();
+                };
+                result.push(ch);
+                idx = match idx.checked_add(step) {
+                    Some(next) => next,
+                    None => return fallback(),
+                };
+            }
+
+            Type::Literal(Lit::Str(result.into()))
+        } else {
+            let idx_ty = self.expr_infer(index_expr, errors);
+            if let Type::Literal(lit) = idx_ty
+                && let Some(idx) = lit.as_index_i64()
+            {
+                let normalized = if idx < 0 { len + idx } else { idx };
+                if normalized >= 0 && normalized < len {
+                    let ch = chars[normalized as usize];
+                    let mut buf = String::new();
+                    buf.push(ch);
+                    return Type::Literal(Lit::Str(buf.into()));
+                } else {
+                    return self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::BadIndex),
+                        format!(
+                            "Index `{idx}` out of range for string with {} elements",
+                            chars.len()
+                        ),
+                    );
+                }
+            }
+            fallback()
         }
     }
 

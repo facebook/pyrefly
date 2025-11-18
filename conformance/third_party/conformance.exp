@@ -3372,6 +3372,17 @@
     {
       "code": -2,
       "column": 1,
+      "concise_description": "Cannot set field `final_no_default`",
+      "description": "Cannot set field `final_no_default`\n  This field is marked as Final",
+      "line": 35,
+      "name": "read-only",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 35
+    },
+    {
+      "code": -2,
+      "column": 1,
       "concise_description": "Cannot set field `final_with_default`",
       "description": "Cannot set field `final_with_default`\n  This field is marked as Final",
       "line": 36,
@@ -3379,6 +3390,17 @@
       "severity": "error",
       "stop_column": 21,
       "stop_line": 36
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Cannot set field `final_no_default`",
+      "description": "Cannot set field `final_no_default`\n  This field is marked as Final",
+      "line": 37,
+      "name": "read-only",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 37
     },
     {
       "code": -2,
@@ -5262,13 +5284,13 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(Any, int) failed",
-      "description": "assert_type(Any, int) failed",
-      "line": 130,
+      "concise_description": "assert_type(int, Any) failed",
+      "description": "assert_type(int, Any) failed",
+      "line": 131,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 27,
-      "stop_line": 130
+      "stop_line": 131
     },
     {
       "code": -2,
@@ -6422,6 +6444,39 @@
       "severity": "error",
       "stop_column": 18,
       "stop_line": 44
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 92,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 92
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 95,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 95
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 98,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 98
     }
   ],
   "generics_type_erasure.py": [
@@ -8746,6 +8801,17 @@
     }
   ],
   "protocols_explicit.py": [
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Method `draw` inherited from class `PColor` has no implementation and cannot be accessed via `super()`",
+      "description": "Method `draw` inherited from class `PColor` has no implementation and cannot be accessed via `super()`",
+      "line": 27,
+      "name": "missing-attribute",
+      "severity": "error",
+      "stop_column": 28,
+      "stop_line": 27
+    },
     {
       "code": -2,
       "column": 20,
@@ -11271,6 +11337,17 @@
       "severity": "error",
       "stop_column": 6,
       "stop_line": 106
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Field `x` is declared `float` in ancestor `class TD_A2: ...\n`, which is not assignable to the type `int` implied by multiple inheritance",
+      "description": "Field `x` is declared `float` in ancestor `class TD_A2: ...\n`, which is not assignable to the type `int` implied by multiple inheritance",
+      "line": 119,
+      "name": "inconsistent-inheritance",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 119
     },
     {
       "code": -2,

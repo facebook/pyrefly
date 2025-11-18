@@ -10,6 +10,7 @@ use lsp_server::Notification;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_types::Url;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -29,7 +30,7 @@ fn test_text_document_did_change() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&filepath).unwrap().to_string(),
                     "languageId": "python",
@@ -49,7 +50,7 @@ fn test_text_document_did_change() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&filepath).unwrap().to_string(),
                     "languageId": "python",
@@ -68,7 +69,7 @@ fn test_text_document_did_change() {
     interaction.server.diagnostic("text_document.py");
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
+        result: Some(json!({"items": [], "kind": "full"})),
         error: None,
     });
 
@@ -89,7 +90,7 @@ fn test_text_document_did_change_unicode() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&utf_filepath).unwrap().to_string(),
                     "languageId": "python",
@@ -110,7 +111,7 @@ fn test_text_document_did_change_unicode() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&utf_filepath).unwrap().to_string(),
                     "languageId": "python",
@@ -130,7 +131,7 @@ fn test_text_document_did_change_unicode() {
     interaction.server.diagnostic("utf.py");
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
+        result: Some(json!({"items": [], "kind": "full"})),
         error: None,
     });
 

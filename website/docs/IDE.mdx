@@ -26,10 +26,12 @@ Want type error squiggles to show up in VS Code? Try setting `python.pyrefly.dis
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
-- Disable language services
+- Disable all language services
   - `python.pyrefly.disableLanguageServices` [boolean: false]: By default, Pyrefly will provide both type errors and other language features like go-to definition, intellisense, hover, etc. Set `disableLanguageServices` to `true` to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
+- Disable certain language services
+  - `python.pyrefly.disabledLanguageServices` [json: {}]: a config to disable certain lsp methods from pyrefly. For example, if you want go-to definition but not find-references.
 - Disable type errors
-  - `python.pyrefly.displayTypeErrors` [string: 'default']: If `'default'`, Pyrefly will only provide type check squiggles in the IDE if your file is covered by a [Pyrefly configuration](../configuration). If `'force-off'`, Pyrefly will never provide type check squiggles in the IDE. If `'force-on'`, Pyrefly will always provide type check squiggles in the IDE.
+  - `python.pyrefly.displayTypeErrors` [enum: default, force-on, force-off]: If `'default'`, Pyrefly will only provide type check squiggles in the IDE if your file is covered by a [Pyrefly configuration](../configuration). If `'force-off'`, Pyrefly will never provide type check squiggles in the IDE. If `'force-on'`, Pyrefly will always provide type check squiggles in the IDE.
 - Specify a custom Pyrefly Binary (lspPath)
   - `pyrefly.lspPath` [string: '']: If your platform is not supported, you can build pyrefly from source and specify the binary path with the `lspPath` config.
 - Use a specific interpreter
@@ -59,7 +61,18 @@ To avoid conflicts, you should disable other Python language servers by either s
 />
 
 ### Jetbrains / Pycharm
-An unofficial Jetbrains extension has been developed [here](https://plugins.jetbrains.com/plugin/26829-pyrefly)
+PyCharm users can enable native Pyrefly support in the settings:
+1. Go to **Python | Tools | Pyrefly** in the Settings dialog.
+2. Select the **Enable** checkbox.
+3. In the Execution mode setting, select how PyCharm should search for the executable:
+
+    **Interpreter** mode: PyCharm searches for an executable installed in your interpreter. To install the Pyrefly package for the selected interpreter, click *Install Pyrefly*.
+
+    **Path** mode: PyCharm searches for an executable in `$PATH`. If the executable is not found, you can specify the path by clicking the  Browse... icon.
+
+4. Select which options should be enabled.
+
+For more information, refer to [PyCharm documentation](https://www.jetbrains.com/help/pycharm/2025.3/lsp-tools.html#pyrefly).
 
 ### Neovim
 

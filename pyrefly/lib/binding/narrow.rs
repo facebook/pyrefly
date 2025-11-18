@@ -31,20 +31,25 @@ use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
+use crate::binding::binding::Binding;
+use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
+use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::types::facet::FacetChain;
 use crate::types::facet::FacetKind;
 use crate::types::types::Type;
 
 assert_words!(AtomicNarrowOp, 11);
-assert_words!(NarrowOp, 12);
+assert_words!(NarrowOp, 13);
 
 #[derive(Clone, Debug)]
 pub enum AtomicNarrowOp {
@@ -92,7 +97,7 @@ pub enum AtomicNarrowOp {
 
 #[derive(Clone, Debug)]
 pub enum NarrowOp {
-    Atomic(Option<FacetChain>, AtomicNarrowOp),
+    Atomic(Option<FacetSubject>, AtomicNarrowOp),
     And(Vec<NarrowOp>),
     Or(Vec<NarrowOp>),
 }
@@ -176,7 +181,7 @@ impl DisplayWith<ModuleInfo> for NarrowOp {
         match self {
             Self::Atomic(prop, op) => match prop {
                 None => write!(f, "{}", op.display_with(ctx)),
-                Some(prop) => write!(f, "[{prop}] {}", op.display_with(ctx)),
+                Some(prop) => write!(f, "[{}] {}", prop.chain, op.display_with(ctx)),
             },
             Self::And(ops) => {
                 write!(
@@ -234,19 +239,45 @@ impl AtomicNarrowOp {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FacetOrigin {
+    // This facet is a direct access, like `x.y`, `x[0]`, `x["key"]`
+    Direct,
+    // This facet came from a call to a `get` method, like `x.get("key")`
+    GetMethod,
+}
+
+#[derive(Clone, Debug)]
+pub struct FacetSubject {
+    pub chain: FacetChain,
+    pub origin: FacetOrigin,
+}
+
 #[derive(Clone, Debug)]
 pub enum NarrowingSubject {
     Name(Name),
-    Facets(Name, FacetChain),
+    Facets(Name, FacetSubject),
 }
 
 impl NarrowingSubject {
     pub fn with_facet(&self, prop: FacetKind) -> Self {
         match self {
-            Self::Name(name) => Self::Facets(name.clone(), FacetChain::new(Vec1::new(prop))),
-            Self::Facets(name, props) => {
-                let props = Vec1::from_vec_push(props.facets().to_vec(), prop);
-                Self::Facets(name.clone(), FacetChain::new(props))
+            Self::Name(name) => Self::Facets(
+                name.clone(),
+                FacetSubject {
+                    chain: FacetChain::new(Vec1::new(prop)),
+                    origin: FacetOrigin::Direct,
+                },
+            ),
+            Self::Facets(name, facets) => {
+                let props = Vec1::from_vec_push(facets.chain.facets().to_vec(), prop);
+                Self::Facets(
+                    name.clone(),
+                    FacetSubject {
+                        chain: FacetChain::new(props),
+                        origin: facets.origin,
+                    },
+                )
             }
         }
     }
@@ -372,7 +403,7 @@ impl NarrowOps {
         for subject in expr_to_subjects(left) {
             let (name, prop) = match subject {
                 NarrowingSubject::Name(name) => (name, None),
-                NarrowingSubject::Facets(name, prop) => (name, Some(prop)),
+                NarrowingSubject::Facets(name, facets) => (name, Some(facets)),
             };
             if let Some((existing, _)) = narrow_ops.0.get_mut(&name) {
                 existing.and(NarrowOp::Atomic(prop, op.clone()));
@@ -393,7 +424,7 @@ impl NarrowOps {
         let mut narrow_ops = Self::new();
         let (name, prop) = match subject {
             NarrowingSubject::Name(name) => (name, None),
-            NarrowingSubject::Facets(name, prop) => (name, Some(prop)),
+            NarrowingSubject::Facets(name, facets) => (name, Some(facets)),
         };
         if let Some((existing, _)) = narrow_ops.0.get_mut(&name) {
             existing.and(NarrowOp::Atomic(prop, op.clone()));
@@ -406,14 +437,25 @@ impl NarrowOps {
     }
 
     pub fn from_expr(builder: &BindingsBuilder, test: Option<&Expr>) -> Self {
+        Self::from_expr_helper(builder, test, SmallSet::new())
+    }
+
+    fn from_expr_helper<'a>(
+        builder: &BindingsBuilder,
+        test: Option<&'a Expr>,
+        mut seen: SmallSet<&'a Name>,
+    ) -> Self {
+        let Some(test) = test else {
+            return Self::new();
+        };
         match test {
-            Some(Expr::Compare(ExprCompare {
+            Expr::Compare(ExprCompare {
                 node_index: _,
                 range: _,
                 left,
                 ops: cmp_ops,
                 comparators,
-            })) => {
+            }) => {
                 // If the left expression is a call to `len()` or `getattr()`, we're narrowing the first argument
                 let mut left = &**left;
                 // If the left expression is a call to `getattr()` we store attribute name and default
@@ -512,46 +554,49 @@ impl NarrowOps {
                     }
                 }
             }
-            Some(Expr::BoolOp(ExprBoolOp {
+            Expr::BoolOp(ExprBoolOp {
                 node_index: _,
                 range: _,
                 op,
                 values,
-            })) => {
+            }) => {
                 let extend = match op {
                     BoolOp::And => NarrowOps::and_all,
                     BoolOp::Or => NarrowOps::or_all,
                 };
                 let mut exprs = values.iter();
-                let mut narrow_ops = Self::from_expr(builder, exprs.next());
+                let mut narrow_ops = Self::from_expr_helper(builder, exprs.next(), seen.clone());
                 for next_val in exprs {
-                    extend(&mut narrow_ops, Self::from_expr(builder, Some(next_val)))
+                    extend(
+                        &mut narrow_ops,
+                        Self::from_expr_helper(builder, Some(next_val), seen.clone()),
+                    )
                 }
                 narrow_ops
             }
-            Some(Expr::UnaryOp(ExprUnaryOp {
+            Expr::UnaryOp(ExprUnaryOp {
                 node_index: _,
                 range: _,
                 op: UnaryOp::Not,
                 operand: e,
-            })) => Self::from_expr(builder, Some(e)).negate(),
-            Some(Expr::Call(ExprCall {
+            }) => Self::from_expr_helper(builder, Some(e), seen).negate(),
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments,
-            })) if builder.as_special_export(func) == Some(SpecialExport::Bool)
+            }) if builder.as_special_export(func) == Some(SpecialExport::Bool)
                 && arguments.args.len() == 1
                 && arguments.keywords.is_empty() =>
             {
                 Self::from_single_narrow_op(&arguments.args[0], AtomicNarrowOp::IsTruthy, *range)
             }
-            Some(Expr::Call(ExprCall {
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments,
-            })) if builder.as_special_export(func) == Some(SpecialExport::HasAttr)
+            }) if builder.as_special_export(func) == Some(SpecialExport::HasAttr)
                 && arguments.args.len() == 2
                 && arguments.keywords.is_empty()
                 && let Expr::StringLiteral(ExprStringLiteral { value, .. }) =
@@ -563,12 +608,12 @@ impl NarrowOps {
                     *range,
                 )
             }
-            Some(Expr::Call(ExprCall {
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments,
-            })) if builder.as_special_export(func) == Some(SpecialExport::GetAttr)
+            }) if builder.as_special_export(func) == Some(SpecialExport::GetAttr)
                 && (arguments.args.len() == 2 || arguments.args.len() == 3)
                 && arguments.keywords.is_empty()
                 && let Expr::StringLiteral(ExprStringLiteral { value, .. }) =
@@ -587,12 +632,18 @@ impl NarrowOps {
                     *range,
                 )
             }
-            Some(Expr::Call(ExprCall {
+            e @ Expr::Call(call) if dict_get_subject_for_call_expr(call).is_some() => {
+                // When the guard is something like `x.get("key")`, we narrow it like `x["key"]` if `x` resolves to a dict
+                // in the answers step.
+                // This cannot be a TypeGuard/TypeIs function call, since the first argument is a string literal
+                Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range())
+            }
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments: args @ Arguments { args: posargs, .. },
-            })) if !posargs.is_empty() => {
+            }) if !posargs.is_empty() => {
                 // This may be a function call that narrows the type of its first argument. Record
                 // it as a possible narrowing operation that we'll resolve in the answers phase.
                 Self::from_single_narrow_op(
@@ -601,13 +652,14 @@ impl NarrowOps {
                     *range,
                 )
             }
-            Some(Expr::Named(named)) => {
+            Expr::Named(named) => {
                 let mut target_narrow = Self::from_single_narrow_op(
                     &named.target,
                     AtomicNarrowOp::IsTruthy,
                     named.target.range(),
                 );
-                let value_narrow = Self::from_expr(builder, Some(*named.value.clone()).as_ref());
+                let value_narrow =
+                    Self::from_expr_helper(builder, Some(*named.value.clone()).as_ref(), seen);
                 // Merge the entries from the two `NarrowOps`
                 // We don't use `and_all` because it always generates placeholders when the entry is not present.
                 // This causes `Or` ops to be generated when the narrowing is negated, which is correct for
@@ -625,8 +677,94 @@ impl NarrowOps {
                 }
                 target_narrow
             }
-            Some(e) => Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range()),
-            None => Self::new(),
+            e @ Expr::Name(name) => {
+                if !seen.insert(name.id()) {
+                    Self::new()
+                } else {
+                    // Look up the definition of `name`.
+                    let original_expr = match Self::get_original_binding(builder, &name.id) {
+                        Some((_, Some(Binding::NameAssign(_, _, original_expr, _)))) => {
+                            Some(&**original_expr)
+                        }
+                        _ => None,
+                    };
+                    let mut ops = Self::from_expr_helper(builder, original_expr, seen);
+                    ops.0.retain(|name, (op, op_range)| {
+                        Self::op_is_still_valid(builder, name, op, *op_range)
+                    });
+                    // Merge the narrow ops from the original definition with IsTruthy(name).
+                    ops.0.insert(
+                        name.id.clone(),
+                        (NarrowOp::Atomic(None, AtomicNarrowOp::IsTruthy), e.range()),
+                    );
+                    ops
+                }
+            }
+            e => Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range()),
+        }
+    }
+
+    fn get_original_binding<'a>(
+        builder: &'a BindingsBuilder,
+        name: &Name,
+    ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
+        let name_read_info = builder.scopes.look_up_name_for_read(Hashed::new(name));
+        match name_read_info {
+            NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
+            _ => None,
+        }
+    }
+
+    fn op_is_still_valid(
+        builder: &BindingsBuilder,
+        name: &Name,
+        op: &NarrowOp,
+        op_range: TextRange,
+    ) -> bool {
+        // Check (1) if `op` checks a property of `name` that can't be invalidated without
+        // reassigning `name` and (2) whether `name` is reassigned after `op` is computed.
+        match op {
+            NarrowOp::And(ops) | NarrowOp::Or(ops) => ops
+                .iter()
+                .all(|op| Self::op_is_still_valid(builder, name, op, op_range)),
+            // A non-None facet subject means we're narrowing something like an attribute or a dict item.
+            NarrowOp::Atomic(Some(_), _) => false,
+            NarrowOp::Atomic(None, op) => match op {
+                AtomicNarrowOp::Is(..)
+                | AtomicNarrowOp::IsNot(..)
+                | AtomicNarrowOp::Eq(..)
+                | AtomicNarrowOp::NotEq(..)
+                // Technically the `__class__` attribute can be mutated, but code that does that
+                // probably isn't statically analyzable anyway.
+                | AtomicNarrowOp::IsInstance(..)
+                | AtomicNarrowOp::IsNotInstance(..)
+                | AtomicNarrowOp::IsSubclass(..)
+                | AtomicNarrowOp::IsNotSubclass(..)
+                | AtomicNarrowOp::TypeEq(..)
+                | AtomicNarrowOp::TypeNotEq(..)
+                // The len ops are only applied to tuples, which are immutable.
+                | AtomicNarrowOp::LenEq(..)
+                | AtomicNarrowOp::LenNotEq(..)
+                | AtomicNarrowOp::LenGt(..)
+                | AtomicNarrowOp::LenGte(..)
+                | AtomicNarrowOp::LenLt(..)
+                | AtomicNarrowOp::LenLte(..)
+                // This is technically unsafe, because it marks arbitrary TypeGuard/TypeIs results
+                // as still valid, but we need to allow this for `isinstance` and friends to work.
+                | AtomicNarrowOp::Call(..)
+                | AtomicNarrowOp::NotCall(..)
+                // The only objects that have different truthy and falsy types
+                // (True vs. False, empty vs. non-empty tuple, etc.) are immutable.
+                | AtomicNarrowOp::IsTruthy
+                | AtomicNarrowOp::IsFalsy
+                | AtomicNarrowOp::Placeholder => match builder.scopes.binding_idx_for_name(name) {
+                    // Make sure the last definition of `name` is before the narrowing operation,
+                    // so we know that `name` hasn't been redefined post-narrowing.
+                    Some((idx, _)) => builder.idx_to_key(idx).range().end() <= op_range.start(),
+                    None => true,
+                },
+                _ => false,
+            },
         }
     }
 }
@@ -770,16 +908,63 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
     f(expr, Vec::new())
 }
 
-fn subject_for_expr(expr: &Expr) -> Option<NarrowingSubject> {
-    identifier_and_chain_for_expr(expr)
-        .map(|(identifier, attr)| NarrowingSubject::Facets(identifier.id, attr))
+// Handle narrowing on `dict.get("key")`. During solving, if the resolved
+// type of the object is not a subtype of `dict`, we will not perform any narrowing.
+fn dict_get_subject_for_call_expr(call_expr: &ExprCall) -> Option<NarrowingSubject> {
+    let func = &call_expr.func;
+    let arguments = &call_expr.arguments;
+    if arguments.keywords.is_empty()
+        && arguments.args.len() == 1
+        && let Some(first_arg) = arguments.args.first()
+        && let Expr::Attribute(attr) = &**func
+        && attr.attr.id.as_str() == "get"
+        && let Expr::StringLiteral(ExprStringLiteral { value, .. }) = first_arg
+    {
+        let key = value.to_string();
+        if let Some((identifier, facets)) = identifier_and_chain_for_expr(&attr.value) {
+            // x.y.z.get("key")
+            let props = Vec1::from_vec_push(facets.facets().to_vec(), FacetKind::Key(key.clone()));
+            return Some(NarrowingSubject::Facets(
+                identifier.id,
+                FacetSubject {
+                    chain: FacetChain::new(props),
+                    origin: FacetOrigin::GetMethod,
+                },
+            ));
+        } else if let Expr::Name(name) = &*attr.value {
+            // x.get("key")
+            return Some(NarrowingSubject::Facets(
+                name.id.clone(),
+                FacetSubject {
+                    chain: FacetChain::new(Vec1::new(FacetKind::Key(key))),
+                    origin: FacetOrigin::GetMethod,
+                },
+            ));
+        }
+    }
+    None
 }
 
 pub fn expr_to_subjects(expr: &Expr) -> Vec<NarrowingSubject> {
     fn f(expr: &Expr, res: &mut Vec<NarrowingSubject>) {
         match expr {
             Expr::Name(name) => res.push(NarrowingSubject::Name(name.id.clone())),
-            Expr::Attribute(_) | Expr::Subscript(_) => res.extend(subject_for_expr(expr)),
+            Expr::Attribute(_) | Expr::Subscript(_) => {
+                if let Some((identifier, facets)) = identifier_and_chain_for_expr(expr) {
+                    res.push(NarrowingSubject::Facets(
+                        identifier.id,
+                        FacetSubject {
+                            chain: facets,
+                            origin: FacetOrigin::Direct,
+                        },
+                    ));
+                }
+            }
+            Expr::Call(call) => {
+                if let Some(subject) = dict_get_subject_for_call_expr(call) {
+                    res.push(subject);
+                }
+            }
             Expr::Named(ExprNamed { target, value, .. }) => {
                 f(target, res);
                 f(value, res);

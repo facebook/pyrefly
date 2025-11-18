@@ -139,6 +139,17 @@ assert_type(x, Literal["a"])
 );
 
 testcase!(
+    test_html_escape_or_str_regression,
+    r#"
+import html
+from typing import assert_type
+
+x = html.escape("") or "a"
+assert_type(x, str)
+    "#,
+);
+
+testcase!(
     test_boolean_and_simple,
     r#"
 from typing import assert_type, Literal
@@ -370,7 +381,7 @@ testcase!(
     r#"
 from typing import TypeVar, reveal_type
 T_co = TypeVar("T_co", covariant=True)
-T_co == int 
+T_co == int
 reveal_type(T_co) # E:  revealed type: TypeVar[T_co]
     "#,
 );
@@ -491,16 +502,15 @@ assert_type(int() or NotBoolable(), int | NotBoolable)
 );
 
 testcase!(
-    bug = "Mypy accepts this program and pyright rejects it wants quotes around the tensor type inside the callable. We should accept this program.",
     test_tensor_type_lambda,
     r#"
-from typing import Callable, cast, reveal_type
+from typing import Callable, cast, assert_type
 
 class Tensor:
     __pow__ = cast(Callable[[Tensor, int], Tensor], lambda x, y: x)  # No redundant cast warning - types are not exactly equal
 
 def f(x: Tensor, i: int):
-    reveal_type(x ** i) # E: Argument `int` is not assignable to parameter with type `Tensor` # E: revealed type: Tensor # E: `**` is not supported between `Tensor` and `int`
+    assert_type(x ** i, Tensor)
 
     "#,
 );
@@ -595,5 +605,79 @@ class B:
     def __radd__(self, other) -> Self:
         return self
 assert_type(A() + B(), A)  # E: `A.__add__` is deprecated
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/396
+testcase!(
+    test_bind_dunder_callable_simple,
+    r#"
+from typing import Callable, reveal_type
+
+def foo_pow(base: "Foo", arg: "int | Foo") -> "Foo": return Foo()
+
+class Foo:
+    __pow__: Callable[["Foo", int], "Foo"] = foo_pow
+
+def test(foo: Foo) -> None:
+    foo ** 2
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/396
+testcase!(
+    test_bind_dunder_callable_2,
+    r#"
+from typing import *
+class ThisClassWorks:
+    def __init__(self, flag: bool) -> None:
+        self.flag = flag
+
+    def __and__(self, other: Union["ThisClassWorks", bool]) -> "ThisClassWorks":
+        if isinstance(other, bool):
+            return ThisClassWorks(self.flag and other)
+        return ThisClassWorks(self.flag and other.flag)
+
+    def __rand__(self, other: Union["ThisClassWorks", bool]) -> "ThisClassWorks":
+        if isinstance(other, bool):
+            return ThisClassWorks(self.flag and other)
+        return ThisClassWorks(self.flag and other.flag)
+
+
+def _produce_and_func() -> Callable[
+    ["ThisClassDoesNotWork", Union["ThisClassDoesNotWork", bool]],
+    "ThisClassDoesNotWork",
+]:
+    def and_func(
+        self: "ThisClassDoesNotWork", other: Union["ThisClassDoesNotWork", bool]
+    ) -> "ThisClassDoesNotWork":
+        if isinstance(other, bool):
+            return ThisClassDoesNotWork(self.flag and other)
+        return ThisClassDoesNotWork(self.flag and other.flag)
+
+    return and_func
+
+
+class ThisClassDoesNotWork:
+    def __init__(self, flag: bool) -> None:
+        self.flag = flag
+
+    __and__ = _produce_and_func()
+    __rand__ = _produce_and_func()
+
+ThisClassWorks(True) & ThisClassWorks(False)
+ThisClassWorks(True) & False
+True & ThisClassWorks(False)
+ThisClassDoesNotWork(True) & ThisClassDoesNotWork(False)
+ThisClassDoesNotWork(True) & False
+True & ThisClassDoesNotWork(False)
+    "#,
+);
+
+testcase!(
+    test_type_of_typevar_equality,
+    r#"
+def f[S, T](x: type[S], y: type[T]):
+    return x == y
     "#,
 );

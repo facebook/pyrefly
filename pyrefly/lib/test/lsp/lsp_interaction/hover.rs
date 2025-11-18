@@ -7,6 +7,7 @@
 
 use lsp_server::Response;
 use lsp_types::Url;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -27,7 +28,7 @@ fn test_hover_basic() {
 
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "```python\n(variable) foo: Literal[3]\n```",
@@ -35,6 +36,68 @@ fn test_hover_basic() {
         })),
         error: None,
     });
+
+    interaction.shutdown();
+}
+
+#[test]
+fn hover_on_attr_of_pyi_assignment_shows_pyi_type() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        ..Default::default()
+    });
+    let file = "attributes_of_py/src_with_assignments.py";
+    interaction.server.did_open(file);
+
+    interaction.server.hover(file, 8, 8);
+    interaction.client.expect_response_with(
+        |response| {
+            if let Some(result) = &response.result
+                && let Some(contents) = result.get("contents")
+                && let Some(value) = contents.get("value")
+                && let Some(value_str) = value.as_str()
+            {
+                return value_str.contains("y: int");
+            }
+            false
+        },
+        "Expected hover response containing 'y: int'",
+    );
+
+    interaction.shutdown();
+}
+
+#[test]
+fn hover_attribute_prefers_py_docstring_over_pyi() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    let file = "attributes_of_py_docstrings/src.py";
+    interaction.server.did_open(file);
+    interaction.server.hover(file, 9, 10);
+    interaction.client.expect_response_with(
+        |response| {
+            response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("contents"))
+                .and_then(|contents| contents.get("value"))
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| {
+                    value.contains("Docstring coming from the .py implementation.")
+                    // a link to the .pyi file proves that the type is coming from the .pyi
+                        && value.contains("lib.pyi")
+                })
+        },
+        "hover result should surface the implementation docstring for attributes defined in .py files",
+    );
 
     interaction.shutdown();
 }
@@ -54,7 +117,7 @@ fn test_hover_import() {
 
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
@@ -84,7 +147,7 @@ fn test_hover_suppressed_error() {
     interaction.server.hover("suppression.py", 5, 10);
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "**Suppressed Error**\n\n`unsupported-operation`: `+` is not supported between `Literal[1]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
@@ -97,7 +160,7 @@ fn test_hover_suppressed_error() {
     interaction.server.hover("suppression.py", 8, 15);
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "**Suppressed Error**\n\n`unsupported-operation`: `+` is not supported between `Literal[2]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
@@ -110,7 +173,7 @@ fn test_hover_suppressed_error() {
     interaction.server.hover("suppression.py", 10, 15);
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "**No errors suppressed by this ignore**\n\n_The ignore comment may have an incorrect error code or there may be no errors on this line._",
@@ -123,7 +186,7 @@ fn test_hover_suppressed_error() {
     interaction.server.hover("suppression.py", 12, 15);
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "**No errors suppressed by this ignore**\n\n_The ignore comment may have an incorrect error code or there may be no errors on this line._",
@@ -136,7 +199,7 @@ fn test_hover_suppressed_error() {
     interaction.server.hover("suppression.py", 15, 10);
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "**No errors suppressed by this ignore**\n\n_The ignore comment may have an incorrect error code or there may be no errors on this line._",

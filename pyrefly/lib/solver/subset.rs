@@ -22,6 +22,7 @@ use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
+use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypedDictSubsetError;
@@ -797,6 +798,19 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             })
     }
 
+    fn is_subset_partial_typed_dict_field(
+        &mut self,
+        got_ty: &Type,
+        want_field: &TypedDictField,
+    ) -> Result<(), SubsetError> {
+        if want_field.is_read_only() {
+            // ReadOnly can only be updated with Never (i.e., no update)
+            self.is_subset_eq(got_ty, &Type::never())
+        } else {
+            self.is_subset_eq(got_ty, &want_field.ty)
+        }
+    }
+
     /// Check TypedDict[got] <: PartialTypedDict[want]
     fn is_subset_partial_typed_dict(
         &mut self,
@@ -805,26 +819,57 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     ) -> Result<(), SubsetError> {
         let got_fields = self.type_order.typed_dict_fields(got);
         let want_fields = self.type_order.typed_dict_fields(want);
-        let got_extra_item = self
-            .type_order
-            .typed_dict_extra_items(got.class_object())
-            .extra_item(self.type_order.stdlib())
-            .ty;
-        let want_extra_item = self
-            .type_order
-            .typed_dict_extra_items(want.class_object())
-            .extra_item(self.type_order.stdlib())
-            .ty;
+        let got_extra_items = self.type_order.typed_dict_extra_items(got.class_object());
+        let want_extra_items = self.type_order.typed_dict_extra_items(want.class_object());
         all(want_fields.iter(), |(k, want_v)| {
-            let got_ty = got_fields.get(k).map_or(&got_extra_item, |got_v| &got_v.ty);
-            if want_v.is_read_only() {
-                // ReadOnly can only be updated with Never (i.e., no update)
-                self.is_subset_eq(got_ty, &Type::never())
+            let got_field_ty = got_fields.get(k).map(|got_v| &got_v.ty);
+            let got_ty = match (got_field_ty, &got_extra_items) {
+                (Some(got_ty), _) => got_ty,
+                (None, ExtraItems::Extra(item)) => &item.ty,
+                (None, ExtraItems::Closed) => {
+                    // If `got` is closed, it definitely doesn't have this item, so we can skip it.
+                    return Ok(());
+                }
+                (None, ExtraItems::Default) => {
+                    // A subclass of `got` could have this item with an incompatible type.
+                    return Err(SubsetError::OpenTypedDict(Box::new(
+                        OpenTypedDictSubsetError::MissingField {
+                            got: got.name().clone(),
+                            want: want.name().clone(),
+                            field: k.clone(),
+                        },
+                    )));
+                }
+            };
+            self.is_subset_partial_typed_dict_field(got_ty, want_v)
+        })?;
+        all(got_fields.iter(), |(k, got_v)| {
+            if want_fields.contains_key(k) {
+                Ok(())
             } else {
-                self.is_subset_eq(got_ty, &want_v.ty)
+                self.is_subset_partial_typed_dict_field(
+                    &got_v.ty,
+                    &self.typed_dict_extra_items_field(want_extra_items.clone()),
+                )
             }
         })?;
-        self.is_subset_eq(&got_extra_item, &want_extra_item)
+        match (got_extra_items, want_extra_items) {
+            (_, ExtraItems::Default) => {
+                // When `want` is open, checking extra items is more likely to cause false positives than catch real errors.
+                Ok(())
+            }
+            (ExtraItems::Default, want_extra_items) => Err(SubsetError::OpenTypedDict(Box::new(
+                OpenTypedDictSubsetError::UnknownFields {
+                    got: got.name().clone(),
+                    want: want.name().clone(),
+                    extra_items: want_extra_items.extra_item(self.type_order.stdlib()).ty,
+                },
+            ))),
+            (got_extra_items, want_extra_items) => self.is_subset_eq(
+                &got_extra_items.extra_item(self.type_order.stdlib()).ty,
+                &want_extra_items.extra_item(self.type_order.stdlib()).ty,
+            ),
+        }
     }
 
     /// Implementation of subset equality for Type, other than Var.
@@ -895,12 +940,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 _ => Err(SubsetError::Other),
             },
             (Type::Union(ls), u) => all(ls.iter(), |l| self.is_subset_eq(l, u)),
-            (l, Type::Intersect(us)) => all(us.iter(), |u| self.is_subset_eq(l, u)),
+            (l, Type::Intersect(u)) => all(u.0.iter(), |u| self.is_subset_eq(l, u)),
             (l, Type::Overload(overload)) => all(overload.signatures.iter(), |u| {
                 self.is_subset_eq(l, &u.as_type())
             }),
-            (l, Type::Union(us)) => any(us.iter(), |u| self.is_subset_eq(l, u)),
-            (Type::Intersect(ls), u) => any(ls.iter(), |l| self.is_subset_eq(l, u)),
+            (l, Type::Union(us)) => {
+                // Check var and non-var elements separately, so that if we match a non-var, we
+                // don't pin the vars.
+                let (vars, nonvars): (Vec<_>, Vec<_>) = us.iter().partition(|u| {
+                    let mut contains_var = false;
+                    u.universe(&mut |t| contains_var |= matches!(t, Type::Var(_)));
+                    contains_var
+                });
+                any(nonvars.iter(), |u| self.is_subset_eq(l, u))
+                    .or_else(|_| any(vars.iter(), |u| self.is_subset_eq(l, u)))
+            }
+            (Type::Intersect(l), u) => any(l.0.iter(), |l| self.is_subset_eq(l, u)),
             (Type::Quantified(q), u) if !q.restriction().is_restricted() => {
                 self.is_subset_eq(&self.type_order.stdlib().object().clone().to_type(), u)
             }

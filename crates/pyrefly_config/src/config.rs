@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::Display;
@@ -31,14 +32,17 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
+use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
 use pyrefly_util::globs::Globs;
+use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Serialize;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
 
@@ -137,17 +141,116 @@ impl ProjectLayout {
     }
 }
 
+/// A cache for managing and producing a fallback search path from
+/// some directory up to and including a root (`up_to`, which is usually a
+/// config directory or filesystem root if none is provided).
+/// The fallback search path consists of a given directory and its ancestors
+/// up to `up_to` or `/`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DirectoryRelativeFallbackSearchPathCache {
+    /// The cache of previously found answers.
+    cache: ArcId<RwLock<SmallMap<PathBuf, Arc<Vec<PathBuf>>>>>,
+    /// When running [`Self::get_ancestors`], produce paths up to and including
+    /// this path. If it is `None`, produce paths up to `/`.
+    up_to: Option<PathBuf>,
+}
+
+impl DirectoryRelativeFallbackSearchPathCache {
+    pub fn new(up_to: Option<PathBuf>) -> Self {
+        Self {
+            cache: ArcId::new(RwLock::new(SmallMap::new())),
+            up_to,
+        }
+    }
+
+    pub fn clear(&self) {
+        self.cache.write().clear()
+    }
+
+    /// Produce a vec of path ancestors from the provided path up to and including
+    /// `up_to`. If any values were previously filled in, we return the cached value.
+    /// Generally, this should be the directory containing a Python file, not the
+    /// file itself.
+    pub fn get_ancestors(&self, path: &Path) -> Arc<Vec<PathBuf>> {
+        let read = self.cache.read();
+        if let Some(result) = read.get(path) {
+            return result.dupe();
+        }
+        drop(read);
+        let ancestors = Arc::new(
+            path.ancestors()
+                .take_while(|p| self.up_to.as_ref().is_none_or(|c| p.starts_with(c)))
+                .map(|p| p.to_owned())
+                .collect::<Vec<_>>(),
+        );
+        let mut write = self.cache.write();
+        if let Some(result) = write.get(path) {
+            // someone beat us to it, so return their result
+            return result.dupe();
+        }
+        write.insert(path.to_path_buf(), ancestors.dupe());
+        ancestors
+    }
+}
+
+impl fmt::Debug for DirectoryRelativeFallbackSearchPathCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Search path with all ancestors of paths up to config at {}",
+            self.up_to.as_ref().map_or(Path::new("/"), |p| p).display()
+        )
+    }
+}
+
+impl fmt::Display for DirectoryRelativeFallbackSearchPathCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Self as fmt::Debug>::fmt(self, f)
+    }
+}
+
 /// A struct for getting, storing, and evaluating fallback search paths. A fallback
 /// search path is a search path consisting of ancestor paths from a start path
 /// (usually some Python file) up to and including an end directory, which is usually
 /// the filesystem root (`/`), but can also be the config.
 #[derive(Default, Clone, PartialEq, Eq)]
 pub enum FallbackSearchPath {
-    /// A previously found fallback search path, which will never change. For all inputs,
-    /// this will never change. We use this in configs where we have no idea what the
-    /// project root is, and just try to import anything. This should be a path consisting
-    /// of the starting path to the filesystem root.
-    Static(Arc<Vec<PathBuf>>),
+    /// A constructed fallback search path that will never change. We use this in
+    /// configs where we have no idea what the project root is, and just try to
+    /// import anything. This will usually be a path consisting
+    /// of the starting path to the filesystem root, but extra paths may be added
+    /// based on heuristics, or if we can determine an import root but aren't sure
+    /// enough about it to try placing it in a higher precedence than typeshed.
+    Explicit(Arc<Vec<PathBuf>>),
+    /// A fallback search path where construct it based on the path we're getting an
+    /// import for, but is different for every directory under a config (or filesystem
+    /// root). We use this to do best-effort importing when there's an on-disk config,
+    /// especially if every file should be able to attempt an import, as long as
+    /// the import is relative to one of its parent directories. (One example of this
+    /// is attempting to perform a loose file import in a build system. We don't know
+    /// where a loose file's import root will be relative to, but we kinda just want
+    /// to try everything, since for the IDE experience, we want to just find
+    /// anything that matches.
+    ///
+    /// Example: given a project
+    /// |- pyrefly.toml
+    /// |- project_root/
+    ///    |- a/
+    ///    |  |- b/c.py
+    ///    |  |- d/e.py
+    ///    |- f.py
+    ///
+    /// If the cache's `up_to` is set to `project_root`, then:
+    /// - for project_root/a/b/c.py, we would call for_directory(project_root/a/b)
+    ///   and get [project_root/a/b, project_root/a, project_root]
+    /// - for project_root/a/d/e.py, we would call for_directory(project_root/a/d)
+    ///   and get [project_root/a/d, project_root/a, project_root]
+    /// - for project_root/f.py, we would call for_directory(project_root)
+    ///   and get [project_root]
+    ///
+    /// If the cache's `up_to` is empty, then the resulting list of paths above would
+    /// continue all the way up to `/`.
+    DirectoryRelative(DirectoryRelativeFallbackSearchPathCache),
     /// There is no fallback search path. These aren't the droids you're looking for.
     #[default]
     Empty,
@@ -155,10 +258,7 @@ pub enum FallbackSearchPath {
 
 impl fmt::Debug for FallbackSearchPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Static(paths) => write!(f, "{paths:?}"),
-            Self::Empty => write!(f, "None"),
-        }
+        write!(f, "{}", self.repr_for_directory(None))
     }
 }
 
@@ -176,14 +276,31 @@ impl FallbackSearchPath {
     /// is `Some`.
     pub fn for_directory(&self, directory: Option<&Path>) -> Arc<Vec<PathBuf>> {
         match (self, directory) {
-            (Self::Static(paths), _) => paths.dupe(),
-            (Self::Empty, _) => Arc::new(vec![]),
+            (Self::Explicit(paths), _) => paths.dupe(),
+            (Self::DirectoryRelative(s), Some(path)) => s.get_ancestors(path),
+            (Self::DirectoryRelative(_), None) | (Self::Empty, _) => Arc::new(vec![]),
+        }
+    }
+
+    pub fn repr_for_directory(&self, directory: Option<&Path>) -> String {
+        match (self, directory) {
+            (Self::Explicit(paths), _) => format!("{:?}", &**paths),
+            (Self::DirectoryRelative(c), Some(start)) => format!("{:?}", &**c.get_ancestors(start)),
+            (Self::DirectoryRelative(c), None) => format!(
+                "<paths from parent directory of all files up to {:?}>",
+                c.up_to
+                    .as_ref()
+                    .map(|p| p.to_string_lossy())
+                    .unwrap_or(Cow::Borrowed("/"))
+            ),
+            (Self::Empty, _) => "None".to_owned(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::Static(paths) => paths.is_empty(),
+            Self::Explicit(paths) => paths.is_empty(),
+            Self::DirectoryRelative(_) => false,
             Self::Empty => true,
         }
     }
@@ -193,7 +310,7 @@ pub enum ImportLookupPathPart<'a> {
     SearchPathFromArgs(&'a [PathBuf]),
     SearchPathFromFile(&'a [PathBuf]),
     ImportRoot(Option<&'a PathBuf>),
-    FallbackSearchPath(&'a [PathBuf]),
+    FallbackSearchPath(&'a FallbackSearchPath, Option<&'a Path>),
     SitePackagePath(&'a [PathBuf]),
     InterpreterSitePackagePath(&'a [PathBuf]),
     BuildSystem(Option<Target>),
@@ -212,10 +329,23 @@ impl Display for ImportLookupPathPart<'_> {
                 write!(f, "Import root (inferred from project layout): {root:?}")
             }
             Self::ImportRoot(None) => write!(f, "Import root (inferred from project layout): None"),
-            Self::FallbackSearchPath(fallback) => write!(
-                f,
-                "Fallback search path (guessed from project_includes): {fallback:?}"
-            ),
+            Self::FallbackSearchPath(fallback, start) => {
+                let guessed_from = if let FallbackSearchPath::Explicit(_) = &fallback {
+                    " (guessed from importing file with heuristics)"
+                } else if let FallbackSearchPath::DirectoryRelative(_) = &fallback
+                    && start.is_some()
+                {
+                    " (expanded directory relative paths for file)"
+                } else {
+                    ""
+                };
+
+                write!(
+                    f,
+                    "Fallback search path{guessed_from}: {}",
+                    fallback.repr_for_directory(*start),
+                )
+            }
             Self::SitePackagePath(paths) => {
                 write!(f, "Site package path from user: {paths:?}")
             }
@@ -241,7 +371,7 @@ impl ImportLookupPathPart<'_> {
             | Self::SitePackagePath(paths)
             | Self::InterpreterSitePackagePath(paths) => paths.is_empty(),
             Self::ImportRoot(root) => root.is_none(),
-            Self::FallbackSearchPath(inner) => inner.is_empty(),
+            Self::FallbackSearchPath(inner, _) => inner.is_empty(),
             Self::BuildSystem(_) => false,
         }
     }
@@ -279,6 +409,10 @@ pub struct ConfigFile {
          )]
     pub project_excludes: Globs,
 
+    /// Should we filter out the required excludes or filter things in your site package path?
+    #[serde(default, skip_serializing_if = "crate::util::skip_default_false")]
+    pub disable_project_excludes_heuristics: bool,
+
     #[serde(skip)]
     pub search_path_from_args: Vec<PathBuf>,
 
@@ -303,14 +437,8 @@ pub struct ConfigFile {
     /// Not exposed to the user. When we aren't able to determine the root of a
     /// project, we guess some fallback search paths that are checked after
     /// typeshed (so we don't clobber the stdlib) and before site_package_path.
-    #[serde(
-             default,
-             skip_serializing_if = "Vec::is_empty",
-             // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
-             // alias while we migrate existing fields from snake case to kebab case.
-             alias = "fallback_search_path"
-         )]
-    pub fallback_search_path: Vec<PathBuf>,
+    #[serde(default, skip)]
+    pub fallback_search_path: FallbackSearchPath,
 
     /// Disable Pyrefly default heuristics, specifically those around
     /// constructing a modified search path. Setting this flag will instruct
@@ -401,8 +529,9 @@ impl Default for ConfigFile {
             search_path_from_args: Vec::new(),
             search_path_from_file: Vec::new(),
             disable_search_path_heuristics: false,
+            disable_project_excludes_heuristics: false,
             import_root: None,
-            fallback_search_path: Vec::new(),
+            fallback_search_path: Default::default(),
             python_environment: Default::default(),
             root: Default::default(),
             sub_configs: Default::default(),
@@ -429,7 +558,7 @@ impl ConfigFile {
         if fallback {
             // De-prioritize guessed import roots, so they don't shadow typeshed. In particular,
             // we don't want the typing-extensions package to shadow the corresponding stub.
-            result.fallback_search_path = vec![import_root];
+            result.fallback_search_path = FallbackSearchPath::Explicit(Arc::new(vec![import_root]));
         } else {
             result.import_root = Some(import_root);
         }
@@ -446,7 +575,7 @@ impl ConfigFile {
         excludes.append(
             &self
                 .site_package_path()
-                .filter(|p| self.import_root.as_ref().is_none_or(|r| !r.starts_with(p)))
+                .filter(|p| !self.search_path().any(|r| r.starts_with(p)))
                 .filter_map(|p| Glob::new(p.to_string_lossy().to_string()).ok())
                 .collect::<Vec<_>>(),
         );
@@ -459,7 +588,10 @@ impl ConfigFile {
     pub fn get_filtered_globs(&self, custom_excludes: Option<Globs>) -> FilteredGlobs {
         let project_excludes = match custom_excludes {
             None => self.project_excludes.clone(),
-            Some(custom_excludes) => self.get_full_project_excludes(custom_excludes),
+            Some(custom_excludes) if !self.disable_project_excludes_heuristics => {
+                self.get_full_project_excludes(custom_excludes)
+            }
+            Some(custom_excludes) => custom_excludes,
         };
         let root = if self.use_ignore_files {
             self.import_root.as_deref()
@@ -490,7 +622,8 @@ impl ConfigFile {
     }
 
     pub fn default_project_includes() -> Globs {
-        Globs::new(vec!["**/*.py*".to_owned()]).unwrap_or_else(|_| Globs::empty())
+        Globs::new(vec!["**/*.py*".to_owned(), "**/*.ipynb".to_owned()])
+            .unwrap_or_else(|_| Globs::empty())
     }
 
     /// Project excludes that should always be set, even if a user or config specifies
@@ -511,6 +644,10 @@ impl ConfigFile {
 
     pub fn default_true() -> bool {
         true
+    }
+
+    pub fn from_real_config_file(&self) -> bool {
+        matches!(self.source, ConfigSource::File(_))
     }
 
     pub fn python_version(&self) -> PythonVersion {
@@ -548,10 +685,10 @@ impl ConfigFile {
     }
 
     /// Gets the full, ordered path used for import lookup. Used for pretty-printing.
-    pub fn structured_import_lookup_path(
-        &self,
-        origin: Option<&Path>,
-    ) -> Vec<ImportLookupPathPart<'_>> {
+    pub fn structured_import_lookup_path<'a>(
+        &'a self,
+        origin: Option<&'a Path>,
+    ) -> Vec<ImportLookupPathPart<'a>> {
         let mut result = vec![];
         if let Some(source_db) = &self.source_db {
             result.push(ImportLookupPathPart::BuildSystem(
@@ -568,6 +705,7 @@ impl ConfigFile {
             result.push(ImportLookupPathPart::ImportRoot(self.import_root.as_ref()));
             result.push(ImportLookupPathPart::FallbackSearchPath(
                 &self.fallback_search_path,
+                origin.and_then(|p| p.parent()),
             ));
         }
         result.push(ImportLookupPathPart::SitePackagePath(
@@ -670,7 +808,6 @@ impl ConfigFile {
                 // be set in `ConfigFile::configure()`.
                 self.root.permissive_ignores.unwrap())
     }
-
     pub fn get_error_config(&self, path: &Path) -> ErrorConfig<'_> {
         ErrorConfig::new(
             self.errors(path),
@@ -728,9 +865,7 @@ impl ConfigFile {
     pub fn get_paths_to_watch(&self) -> Vec<WatchPattern<'_>> {
         let mut result = Vec::new();
         if let Some(source_db) = &self.source_db {
-            for buildfile in source_db.get_critical_files() {
-                result.push(WatchPattern::file(buildfile));
-            }
+            result.extend(source_db.get_paths_to_watch())
         }
         let config_root = self.source.root();
         if let Some(config_root) = config_root {
@@ -787,10 +922,12 @@ impl ConfigFile {
             }
         }
 
-        let project_excludes = mem::take(&mut self.project_excludes);
-        // do this after overwriting CLI values so that we can preserve the required
-        // project excludes and add the site package path.
-        self.project_excludes = self.get_full_project_excludes(project_excludes);
+        if !self.disable_project_excludes_heuristics {
+            let project_excludes = mem::take(&mut self.project_excludes);
+            // do this after overwriting CLI values so that we can preserve the required
+            // project excludes and add the site package path.
+            self.project_excludes = self.get_full_project_excludes(project_excludes);
+        }
 
         if self.root.errors.is_none() {
             self.root.errors = Some(Default::default());
@@ -825,7 +962,10 @@ impl ConfigFile {
                 ConfigSource::File(path) => {
                     let mut root = path.to_path_buf();
                     root.pop();
-                    self.source_db = Some(Arc::new(build_system.get_source_db(root)));
+                    self.source_db = Some(Arc::new(build_system.get_source_db(root.to_path_buf())));
+                    self.fallback_search_path = FallbackSearchPath::DirectoryRelative(
+                        DirectoryRelativeFallbackSearchPathCache::new(Some(root)),
+                    );
                 }
                 _ => configure_errors.push(anyhow::anyhow!(
                     "Invalid config state: `build-system` is set on project without config."
@@ -1026,6 +1166,7 @@ mod tests {
     use std::path;
 
     use pretty_assertions::assert_eq;
+    use pyrefly_util::test_path::TestPath;
     use tempfile::TempDir;
     use toml::Table;
     use toml::Value;
@@ -1084,16 +1225,18 @@ mod tests {
                 search_path_from_args: Vec::new(),
                 search_path_from_file: vec![PathBuf::from("../..")],
                 disable_search_path_heuristics: false,
+                disable_project_excludes_heuristics: false,
                 import_root: None,
                 build_system: Default::default(),
                 use_ignore_files: true,
-                fallback_search_path: Vec::new(),
+                fallback_search_path: Default::default(),
                 python_environment: PythonEnvironment {
                     python_platform: Some(PythonPlatform::mac()),
                     python_version: Some(PythonVersion::new(1, 2, 3)),
                     site_package_path: Some(vec![PathBuf::from(
                         "venv/lib/python1.2.3/site-packages"
                     )]),
+                    interpreter_stdlib_path: vec![],
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
@@ -1247,6 +1390,10 @@ mod tests {
                         .python_environment
                         .interpreter_site_package_path
                         .clone(),
+                    interpreter_stdlib_path: config
+                        .python_environment
+                        .interpreter_stdlib_path
+                        .clone(),
                 },
                 ..Default::default()
             }
@@ -1285,6 +1432,10 @@ mod tests {
                     interpreter_site_package_path: config
                         .python_environment
                         .interpreter_site_package_path
+                        .clone(),
+                    interpreter_stdlib_path: config
+                        .python_environment
+                        .interpreter_stdlib_path
                         .clone(),
                 },
                 ..Default::default()
@@ -1344,9 +1495,10 @@ mod tests {
             search_path_from_args: Vec::new(),
             search_path_from_file: vec![PathBuf::from("../..")],
             disable_search_path_heuristics: false,
+            disable_project_excludes_heuristics: false,
             import_root: None,
             use_ignore_files: true,
-            fallback_search_path: Vec::new(),
+            fallback_search_path: Default::default(),
             python_environment: python_environment.clone(),
             interpreters: Interpreters {
                 python_interpreter_path: Some(ConfigOrigin::config(PathBuf::from(
@@ -1409,6 +1561,7 @@ mod tests {
             search_path_from_args: Vec::new(),
             search_path_from_file: search_path,
             disable_search_path_heuristics: false,
+            disable_project_excludes_heuristics: false,
             use_ignore_files: true,
             import_root: None,
             fallback_search_path: Default::default(),
@@ -1658,6 +1811,7 @@ mod tests {
         let site_package_path = vec![
             "venv/site_packages".to_owned(),
             "system/site_packages".to_owned(),
+            "my_search_path".to_owned(),
         ];
         config.interpreters.skip_interpreter_query = true;
         config.python_environment.site_package_path = Some(
@@ -1666,9 +1820,15 @@ mod tests {
                 .map(PathBuf::from)
                 .collect::<Vec<_>>(),
         );
+        config.search_path_from_file = vec![PathBuf::from("my_search_path")];
         config.project_excludes = ConfigFile::required_project_excludes();
 
         config.configure();
+
+        let mut expected_site_package_path = site_package_path;
+        // get rid of "my_search_path" in site package path, since it's going to be removed
+        // when we add site package path to project excludes
+        expected_site_package_path.pop();
 
         assert_eq!(
             config.get_filtered_globs(None),
@@ -1688,7 +1848,7 @@ mod tests {
                         "**/venv/**".to_owned(),
                         "**/.[!/.]*/**".to_owned(),
                     ])
-                    .chain(site_package_path.clone())
+                    .chain(expected_site_package_path.clone())
                     .collect::<Vec<_>>()
                 )
                 .unwrap(),
@@ -1710,7 +1870,7 @@ mod tests {
                             "**/venv/**".to_owned(),
                             "**/.[!/.]*/**".to_owned(),
                         ])
-                        .chain(site_package_path)
+                        .chain(expected_site_package_path)
                         .collect::<Vec<_>>()
                 )
                 .unwrap(),
@@ -1841,5 +2001,102 @@ mod tests {
             Some(Path::new("example/path")),
             ModuleName::from_str("example.path.b")
         ));
+    }
+
+    #[test]
+    fn test_dynamic_fallback_search_path() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "foo",
+                vec![
+                    TestPath::dir("bar", vec![]),
+                    TestPath::dir("baz", vec![TestPath::dir("quux", vec![])]),
+                ],
+            )],
+        );
+
+        let bounded = DirectoryRelativeFallbackSearchPathCache::new(Some(root.to_path_buf()));
+        let unbounded = DirectoryRelativeFallbackSearchPathCache::new(None);
+
+        let compare_paths = |start: PathBuf, expected_bounded: Vec<PathBuf>| {
+            let bounded_result = bounded.get_ancestors(&start);
+            let unbounded_result = unbounded.get_ancestors(&start);
+            let expected_unbounded = expected_bounded
+                .iter()
+                .map(|p| &**p)
+                .chain(root.ancestors().skip(1))
+                .map(PathBuf::from)
+                .collect::<Vec<PathBuf>>();
+            assert_eq!(
+                *bounded_result, expected_bounded,
+                "Got different results for bounded {start:?}",
+            );
+            assert_eq!(
+                *unbounded_result, expected_unbounded,
+                "Got different results for unbounded {start:?}",
+            );
+        };
+
+        compare_paths(
+            root.join("foo/baz/quux"),
+            vec![
+                root.join("foo/baz/quux"),
+                root.join("foo/baz"),
+                root.join("foo"),
+                root.to_path_buf(),
+            ],
+        );
+        compare_paths(
+            root.join("foo/baz"),
+            vec![root.join("foo/baz"), root.join("foo"), root.to_path_buf()],
+        );
+        compare_paths(root.join("foo"), vec![root.join("foo"), root.to_path_buf()]);
+        compare_paths(root.join("bar"), vec![root.join("bar"), root.to_path_buf()]);
+        compare_paths(root.to_path_buf(), vec![root.to_path_buf()]);
+        // test this one again to make sure caching works
+        compare_paths(
+            root.join("foo/baz/quux"),
+            vec![
+                root.join("foo/baz/quux"),
+                root.join("foo/baz"),
+                root.join("foo"),
+                root.to_path_buf(),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_disable_excludes_heuristics() {
+        let mut disabled_config = ConfigFile {
+            disable_project_excludes_heuristics: true,
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            python_environment: PythonEnvironment {
+                site_package_path: Some(vec![PathBuf::from("spp")]),
+                ..Default::default()
+            },
+            project_excludes: Globs::new(vec!["my_project_excludes".to_owned()]).unwrap(),
+            ..Default::default()
+        };
+        let mut enabled_config = disabled_config.clone();
+        enabled_config.disable_project_excludes_heuristics = false;
+
+        disabled_config.configure();
+        enabled_config.configure();
+
+        assert_eq!(
+            &disabled_config.project_excludes,
+            &Globs::new(vec!["my_project_excludes".to_owned()]).unwrap(),
+        );
+        let mut full_project_excludes = Globs::new(vec!["my_project_excludes".to_owned()]).unwrap();
+
+        full_project_excludes.append(ConfigFile::required_project_excludes().globs());
+        full_project_excludes.append(&[Glob::new("spp".to_owned()).unwrap()]);
+        assert_eq!(&enabled_config.project_excludes, &full_project_excludes);
     }
 }

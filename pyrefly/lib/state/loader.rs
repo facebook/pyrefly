@@ -34,8 +34,12 @@ pub enum FindError {
     /// We found stubs, but no source files were found. This means it's likely stubs
     /// are installed for a project, but the library is not actually importable
     NoSource(ModuleName),
-    /// No stubs were found for a library with a known stubs package.
-    NoStubs(ModuleName, ModuleName),
+    /// We have the source files, but do not have the stubs. In this case we should send
+    /// a message to the user which will allow them to install the stubs for the package.
+    /// The string will hold the name of the pip package that we will tell the user to install.
+    MissingStubs(ModuleName, Arc<String>),
+    /// This is the condition where we are using stubs but we do not have the source files
+    NoSourceForStubs(ModuleName),
 }
 
 impl FindError {
@@ -91,7 +95,13 @@ impl FindError {
                     installed/unimportable."
                 )],
             ),
-            Self::NoStubs(source_package, stubs_package) => (
+            Self::NoSourceForStubs(module) => (
+                None,
+                vec1![format!(
+                    "Stubs for `{module}` are bundled with Pyrefly but the source files for the package are not found."
+                )],
+            ),
+            Self::MissingStubs(source_package, stubs_package) => (
                 Some(Box::new(|| ErrorContext::ImportNotTyped(*source_package))),
                 vec1![format!("Hint: install the `{stubs_package}` package")],
             ),
@@ -102,7 +112,8 @@ impl FindError {
         match self {
             Self::NotFound(..) => Some(ErrorKind::MissingImport),
             Self::NoSource(..) => Some(ErrorKind::MissingSource),
-            Self::NoStubs(..) => Some(ErrorKind::UntypedImport),
+            Self::NoSourceForStubs(..) => Some(ErrorKind::MissingSourceForStubs),
+            Self::MissingStubs(..) => Some(ErrorKind::UntypedImport),
             Self::Ignored => None,
         }
     }

@@ -12,6 +12,7 @@ use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_server::ResponseError;
 use lsp_types::Url;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -31,7 +32,7 @@ fn test_initialize_basic() {
         .client
         .expect_message(Message::Response(Response {
             id: RequestId::from(1),
-            result: Some(serde_json::json!({"capabilities": {
+            result: Some(json!({"capabilities": {
                 "positionEncoding": "utf-16",
                 "textDocumentSync": 2,
                 "definitionProvider": true,
@@ -42,13 +43,17 @@ fn test_initialize_basic() {
                 "completionProvider": {
                     "triggerCharacters": ["."]
                 },
+                "declarationProvider": true,
                 "documentHighlightProvider": true,
                 "signatureHelpProvider": {
                     "triggerCharacters": ["(", ","]
                 },
                 "hoverProvider": true,
+                "implementationProvider": true,
                 "inlayHintProvider": true,
+                "notebookDocumentSync":{"notebookSelector":[{"cells":[{"language":"python"}]}]},
                 "documentSymbolProvider": true,
+                "foldingRangeProvider":true,
                 "workspaceSymbolProvider": true,
                 "workspace": {
                     "workspaceFolders": {
@@ -90,7 +95,7 @@ fn test_shutdown() {
         .client
         .expect_message(Message::Response(Response {
             id: RequestId::from(2),
-            result: Some(serde_json::json!(null)),
+            result: Some(json!(null)),
             error: None,
         }));
 
@@ -130,10 +135,9 @@ fn test_initialize_with_python_path() {
     interaction
         .client
         .expect_configuration_request(1, Some(vec![&scope_uri]));
-    interaction.server.send_configuration_response(
-        1,
-        serde_json::json!([{"pythonPath": python_path}, {"pythonPath": python_path}]),
-    );
+    interaction
+        .server
+        .send_configuration_response(1, json!([{"pythonPath": python_path}]));
 
     interaction.shutdown();
 }
@@ -151,7 +155,7 @@ fn test_nonexistent_file() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didOpen".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string(),
                     "languageId": "python",
@@ -164,7 +168,7 @@ fn test_nonexistent_file() {
     interaction.server.send_message(Message::Request(Request {
         id: RequestId::from(2),
         method: "textDocument/diagnostic".to_owned(),
-        params: serde_json::json!({
+        params: json!({
             "textDocument": {
                 "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string()
             },
@@ -173,7 +177,7 @@ fn test_nonexistent_file() {
 
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!({"items":[],"kind":"full"})),
+        result: Some(json!({"items":[],"kind":"full"})),
         error: None,
     });
 
@@ -182,7 +186,7 @@ fn test_nonexistent_file() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string(),
                     "languageId": "python",
@@ -204,7 +208,7 @@ fn test_unknown_request() {
     interaction.server.send_message(Message::Request(Request {
         id: RequestId::from(1),
         method: "fake-method".to_owned(),
-        params: serde_json::json!(null),
+        params: json!(null),
     }));
     interaction
         .client
@@ -217,4 +221,18 @@ fn test_unknown_request() {
                 data: None,
             }),
         }));
+}
+
+#[test]
+fn test_connection_closed_server_stops() {
+    let mut interaction = LspInteraction::new();
+    interaction.initialize(InitializeSettings::default());
+
+    // Close the connection by dropping both the receiver and sender
+    // This simulates the client disconnecting unexpectedly
+    interaction.client.drop_connection();
+    interaction.server.drop_connection();
+
+    // The server should stop when the connection is closed
+    interaction.server.expect_stop();
 }

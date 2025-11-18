@@ -25,11 +25,13 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::solver::solver::SubsetError;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -139,14 +141,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             None => {
+                // This is an unpacked item (`**some_dict`).
                 has_expansion = true;
-                self.expr_with_separate_check_errors(
+                let partial_td_ty = Type::PartialTypedDict(typed_dict.clone());
+                let item_ty = self.expr_infer_with_hint(
                     &x.value,
-                    Some((&Type::TypedDict(typed_dict.clone()), check_errors, &|| {
-                        TypeCheckContext::of_kind(TypeCheckKind::TypedDictUnpacking)
-                    })),
+                    Some(HintRef::soft(&partial_td_ty)),
                     item_errors,
                 );
+                let subset_result = self.is_subset_eq_with_reason(&item_ty, &partial_td_ty);
+                if let Some(subset_error) = subset_result.err() {
+                    let tcc: &dyn Fn() -> TypeCheckContext =
+                        if matches!(subset_error, SubsetError::OpenTypedDict(_)) {
+                            // This SubsetError variant is used to report cases in which the unpacked
+                            // item is an open TypedDict that, via inheritance, may contain a key from
+                            // `partial_td_ty` with an incompatible type. We report this error via a
+                            // dedicated error kind that is off by default.
+                            &|| TypeCheckContext::of_kind(TypeCheckKind::TypedDictOpenUnpacking)
+                        } else {
+                            &|| TypeCheckContext::of_kind(TypeCheckKind::TypedDictUnpacking)
+                        };
+                    self.solver().error(
+                        &item_ty,
+                        &partial_td_ty,
+                        check_errors,
+                        range,
+                        tcc,
+                        subset_error,
+                    );
+                }
             }
         });
         // You can update a TypedDict with a subset of its items. Otherwise, all required fields must be present.
@@ -181,8 +204,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         is_total: bool,
     ) -> Option<TypedDictField> {
-        self.get_class_member(class, name).and_then(|member| {
-            Arc::unwrap_or_clone(member.value)
+        self.get_class_member(class, name).and_then(|field| {
+            Arc::unwrap_or_clone(field)
                 .as_typed_dict_field_info(is_total)
                 .map(|field| field.substitute_with(substitution))
         })

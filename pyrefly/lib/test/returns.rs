@@ -286,3 +286,30 @@ def f(x: str): pass
 return f(1) # E: Invalid `return` outside of a function # E: `Literal[1]` is not assignable to parameter `x` with type `str`
 "#,
 );
+
+testcase!(
+    test_bare_return_with_non_none_type,
+    r#"
+def test() -> int:
+    return  # E: Returned type `None` is not assignable to declared return type `int`
+"#,
+);
+
+testcase!(
+    test_bare_return_with_none_type,
+    r#"
+def test() -> None:
+    return  # Should work - None is assignable to None
+"#,
+);
+
+testcase!(
+    test_bare_return_in_generator,
+    r#"
+from typing import Generator
+
+def gen() -> Generator[int, None, str]:
+    yield 1
+    return  # E: Returned type `None` is not assignable to declared return type `str`
+"#,
+);

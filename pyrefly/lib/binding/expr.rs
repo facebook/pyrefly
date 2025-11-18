@@ -37,6 +37,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::SuperStyle;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -390,7 +391,7 @@ impl<'a> BindingsBuilder<'a> {
             for x in comp.ifs.iter_mut() {
                 self.ensure_expr(x, &mut Usage::narrowing_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(x));
-                self.bind_narrow_ops(&narrow_ops, comp.range, usage);
+                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(comp.range), usage);
             }
         }
     }
@@ -409,7 +410,7 @@ impl<'a> BindingsBuilder<'a> {
         // TODO: We should properly handle `yield` and `yield from`; lambdas can be generators.
         // One example of this is in the standard library, in `_collections_abc.pyi`:
         // https://github.com/python/cpython/blob/965662ee4a986605b60da470d9e7c1e9a6f922b3/Lib/_collections_abc.py#L92
-        let (yields_and_returns, _) = self.scopes.pop_function_scope();
+        let (yields_and_returns, _, _) = self.scopes.pop_function_scope();
         for (idx, y) in yields_and_returns.yields {
             self.insert_binding_idx(idx, BindingYield::Invalid(y));
         }
@@ -486,12 +487,16 @@ impl<'a> BindingsBuilder<'a> {
                 self.start_fork_and_branch(x.range);
                 self.ensure_expr(&mut x.test, &mut Usage::narrowing_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
-                self.bind_narrow_ops(&narrow_ops, x.body.range(), usage);
+                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(x.body.range()), usage);
                 self.ensure_expr(&mut x.body, usage);
                 // Negate the narrow ops for the `orelse`, then merge the Flows.
                 // TODO(stroxler): We eventually want to drop all narrows but merge values.
                 self.next_branch();
-                self.bind_narrow_ops(&narrow_ops.negate(), x.range, usage);
+                self.bind_narrow_ops(
+                    &narrow_ops.negate(),
+                    NarrowUseLocation::Span(x.range),
+                    usage,
+                );
                 self.ensure_expr(&mut x.orelse, usage);
                 self.finish_branch();
                 self.finish_exhaustive_fork();
@@ -523,7 +528,11 @@ impl<'a> BindingsBuilder<'a> {
                     self.start_fork_and_branch(*range);
                     let mut narrow_ops = get_narrow_ops(self, value, *op);
                     for value in values {
-                        self.bind_narrow_ops(&narrow_ops, value.range(), usage);
+                        self.bind_narrow_ops(
+                            &narrow_ops,
+                            NarrowUseLocation::Span(value.range()),
+                            usage,
+                        );
                         self.ensure_expr(value, &mut Usage::narrowing_from(usage));
                         let new_narrow_ops = get_narrow_ops(self, value, *op);
                         narrow_ops.and_all(new_narrow_ops);
@@ -532,7 +541,11 @@ impl<'a> BindingsBuilder<'a> {
                     // TODO(stroxler): We eventually want to drop all narrows but merge values.
                     // Once we have a way to do that, the negation will be unnecessary.
                     self.next_branch();
-                    self.bind_narrow_ops(&narrow_ops.negate(), *range, usage);
+                    self.bind_narrow_ops(
+                        &narrow_ops.negate(),
+                        NarrowUseLocation::End(*range),
+                        usage,
+                    );
                     self.finish_branch();
                     self.finish_bool_op_fork();
                 }
@@ -667,7 +680,7 @@ impl<'a> BindingsBuilder<'a> {
                 for kw in arguments.keywords.iter_mut() {
                     self.ensure_expr(&mut kw.value, usage);
                 }
-                self.bind_narrow_ops(&narrow_op, *range, usage);
+                self.bind_narrow_ops(&narrow_op, NarrowUseLocation::Span(*range), usage);
             }
             Expr::Named(x) => {
                 // For scopes defined in terms of Definitions, we should normally already have the name in Static, but

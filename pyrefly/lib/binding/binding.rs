@@ -15,6 +15,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
@@ -78,7 +79,7 @@ use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
-assert_words!(Key, 5);
+assert_words!(Key, 6);
 assert_words!(KeyExpect, 1);
 assert_words!(KeyExport, 3);
 assert_words!(KeyClass, 1);
@@ -326,6 +327,39 @@ impl Keyed for KeyYieldFrom {
     }
 }
 
+/// Location at which a narrowing operation is used. We've seen the same narrowing operation be
+/// used at the same text range up to three times, so we use this enum to mark those three uses
+/// as distinct locations to avoid generating duplicate keys. It doesn't really matter whether a
+/// particular location is marked as Span, Start, or End as long as we never have duplicates, but
+/// generally, Start is used for an operation that happens before the main operation (e.g.,
+/// negating the narrows from one branch of an if/else at the start of the next), Span is used
+/// for the main operation, and End is used for an operation that happens afterwards (e.g.,
+/// merging flow at the end of a fork).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NarrowUseLocation {
+    Span(TextRange),
+    Start(TextRange),
+    End(TextRange),
+}
+
+impl DisplayWith<ModuleInfo> for NarrowUseLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &ModuleInfo) -> fmt::Result {
+        match self {
+            Self::Span(r) => write!(f, "{}", ctx.display(r)),
+            Self::Start(r) => write!(f, "Start({})", ctx.display(r)),
+            Self::End(r) => write!(f, "End({}", ctx.display(r)),
+        }
+    }
+}
+
+impl Ranged for NarrowUseLocation {
+    fn range(&self) -> TextRange {
+        match self {
+            Self::Span(r) | Self::Start(r) | Self::End(r) => *r,
+        }
+    }
+}
+
 /// Keys that refer to a `Type`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
@@ -375,7 +409,7 @@ pub enum Key {
     ///       pass
     /// The `x is None` operation is defined once in the `if` test but generates two key/binding
     /// pairs, when it is used to narrow `x` in the `if` and the `else`, respectively.
-    Narrow(Name, TextRange, TextRange),
+    Narrow(Name, TextRange, NarrowUseLocation),
     /// The binding definition site, anywhere it occurs
     Anywhere(Name, TextRange),
     /// Result of a super() call
@@ -975,7 +1009,7 @@ impl IsAsync {
 #[derive(Clone, Debug)]
 pub enum FunctionParameter {
     Annotated(Idx<KeyAnnotation>),
-    Unannotated(Var, Idx<KeyUndecoratedFunction>),
+    Unannotated(Var, Idx<KeyUndecoratedFunction>, AnnotationTarget),
 }
 
 /// Is the body of this function stubbed out (contains nothing but `...`)?
@@ -1009,6 +1043,7 @@ pub struct BindingUndecoratedFunction {
     pub class_key: Option<Idx<KeyClass>>,
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[(Idx<Key>, TextRange)]>,
+    pub module_style: ModuleStyle,
 }
 
 impl DisplayWith<Bindings> for BindingUndecoratedFunction {
@@ -1046,6 +1081,7 @@ pub struct ReturnExplicit {
     pub expr: Option<Box<Expr>>,
     pub is_generator: bool,
     pub is_async: bool,
+    pub range: TextRange,
 }
 
 #[derive(Clone, Debug)]
@@ -1258,7 +1294,7 @@ pub enum Binding {
     /// the loop, which can be used if the resulting Var is forced.
     LoopPhi(Idx<Key>, SmallSet<Idx<Key>>),
     /// A narrowed type.
-    Narrow(Idx<Key>, Box<NarrowOp>, TextRange),
+    Narrow(Idx<Key>, Box<NarrowOp>, NarrowUseLocation),
     /// An import of a module.
     /// Also contains the path along the module to bind, and optionally a key
     /// with the previous import to this binding (in which case merge the modules).
@@ -1543,7 +1579,7 @@ impl DisplayWith<Bindings> for Binding {
                 "FunctionParameter({})",
                 match x {
                     FunctionParameter::Annotated(k) => ctx.display(*k).to_string(),
-                    FunctionParameter::Unannotated(x, k) => format!("{x}, {}", ctx.display(*k)),
+                    FunctionParameter::Unannotated(x, k, _) => format!("{x}, {}", ctx.display(*k)),
                 }
             ),
             Self::SuperInstance(SuperStyle::ExplicitArgs(cls, obj), _range) => {
@@ -1626,7 +1662,13 @@ impl Binding {
             | Binding::TypeParameter(_)
             | Binding::PossibleLegacyTParam(_, _) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
-            Binding::Function(_, _, _) => Some(SymbolKind::Function),
+            Binding::Function(_, _, class_metadata) => {
+                if class_metadata.is_some() {
+                    Some(SymbolKind::Method)
+                } else {
+                    Some(SymbolKind::Function)
+                }
+            }
             Binding::Import(_, _, _) => {
                 // TODO: maybe we can resolve it to see its symbol kind
                 Some(SymbolKind::Variable)
@@ -1719,9 +1761,7 @@ impl AnnotationWithTarget {
                 } else if matches!(annotation_ty, Type::Args(_)) {
                     Some(annotation_ty.clone())
                 } else {
-                    Some(Type::Tuple(Tuple::Unbounded(Box::new(
-                        annotation_ty.clone(),
-                    ))))
+                    Some(Type::Tuple(Tuple::unbounded(annotation_ty.clone())))
                 }
             }
             AnnotationTarget::KwargsParam(_) => {
@@ -1979,6 +2019,13 @@ impl DisplayWith<Bindings> for BindingClassField {
 pub struct MethodThatSetsAttr {
     pub method_name: Name,
     pub recognized_attribute_defining_method: bool,
+    pub instance_or_class: MethodSelfKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MethodSelfKind {
+    Instance,
+    Class,
 }
 
 /// Bindings for fields synthesized by a class, such as a dataclass's `__init__` method. This

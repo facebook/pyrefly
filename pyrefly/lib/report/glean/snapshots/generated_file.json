@@ -1,0 +1,404 @@
+[
+  {
+    "facts": [],
+    "predicate": "python.CalleeToCaller.4"
+  },
+  {
+    "facts": [],
+    "predicate": "python.DeclarationDocstring.4"
+  },
+  {
+    "facts": [],
+    "predicate": "python.FileCall.4"
+  },
+  {
+    "facts": [],
+    "predicate": "python.ImportStarLocation.4"
+  },
+  {
+    "facts": [],
+    "predicate": "python.XRefsViaNameByTarget.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": ""
+      }
+    ],
+    "predicate": "python.Name.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "class_": {
+            "id": 0,
+            "key": "BarCodeGen"
+          },
+          "command": {
+            "id": 0,
+            "key": "scripts/foo/bar"
+          },
+          "file": {
+            "id": 0,
+            "key": "generated_file.py"
+          },
+          "signature": {
+            "id": 0,
+            "key": "abcde123456"
+          },
+          "source": {
+            "id": 0,
+            "key": "this/is/the/Way.php"
+          },
+          "variant": 0
+        }
+      }
+    ],
+    "predicate": "gencode.GenCode.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "generated_file"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "generated_file.helloworld"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "generated_file"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "generated_file"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.ContainingTopLevelDeclaration.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "generated_file.helloworld"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "generated_file.py"
+          },
+          "span": {
+            "length": 26,
+            "start": 162
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "generated_file"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "generated_file.py"
+          },
+          "span": {
+            "length": 189,
+            "start": 0
+          }
+        }
+      }
+    ],
+    "predicate": "python.DeclarationLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "func": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "generated_file"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "generated_file.helloworld"
+                    }
+                  }
+                },
+                "is_async": false,
+                "kwonly_params": [],
+                "params": [],
+                "posonly_params": []
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "generated_file.py"
+          },
+          "span": {
+            "length": 26,
+            "start": 162
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "module": {
+              "id": 0,
+              "key": {
+                "module": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "generated_file"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "generated_file.py"
+          },
+          "span": {
+            "length": 189,
+            "start": 0
+          }
+        }
+      }
+    ],
+    "predicate": "python.DefinitionLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "digest": {
+            "hash": "5087fb04e1a9d6528d1da8d5cbea1a1c1744a69cb1196fcdf47b62a576e08e0f",
+            "size": 189
+          },
+          "file": {
+            "id": 0,
+            "key": "generated_file.py"
+          }
+        }
+      }
+    ],
+    "predicate": "digest.FileDigest.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "endsInNewline": true,
+          "file": {
+            "id": 0,
+            "key": "generated_file.py"
+          },
+          "hasUnicodeOrTabs": false,
+          "lengths": [
+            1,
+            18,
+            31,
+            38,
+            42,
+            50,
+            9
+          ]
+        }
+      }
+    ],
+    "predicate": "src.FileLines.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "generated_file.py"
+          },
+          "language": 7
+        }
+      }
+    ],
+    "predicate": "src.FileLanguage.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "generated_file.py"
+          },
+          "xrefs": []
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByFile.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": ""
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": ""
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "generated_file"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "generated_file"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "generated_file.helloworld"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "helloworld"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "generated_file"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.NameToSName.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "name": {
+            "id": 0,
+            "key": "generated_file"
+          }
+        }
+      }
+    ],
+    "predicate": "python.Module.4"
+  },
+  {
+    "schema_id": "b53ee776cd31801ec9f22ea9787a58ad"
+  }
+]

@@ -11,6 +11,7 @@ use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_types::Url;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -31,7 +32,7 @@ fn test_edits_while_recheck() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didSave".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string(),
                     "languageId": "python",
@@ -45,7 +46,7 @@ fn test_edits_while_recheck() {
         .server
         .send_message(Message::Notification(Notification {
             method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
+            params: json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&path).unwrap().to_string(),
                     "languageId": "python",
@@ -82,7 +83,7 @@ fn test_file_watcher() {
     interaction.client.expect_request(Request {
         id: RequestId::from(1),
         method: "client/registerCapability".to_owned(),
-        params: serde_json::json!({
+        params: json!({
             "registrations": [{
                 "id": "FILEWATCHER",
                 "method": "workspace/didChangeWatchedFiles",

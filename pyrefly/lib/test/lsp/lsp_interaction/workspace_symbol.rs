@@ -10,6 +10,7 @@ use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_types::Url;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -24,9 +25,7 @@ fn test_workspace_symbol() {
     interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(Some(
-            serde_json::json!([{ "indexing_mode": "lazy_blocking"}]),
-        )),
+        configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
         ..Default::default()
     });
 
@@ -35,14 +34,14 @@ fn test_workspace_symbol() {
     interaction.server.send_message(Message::Request(Request {
         id: RequestId::from(2),
         method: "workspace/symbol".to_owned(),
-        params: serde_json::json!({
+        params: json!({
             "query": "this_is_a_very_long_function_name_so_we_can"
         }),
     }));
 
     interaction.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!([
+        result: Some(json!([
             {
                 "kind": 12,
                 "location": {

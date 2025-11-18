@@ -776,7 +776,6 @@ x2: Spam2[int, str] = int
 );
 
 testcase!(
-    bug = "there shouldn't be an error here",
     test_generic_typealias_of_scopedtypealias,
     r#"
 from typing import TypeAlias, TypeAliasType, TypeVar
@@ -788,7 +787,7 @@ type Spam1[T1, T2] = T2 | type[T1]
 Spam2: TypeAlias = Spam1[T1, T2]
 
 x1: Spam1[int, str] = int
-x2: Spam2[int, str] = int # E: `Spam2` is not subscriptable
+x2: Spam2[int, str] = int
     "#,
 );
 

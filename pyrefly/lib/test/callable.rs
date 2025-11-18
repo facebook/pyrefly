@@ -1028,3 +1028,23 @@ def _(flag: bool):
     assert_type(c[0], bytes | str)
     "#,
 );
+
+testcase!(
+    test_unknown_varargs_kwargs,
+    r#"
+from typing import Any, assert_type
+def f(*args, **kwargs):
+    assert_type(args, tuple[Any, ...])
+    assert_type(kwargs, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_bad_varargs_kwargs,
+    r#"
+from typing import Annotated, Any, assert_type
+def f(*args: Annotated, **kwargs: Annotated): # E: # E:
+    assert_type(args, tuple[Any, ...])
+    assert_type(kwargs, dict[str, Any])
+    "#,
+);

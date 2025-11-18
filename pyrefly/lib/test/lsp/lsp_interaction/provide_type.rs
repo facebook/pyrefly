@@ -6,6 +6,7 @@
  */
 
 use lsp_server::Response;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -26,7 +27,7 @@ fn test_provide_type_basic() {
 
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "contents": [{
                 "kind": "plaintext",
                 "value": "typing.Literal[3]",
@@ -53,7 +54,7 @@ fn test_provide_type() {
 
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+        result: Some(json!({
             "contents": [{
                 "kind": "plaintext",
                 "value": "type[bar.Bar]".to_owned()

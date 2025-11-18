@@ -15,15 +15,23 @@ use pyrefly_python::docstring::Docstring;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::symbol_kind::SymbolKind;
+use pyrefly_types::callable::Callable;
+use pyrefly_types::callable::Param;
+use pyrefly_types::callable::ParamList;
+use pyrefly_types::callable::Params;
+use pyrefly_types::callable::Required;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
+use ruff_python_ast::name::Name;
 use ruff_text_size::TextSize;
-use starlark_map::small_set::SmallSet;
 
+use crate::alt::answers_solver::AnswersSolver;
 use crate::error::error::Error;
+use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
+use crate::state::state::TransactionHandle;
 
 /// Gets all suppressed errors that overlap with the given line.
 ///
@@ -95,17 +103,17 @@ pub struct HoverValue {
     pub name: Option<String>,
     pub type_: Type,
     pub docstring: Option<Docstring>,
+    pub display: Option<String>,
 }
 
 impl HoverValue {
     #[cfg(not(target_arch = "wasm32"))]
     fn format_symbol_def_locations(t: &Type) -> Option<String> {
-        let mut tracked_def_locs = SmallSet::new();
-        t.universe(&mut |t| tracked_def_locs.extend(t.qname()));
-        let linked_names = tracked_def_locs
+        let symbol_paths = collect_symbol_def_paths(t);
+        let linked_names = symbol_paths
             .into_iter()
-            .filter_map(|qname| {
-                if let Ok(mut url) = Url::from_file_path(qname.module_path().as_path()) {
+            .filter_map(|(qname, file_path)| {
+                if let Ok(mut url) = Url::from_file_path(&file_path) {
                     let start_pos = qname.module().display_range(qname.range()).start;
                     if let Some(cell) = start_pos.cell() {
                         url.set_fragment(Some(&format!(
@@ -159,6 +167,10 @@ impl HoverValue {
             .map_or("".to_owned(), |s| format!("{s}: "));
         let symbol_def_formatted =
             HoverValue::format_symbol_def_locations(&self.type_).unwrap_or("".to_owned());
+        let type_display = self
+            .display
+            .clone()
+            .unwrap_or_else(|| self.type_.as_hover_string());
 
         Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -167,7 +179,7 @@ impl HoverValue {
                     "```python\n{}{}{}\n```{}{}",
                     kind_formatted,
                     name_formatted,
-                    self.type_.as_hover_string(),
+                    type_display,
                     docstring_formatted,
                     symbol_def_formatted
                 ),
@@ -177,6 +189,49 @@ impl HoverValue {
     }
 }
 
+fn collect_typed_dict_fields_for_hover<'a>(
+    solver: &AnswersSolver<TransactionHandle<'a>>,
+    ty: &Type,
+) -> Option<Vec<(Name, Type, Required)>> {
+    match ty {
+        Type::Unpack(inner) => match inner.as_ref() {
+            Type::TypedDict(typed_dict) => {
+                let fields = solver.type_order().typed_dict_kw_param_info(typed_dict);
+                if fields.is_empty() {
+                    None
+                } else {
+                    Some(fields)
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn expand_callable_kwargs_for_hover<'a>(
+    solver: &AnswersSolver<TransactionHandle<'a>>,
+    callable: &mut Callable,
+) {
+    if let Params::List(param_list) = &mut callable.params {
+        let mut expanded = Vec::with_capacity(param_list.len());
+        let mut changed = false;
+        for param in param_list.items() {
+            if let Param::Kwargs(_, ty) = param
+                && let Some(fields) = collect_typed_dict_fields_for_hover(solver, ty)
+            {
+                changed = true;
+                for (field_name, field_type, required) in fields {
+                    expanded.push(Param::KwOnly(field_name, field_type, required));
+                }
+            }
+            expanded.push(param.clone());
+        }
+        if changed {
+            *param_list = ParamList::new(expanded);
+        }
+    }
+}
 pub fn get_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -214,6 +269,15 @@ pub fn get_hover(
 
     // Otherwise, fall through to the existing type hover logic
     let type_ = transaction.get_type_at(handle, position)?;
+    let type_display = transaction.ad_hoc_solve(handle, {
+        let mut cloned = type_.clone();
+        move |solver| {
+            // If the type is a callable, rewrite the signature to expand TypedDict-based
+            // `**kwargs` entries, ensuring hover text shows the actual keyword names users can pass.
+            cloned.visit_toplevel_callable_mut(|c| expand_callable_kwargs_for_hover(&solver, c));
+            cloned.as_hover_string()
+        }
+    });
     let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,
@@ -223,7 +287,7 @@ pub fn get_hover(
         .find_definition(
             handle,
             position,
-            &FindPreference {
+            FindPreference {
                 prefer_pyi: false,
                 ..Default::default()
             },
@@ -232,8 +296,12 @@ pub fn get_hover(
         .into_iter()
         .next()
     {
+        let mut kind = metadata.symbol_kind();
+        if matches!(kind, Some(SymbolKind::Attribute)) && type_.is_function_type() {
+            kind = Some(SymbolKind::Method);
+        }
         (
-            metadata.symbol_kind(),
+            kind,
             Some(module.code_at(definition_location).to_owned()),
             docstring_range,
             Some(module),
@@ -254,6 +322,7 @@ pub fn get_hover(
             name,
             type_,
             docstring,
+            display: type_display,
         }
         .format(),
     )

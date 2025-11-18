@@ -5,11 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// We Handle contains a ConfigFile, which contains a Regex, which has an interior cache.
-// Not relevant because we use the ArcId to compare, and never go inside.
-// Plus it's not actually mutable in practice, just for caching.
-#![allow(clippy::mutable_key_type)]
-
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -31,8 +26,6 @@ use std::time::Instant;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
 use enum_iterator::Sequence;
-use fuzzy_matcher::FuzzyMatcher;
-use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
@@ -90,7 +83,6 @@ use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
-use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
@@ -102,7 +94,7 @@ use crate::state::dirty::Dirty;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
 use crate::state::errors::Errors;
-use crate::state::load::CodeOrNotebook;
+use crate::state::load::FileContents;
 use crate::state::load::Load;
 use crate::state::loader::FindingOrError;
 use crate::state::loader::LoaderFindCache;
@@ -243,7 +235,7 @@ impl StateData {
 /// `TransactionData` contains most of the information in `Transaction`, but it doesn't lock
 /// the read of `State`.
 /// It is used to store uncommitted transaction state in between transaction runs.
-pub struct TransactionData<'a> {
+pub(crate) struct TransactionData<'a> {
     state: &'a State,
     stdlib: SmallMap<SysInfo, Arc<Stdlib>>,
     updated_modules: LockedMap<Handle, ArcId<ModuleDataMut>>,
@@ -265,7 +257,7 @@ pub struct TransactionData<'a> {
 }
 
 impl<'a> TransactionData<'a> {
-    pub fn into_transaction(self) -> Transaction<'a> {
+    pub(crate) fn into_transaction(self) -> Transaction<'a> {
         let readable = self.state.state.read();
         Transaction {
             data: self,
@@ -286,7 +278,7 @@ pub struct Transaction<'a> {
 
 impl<'a> Transaction<'a> {
     /// Drops the lock and retains just the underlying data.
-    pub fn into_data(self) -> TransactionData<'a> {
+    pub(crate) fn into_data(self) -> TransactionData<'a> {
         let Transaction { data, readable } = self;
         drop(readable);
         data
@@ -370,90 +362,12 @@ impl<'a> Transaction<'a> {
         &self.data.state.config_finder
     }
 
-    pub fn search_exports_exact(&self, name: &str) -> Vec<Handle> {
-        self.search_exports_helper(|handle, exports| {
-            if let Some(export) = exports.get(&Name::new(name)) {
-                match export {
-                    ExportLocation::ThisModule(_) => vec![handle.dupe()],
-                    // Re-exported modules like `foo` in `from from_module import foo`
-                    // should likely be ignored in autoimport suggestions
-                    // because the original export in from_module will show it.
-                    // The current strategy will prevent intended re-exports from showing up in
-                    // result list, but it's better than showing thousands of likely bad results.
-                    ExportLocation::OtherModule(..) => Vec::new(),
-                }
-            } else {
-                Vec::new()
-            }
-        })
-    }
-
-    pub fn search_exports_fuzzy(&self, pattern: &str) -> Vec<(Handle, String, Export)> {
-        self.search_exports_helper(|handle, exports| {
-            let matcher = SkimMatcherV2::default().smart_case();
-            let mut results = Vec::new();
-            for (name, location) in exports.iter() {
-                let name = name.as_str();
-                if let Some(score) = matcher.fuzzy_match(name, pattern) {
-                    match location {
-                        ExportLocation::OtherModule(..) => {}
-                        ExportLocation::ThisModule(export) => {
-                            results.push((score, handle.dupe(), name.to_owned(), export.clone()));
-                        }
-                    }
-                }
-            }
-            results
-        })
-        .into_iter()
-        .sorted_by_key(|(score, _, _, _)| *score)
-        .rev()
-        .map(|(_, handle, name, export)| (handle, name, export))
-        .collect()
-    }
-
-    pub fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
-        // Make sure all the modules are in updated_modules.
-        for x in self.readable.modules.keys() {
-            self.get_module(x);
-        }
-
-        let matcher = SkimMatcherV2::default().smart_case();
-        let mut results = Vec::new();
-
-        // Collect unique module names from all known modules
-        let mut seen_modules = SmallSet::new();
-        for module_handle in self.data.updated_modules.keys() {
-            let module_name = module_handle.module();
-            let module_name_str = module_name.as_str();
-
-            // Skip builtins module
-            if module_name_str == "builtins" {
-                continue;
-            }
-
-            // Skip if we've already seen this module name
-            if !seen_modules.insert(module_name) {
-                continue;
-            }
-
-            let components = module_name.components();
-            let last_component = components.last().map(|name| name.as_str()).unwrap_or("");
-            if let Some(score) = matcher.fuzzy_match(last_component, pattern) {
-                results.push((score, module_name));
-            }
-        }
-
-        results.sort_by_key(|(score, _)| -score);
-        results
-            .into_iter()
-            .map(|(_, module_name)| module_name)
-            .collect()
-    }
-
-    fn search_exports_helper<V: Send + Sync>(
+    /// Search through the export table of every module we know about.
+    /// Searches will be performed in parallel on chunks of modules, to speed things up.
+    /// The order of the resulting `Vec` is unspecified.
+    pub fn search_exports<V: Send + Sync>(
         &self,
-        searcher: impl Fn(&Handle, Arc<SmallMap<Name, ExportLocation>>) -> Vec<V> + Sync,
+        searcher: impl Fn(&Handle, &SmallMap<Name, ExportLocation>) -> Vec<V> + Sync,
     ) -> Vec<V> {
         // Make sure all the modules are in updated_modules.
         // We have to get a mutable module data to do the lookup we need anyway.
@@ -478,7 +392,7 @@ impl<'a> Transaction<'a> {
                     let exports = self
                         .lookup_export(module_data)
                         .exports(&self.lookup(module_data.dupe()));
-                    thread_local_results.extend(searcher(handle, exports));
+                    thread_local_results.extend(searcher(handle, &exports));
                 }
                 if !thread_local_results.is_empty() {
                     all_results.lock().push(thread_local_results);
@@ -537,6 +451,21 @@ impl<'a> Transaction<'a> {
             }
             res
         }
+    }
+
+    /// Return all modules for which there is data, in a non-deterministic order.
+    pub fn modules(&self) -> SmallSet<ModuleName> {
+        self.readable
+            .modules
+            .keys()
+            .map(|x| x.module())
+            .chain(
+                self.data
+                    .updated_modules
+                    .iter_unordered()
+                    .map(|x| x.0.module()),
+            )
+            .collect()
     }
 
     pub fn module_count(&self) -> usize {
@@ -701,17 +630,17 @@ impl<'a> Transaction<'a> {
         if exclusive.dirty.load
             && let Some(old_load) = exclusive.steps.load.dupe()
         {
-            let (code_or_notebook, self_error) =
+            let (file_contents, self_error) =
                 Load::load_from_path(module_data.handle.path(), &self.memory_lookup());
             if self_error.is_some()
-                || match &code_or_notebook {
-                    CodeOrNotebook::Code(code) => {
+                || match &file_contents {
+                    FileContents::Source(code) => {
                         old_load.module_info.is_notebook()
-                            || code != old_load.module_info.contents()
+                            || code.as_str() != old_load.module_info.contents().as_str()
                     }
-                    CodeOrNotebook::Notebook(notebook) => {
+                    FileContents::Notebook(notebook) => {
                         if let Some(old_notebook) = old_load.module_info.notebook() {
-                            &**notebook != old_notebook
+                            **notebook != *old_notebook
                         } else {
                             false
                         }
@@ -723,7 +652,7 @@ impl<'a> Transaction<'a> {
                     module_data.handle.module(),
                     module_data.handle.path().dupe(),
                     old_load.errors.style(),
-                    code_or_notebook,
+                    file_contents,
                     self_error,
                 )));
                 rebuild(write, true);
@@ -861,12 +790,9 @@ impl<'a> Transaction<'a> {
                 if changed {
                     self.data.changed.lock().push(module_data.dupe());
                     let mut dirtied = Vec::new();
-                    for x in module_data
-                        .rdeps
-                        .lock()
-                        .iter()
-                        .map(|handle| self.get_module(handle))
-                    {
+                    // We clone so we drop the lock immediately
+                    let rdeps = module_data.rdeps.lock().iter().cloned().collect::<Vec<_>>();
+                    for x in rdeps.iter().map(|handle| self.get_module(handle)) {
                         loop {
                             let reader = x.state.read();
                             if reader.epochs.computed == self.data.now || reader.dirty.deps {
@@ -1370,7 +1296,7 @@ impl<'a> Transaction<'a> {
 
     /// Called if the `find` portion of loading might have changed.
     /// E.g. you have include paths, and a new file appeared earlier on the path.
-    pub fn invalidate_find(&mut self) {
+    fn invalidate_find(&mut self) {
         let new_loaders = LockedMap::new();
         for loader in self.data.updated_loaders.keys() {
             new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
@@ -1461,7 +1387,7 @@ impl<'a> Transaction<'a> {
 
     /// Called if the `load_from_memory` portion of loading might have changed.
     /// Specify which in-memory files might have changed, use None to say they don't exist anymore.
-    pub fn set_memory(&mut self, files: Vec<(PathBuf, Option<Arc<String>>)>) {
+    pub fn set_memory(&mut self, files: Vec<(PathBuf, Option<Arc<FileContents>>)>) {
         let mut changed = SmallSet::new();
         for (path, contents) in files {
             if self.memory_lookup().get(&path) != contents.as_ref() {
@@ -1597,7 +1523,7 @@ impl<'a> Transaction<'a> {
     }
 }
 
-pub struct TransactionHandle<'a> {
+pub(crate) struct TransactionHandle<'a> {
     transaction: &'a Transaction<'a>,
     module_data: ArcId<ModuleDataMut>,
 }

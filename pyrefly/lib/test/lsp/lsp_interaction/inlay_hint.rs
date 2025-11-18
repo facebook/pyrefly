@@ -6,6 +6,7 @@
  */
 
 use lsp_server::Response;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -28,7 +29,7 @@ fn test_inlay_hint_default_config() {
 
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([
+        result: Some(json!([
             {
                 "label":" -> tuple[Literal[1], Literal[2]]",
                 "position":{"character":21,"line":6},
@@ -61,12 +62,46 @@ fn test_inlay_hint_default_config() {
 }
 
 #[test]
+fn test_inlay_hint_default_and_pyrefly_analysis() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(json!([{
+            "pyrefly":{"analysis": {}},
+            "analysis": {
+                "inlayHints": {
+                    "callArgumentNames": "off",
+                    "functionReturnTypes": false,
+                    "pytestParameters": false,
+                    "variableTypes": false
+                },
+            }
+        }]))),
+        ..Default::default()
+    });
+
+    interaction.server.did_open("inlay_hint_test.py");
+    interaction
+        .server
+        .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
+
+    interaction.client.expect_response(Response {
+        id: interaction.server.current_request_id(),
+        result: Some(json!([])),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
+#[test]
 fn test_inlay_hint_disable_all() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
-        configuration: Some(Some(serde_json::json!([{
+        configuration: Some(Some(json!([{
             "analysis": {
                 "inlayHints": {
                     "callArgumentNames": "all",
@@ -87,7 +122,7 @@ fn test_inlay_hint_disable_all() {
 
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([])),
+        result: Some(json!([])),
         error: None,
     });
 
@@ -100,7 +135,7 @@ fn test_inlay_hint_disable_variables() {
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
-        configuration: Some(Some(serde_json::json!([{
+        configuration: Some(Some(json!([{
             "analysis": {
                 "inlayHints": {
                     "variableTypes": false
@@ -118,7 +153,7 @@ fn test_inlay_hint_disable_variables() {
 
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([{
+        result: Some(json!([{
             "label":" -> tuple[Literal[1], Literal[2]]",
             "position":{"character":21,"line":6},
             "textEdits":[{
@@ -146,7 +181,7 @@ fn test_inlay_hint_disable_returns() {
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
-        configuration: Some(Some(serde_json::json!([{
+        configuration: Some(Some(json!([{
             "analysis": {
                 "inlayHints": {
                     "functionReturnTypes": false
@@ -164,7 +199,7 @@ fn test_inlay_hint_disable_returns() {
 
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([{
+        result: Some(json!([{
             "label":": tuple[Literal[1], Literal[2]]",
             "position":{"character":6,"line":11},
             "textEdits":[{
@@ -172,6 +207,53 @@ fn test_inlay_hint_disable_returns() {
                 "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
             }]
         }])),
+        error: None,
+    });
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_inlay_hint_labels_do_not_support_goto_type_definition() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    interaction.server.did_open("type_def_inlay_hint_test.py");
+    interaction
+        .server
+        .inlay_hint("type_def_inlay_hint_test.py", 0, 0, 100, 0);
+
+    interaction.client.expect_response(Response {
+        id: interaction.server.current_request_id(),
+        result: Some(json!([
+            {
+                "label": " -> MyClass",
+                "position": {"character": 22, "line": 11},
+                "textEdits": [{
+                    "newText": " -> MyClass",
+                    "range": {
+                        "end": {"character": 22, "line": 11},
+                        "start": {"character": 22, "line": 11}
+                    }
+                }]
+            },
+            {
+                "label": ": MyClass",
+                "position": {"character": 6, "line": 15},
+                "textEdits": [{
+                    "newText": ": MyClass",
+                    "range": {
+                        "end": {"character": 6, "line": 15},
+                        "start": {"character": 6, "line": 15}
+                    }
+                }]
+            }
+        ])),
         error: None,
     });
 

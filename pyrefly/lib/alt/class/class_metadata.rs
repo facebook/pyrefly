@@ -262,6 +262,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_deprecated = decorators
             .iter()
             .any(|(decorator, _)| decorator.ty().is_deprecation_marker());
+        let is_disjoint_base = decorators.iter().any(|(decorator, _)| {
+            decorator.ty().callee_kind() == Some(CalleeKind::Function(FunctionKind::DisjointBase))
+        });
 
         let total_ordering_metadata = decorators.iter().find_map(|(decorator, decorator_range)| {
             decorator.ty().callee_kind().and_then(|kind| {
@@ -344,6 +347,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_new_type,
             is_final,
             is_deprecated,
+            is_disjoint_base,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,

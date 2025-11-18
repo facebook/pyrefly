@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::path::Component;
+use std::path::Path;
 use std::path::PathBuf;
 
 use lsp_types::FileChangeType;
@@ -22,11 +24,13 @@ impl CategorizedEvents {
     pub fn new_notify(events: Vec<notify::Event>) -> Self {
         let mut res = Self::default();
         for event in events {
-            match event.kind {
-                EventKind::Create(_) => res.created.extend(event.paths),
-                EventKind::Modify(_) => res.modified.extend(event.paths),
-                EventKind::Remove(_) => res.removed.extend(event.paths),
-                EventKind::Any => res.unknown.extend(event.paths),
+            let notify::Event { kind, paths, .. } = event;
+            let get_paths = || paths.into_iter().filter(|p| !Self::should_ignore(p));
+            match kind {
+                EventKind::Create(_) => res.created.extend(get_paths()),
+                EventKind::Modify(_) => res.modified.extend(get_paths()),
+                EventKind::Remove(_) => res.removed.extend(get_paths()),
+                EventKind::Any => res.unknown.extend(get_paths()),
                 EventKind::Access(_) | EventKind::Other => {}
             }
         }
@@ -37,7 +41,9 @@ impl CategorizedEvents {
     pub fn new_lsp(events: Vec<lsp_types::FileEvent>) -> CategorizedEvents {
         let mut res = CategorizedEvents::default();
         for event in events {
-            if let Ok(path) = event.uri.to_file_path() {
+            if let Ok(path) = event.uri.to_file_path()
+                && !Self::should_ignore(&path)
+            {
                 match event.typ {
                     FileChangeType::CREATED => res.created.push(path),
                     FileChangeType::CHANGED => res.modified.push(path),
@@ -62,5 +68,10 @@ impl CategorizedEvents {
             .chain(self.modified.iter())
             .chain(self.removed.iter())
             .chain(self.unknown.iter())
+    }
+
+    pub fn should_ignore(path: &Path) -> bool {
+        path.components()
+            .any(|c| matches!(c, Component::Normal(name) if name == "__pycache__"))
     }
 }
