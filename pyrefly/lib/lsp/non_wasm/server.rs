@@ -587,19 +587,19 @@ pub fn lsp_loop(
         workspace_indexing_limit,
     );
     let lsp_queue2 = lsp_queue.dupe();
-    std::thread::spawn(move || {
+    let dispatcher_handle = std::thread::spawn(move || {
         dispatch_lsp_events(&connection_for_dispatcher, lsp_queue2);
     });
     let recheck_queue = server.recheck_queue.dupe();
-    std::thread::spawn(move || {
+    let recheck_handle = std::thread::spawn(move || {
         recheck_queue.run_until_stopped();
     });
     let find_reference_queue = server.find_reference_queue.dupe();
-    std::thread::spawn(move || {
+    let find_reference_handle = std::thread::spawn(move || {
         find_reference_queue.run_until_stopped();
     });
     let sourcedb_queue = server.sourcedb_queue.dupe();
-    std::thread::spawn(move || {
+    let sourcedb_handle = std::thread::spawn(move || {
         sourcedb_queue.run_until_stopped();
     });
     let mut ide_transaction_manager = TransactionManager::default();
@@ -633,6 +633,14 @@ pub fn lsp_loop(
     server.find_reference_queue.stop();
     server.sourcedb_queue.stop();
     drop(server); // close connection
+
+    // Wait for all background threads to finish to prevent orphaned processes
+    info!("Waiting for background threads to finish");
+    let _ = recheck_handle.join();
+    let _ = find_reference_handle.join();
+    let _ = sourcedb_handle.join();
+    let _ = dispatcher_handle.join();
+    info!("All background threads finished");
     Ok(())
 }
 
