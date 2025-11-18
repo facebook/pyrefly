@@ -1010,7 +1010,7 @@ impl<'a> BindingsBuilder<'a> {
         let mut hashed_name = Hashed::new(name);
         let mut write_info =
             self.scopes
-                .define_in_current_flow(hashed_name.clone(), idx, style.clone());
+                .define_in_current_flow(hashed_name, idx, style.clone());
         if write_info.is_none()
             && self.errors_suppressed()
             && self.should_bind_unreachable_branches()
@@ -1021,7 +1021,7 @@ impl<'a> BindingsBuilder<'a> {
             hashed_name = Hashed::new(name);
             write_info = self
                 .scopes
-                .define_in_current_flow(hashed_name.clone(), idx, style);
+                .define_in_current_flow(hashed_name, idx, style);
         }
         let write_info = write_info.unwrap_or_else(|| {
             panic!(
