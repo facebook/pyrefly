@@ -212,6 +212,7 @@ pub fn insert_import_edit(
         handle_to_import_from,
         export_name,
         use_absolute_import,
+        true,
     )
 }
 
@@ -236,6 +237,7 @@ pub fn insert_import_edit_with_forced_import_format(
     handle_to_import_from: Handle,
     export_name: &str,
     use_absolute_import: bool,
+    merge_with_existing: bool,
 ) -> ImportEdit {
     let module_name_to_import = if use_absolute_import {
         handle_to_import_from.module()
@@ -252,14 +254,16 @@ pub fn insert_import_edit_with_forced_import_format(
         module_name_to_import.as_str(),
         export_name
     );
-    if let Some(edit) = try_extend_existing_from_import(
-        ast,
-        module_name_to_import.as_str(),
-        export_name,
-        display_text.clone(),
-        module_name_to_import.as_str(),
-    ) {
-        return edit;
+    if merge_with_existing {
+        if let Some(edit) = try_extend_existing_from_import(
+            ast,
+            module_name_to_import.as_str(),
+            export_name,
+            display_text.clone(),
+            module_name_to_import.as_str(),
+        ) {
+            return edit;
+        }
     }
     let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
         first_stmt.range().start()

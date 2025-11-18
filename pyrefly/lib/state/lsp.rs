@@ -2389,6 +2389,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
+
     fn add_autoimport_completions(
         &self,
         handle: &Handle,
@@ -2405,9 +2406,11 @@ impl<'a> Transaction<'a> {
             && let Some(ast) = self.get_ast(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
-            for (handle_to_import_from, name, export) in
-                self.search_exports_fuzzy(identifier.as_str())
-            {
+            let search_results = self.search_exports_fuzzy(identifier.as_str());
+            for (handle_to_import_from, name, export) in search_results {
+                if !identifier.as_str().starts_with('_') && name.starts_with('_') {
+                    continue;
+                }
                 // Using handle itself doesn't always work because handles can be made separately and have different hashes
                 if handle_to_import_from.module() == handle.module()
                     || handle_to_import_from.module() == ModuleName::builtins()

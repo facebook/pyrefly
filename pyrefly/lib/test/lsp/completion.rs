@@ -87,7 +87,7 @@ fn get_test_report(
                     report.push_str("[DEPRECATED] ");
                 }
                 report.push_str(&label);
-                if let Some(detail) = detail {
+                if let Some(detail) = &detail {
                     report.push_str(": ");
                     report.push_str(&detail);
                 }
@@ -100,6 +100,7 @@ fn get_test_report(
                     report.push_str(" with text edit: ");
                     report.push_str(&format!("{:?}", &text_edit));
                 }
+                let mut added_extra_line = false;
                 if let Some(documentation) = documentation {
                     report.push('\n');
                     match documentation {
@@ -110,6 +111,11 @@ fn get_test_report(
                             report.push_str(&content.value);
                         }
                     }
+                    added_extra_line = true;
+                }
+                if detail.is_some() || added_extra_line {
+                    // Insert a blank line between rich (import/doc) entries for readability.
+                    report.push('\n');
                 }
             }
         }

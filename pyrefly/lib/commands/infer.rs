@@ -300,6 +300,7 @@ impl InferArgs {
                                             handle_to_import_from.dupe(),
                                             unknown_name,
                                             true,
+                                            /*merge_with_existing=*/ false,
                                         )
                                     })
                                     .collect();
