@@ -711,9 +711,12 @@ impl CheckArgs {
         let report_errors_start = Instant::now();
         let mut config_errors = transaction.get_config_errors();
         config_errors.append(&mut sourcedb_errors);
-        let config_errors_count = config_errors.len();
+        let mut config_errors_count = 0;
         for error in config_errors {
             error.print();
+            if error.severity() >= Severity::Error {
+                config_errors_count += 1;
+            }
         }
 
         let relative_to = self.output.relative_to.as_ref().map_or_else(

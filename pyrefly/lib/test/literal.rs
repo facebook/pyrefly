@@ -324,3 +324,13 @@ result5 = x.replace(old, non_lit)
 assert_type(result5, str)
 "#,
 );
+
+testcase!(
+    test_literal_string_as_container,
+    r#"
+from typing import Container
+s: str = "foo"
+x1: Container[str] = s
+x2: Container[str] = "foo"
+    "#,
+);

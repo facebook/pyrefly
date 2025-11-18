@@ -5,7 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Response;
+use lsp_types::request::InlayHintRequest;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -30,9 +31,9 @@ fn test_inlay_hints() {
     );
 
     interaction.inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([{
+    interaction.client.expect_response::<InlayHintRequest>(
+        interaction.client.current_request_id(),
+        json!([{
             "label": " -> tuple[Literal[1], Literal[2]]",
             "position": {"character": 21, "line": 0},
             "textEdits": [{
@@ -42,14 +43,13 @@ fn test_inlay_hints() {
                 "newText": "import typing\n",
                 "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
             }]
-        }])),
-        error: None,
-    });
+        }]),
+    );
 
     interaction.inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([{
+    interaction.client.expect_response::<InlayHintRequest>(
+        interaction.client.current_request_id(),
+        json!([{
             "label": ": tuple[Literal[1], Literal[2]]",
             "position": {"character": 6, "line": 0},
             "textEdits": [{
@@ -59,14 +59,13 @@ fn test_inlay_hints() {
                 "newText": "import typing\n",
                 "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
             }]
-        }])),
-        error: None,
-    });
+        }]),
+    );
 
     interaction.inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([{
+    interaction.client.expect_response::<InlayHintRequest>(
+        interaction.client.current_request_id(),
+        json!([{
             "label": " -> Literal[0]",
             "position": {"character": 15, "line": 0},
             "textEdits": [{
@@ -76,8 +75,7 @@ fn test_inlay_hints() {
                 "newText": "import typing\n",
                 "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
             }]
-        }])),
-        error: None,
-    });
+        }]),
+    );
     interaction.shutdown();
 }

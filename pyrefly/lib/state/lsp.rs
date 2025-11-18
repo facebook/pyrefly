@@ -6,7 +6,6 @@
  */
 
 use std::cmp::Reverse;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use fuzzy_matcher::FuzzyMatcher;
@@ -16,19 +15,11 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemTag;
-use lsp_types::DocumentSymbol;
-use lsp_types::FoldingRangeKind;
-use lsp_types::ParameterInformation;
-use lsp_types::ParameterLabel;
-use lsp_types::SemanticToken;
-use lsp_types::SignatureHelp;
-use lsp_types::SignatureInformation;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
-use pyrefly_python::folding::folding_ranges;
 use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
 use pyrefly_python::module::TextRangeWithModule;
@@ -50,14 +41,10 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprContext;
-use ruff_python_ast::ExprDict;
-use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::ParameterWithDefault;
-use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -70,14 +57,12 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
-use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
-use crate::binding::bindings::Bindings;
 use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
-use crate::graph::index::Idx;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::wasm::inlay_hints::normalize_singleton_function_type_into_params;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -86,13 +71,9 @@ use crate::state::import_tracker::ImportTracker;
 use crate::state::import_tracker::format_type_for_annotation;
 use crate::state::lsp_attributes::AttributeContext;
 use crate::state::require::Require;
-use crate::state::semantic_tokens::SemanticTokenBuilder;
-use crate::state::semantic_tokens::SemanticTokensLegends;
-use crate::state::semantic_tokens::disabled_ranges_for_module;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
-use crate::types::callable::Params;
 use crate::types::module::ModuleType;
 use crate::types::types::Type;
 
@@ -152,7 +133,7 @@ pub enum DisplayTypeErrors {
 }
 
 const RESOLVE_EXPORT_INITIAL_GAS: Gas = Gas::new(100);
-const MIN_CHARACTERS_TYPED_AUTOIMPORT: usize = 3;
+pub const MIN_CHARACTERS_TYPED_AUTOIMPORT: usize = 3;
 
 /// Determines what to do when finding definitions. Do we continue searching, or stop somewhere intermediate?
 #[derive(Clone, Copy, Debug)]
@@ -201,15 +182,6 @@ impl DefinitionMetadata {
     }
 }
 
-/// A binding that is verified to be a binding for a name in the source code.
-/// This data structure carries the proof for the verification,
-/// which includes the definition information, and the binding itself.
-struct NamedBinding {
-    definition_handle: Handle,
-    definition_export: Export,
-    key: Key,
-}
-
 #[derive(Debug)]
 enum CalleeKind {
     // Function name
@@ -230,7 +202,7 @@ fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
 /// Generic helper to visit keyword arguments with a custom handler.
 /// The handler receives the keyword index and reference, and returns true to stop iteration.
 /// This function will also take in a generic function which is used a filter
-fn visit_keyword_arguments_until_match<F>(call: &ExprCall, mut filter: F) -> bool
+pub(crate) fn visit_keyword_arguments_until_match<F>(call: &ExprCall, mut filter: F) -> bool
 where
     F: FnMut(usize, &Keyword) -> bool,
 {
@@ -346,13 +318,6 @@ pub struct InlayHintWithEdits {
 struct RenderedTypeHint {
     text: String,
     import_edits: Vec<(TextSize, String)>,
-}
-
-#[derive(Debug)]
-pub struct ParameterAnnotation {
-    pub text_size: TextSize,
-    pub has_annotation: bool,
-    pub ty: Option<Type>,
 }
 
 impl IdentifierWithContext {
@@ -524,25 +489,14 @@ pub struct FindDefinitionItem {
     pub module: Module,
 }
 
-/// The currently active argument in a function call for signature help.
-#[derive(Debug)]
-enum ActiveArgument {
-    /// The cursor is within an existing positional argument at the given index.
-    Positional(usize),
-    /// The cursor is within a keyword argument whose name is provided.
-    Keyword(Name),
-    /// The cursor is in the argument list but not inside any argument expression yet.
-    Next(usize),
-}
-
 impl<'a> Transaction<'a> {
-    fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
+    pub fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
         let idx = self.get_bindings(handle)?.key_to_idx(key);
         let answers = self.get_answers(handle)?;
         answers.get_type_at(idx)
     }
 
-    fn get_type_trace(&self, handle: &Handle, range: TextRange) -> Option<Type> {
+    pub fn get_type_trace(&self, handle: &Handle, range: TextRange) -> Option<Type> {
         let ans = self.get_answers(handle)?;
         ans.get_type_trace(range)
     }
@@ -902,211 +856,6 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn visit_finding_signature_range(
-        x: &Expr,
-        find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
-    ) {
-        if let Expr::Call(call) = x
-            && call.arguments.range.contains_inclusive(find)
-        {
-            if Self::visit_positional_signature_args(call, find, res) {
-                return;
-            }
-            if Self::visit_keyword_signature_args(call, find, res) {
-                return;
-            }
-            if res.is_none() {
-                *res = Some((
-                    call.func.range(),
-                    call.arguments.range,
-                    ActiveArgument::Next(call.arguments.len()),
-                ));
-            }
-        } else {
-            x.recurse(&mut |x| Self::visit_finding_signature_range(x, find, res));
-        }
-    }
-
-    fn visit_positional_signature_args(
-        call: &ExprCall,
-        find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
-    ) -> bool {
-        for (i, arg) in call.arguments.args.as_ref().iter().enumerate() {
-            if arg.range().contains_inclusive(find) {
-                Self::visit_finding_signature_range(arg, find, res);
-                if res.is_some() {
-                    return true;
-                }
-                *res = Some((
-                    call.func.range(),
-                    call.arguments.range,
-                    ActiveArgument::Positional(i),
-                ));
-                return true;
-            }
-        }
-        false
-    }
-
-    fn visit_keyword_signature_args(
-        call: &ExprCall,
-        find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
-    ) -> bool {
-        let kwarg_start_idx = call.arguments.args.len();
-        visit_keyword_arguments_until_match(call, |j, kw| {
-            if kw.range.contains_inclusive(find) {
-                Self::visit_finding_signature_range(&kw.value, find, res);
-                if res.is_some() {
-                    return true;
-                }
-                let active_argument = match kw.arg.as_ref() {
-                    Some(identifier) => ActiveArgument::Keyword(identifier.id.clone()),
-                    None => ActiveArgument::Positional(kwarg_start_idx + j),
-                };
-                *res = Some((call.func.range(), call.arguments.range, active_argument));
-                true
-            } else {
-                false
-            }
-        })
-    }
-
-    /// Finds the callable(s) (multiple if overloads exist) at position in document, returning them, chosen overload index, and arg index
-    fn get_callables_from_call(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-    ) -> Option<(Vec<Type>, usize, ActiveArgument)> {
-        let mod_module = self.get_ast(handle)?;
-        let mut res = None;
-        mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
-        let (callee_range, call_args_range, mut active_argument) = res?;
-        // When the cursor is in the argument list but not inside any argument yet,
-        // estimate the would-be positional index by counting commas up to the cursor.
-        // This keeps signature help useful even before the user starts typing the next arg.
-        if let ActiveArgument::Next(index) = &mut active_argument
-            && let Some(next_index) =
-                self.count_argument_separators_before(handle, call_args_range, position)
-        {
-            *index = next_index;
-        }
-        let answers = self.get_answers(handle)?;
-        if let Some((overloads, chosen_overload_index)) =
-            answers.get_all_overload_trace(call_args_range)
-        {
-            let callables = overloads.into_map(|callable| Type::Callable(Box::new(callable)));
-            Some((
-                callables,
-                chosen_overload_index.unwrap_or_default(),
-                active_argument,
-            ))
-        } else {
-            answers
-                .get_type_trace(callee_range)
-                .map(|t| (vec![t], 0, active_argument))
-        }
-    }
-
-    pub fn get_signature_help_at(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-    ) -> Option<SignatureHelp> {
-        self.get_callables_from_call(handle, position).map(
-            |(callables, chosen_overload_index, active_argument)| {
-                let signatures = callables
-                    .into_iter()
-                    .map(|t| Self::create_signature_information(t, &active_argument))
-                    .collect_vec();
-                let active_parameter = signatures
-                    .get(chosen_overload_index)
-                    .and_then(|info| info.active_parameter);
-                SignatureHelp {
-                    signatures,
-                    active_signature: Some(chosen_overload_index as u32),
-                    active_parameter,
-                }
-            },
-        )
-    }
-
-    fn create_signature_information(
-        type_: Type,
-        active_argument: &ActiveArgument,
-    ) -> SignatureInformation {
-        let type_ = type_.deterministic_printing();
-        let label = type_.as_hover_string();
-        let (parameters, active_parameter) =
-            if let Some(params) = Self::normalize_singleton_function_type_into_params(type_) {
-                let active_parameter =
-                    Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);
-                (
-                    Some(params.map(|param| ParameterInformation {
-                        label: ParameterLabel::Simple(format!("{param}")),
-                        documentation: None,
-                    })),
-                    active_parameter,
-                )
-            } else {
-                (None, None)
-            };
-        SignatureInformation {
-            label,
-            documentation: None,
-            parameters,
-            active_parameter,
-        }
-    }
-
-    fn active_parameter_index(params: &[Param], active_argument: &ActiveArgument) -> Option<usize> {
-        match active_argument {
-            ActiveArgument::Positional(index) | ActiveArgument::Next(index) => {
-                (*index < params.len()).then_some(*index)
-            }
-            ActiveArgument::Keyword(name) => params
-                .iter()
-                .position(|param| param.name().is_some_and(|param_name| param_name == name)),
-        }
-    }
-
-    fn count_argument_separators_before(
-        &self,
-        handle: &Handle,
-        arguments_range: TextRange,
-        position: TextSize,
-    ) -> Option<usize> {
-        let module = self.get_module_info(handle)?;
-        let contents = module.contents();
-        let len = contents.len();
-        let start = arguments_range.start().to_usize().min(len);
-        let end = arguments_range.end().to_usize().min(len);
-        let pos = position.to_usize().clamp(start, end);
-        contents
-            .get(start..pos)
-            .map(|slice| slice.bytes().filter(|&b| b == b',').count())
-            .or(Some(0))
-    }
-
-    fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<Param>> {
-        let callable = type_.to_callable()?;
-        // We will drop the self parameter for signature help
-        if let Params::List(params_list) = callable.params {
-            if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
-                params_list.items().first()
-                && (name.as_str() == "self" || name.as_str() == "cls")
-            {
-                let mut params = params_list.into_items();
-                params.remove(0);
-                return Some(params);
-            }
-            return Some(params_list.into_items());
-        }
-        None
-    }
-
     fn resolve_named_import(
         &self,
         handle: &Handle,
@@ -1202,7 +951,7 @@ impl<'a> Transaction<'a> {
                         location: TextRange::default(),
                         symbol_kind: Some(SymbolKind::Module),
                         docstring_range,
-                        is_deprecated: false,
+                        deprecation: None,
                         special_export: None,
                     },
                 ))
@@ -1284,7 +1033,7 @@ impl<'a> Transaction<'a> {
         Some((executable_module, def_range, docstring_range))
     }
 
-    fn key_to_export(
+    pub fn key_to_export(
         &self,
         handle: &Handle,
         key: &Key,
@@ -1813,31 +1562,6 @@ impl<'a> Transaction<'a> {
         definitions.into_map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
 
-    pub fn folding_ranges(
-        &self,
-        handle: &Handle,
-    ) -> Option<Vec<(TextRange, Option<FoldingRangeKind>)>> {
-        let ast = self.get_ast(handle)?;
-        let module_info = self.get_module_info(handle)?;
-        Some(folding_ranges(&module_info, &ast.body))
-    }
-
-    pub fn docstring_ranges(&self, handle: &Handle) -> Option<Vec<TextRange>> {
-        let ranges = self.folding_ranges(handle)?;
-        Some(
-            ranges
-                .into_iter()
-                .filter_map(|(range, kind)| {
-                    if kind == Some(FoldingRangeKind::Comment) {
-                        Some(range)
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
-        )
-    }
-
     pub fn goto_type_definition(
         &self,
         handle: &Handle,
@@ -2304,35 +2028,6 @@ impl<'a> Transaction<'a> {
         Some(references)
     }
 
-    /// Bindings can contain synthetic bindings, which are not meaningful to end users.
-    /// This function helps to filter out such bindings and only leave bindings that eventually
-    /// jumps to a name in the source.
-    fn named_bindings(&self, handle: &Handle, bindings: &Bindings) -> Vec<NamedBinding> {
-        let mut named_bindings = Vec::new();
-        for idx in bindings.keys::<Key>() {
-            let key = bindings.idx_to_key(idx);
-            if matches!(key, Key::Phi(..) | Key::Narrow(..)) {
-                // These keys are always synthetic and never serves as a name definition.
-                continue;
-            }
-            if let Some((definition_handle, definition_export)) = self.key_to_export(
-                handle,
-                key,
-                FindPreference {
-                    import_behavior: ImportBehavior::StopAtRenamedImports,
-                    ..Default::default()
-                },
-            ) {
-                named_bindings.push(NamedBinding {
-                    definition_handle,
-                    definition_export,
-                    key: key.clone(),
-                });
-            }
-        }
-        named_bindings
-    }
-
     fn add_kwargs_completions(
         &self,
         handle: &Handle,
@@ -2341,7 +2036,7 @@ impl<'a> Transaction<'a> {
     ) {
         if let Some((callables, overload_idx, _)) = self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(overload_idx).cloned()
-            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
+            && let Some(params) = normalize_singleton_function_type_into_params(callable)
         {
             for param in params {
                 match param {
@@ -2486,7 +2181,7 @@ impl<'a> Transaction<'a> {
                         }),
                     additional_text_edits,
                     label_details,
-                    tags: if export.is_deprecated {
+                    tags: if export.deprecation.is_some() {
                         Some(vec![CompletionItemTag::DEPRECATED])
                     } else {
                         None
@@ -2600,11 +2295,11 @@ impl<'a> Transaction<'a> {
                 let is_deprecated = ty.as_ref().is_some_and(|t| {
                     if let Type::ClassDef(cls) = t {
                         self.ad_hoc_solve(handle, |solver| {
-                            solver.get_metadata_for_class(cls).is_deprecated()
+                            solver.get_metadata_for_class(cls).deprecation().is_some()
                         })
                         .unwrap_or(false)
                     } else {
-                        t.is_deprecated_function()
+                        t.function_deprecation().is_some()
                     }
                 });
                 let detail = ty.map(|t| t.to_string());
@@ -2676,8 +2371,7 @@ impl<'a> Transaction<'a> {
         if let Some((callables, chosen_overload_index, active_argument)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(chosen_overload_index)
-            && let Some(params) =
-                Self::normalize_singleton_function_type_into_params(callable.clone())
+            && let Some(params) = normalize_singleton_function_type_into_params(callable.clone())
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
@@ -2775,7 +2469,7 @@ impl<'a> Transaction<'a> {
                     let exports = self.get_exports(&handle);
                     for (name, export) in exports.iter() {
                         let is_deprecated = match export {
-                            ExportLocation::ThisModule(export) => export.is_deprecated,
+                            ExportLocation::ThisModule(export) => export.deprecation.is_some(),
                             ExportLocation::OtherModule(_, _) => false,
                         };
                         result.push(CompletionItem {
@@ -2930,65 +2624,6 @@ impl<'a> Transaction<'a> {
         (result, is_incomplete)
     }
 
-    fn collect_types_from_callees(&self, range: TextRange, handle: &Handle) -> Vec<Type> {
-        fn callee_at(mod_module: Arc<ModModule>, position: TextSize) -> Option<ExprCall> {
-            fn f(x: &Expr, find: TextSize, res: &mut Option<ExprCall>) {
-                if let Expr::Call(call) = x
-                    && call.func.range().contains_inclusive(find)
-                {
-                    f(call.func.as_ref(), find, res);
-                    if res.is_some() {
-                        return;
-                    }
-                    *res = Some(call.clone());
-                } else {
-                    x.recurse(&mut |x| f(x, find, res));
-                }
-            }
-            let mut res = None;
-            mod_module.visit(&mut |x| f(x, position, &mut res));
-            res
-        }
-        match self.get_ast(handle) {
-            Some(mod_module) => {
-                let callee = callee_at(mod_module, range.start());
-                match callee {
-                    Some(ExprCall {
-                        arguments: args, ..
-                    }) => args
-                        .args
-                        .iter()
-                        .filter_map(|arg| self.get_type_trace(handle, arg.range()))
-                        .collect(),
-                    None => Vec::new(),
-                }
-            }
-            None => Vec::new(),
-        }
-    }
-
-    fn collect_references(
-        &self,
-        handle: &Handle,
-        idx: Idx<Key>,
-        bindings: Bindings,
-        transaction: &mut CancellableTransaction,
-    ) -> Vec<(Module, Vec<TextRange>)> {
-        if let Key::Definition(id) = bindings.idx_to_key(idx)
-            && let Some(module_info) = self.get_module_info(handle)
-        {
-            let definition_kind = DefinitionMetadata::VariableOrAttribute(None);
-            if let Ok(references) = transaction.find_global_references_from_definition(
-                handle.sys_info(),
-                definition_kind,
-                TextRangeWithModule::new(module_info, id.range()),
-            ) {
-                return references;
-            }
-        }
-        Vec::new()
-    }
-
     pub fn search_exports_exact(&self, name: &str) -> Vec<Handle> {
         self.search_exports(|handle, exports| {
             if let Some(export) = exports.get(&Name::new(name)) {
@@ -3007,7 +2642,7 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    fn search_exports_fuzzy(&self, pattern: &str) -> Vec<(Handle, String, Export)> {
+    pub fn search_exports_fuzzy(&self, pattern: &str) -> Vec<(Handle, String, Export)> {
         let mut res = self.search_exports(|handle, exports| {
             let matcher = SkimMatcherV2::default().smart_case();
             let mut results = Vec::new();
@@ -3026,184 +2661,6 @@ impl<'a> Transaction<'a> {
         });
         res.sort_by_key(|(score, _, _, _)| Reverse(*score));
         res.into_map(|(_, handle, name, export)| (handle, name, export))
-    }
-
-    fn filter_parameters(
-        &self,
-        param_with_default: ParameterWithDefault,
-        handle: &Handle,
-    ) -> Option<ParameterAnnotation> {
-        if param_with_default.name() == "self" || param_with_default.name() == "cls" {
-            return None;
-        }
-        let ty = match param_with_default.default() {
-            Some(expr) => self.get_type_trace(handle, expr.range()),
-            None => None,
-        };
-        Some(ParameterAnnotation {
-            text_size: param_with_default.parameter.range().end(),
-            ty,
-            has_annotation: param_with_default.annotation().is_some(),
-        })
-    }
-
-    pub fn infer_parameter_annotations(
-        &self,
-        handle: &Handle,
-        cancellable_transaction: &mut CancellableTransaction,
-    ) -> Vec<ParameterAnnotation> {
-        if let Some(bindings) = self.get_bindings(handle) {
-            let transaction = cancellable_transaction;
-            fn transpose<T: Clone>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
-                if v.is_empty() {
-                    return Vec::new();
-                }
-                let max_len = v.iter().map(|row| row.len()).max().unwrap();
-                let mut result = vec![Vec::new(); max_len];
-                for row in v {
-                    for (i, elem) in row.into_iter().enumerate() {
-                        result[i].push(elem);
-                    }
-                }
-                result
-            }
-            fn zip_types(
-                inferred_types: Vec<Vec<Type>>,
-                function_arguments: Vec<ParameterAnnotation>,
-            ) -> Vec<ParameterAnnotation> {
-                let zipped_inferred_types: Vec<Vec<Type>> = transpose(inferred_types);
-                let types: Vec<(ParameterAnnotation, Vec<Type>)> =
-                    match zipped_inferred_types.is_empty() {
-                        true => function_arguments
-                            .into_iter()
-                            .map(
-                                |arg: ParameterAnnotation| -> (ParameterAnnotation, Vec<Type>) {
-                                    (arg, vec![])
-                                },
-                            )
-                            .collect(),
-                        false => function_arguments
-                            .into_iter()
-                            .zip(zipped_inferred_types)
-                            .collect(),
-                    };
-
-                types
-                    .into_iter()
-                    .map(|(arg, mut ty)| {
-                        let mut arg = arg;
-                        if let Some(default_type) = arg.ty {
-                            ty.push(default_type)
-                        }
-                        if ty.len() == 1 {
-                            arg.ty = Some(ty[0].clone());
-                        } else {
-                            let ty = ty.into_iter().filter(|x| !x.is_any()).collect();
-                            arg.ty = Some(Type::Union(ty));
-                        }
-                        arg
-                    })
-                    .collect()
-            }
-
-            bindings
-                .keys::<Key>()
-                .flat_map(|idx| {
-                    let binding = bindings.get(idx);
-                    // Check if this binding is a function
-                    if let Binding::Function(key_function, _, _) = binding {
-                        let binding_func =
-                            bindings.get(bindings.get(*key_function).undecorated_idx);
-                        let args = binding_func.def.parameters.args.clone();
-                        let func_args: Vec<ParameterAnnotation> = args
-                            .into_iter()
-                            .filter_map(|param_with_default| {
-                                self.filter_parameters(param_with_default, handle)
-                            })
-                            .collect();
-                        let references =
-                            self.collect_references(handle, idx, bindings.clone(), transaction);
-                        let ranges: Vec<&TextRange> =
-                            references.iter().flat_map(|(_, range)| range).collect();
-                        let inferred_types =
-                            ranges.map(|range| self.collect_types_from_callees(**range, handle));
-                        zip_types(inferred_types, func_args)
-                    } else {
-                        vec![]
-                    }
-                })
-                .collect()
-        } else {
-            vec![]
-        }
-    }
-
-    pub fn inferred_types(
-        &self,
-        handle: &Handle,
-        return_types: bool,
-        containers: bool,
-    ) -> Option<Vec<(TextSize, Type, AnnotationKind)>> {
-        let is_interesting_type = |x: &Type| !x.is_any();
-        let is_interesting_expr = |x: &Expr| !Ast::is_literal(x);
-        let bindings = self.get_bindings(handle)?;
-        let mut res = Vec::new();
-        for idx in bindings.keys::<Key>() {
-            match bindings.idx_to_key(idx) {
-                // Return Annotation
-                key @ Key::ReturnType(id) if return_types => {
-                    match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
-                        Binding::Function(x, _pred, _class_meta) => {
-                            if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
-                                && let Some(ty) = self.get_type(handle, key)
-                                && is_interesting_type(&ty)
-                            {
-                                let fun = bindings.get(bindings.get(*x).undecorated_idx);
-                                res.push((
-                                    fun.def.parameters.range.end(),
-                                    ty,
-                                    AnnotationKind::Return,
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                // Only annotate empty containers for now
-                key @ Key::Definition(_) if containers => {
-                    if let Some(ty) = self.get_type(handle, key) {
-                        let e = match bindings.get(idx) {
-                            Binding::NameAssign(_, None, e, _) => match &**e {
-                                Expr::List(ExprList { elts, .. }) => {
-                                    if elts.is_empty() {
-                                        Some(&**e)
-                                    } else {
-                                        None
-                                    }
-                                }
-                                Expr::Dict(ExprDict { items, .. }) => {
-                                    if items.is_empty() {
-                                        Some(&**e)
-                                    } else {
-                                        None
-                                    }
-                                }
-                                _ => None,
-                            },
-                            _ => None,
-                        };
-                        if let Some(e) = e
-                            && is_interesting_expr(e)
-                            && is_interesting_type(&ty)
-                        {
-                            res.push((key.range().end(), ty, AnnotationKind::Variable));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Some(res)
     }
 
     pub fn inlay_hints(
@@ -3319,19 +2776,6 @@ impl<'a> Transaction<'a> {
         Some(res)
     }
 
-    fn collect_function_calls_from_ast(module: Arc<ModModule>) -> Vec<ExprCall> {
-        fn collect_function_calls(x: &Expr, calls: &mut Vec<ExprCall>) {
-            if let Expr::Call(call) = x {
-                calls.push(call.clone());
-            }
-            x.recurse(&mut |x| collect_function_calls(x, calls));
-        }
-
-        let mut function_calls = Vec::new();
-        module.visit(&mut |x| collect_function_calls(x, &mut function_calls));
-        function_calls
-    }
-
     fn add_inlay_hints_for_positional_function_args(
         &self,
         handle: &Handle,
@@ -3413,161 +2857,6 @@ impl<'a> Transaction<'a> {
             }
         }
         RenderedTypeHint { text, import_edits }
-    }
-
-    pub fn semantic_tokens(
-        &self,
-        handle: &Handle,
-        limit_range: Option<TextRange>,
-        limit_cell_idx: Option<usize>,
-    ) -> Option<Vec<SemanticToken>> {
-        let module_info = self.get_module_info(handle)?;
-        let bindings = self.get_bindings(handle)?;
-        let ast = self.get_ast(handle)?;
-        let legends = SemanticTokensLegends::new();
-        let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), handle.sys_info());
-        let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
-        for NamedBinding {
-            definition_handle,
-            definition_export,
-            key,
-        } in self.named_bindings(handle, &bindings)
-        {
-            if let Export {
-                symbol_kind: Some(symbol_kind),
-                ..
-            } = definition_export
-            {
-                builder.process_key(&key, definition_handle.module(), symbol_kind)
-            }
-        }
-        builder.process_ast(&ast, &|range| self.get_type_trace(handle, range));
-        Some(legends.convert_tokens_into_lsp_semantic_tokens(
-            &builder.all_tokens_sorted(),
-            module_info,
-            limit_cell_idx,
-        ))
-    }
-
-    #[allow(deprecated)] // The `deprecated` field
-    pub fn symbols(&self, handle: &Handle) -> Option<Vec<DocumentSymbol>> {
-        let ast = self.get_ast(handle)?;
-        let module_info = self.get_module_info(handle)?;
-        fn recurse_stmt_adding_symbols<'a>(
-            stmt: &'a Stmt,
-            symbols: &'a mut Vec<DocumentSymbol>,
-            module_info: &Module,
-        ) {
-            let mut recursed_symbols = Vec::new();
-            stmt.recurse(&mut |stmt| {
-                recurse_stmt_adding_symbols(stmt, &mut recursed_symbols, module_info)
-            });
-
-            match stmt {
-                Stmt::FunctionDef(stmt_function_def) => {
-                    let mut children = Vec::new();
-                    children.append(&mut recursed_symbols);
-                    // todo(kylei): better approach to filtering out "" for all symbols
-                    let name = match stmt_function_def.name.as_str() {
-                        "" => "unknown".to_owned(),
-                        name => name.to_owned(),
-                    };
-                    symbols.push(DocumentSymbol {
-                        name,
-                        detail: None,
-                        kind: lsp_types::SymbolKind::FUNCTION,
-                        tags: None,
-                        deprecated: None,
-                        range: module_info.to_lsp_range(stmt_function_def.range),
-                        selection_range: module_info.to_lsp_range(stmt_function_def.name.range),
-
-                        children: Some(children),
-                    });
-                }
-                Stmt::ClassDef(stmt_class_def) => {
-                    let mut children = Vec::new();
-                    children.append(&mut recursed_symbols);
-                    let name = match stmt_class_def.name.as_str() {
-                        "" => "unknown".to_owned(),
-                        name => name.to_owned(),
-                    };
-                    symbols.push(DocumentSymbol {
-                        name,
-                        detail: None,
-                        kind: lsp_types::SymbolKind::CLASS,
-                        tags: None,
-                        deprecated: None,
-                        range: module_info.to_lsp_range(stmt_class_def.range),
-                        selection_range: module_info.to_lsp_range(stmt_class_def.name.range),
-                        children: Some(children),
-                    });
-                }
-                Stmt::Assign(stmt_assign) => {
-                    for target in &stmt_assign.targets {
-                        if let Expr::Name(name) = target {
-                            // todo(jvansch): Try to resuse DefinitionMetadata here.
-                            symbols.push(DocumentSymbol {
-                                name: name.id.to_string(),
-                                detail: None, // Todo(jvansch): Could add type info here later
-                                kind: lsp_types::SymbolKind::VARIABLE,
-                                tags: None,
-                                deprecated: None,
-                                range: module_info.to_lsp_range(stmt_assign.range),
-                                selection_range: module_info.to_lsp_range(name.range),
-                                children: None,
-                            });
-                        }
-                    }
-                }
-                Stmt::AnnAssign(stmt_ann_assign) => {
-                    if let Expr::Name(name) = &*stmt_ann_assign.target {
-                        symbols.push(DocumentSymbol {
-                            name: name.id.to_string(),
-                            detail: Some(
-                                module_info
-                                    .code_at(stmt_ann_assign.annotation.range())
-                                    .to_owned(),
-                            ),
-                            kind: lsp_types::SymbolKind::VARIABLE,
-                            tags: None,
-                            deprecated: None,
-                            range: module_info.to_lsp_range(stmt_ann_assign.range),
-                            selection_range: module_info.to_lsp_range(name.range),
-                            children: None,
-                        });
-                    }
-                }
-                _ => {}
-            };
-            symbols.append(&mut recursed_symbols);
-        }
-        let mut result = Vec::new();
-        ast.body
-            .visit(&mut |stmt| recurse_stmt_adding_symbols(stmt, &mut result, &module_info));
-        Some(result)
-    }
-
-    pub fn workspace_symbols(
-        &self,
-        query: &str,
-    ) -> Option<Vec<(String, lsp_types::SymbolKind, TextRangeWithModule)>> {
-        if query.len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
-            return None;
-        }
-        let mut result = Vec::new();
-        for (handle, name, export) in self.search_exports_fuzzy(query) {
-            if let Some(module) = self.get_module_info(&handle) {
-                let kind = export
-                    .symbol_kind
-                    .map_or(lsp_types::SymbolKind::VARIABLE, |k| k.to_lsp_symbol_kind());
-                let location = TextRangeWithModule {
-                    module,
-                    range: export.location,
-                };
-                result.push((name, kind, location));
-            }
-        }
-        Some(result)
     }
 }
 
@@ -3809,5 +3098,69 @@ impl<'a> CancellableTransaction<'a> {
         all_implementations.dedup_by_key(|impl_| (impl_.module.path().dupe(), impl_.range.start()));
 
         Ok(all_implementations)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ruff_python_ast::name::Name;
+
+    use super::Transaction;
+    use crate::types::callable::Param;
+    use crate::types::callable::Required;
+    use crate::types::types::AnyStyle;
+    use crate::types::types::Type;
+
+    fn any_type() -> Type {
+        Type::Any(AnyStyle::Explicit)
+    }
+
+    #[test]
+    fn param_name_for_positional_argument_marks_vararg_repeats() {
+        let params = vec![
+            Param::Pos(Name::new_static("x"), any_type(), Required::Required),
+            Param::VarArg(Some(Name::new_static("columns")), any_type()),
+            Param::KwOnly(Name::new_static("kw"), any_type(), Required::Required),
+        ];
+
+        assert_eq!(match_summary(&params, 0), Some(("x", false)));
+        assert_eq!(match_summary(&params, 1), Some(("columns", false)));
+        assert_eq!(match_summary(&params, 3), Some(("columns", true)));
+    }
+
+    #[test]
+    fn param_name_for_positional_argument_handles_missing_names() {
+        let params = vec![
+            Param::PosOnly(None, any_type(), Required::Required),
+            Param::VarArg(None, any_type()),
+        ];
+
+        assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 0).is_none());
+        assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 1).is_none());
+        assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 5).is_none());
+    }
+
+    #[test]
+    fn duplicate_vararg_hints_are_not_emitted() {
+        let params = vec![
+            Param::Pos(Name::new_static("s"), any_type(), Required::Required),
+            Param::VarArg(Some(Name::new_static("args")), any_type()),
+            Param::KwOnly(Name::new_static("a"), any_type(), Required::Required),
+        ];
+
+        let labels: Vec<&str> = (0..4)
+            .filter_map(|idx| {
+                Transaction::<'static>::param_name_for_positional_argument(&params, idx)
+            })
+            .filter(|match_| !match_.is_vararg_repeat)
+            .map(|match_| match_.name.as_str())
+            .collect();
+
+        assert_eq!(labels, vec!["s", "args"]);
+    }
+
+    fn match_summary(params: &[Param], idx: usize) -> Option<(&str, bool)> {
+        Transaction::<'static>::param_name_for_positional_argument(params, idx)
+            .map(|match_| (match_.name.as_str(), match_.is_vararg_repeat))
     }
 }

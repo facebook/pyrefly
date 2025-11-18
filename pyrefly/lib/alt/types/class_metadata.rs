@@ -14,6 +14,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
+use pyrefly_types::callable::Deprecation;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::visit::VisitMut;
@@ -53,7 +54,7 @@ pub struct ClassMetadata {
     has_base_any: bool,
     is_new_type: bool,
     is_final: bool,
-    is_deprecated: bool,
+    deprecation: Option<Deprecation>,
     is_disjoint_base: bool,
     total_ordering_metadata: Option<TotalOrderingMetadata>,
     /// If this class is decorated with `typing.dataclass_transform(...)`, the keyword arguments
@@ -91,7 +92,7 @@ impl ClassMetadata {
         has_base_any: bool,
         is_new_type: bool,
         is_final: bool,
-        is_deprecated: bool,
+        deprecation: Option<Deprecation>,
         is_disjoint_base: bool,
         total_ordering_metadata: Option<TotalOrderingMetadata>,
         dataclass_transform_metadata: Option<DataclassTransformKeywords>,
@@ -112,7 +113,7 @@ impl ClassMetadata {
             has_base_any,
             is_new_type,
             is_final,
-            is_deprecated,
+            deprecation,
             is_disjoint_base,
             total_ordering_metadata,
             dataclass_transform_metadata,
@@ -136,7 +137,7 @@ impl ClassMetadata {
             has_base_any: false,
             is_new_type: false,
             is_final: false,
-            is_deprecated: false,
+            deprecation: None,
             is_disjoint_base: false,
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
@@ -206,8 +207,8 @@ impl ClassMetadata {
         false
     }
 
-    pub fn is_deprecated(&self) -> bool {
-        self.is_deprecated
+    pub fn deprecation(&self) -> Option<&Deprecation> {
+        self.deprecation.as_ref()
     }
 
     pub fn is_disjoint_base(&self) -> bool {

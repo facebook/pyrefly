@@ -6,7 +6,8 @@
  */
 
 use lsp_server::RequestId;
-use lsp_server::Response;
+use lsp_types::request::References;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -25,10 +26,8 @@ fn test_notebook_references() {
 
     interaction.references_cell("notebook.ipynb", "cell1", 0, 0, true);
     // TODO: references always returns empty for notebooks atm
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!([])),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<References>(RequestId::from(2), json!([]));
     interaction.shutdown();
 }

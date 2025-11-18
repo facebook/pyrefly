@@ -184,6 +184,25 @@ class B(A):
     "#,
 );
 
+// Verify that we correctly pick up parant class type as context when there's a
+// qualifier-only annotation.
+testcase!(
+    test_inherited_attribute_with_qualifier_only_annotation,
+    r#"
+from typing import ClassVar, assert_type
+class A: pass
+class B(A): pass
+class Foo:
+    x: ClassVar[list[A]] = []
+    y: ClassVar[list[A]] = []
+class Bar(Foo):
+    x: ClassVar = [B()]
+    y = [B()]
+assert_type(Bar.x, list[A])
+assert_type(Bar.y, list[A])
+    "#,
+);
+
 // Ref https://github.com/facebook/pyrefly/issues/370
 // Ref https://github.com/facebook/pyrefly/issues/522
 testcase!(
@@ -1782,5 +1801,21 @@ class C:
     @decorator
     def f(self) -> int: ...
 assert_type(C().f(), Any)
+    "#,
+);
+
+testcase!(
+    test_class_toplevel_inherited_attr_name,
+    r#"
+# at the class top level, inherited attribute names should be considered in scope
+from typing import assert_type
+
+class Foo:
+    assert_type(__qualname__, str)
+    assert_type(__module__, str)
+    attr: int
+
+class Bar(Foo):
+    assert_type(attr, int)
     "#,
 );

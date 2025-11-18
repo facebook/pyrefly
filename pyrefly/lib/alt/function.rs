@@ -9,6 +9,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -36,6 +37,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::types::decorated_function::DecoratedFunction;
+use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::SpecialDecorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::binding::binding::Binding;
@@ -44,6 +46,7 @@ use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
+use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -218,7 +221,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def: &StmtFunctionDef,
         stub_or_impl: FunctionStubOrImpl,
         class_key: Option<&Idx<KeyClass>>,
-        decorators: &[(Idx<Key>, TextRange)],
+        decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
         module_style: ModuleStyle,
         errors: &ErrorCollector,
@@ -241,30 +244,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ..Default::default()
         };
         let mut found_class_property = false;
-        let decorators = Box::from_iter(
-            decorators
-                .iter()
-                .filter(|(k, range)| {
-                    let decorator = self.get_idx(*k);
-                    let decorator_ty = decorator.ty();
-                    if let Some(special_decorator) = self.get_special_decorator(decorator_ty) {
-                        if is_top_level_function {
-                            self.check_top_level_function_decorator(
-                                &special_decorator,
-                                *range,
-                                errors,
-                            );
-                        }
-                        !self.set_flag_from_special_decorator(&mut flags, &special_decorator)
-                    } else {
-                        if is_class_property_decorator_type(decorator_ty) {
-                            found_class_property = true;
-                        }
-                        true
-                    }
-                })
-                .map(|(idx, range)| (self.get_idx(*idx).arc_clone_ty(), *range)),
-        );
+        let decorators = Box::from_iter(decorators.iter().filter_map(|k| {
+            let decorator = self.get_idx(*k);
+            let range = self.bindings().idx_to_key(*k).range();
+            let keep = if let Some(special_decorator) = self.get_special_decorator(&decorator) {
+                if is_top_level_function {
+                    self.check_top_level_function_decorator(&special_decorator, range, errors);
+                }
+                !self.set_flag_from_special_decorator(&mut flags, &special_decorator)
+            } else {
+                if is_class_property_decorator_type(&decorator.ty) {
+                    found_class_property = true;
+                }
+                true
+            };
+            if keep {
+                Some((decorator.ty.clone(), range))
+            } else {
+                None
+            }
+        }));
 
         if stub_or_impl == FunctionStubOrImpl::Stub {
             flags.lacks_implementation = true;
@@ -406,8 +405,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Arc::new(ty)
     }
 
-    pub fn get_special_decorator(&'a self, decorator: &'a Type) -> Option<SpecialDecorator<'a>> {
-        match decorator.callee_kind() {
+    pub fn get_special_decorator(
+        &'a self,
+        decorator: &'a Decorator,
+    ) -> Option<SpecialDecorator<'a>> {
+        match decorator.ty.callee_kind() {
             Some(CalleeKind::Function(FunctionKind::Overload)) => Some(SpecialDecorator::Overload),
             Some(CalleeKind::Class(ClassKind::StaticMethod(name))) => {
                 Some(SpecialDecorator::StaticMethod(name))
@@ -424,11 +426,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(CalleeKind::Class(ClassKind::EnumMember)) => Some(SpecialDecorator::EnumMember),
             Some(CalleeKind::Function(FunctionKind::Override)) => Some(SpecialDecorator::Override),
             Some(CalleeKind::Function(FunctionKind::Final)) => Some(SpecialDecorator::Final),
-            _ if decorator.is_deprecation_marker() => Some(SpecialDecorator::Deprecated),
-            _ if decorator.is_property_setter_decorator() => {
-                Some(SpecialDecorator::PropertySetter(decorator))
+            _ if let Some(deprecation) = &decorator.deprecation => {
+                Some(SpecialDecorator::Deprecated(deprecation))
             }
-            _ if let Type::KwCall(call) = decorator
+            _ if decorator.ty.is_property_setter_decorator() => {
+                Some(SpecialDecorator::PropertySetter(&decorator.ty))
+            }
+            _ if let Type::KwCall(call) = &decorator.ty
                 && call.has_function_kind(FunctionKind::DataclassTransform) =>
             {
                 Some(SpecialDecorator::DataclassTransformCall(&call.keywords))
@@ -483,8 +487,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 flags.has_final_decoration = true;
                 true
             }
-            SpecialDecorator::Deprecated => {
-                flags.is_deprecated = true;
+            SpecialDecorator::Deprecated(deprecation) => {
+                flags.deprecation = Some((**deprecation).clone());
                 true
             }
             SpecialDecorator::PropertySetter(decorator) => {
@@ -620,10 +624,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             // If the parameter begins but does not end with "__", it is a positional-only parameter.
             // See: https://typing.python.org/en/latest/spec/historical.html#positional-only-parameters
-            if is_historical_args_usage
-                && x.parameter.name.starts_with("__")
-                && !x.parameter.name.ends_with("__")
-            {
+            if is_historical_args_usage && Ast::is_mangled_attr(&x.parameter.name.id) {
                 if seen_keyword_args {
                     self.error(
                         errors,
@@ -1106,7 +1107,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // on the first overload: https://typing.python.org/en/latest/spec/overload.html#invalid-overload-definitions.
         let mut metadata = first.2.clone();
         // This does not apply to `@deprecated` - some overloads can be deprecated while others are fine.
-        metadata.flags.is_deprecated = false;
+        metadata.flags.deprecation = None;
         // `dataclass_transform()` can be on any of the overloads.
         if metadata.flags.dataclass_transform_metadata.is_none() {
             metadata.flags.dataclass_transform_metadata = remaining

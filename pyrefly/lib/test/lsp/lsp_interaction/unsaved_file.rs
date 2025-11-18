@@ -5,10 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::Url;
+use lsp_types::request::Completion;
+use lsp_types::request::SemanticTokensFullRequest;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -24,15 +25,16 @@ fn test_semantic_tokens_for_unsaved_file() {
 
 foo()
 "#;
-    interaction.server.did_open_uri(&uri, "python", text);
+    interaction.client.did_open_uri(&uri, "python", text);
 
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(2),
-        method: "textDocument/semanticTokens/full".to_owned(),
-        params: serde_json::json!({
-            "textDocument": { "uri": uri.to_string() }
-        }),
-    }));
+    interaction
+        .client
+        .send_request::<SemanticTokensFullRequest>(
+            RequestId::from(2),
+            json!({
+                "textDocument": { "uri": uri.to_string() }
+            }),
+        );
 
     interaction.client.expect_response_with(
         |response| {
@@ -62,16 +64,15 @@ fn test_completion_for_unsaved_file() {
     let text = r#"import math
 math.
 "#;
-    interaction.server.did_open_uri(&uri, "python", text);
+    interaction.client.did_open_uri(&uri, "python", text);
 
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(2),
-        method: "textDocument/completion".to_owned(),
-        params: serde_json::json!({
+    interaction.client.send_request::<Completion>(
+        RequestId::from(2),
+        json!({
             "textDocument": {"uri": uri.to_string()},
             "position": {"line": 1, "character": 5}
         }),
-    }));
+    );
 
     interaction.client.expect_response_with(
         |response| {

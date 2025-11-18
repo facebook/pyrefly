@@ -5,19 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::env::temp_dir;
 use std::path::PathBuf;
 
 use lsp_server::Message;
 use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
-use lsp_server::ResponseError;
 use lsp_types::Url;
+use serde_json::json;
 use tempfile::TempDir;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn test_go_to_def(
@@ -34,7 +33,7 @@ fn test_go_to_def(
         workspace_folders,
         ..Default::default()
     });
-    interaction.server.did_open(request_file_name);
+    interaction.client.did_open(request_file_name);
 
     for (
         request_line,
@@ -47,7 +46,7 @@ fn test_go_to_def(
     ) in requests
     {
         interaction
-            .server
+            .client
             .definition(request_file_name, request_line, request_character);
         interaction.client.expect_definition_response_from_root(
             response_file_name,
@@ -68,9 +67,9 @@ fn definition_on_attr_of_pyi_assignment_goes_to_py() {
         ..Default::default()
     });
     let file = "attributes_of_py/src_with_assignments.py";
-    interaction.server.did_open(file);
+    interaction.client.did_open(file);
     // Test annotated assignment (x: int = 100)
-    interaction.server.definition(file, 7, 8);
+    interaction.client.definition(file, 7, 8);
     interaction.client.expect_definition_response_from_root(
         "attributes_of_py/lib_with_assignments.py",
         7,
@@ -79,7 +78,7 @@ fn definition_on_attr_of_pyi_assignment_goes_to_py() {
         5,
     );
     // Test regular assignment (y = "world")
-    interaction.server.definition(file, 8, 8);
+    interaction.client.definition(file, 8, 8);
     interaction.client.expect_definition_response_from_root(
         "attributes_of_py/lib_with_assignments.py",
         8,
@@ -98,20 +97,20 @@ fn test_go_to_def_basic(root: &TempDir, workspace_folders: Option<Vec<(String, U
         workspace_folders: workspace_folders.clone(),
         ..Default::default()
     });
-    interaction.server.did_open(file);
-    interaction.server.definition(file, 5, 7);
+    interaction.client.did_open(file);
+    interaction.client.definition(file, 5, 7);
     interaction
         .client
         .expect_definition_response_from_root("bar.py", 0, 0, 0, 0);
-    interaction.server.definition(file, 6, 16);
+    interaction.client.definition(file, 6, 16);
     interaction
         .client
         .expect_definition_response_from_root("bar.py", 6, 6, 6, 9);
-    interaction.server.definition(file, 8, 9);
+    interaction.client.definition(file, 8, 9);
     interaction
         .client
         .expect_definition_response_from_root("bar.py", 7, 4, 7, 7);
-    interaction.server.definition(file, 9, 7);
+    interaction.client.definition(file, 9, 7);
     interaction
         .client
         .expect_definition_response_from_root("bar.py", 6, 6, 6, 9);
@@ -184,10 +183,10 @@ fn definition_in_builtins() {
         ..Default::default()
     });
     interaction
-        .server
+        .client
         .did_open("imports_builtins/imports_builtins.py");
     interaction
-        .server
+        .client
         .definition("imports_builtins/imports_builtins.py", 7, 7);
     interaction.client.expect_response_with(
         |response| {
@@ -210,8 +209,8 @@ fn definition_on_attr_of_pyi_goes_to_py() {
         ..Default::default()
     });
     let file = "attributes_of_py/src.py";
-    interaction.server.did_open(file);
-    interaction.server.definition(file, 7, 4);
+    interaction.client.did_open(file);
+    interaction.client.definition(file, 7, 4);
     interaction
         .client
         .expect_definition_response_from_root("attributes_of_py/lib.py", 7, 8, 7, 9);
@@ -221,19 +220,17 @@ fn definition_on_attr_of_pyi_goes_to_py() {
 #[test]
 fn definition_in_builtins_without_interpreter_goes_to_stub() {
     let root = get_test_files_root();
-    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let pyrefly_typeshed_materialized = bundled_typeshed_path();
     let result_file = pyrefly_typeshed_materialized.join("typing.pyi");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
-        configuration: Some(Some(
-            serde_json::json!([{"pythonPath": "/fake/python/path"}]),
-        )),
+        configuration: Some(Some(json!([{"pythonPath": "/fake/python/path"}]))),
         ..Default::default()
     });
-    interaction.server.did_open("imports_builtins_no_config.py");
+    interaction.client.did_open("imports_builtins_no_config.py");
     interaction
-        .server
+        .client
         .definition("imports_builtins_no_config.py", 7, 7);
     interaction.client.expect_definition_response_absolute(
         result_file.to_string_lossy().to_string(),
@@ -252,26 +249,25 @@ fn malformed_missing_position() {
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    interaction.server.did_open("foo.py");
-    interaction.server.send_message(Message::Request(Request {
+    interaction.client.did_open("foo.py");
+    interaction.client.send_message(Message::Request(Request {
         id: RequestId::from(2),
         method: "textDocument/definition".to_owned(),
-        // Missing position
-        params: serde_json::json!({
+        // Missing position - intentionally malformed to test error handling
+        params: json!({
             "textDocument": {
                 "uri": Url::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string()
             },
         }),
     }));
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: None,
-        error: Some(ResponseError {
-            code: -32602,
-            message: "missing field `position`".to_owned(),
-            data: None,
+    interaction.client.expect_response_error(
+        RequestId::from(2),
+        json!({
+            "code": -32602,
+            "message": "missing field `position`",
+            "data": null,
         }),
-    });
+    );
 }
 
 // we generally want to prefer py. but if it's missing in the py, we should prefer the pyi
@@ -284,8 +280,8 @@ fn prefer_pyi_when_missing_in_py() {
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    interaction.server.did_open("main.py");
-    interaction.server.definition("main.py", 5, 18);
+    interaction.client.did_open("main.py");
+    interaction.client.definition("main.py", 5, 18);
     interaction
         .client
         .expect_definition_response_from_root("foo.pyi", 5, 4, 5, 7);
@@ -294,16 +290,16 @@ fn prefer_pyi_when_missing_in_py() {
 #[test]
 fn goto_type_def_on_str_primitive_goes_to_builtins_stub() {
     let root = get_test_files_root();
-    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let pyrefly_typeshed_materialized = bundled_typeshed_path();
     let result_file = pyrefly_typeshed_materialized.join("builtins.pyi");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    interaction.server.did_open("primitive_type_test.py");
+    interaction.client.did_open("primitive_type_test.py");
     interaction
-        .server
+        .client
         .type_definition("primitive_type_test.py", 5, 0);
 
     interaction.client.expect_definition_response_absolute(
@@ -323,17 +319,17 @@ fn goto_type_def_on_str_primitive_goes_to_builtins_stub() {
 #[test]
 fn goto_type_def_on_int_primitive_goes_to_builtins_stub() {
     let root = get_test_files_root();
-    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let pyrefly_typeshed_materialized = bundled_typeshed_path();
     let result_file = pyrefly_typeshed_materialized.join("builtins.pyi");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    interaction.server.did_open("primitive_type_test.py");
+    interaction.client.did_open("primitive_type_test.py");
 
     interaction
-        .server
+        .client
         .type_definition("primitive_type_test.py", 6, 0);
 
     // Expect to go to the int class definition in builtins.pyi
@@ -355,16 +351,16 @@ fn goto_type_def_on_int_primitive_goes_to_builtins_stub() {
 #[test]
 fn goto_type_def_on_bool_primitive_goes_to_builtins_stub() {
     let root = get_test_files_root();
-    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let pyrefly_typeshed_materialized = bundled_typeshed_path();
     let result_file = pyrefly_typeshed_materialized.join("builtins.pyi");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    interaction.server.did_open("primitive_type_test.py");
+    interaction.client.did_open("primitive_type_test.py");
     interaction
-        .server
+        .client
         .type_definition("primitive_type_test.py", 7, 0);
 
     // Expect to go to the bool class definition in builtins.pyi
@@ -386,17 +382,17 @@ fn goto_type_def_on_bool_primitive_goes_to_builtins_stub() {
 #[test]
 fn goto_type_def_on_bytes_primitive_goes_to_builtins_stub() {
     let root = get_test_files_root();
-    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let pyrefly_typeshed_materialized = bundled_typeshed_path();
     let result_file = pyrefly_typeshed_materialized.join("builtins.pyi");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    interaction.server.did_open("primitive_type_test.py");
+    interaction.client.did_open("primitive_type_test.py");
 
     interaction
-        .server
+        .client
         .type_definition("primitive_type_test.py", 8, 0);
 
     // Expect to go to the bytes class definition in builtins.pyi
@@ -423,10 +419,10 @@ fn goto_type_def_on_custom_class_goes_to_class_definition() {
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    interaction.server.did_open("custom_class_type_test.py");
+    interaction.client.did_open("custom_class_type_test.py");
 
     interaction
-        .server
+        .client
         .type_definition("custom_class_type_test.py", 8, 6);
 
     // Expect to go to the Foo class definition (line 6, columns 6-9)
@@ -442,17 +438,17 @@ fn goto_type_def_on_custom_class_goes_to_class_definition() {
 #[test]
 fn goto_type_def_on_list_of_primitives_shows_selector() {
     let root = get_test_files_root();
-    let pyrefly_typeshed_materialized = temp_dir().join("pyrefly_bundled_typeshed");
+    let pyrefly_typeshed_materialized = bundled_typeshed_path();
     let builtins_file = pyrefly_typeshed_materialized.join("builtins.pyi");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         ..Default::default()
     });
-    interaction.server.did_open("primitive_type_test.py");
+    interaction.client.did_open("primitive_type_test.py");
 
     interaction
-        .server
+        .client
         .type_definition("primitive_type_test.py", 9, 0);
 
     interaction.client.expect_response_with(

@@ -10,7 +10,7 @@ $ mkdir $TMPDIR/test && echo "" > $TMPDIR/test/empty.py && \
  WARN */pyrefly.toml: Invalid site-package-path: */abcd` does not exist (glob)
  WARN */pyrefly.toml: Invalid search-path: */efgh` does not exist (glob)
  INFO * errors* (glob)
-[1]
+[0]
 ```
 
 ## Dump config

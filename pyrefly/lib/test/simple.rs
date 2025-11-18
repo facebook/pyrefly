@@ -1879,13 +1879,6 @@ takes_alias("bad")  # E: Argument `Literal['bad']` is not assignable to paramete
 );
 
 testcase!(
-    test_starred_empty_tuple_no_panic,
-    r#"
-(),*()
-    "#,
-);
-
-testcase!(
     test_asyncio_gather,
     r#"
 import asyncio

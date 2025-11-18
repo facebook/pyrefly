@@ -13,6 +13,7 @@ use itertools::EitherOrBoth;
 use itertools::Itertools;
 use itertools::izip;
 use pyrefly_python::dunder;
+use pyrefly_types::literal::Lit;
 use pyrefly_types::read_only::ReadOnlyReason;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
@@ -1112,6 +1113,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     _ => Err(SubsetError::Other),
                 }
             }
+            (Type::LiteralString | Type::Literal(Lit::Str(_)), Type::ClassType(want))
+                if want.has_qname("typing", "Container") =>
+            {
+                // The signature of `typing.Container.__contains__` is weird.
+                // `str` matches it by direct inheritance, but we cannot convert `LiteralString` to `str`
+                // otherwise it would be difficult to match protocols like `Interface[LiteralString]`
+                //
+                // https://github.com/python/typeshed/blob/5c8b7fcbbeb4af2d7e9f33e745a7863e401c2578/stdlib/typing.pyi#L638
+                Ok(())
+            }
             (_, Type::ClassType(want)) if self.type_order.is_protocol(want.class_object()) => {
                 self.is_subset_protocol(got.clone(), want.clone())
             }
@@ -1146,6 +1157,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 if self.type_order.is_new_type(got) && want.is_builtin("type") =>
             {
                 Err(SubsetError::Other)
+            }
+            (Type::ClassDef(got), Type::Type(box Type::ClassType(want)))
+                if self.type_order.is_protocol(want.class_object())
+                    && self.type_order.is_protocol(got) =>
+            {
+                // We only allow concrete class names to be assigned to `type[T]` if `T` is a protocol
+                Err(SubsetError::TypeOfProtocolNeedsConcreteClass(
+                    want.name().clone(),
+                ))
             }
             (Type::ClassDef(got), Type::Type(want)) => {
                 self.is_subset_eq(&self.type_order.promote_silently(got), want)

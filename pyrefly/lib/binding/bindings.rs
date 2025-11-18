@@ -64,6 +64,7 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::NameReadInfo;
 use crate::binding::scope::ScopeTrace;
 use crate::binding::scope::Scopes;
+use crate::binding::scope::UnusedImport;
 use crate::binding::scope::UnusedParameter;
 use crate::binding::table::TableKeyed;
 use crate::config::base::UntypedDefBehavior;
@@ -105,7 +106,7 @@ pub enum NameLookupResult {
     ///   if I am used after a `del` or is an anywhere-style lookup)
     Found {
         idx: Idx<Key>,
-        uninitialized: UninitializedInFlow,
+        initialized: InitializedInFlow,
     },
     /// This name is not defined in the current scope stack.
     NotFound,
@@ -121,18 +122,18 @@ impl NameLookupResult {
 }
 
 #[derive(Debug)]
-pub enum UninitializedInFlow {
-    No,
-    Conditionally,
+pub enum InitializedInFlow {
     Yes,
+    Conditionally,
+    No,
 }
 
-impl UninitializedInFlow {
+impl InitializedInFlow {
     pub fn as_error_message(&self, name: &Name) -> Option<String> {
         match self {
-            UninitializedInFlow::No => None,
-            UninitializedInFlow::Conditionally => Some(format!("`{name}` may be uninitialized")),
-            UninitializedInFlow::Yes => Some(format!("`{name}` is uninitialized")),
+            InitializedInFlow::Yes => None,
+            InitializedInFlow::Conditionally => Some(format!("`{name}` may be uninitialized")),
+            InitializedInFlow::No => Some(format!("`{name}` is uninitialized")),
         }
     }
 }
@@ -153,6 +154,7 @@ struct BindingsInner {
     table: BindingTable,
     scope_trace: Option<ScopeTrace>,
     unused_parameters: Vec<UnusedParameter>,
+    unused_imports: Vec<UnusedImport>,
 }
 
 impl Display for Bindings {
@@ -190,6 +192,7 @@ pub struct BindingsBuilder<'a> {
     table: BindingTable,
     pub untyped_def_behavior: UntypedDefBehavior,
     unused_parameters: Vec<UnusedParameter>,
+    unused_imports: Vec<UnusedImport>,
 }
 
 impl Bindings {
@@ -213,6 +216,10 @@ impl Bindings {
 
     pub fn unused_parameters(&self) -> &[UnusedParameter] {
         &self.0.unused_parameters
+    }
+
+    pub fn unused_imports(&self) -> &[UnusedImport] {
+        &self.0.unused_imports
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -368,6 +375,7 @@ impl Bindings {
             table: Default::default(),
             untyped_def_behavior,
             unused_parameters: Vec::new(),
+            unused_imports: Vec::new(),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -379,6 +387,8 @@ impl Bindings {
         builder.inject_globals();
         builder.stmts(x.body, &NestingContext::toplevel());
         assert_eq!(builder.scopes.loop_depth(), 0);
+        let unused_imports = builder.scopes.collect_module_unused_imports();
+        builder.record_unused_imports(unused_imports);
         let scope_trace = builder.scopes.finish();
         let exported = exports.exports(lookup);
         for (name, exportable) in scope_trace.exportables().into_iter_hashed() {
@@ -406,6 +416,7 @@ impl Bindings {
                 None
             },
             unused_parameters: builder.unused_parameters,
+            unused_imports: builder.unused_imports,
         }))
     }
 }
@@ -559,6 +570,10 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn record_unused_parameters(&mut self, unused: Vec<UnusedParameter>) {
         self.unused_parameters.extend(unused);
+    }
+
+    pub fn record_unused_imports(&mut self, unused: Vec<UnusedImport>) {
+        self.unused_imports.extend(unused);
     }
 
     /// Insert a binding into the bindings table, given a `Usage`. This will panic if the usage
@@ -793,26 +808,28 @@ impl<'a> BindingsBuilder<'a> {
         match self.scopes.look_up_name_for_read(name) {
             NameReadInfo::Flow {
                 idx,
-                uninitialized: is_initialized,
+                initialized: is_initialized,
             } => {
                 let (idx, first_use) = self.detect_first_use(idx, usage);
                 if let Some(used_idx) = first_use {
                     self.record_first_use(used_idx, usage);
                 }
                 self.scopes.mark_parameter_used(name.key());
+                self.scopes.mark_import_used(name.key());
                 NameLookupResult::Found {
                     idx,
-                    uninitialized: is_initialized,
+                    initialized: is_initialized,
                 }
             }
             NameReadInfo::Anywhere {
                 key,
-                uninitialized: is_initialized,
+                initialized: is_initialized,
             } => {
                 self.scopes.mark_parameter_used(name.key());
+                self.scopes.mark_import_used(name.key());
                 NameLookupResult::Found {
                     idx: self.table.types.0.insert(key),
-                    uninitialized: is_initialized,
+                    initialized: is_initialized,
                 }
             }
             NameReadInfo::NotFound => NameLookupResult::NotFound,
@@ -1172,7 +1189,7 @@ impl TParamLookupResult {
         self.idx()
             .map_or(NameLookupResult::NotFound, |idx| NameLookupResult::Found {
                 idx,
-                uninitialized: UninitializedInFlow::No,
+                initialized: InitializedInFlow::Yes,
             })
     }
 }

@@ -11,6 +11,7 @@
 
 use std::iter;
 
+use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
 
 use super::stdlib::Stdlib;
@@ -66,7 +67,7 @@ impl ImplicitGlobal {
 
     #[allow(dead_code)]
     pub fn from_name(name: &Name) -> Option<ImplicitGlobal> {
-        if name.starts_with("__") && name.ends_with("__") {
+        if is_dunder(name.as_str()) {
             IMPLICIT_GLOBALS.iter().find(|x| &x.name == name).cloned()
         } else {
             None

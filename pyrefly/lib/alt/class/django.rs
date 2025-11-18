@@ -23,7 +23,6 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
-use crate::alt::class::class_field::WithDefiningClass;
 use crate::alt::class::enums::VALUE_PROP;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -123,7 +122,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Default: use _pyi_private_get_type from the field class
         self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
-            .map(|member| member.value.ty())
+            .map(|field| field.ty())
     }
 
     /// Check if a class inherits from Django's Field class
@@ -137,11 +136,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     // Get ManyRelatedManager class from django stubs
     fn get_manager_type(&self, target_model_type: Type) -> Option<Type> {
-        let manager_class_type = self.get_from_export(
-            ModuleName::django_models_fields_related_descriptors(),
-            None,
-            &KeyExport(MANYRELATEDMANAGER),
-        );
+        let django_related_module = ModuleName::django_models_fields_related_descriptors();
+        let django_related_module_exports = self.exports.get(django_related_module).finding()?;
+        let manager_class_type = if django_related_module_exports
+            .exports(self.exports)
+            .contains_key(&MANYRELATEDMANAGER)
+        {
+            self.get_from_export(django_related_module, None, &KeyExport(MANYRELATEDMANAGER))
+        } else {
+            return None;
+        };
 
         // Extract the Class from ClassDef
         let manager_class = match manager_class_type.as_ref() {
@@ -241,10 +245,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Also include the type of __empty__ field if it exists, since it contributes to label types
         let empty_name = Name::new_static("__empty__");
-        let has_empty = if let Some(WithDefiningClass { value, .. }) =
-            self.get_class_member(cls, &empty_name)
-        {
-            label_types.push(value.ty());
+        let has_empty = if let Some(field) = self.get_class_member(cls, &empty_name) {
+            label_types.push(field.ty());
             true
         } else {
             false
