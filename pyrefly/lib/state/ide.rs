@@ -261,9 +261,10 @@ pub fn insert_import_edit_with_forced_import_format(
             export_name,
             display_text.clone(),
             module_name_to_import.as_str(),
-        ) {
-            return edit;
-        }
+        )
+    {
+        return edit;
+    }
     let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
         first_stmt.range().start()
     } else {
@@ -313,26 +314,27 @@ fn try_extend_existing_from_import(
 ) -> Option<ImportEdit> {
     for stmt in &ast.body {
         if let Stmt::ImportFrom(import_from) = stmt
-            && import_from_module_name(import_from) == target_module_name {
-                if import_from
-                    .names
-                    .iter()
-                    .any(|alias| alias.asname.is_none() && alias.name.as_str() == export_name)
-                {
-                    // Already imported; don't propose a duplicate edit.
-                    return None;
-                }
-                if let Some(last_alias) = import_from.names.last() {
-                    let position = last_alias.range.end();
-                    let insert_text = format!(", {}", export_name);
-                    return Some(ImportEdit {
-                        position,
-                        insert_text,
-                        display_text,
-                        module_name: module_name.to_owned(),
-                    });
-                }
+            && import_from_module_name(import_from) == target_module_name
+        {
+            if import_from
+                .names
+                .iter()
+                .any(|alias| alias.asname.is_none() && alias.name.as_str() == export_name)
+            {
+                // Already imported; don't propose a duplicate edit.
+                return None;
             }
+            if let Some(last_alias) = import_from.names.last() {
+                let position = last_alias.range.end();
+                let insert_text = format!(", {}", export_name);
+                return Some(ImportEdit {
+                    position,
+                    insert_text,
+                    display_text,
+                    module_name: module_name.to_owned(),
+                });
+            }
+        }
     }
     None
 }
