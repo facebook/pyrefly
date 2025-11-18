@@ -173,6 +173,12 @@
                             "default": false
                         }
                     }
+                },
+                "python.analysis.showHoverGoToLinks": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Controls whether hover tooltips include 'Go to definition' and 'Go to type definition' navigation links.",
+                    "scope": "resource"
                 }
             }
         }
