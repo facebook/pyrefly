@@ -1008,9 +1008,9 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
         let mut hashed_name = Hashed::new(name);
-        let mut write_info =
-            self.scopes
-                .define_in_current_flow(hashed_name, idx, style.clone());
+        let mut write_info = self
+            .scopes
+            .define_in_current_flow(hashed_name, idx, style.clone());
         if write_info.is_none()
             && self.errors_suppressed()
             && self.should_bind_unreachable_branches()
@@ -1019,9 +1019,7 @@ impl<'a> BindingsBuilder<'a> {
             self.scopes.add_synthetic_definition(name, key_range);
             // Recreate the hash since it borrows `name` by reference and we just mutated state
             hashed_name = Hashed::new(name);
-            write_info = self
-                .scopes
-                .define_in_current_flow(hashed_name, idx, style);
+            write_info = self.scopes.define_in_current_flow(hashed_name, idx, style);
         }
         let write_info = write_info.unwrap_or_else(|| {
             panic!(
