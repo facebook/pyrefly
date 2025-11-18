@@ -290,7 +290,7 @@ impl InferArgs {
                             if let Some(ast) = transaction.get_ast(&handle) {
                                 let error_range = error.range();
                                 let unknown_name = module_info.code_at(error_range);
-                                let imports: Vec<(TextSize, String, String)> = transaction
+                                let imports: Vec<ImportEdit> = transaction
                                     .search_exports_exact(unknown_name)
                                     .into_iter()
                                     .map(|handle_to_import_from| {
@@ -335,16 +335,16 @@ impl InferArgs {
         fs_anyhow::write(file_path, result)
     }
 
-    fn add_imports_to_file(
-        file_path: &Path,
-        imports: Vec<(TextSize, String, String)>,
-    ) -> anyhow::Result<()> {
+    fn add_imports_to_file(file_path: &Path, imports: Vec<ImportEdit>) -> anyhow::Result<()> {
         let file_content = fs_anyhow::read_to_string(file_path)?;
         let mut result = file_content;
-        for (position, import, _) in imports {
-            let offset = (position).into();
-            if !result.contains(&import) {
-                result.insert_str(offset, &import);
+        for import_edit in imports {
+            if import_edit.insert_text.is_empty() {
+                continue;
+            }
+            let offset = (import_edit.position).into();
+            if offset <= result.len() && !result.contains(&import_edit.insert_text) {
+                result.insert_str(offset, &import_edit.insert_text);
             }
         }
         fs_anyhow::write(file_path, result)
