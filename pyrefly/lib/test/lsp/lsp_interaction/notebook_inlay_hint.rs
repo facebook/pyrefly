@@ -33,10 +33,10 @@ fn test_inlay_hints() {
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
         result: Some(serde_json::json!([{
-            "label": " -> tuple[typing.Literal[1], typing.Literal[2]]",
+            "label": " -> tuple[Literal[1], Literal[2]]",
             "position": {"character": 21, "line": 0},
             "textEdits": [{
-                "newText": " -> tuple[typing.Literal[1], typing.Literal[2]]",
+                "newText": " -> tuple[Literal[1], Literal[2]]",
                 "range": {"end": {"character": 21, "line": 0}, "start": {"character": 21, "line": 0}}
             }, {
                 "newText": "import typing\n",
@@ -50,10 +50,10 @@ fn test_inlay_hints() {
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
         result: Some(serde_json::json!([{
-            "label": ": tuple[typing.Literal[1], typing.Literal[2]]",
+            "label": ": tuple[Literal[1], Literal[2]]",
             "position": {"character": 6, "line": 0},
             "textEdits": [{
-                "newText": ": tuple[typing.Literal[1], typing.Literal[2]]",
+                "newText": ": tuple[Literal[1], Literal[2]]",
                 "range": {"end": {"character": 6, "line": 0}, "start": {"character": 6, "line": 0}}
             }, {
                 "newText": "import typing\n",
@@ -67,10 +67,10 @@ fn test_inlay_hints() {
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
         result: Some(serde_json::json!([{
-            "label": " -> typing.Literal[0]",
+            "label": " -> Literal[0]",
             "position": {"character": 15, "line": 0},
             "textEdits": [{
-                "newText": " -> typing.Literal[0]",
+                "newText": " -> Literal[0]",
                 "range": {"end": {"character": 15, "line": 0}, "start": {"character": 15, "line": 0}}
             }, {
                 "newText": "import typing\n",

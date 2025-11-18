@@ -58,7 +58,6 @@ use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::ParameterWithDefault;
 use ruff_python_ast::Stmt;
-use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -68,7 +67,6 @@ use ruff_text_size::TextSize;
 use serde::Deserialize;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
-use starlark_map::small_set::SmallSet;
 
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
@@ -84,6 +82,8 @@ use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
+use crate::state::import_tracker::ImportTracker;
+use crate::state::import_tracker::format_type_for_annotation;
 use crate::state::lsp_attributes::AttributeContext;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokenBuilder;
@@ -93,7 +93,6 @@ use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::callable::Params;
-use crate::types::display::TypeDisplayContext;
 use crate::types::module::ModuleType;
 use crate::types::types::Type;
 
@@ -344,6 +343,11 @@ pub struct InlayHintWithEdits {
     pub import_edits: Vec<(TextSize, String)>,
 }
 
+struct RenderedTypeHint {
+    text: String,
+    import_edits: Vec<(TextSize, String)>,
+}
+
 #[derive(Debug)]
 pub struct ParameterAnnotation {
     pub text_size: TextSize,
@@ -503,145 +507,6 @@ impl IdentifierWithContext {
             context: IdentifierContext::Expr(expr_name.ctx),
         }
     }
-}
-
-#[derive(Default)]
-struct ImportTracker {
-    canonical_modules: SmallSet<ModuleName>,
-    alias_modules: Vec<(ModuleName, String)>,
-}
-
-impl ImportTracker {
-    fn from_ast(ast: &ModModule) -> Self {
-        let mut tracker = Self::default();
-        for stmt in &ast.body {
-            if let Stmt::Import(stmt_import) = stmt {
-                tracker.record_import(stmt_import);
-            }
-        }
-        tracker
-            .alias_modules
-            .sort_by_key(|(module, _)| Reverse(module.as_str().len()));
-        tracker
-    }
-
-    fn record_import(&mut self, stmt_import: &StmtImport) {
-        for alias in &stmt_import.names {
-            let module_name = ModuleName::from_str(alias.name.as_str());
-            if let Some(asname) = &alias.asname {
-                self.alias_modules
-                    .push((module_name, asname.id.to_string()));
-            } else {
-                self.canonical_modules.insert(module_name);
-            }
-        }
-    }
-
-    fn apply_aliases(&self, text: &str) -> String {
-        if self.alias_modules.is_empty() {
-            return text.to_owned();
-        }
-        let bytes = text.as_bytes();
-        let mut result = String::with_capacity(text.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            let mut replaced = false;
-            for (module, alias) in &self.alias_modules {
-                let module_str = module.as_str();
-                if module_str.is_empty() {
-                    continue;
-                }
-                let module_bytes = module_str.as_bytes();
-                if i + module_bytes.len() <= bytes.len()
-                    && &bytes[i..i + module_bytes.len()] == module_bytes
-                    && Self::is_boundary(bytes, i, i + module_bytes.len())
-                {
-                    result.push_str(alias);
-                    i += module_bytes.len();
-                    replaced = true;
-                    break;
-                }
-            }
-            if !replaced {
-                result.push(bytes[i] as char);
-                i += 1;
-            }
-        }
-        result
-    }
-
-    fn missing_modules(
-        &self,
-        modules: &SmallSet<ModuleName>,
-        current_module: ModuleName,
-    ) -> SmallSet<ModuleName> {
-        let mut missing = SmallSet::new();
-        for module in modules.iter() {
-            let module = module.dupe();
-            if module.as_str().is_empty()
-                || module == current_module
-                || module == ModuleName::builtins()
-                || module == ModuleName::extra_builtins()
-            {
-                continue;
-            }
-            if self.module_is_imported(module) {
-                continue;
-            }
-            missing.insert(module);
-        }
-        missing
-    }
-
-    fn module_is_imported(&self, module: ModuleName) -> bool {
-        self.alias_for(module).is_some() || self.has_canonical(module)
-    }
-
-    fn alias_for(&self, module: ModuleName) -> Option<String> {
-        let target = module.as_str();
-        for (alias_module, alias_name) in &self.alias_modules {
-            let alias_module_str = alias_module.as_str();
-            if alias_module_str.is_empty() {
-                continue;
-            }
-            if target == alias_module_str {
-                return Some(alias_name.clone());
-            }
-            if target.len() > alias_module_str.len()
-                && target.starts_with(alias_module_str)
-                && target.as_bytes()[alias_module_str.len()] == b'.'
-            {
-                let remainder = &target[alias_module_str.len()..];
-                return Some(format!("{alias_name}{remainder}"));
-            }
-        }
-        None
-    }
-
-    fn has_canonical(&self, module: ModuleName) -> bool {
-        let target = module.as_str();
-        self.canonical_modules.iter().any(|imported| {
-            let imported_str = imported.as_str();
-            imported_str == target
-                || (target.len() > imported_str.len()
-                    && target.starts_with(imported_str)
-                    && target.as_bytes()[imported_str.len()] == b'.')
-        })
-    }
-
-    fn is_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
-        (start == 0 || !Self::is_ident(bytes[start - 1]))
-            && (end == bytes.len() || !Self::is_ident(bytes[end]))
-    }
-
-    fn is_ident(byte: u8) -> bool {
-        matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
-    }
-}
-
-struct RenderedTypeHint {
-    text: String,
-    import_edits: Vec<(TextSize, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -3345,7 +3210,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         inlay_hint_config: InlayHintConfig,
-    ) -> Option<Vec<(TextSize, String, Option<Vec<TextRangeWithModule>>)>> {
+    ) -> Option<Vec<InlayHintWithEdits>> {
         let is_interesting = |e: &Expr, ty: &Type, class_name: Option<&Name>| {
             !ty.is_any()
                 && match e {
@@ -3369,10 +3234,9 @@ impl<'a> Transaction<'a> {
                 }
         };
         let bindings = self.get_bindings(handle)?;
-        let ast_arc = self.get_ast(handle);
-        let ast_ref = ast_arc.as_deref();
-        let import_tracker = ast_ref.map(ImportTracker::from_ast);
-        let mut res = Vec::new();
+        let ast = self.get_ast(handle);
+        let import_tracker = ast.as_deref().map(ImportTracker::from_ast);
+        let mut res: Vec<InlayHintWithEdits> = Vec::new();
         for idx in bindings.keys::<Key>() {
             match bindings.idx_to_key(idx) {
                 key @ Key::ReturnType(id) => {
@@ -3392,11 +3256,17 @@ impl<'a> Transaction<'a> {
                                     {
                                         ty = return_ty;
                                     }
-                                    res.push((
-                                        fun.def.parameters.range.end(),
-                                        format!(" -> {ty}"),
-                                        None, // Location info will be added in a later diff
-                                    ));
+                                    let rendered = self.render_type_hint(
+                                        &ty,
+                                        handle,
+                                        import_tracker.as_ref(),
+                                        ast.as_deref(),
+                                    );
+                                    res.push(InlayHintWithEdits {
+                                        position: fun.def.parameters.range.end(),
+                                        label: format!(" -> {}", rendered.text),
+                                        import_edits: rendered.import_edits,
+                                    });
                                 }
                             }
                             _ => {}
@@ -3425,8 +3295,17 @@ impl<'a> Transaction<'a> {
                     if let Some(e) = e
                         && is_interesting(e, &ty, class_name)
                     {
-                        let ty = format!(": {ty}");
-                        res.push((key.range().end(), ty, None)); // Location info will be added in a later diff
+                        let rendered = self.render_type_hint(
+                            &ty,
+                            handle,
+                            import_tracker.as_ref(),
+                            ast.as_deref(),
+                        );
+                        res.push(InlayHintWithEdits {
+                            position: key.range().end(),
+                            label: format!(": {}", rendered.text),
+                            import_edits: rendered.import_edits,
+                        });
                     }
                 }
                 _ => {}
@@ -3434,11 +3313,7 @@ impl<'a> Transaction<'a> {
         }
 
         if inlay_hint_config.call_argument_names != AllOffPartial::Off {
-            res.extend(
-                self.add_inlay_hints_for_positional_function_args(handle)
-                    .into_iter()
-                    .map(|(pos, text)| (pos, text, None)),
-            );
+            res.extend(self.add_inlay_hints_for_positional_function_args(handle));
         }
 
         Some(res)
@@ -3523,7 +3398,7 @@ impl<'a> Transaction<'a> {
         tracker: Option<&ImportTracker>,
         ast: Option<&ModModule>,
     ) -> RenderedTypeHint {
-        let (mut text, modules) = Self::format_type_for_annotation(ty);
+        let (mut text, modules) = format_type_for_annotation(ty);
         let mut import_edits = Vec::new();
         if let (Some(tracker), Some(ast)) = (tracker, ast) {
             text = tracker.apply_aliases(&text);
@@ -3538,13 +3413,6 @@ impl<'a> Transaction<'a> {
             }
         }
         RenderedTypeHint { text, import_edits }
-    }
-
-    fn format_type_for_annotation(ty: &Type) -> (String, SmallSet<ModuleName>) {
-        let mut ctx = TypeDisplayContext::new(&[ty]);
-        ctx.always_display_module_name_except_builtins();
-        let text = ctx.display(ty).to_string();
-        (text, ctx.referenced_modules())
     }
 
     pub fn semantic_tokens(

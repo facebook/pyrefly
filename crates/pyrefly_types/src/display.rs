@@ -89,7 +89,8 @@ pub struct TypeDisplayContext<'a> {
     /// Should we display for IDE Hover? This makes type names more readable but less precise.
     hover: bool,
     always_display_module_name: bool,
-    display_modules: RefCell<SmallSet<ModuleName>>,
+    /// Modules encountered while formatting, used downstream (e.g. to decide which imports are required).
+    modules: RefCell<SmallSet<ModuleName>>,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -235,7 +236,7 @@ impl<'a> TypeDisplayContext<'a> {
         name: &str,
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
-        self.display_modules
+        self.modules
             .borrow_mut()
             .insert(ModuleName::from_str(module));
         if self.always_display_module_name {
@@ -246,7 +247,7 @@ impl<'a> TypeDisplayContext<'a> {
     }
 
     pub fn referenced_modules(&self) -> SmallSet<ModuleName> {
-        let mut modules = self.display_modules.borrow().clone();
+        let mut modules = self.modules.borrow().clone();
         for info in self.qnames.values() {
             for module in info.info.keys() {
                 modules.insert(module.dupe());

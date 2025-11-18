@@ -2260,12 +2260,11 @@ impl Server {
                 // Group consecutive implementations by module, preserving the sorted order
                 let mut grouped: Vec<(ModuleInfo, Vec<TextRange>)> = Vec::new();
                 for impl_with_module in implementations {
-                    if let Some((last_module, ranges)) = grouped.last_mut() {
-                        if last_module.path() == impl_with_module.module.path() {
+                    if let Some((last_module, ranges)) = grouped.last_mut()
+                        && last_module.path() == impl_with_module.module.path() {
                             ranges.push(impl_with_module.range);
                             continue;
                         }
-                    }
                     grouped.push((impl_with_module.module, vec![impl_with_module.range]));
                 }
                 Ok(grouped)
@@ -2635,20 +2634,20 @@ impl Server {
         )?;
         let res = t
             .into_iter()
-            .filter_map(|(text_size, label_text, _locations)| {
+            .filter_map(|hint| {
                 // If the url is a notebook cell, filter out inlay hints for other cells
-                if info.to_cell_for_lsp(text_size) != maybe_cell_idx {
+                if info.to_cell_for_lsp(hint.position) != maybe_cell_idx {
                     return None;
                 }
-                let position = info.to_lsp_position(text_size);
+                let position = info.to_lsp_position(hint.position);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
-                    let mut text_edits = Vec::with_capacity(1 + x.import_edits.len());
+                    let mut text_edits = Vec::with_capacity(1 + hint.import_edits.len());
                     text_edits.push(TextEdit {
                         range: Range::new(position, position),
-                        new_text: x.label.clone(),
+                        new_text: hint.label.clone(),
                     });
-                    for (offset, import_text) in x.import_edits {
+                    for (offset, import_text) in hint.import_edits {
                         let insert_position = info.to_lsp_position(offset);
                         text_edits.push(TextEdit {
                             range: Range::new(insert_position, insert_position),
@@ -2657,12 +2656,9 @@ impl Server {
                     }
                     Some(InlayHint {
                         position,
-                        label: InlayHintLabel::String(label_text.clone()),
+                        label: InlayHintLabel::String(hint.label),
                         kind: None,
-                        text_edits: Some(vec![TextEdit {
-                            range: Range::new(position, position),
-                            new_text: label_text,
-                        }]),
+                        text_edits: Some(text_edits),
                         tooltip: None,
                         padding_left: None,
                         padding_right: None,

@@ -30,10 +30,10 @@ fn test_inlay_hint_default_config() {
         id: interaction.server.current_request_id(),
         result: Some(serde_json::json!([
             {
-                "label":" -> tuple[typing.Literal[1], typing.Literal[2]]",
+                "label":" -> tuple[Literal[1], Literal[2]]",
                 "position":{"character":21,"line":6},
                 "textEdits":[{
-                    "newText":" -> tuple[typing.Literal[1], typing.Literal[2]]",
+                    "newText":" -> tuple[Literal[1], Literal[2]]",
                     "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
                 },
                 {
@@ -42,10 +42,10 @@ fn test_inlay_hint_default_config() {
                 }]
             },
             {
-                "label":": tuple[typing.Literal[1], typing.Literal[2]]",
+                "label":": tuple[Literal[1], Literal[2]]",
                 "position":{"character":6,"line":11},
                 "textEdits":[{
-                    "newText":": tuple[typing.Literal[1], typing.Literal[2]]",
+                    "newText":": tuple[Literal[1], Literal[2]]",
                     "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
                 },
                 {
@@ -54,10 +54,10 @@ fn test_inlay_hint_default_config() {
                 }]
             },
             {
-                "label":" -> typing.Literal[0]",
+                "label":" -> Literal[0]",
                 "position":{"character":15,"line":14},
                 "textEdits":[{
-                    "newText":" -> typing.Literal[0]",
+                    "newText":" -> Literal[0]",
                     "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
                 },
                 {
@@ -165,10 +165,10 @@ fn test_inlay_hint_disable_variables() {
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
         result: Some(serde_json::json!([{
-            "label":" -> tuple[typing.Literal[1], typing.Literal[2]]",
+            "label":" -> tuple[Literal[1], Literal[2]]",
             "position":{"character":21,"line":6},
             "textEdits":[{
-                "newText":" -> tuple[typing.Literal[1], typing.Literal[2]]",
+                "newText":" -> tuple[Literal[1], Literal[2]]",
                 "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
             },
             {
@@ -177,10 +177,10 @@ fn test_inlay_hint_disable_variables() {
             }]
         },
         {
-            "label":" -> typing.Literal[0]",
+            "label":" -> Literal[0]",
             "position":{"character":15,"line":14},
             "textEdits":[{
-                "newText":" -> typing.Literal[0]",
+                "newText":" -> Literal[0]",
                 "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
             },
             {
@@ -219,10 +219,10 @@ fn test_inlay_hint_disable_returns() {
     interaction.client.expect_response(Response {
         id: interaction.server.current_request_id(),
         result: Some(serde_json::json!([{
-            "label":": tuple[typing.Literal[1], typing.Literal[2]]",
+            "label":": tuple[Literal[1], Literal[2]]",
             "position":{"character":6,"line":11},
             "textEdits":[{
-                "newText":": tuple[typing.Literal[1], typing.Literal[2]]",
+                "newText":": tuple[Literal[1], Literal[2]]",
                 "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
             },
             {
