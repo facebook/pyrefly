@@ -1803,13 +1803,13 @@ testcase!(
     test_unpack_inherited_typeddict,
     r#"
 import typing_extensions as te
-    
+
 class InheritFromMe(te.TypedDict):
     foo: bool
-    
+
 class TestBadUnpackingError(InheritFromMe):
     bar: bool
-    
+
 unpack_this: InheritFromMe = {"foo": True}
 test1: TestBadUnpackingError = {"bar": True, **unpack_this}
 test2: TestBadUnpackingError = {"bar": True, "foo": True}
@@ -1916,4 +1916,15 @@ def f(foo: Foo, k: Literal["bar", "baz"]):
     print(foo[k])
     foo[k] = 2
     "#,
+);
+
+testcase!(
+    test_recursive_functional_typeddict,
+    r#"
+from typing import NamedTuple, TypedDict, Optional
+ListNode = TypedDict('ListNode', {
+    'value': int,
+    'next': Optional['ListNode'],
+})
+"#,
 );

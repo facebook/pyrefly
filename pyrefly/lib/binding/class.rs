@@ -1017,7 +1017,7 @@ impl<'a> BindingsBuilder<'a> {
                     if let Some(key) = &mut item.key {
                         self.ensure_expr(key, class_object.usage());
                     }
-                    self.ensure_type(&mut item.value.clone(), &mut None);
+                    self.ensure_type(&mut item.value, &mut None);
                     match (&item.key, &item.value) {
                         (Some(Expr::StringLiteral(k)), v) => {
                             Some((k.value.to_string(), k.range(), Some(v.clone()), None))

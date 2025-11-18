@@ -11442,17 +11442,6 @@
       "severity": "error",
       "stop_column": 34,
       "stop_line": 60
-    },
-    {
-      "code": -2,
-      "column": 75,
-      "concise_description": "Expected a type form, got instance of `Literal['RecursiveMovie']`",
-      "description": "Expected a type form, got instance of `Literal['RecursiveMovie']`",
-      "line": 71,
-      "name": "not-a-type",
-      "severity": "error",
-      "stop_column": 91,
-      "stop_line": 71
     }
   ],
   "typeddicts_type_consistency.py": [

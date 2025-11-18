@@ -325,9 +325,7 @@
   "typeddicts_readonly_inheritance.py": [],
   "typeddicts_readonly_kwargs.py": [],
   "typeddicts_readonly_update.py": [],
-  "typeddicts_required.py": [
-    "Line 71: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMovie']`\"]"
-  ],
+  "typeddicts_required.py": [],
   "typeddicts_type_consistency.py": [],
   "typeddicts_usage.py": []
 }
