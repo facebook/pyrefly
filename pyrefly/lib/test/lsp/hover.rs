@@ -39,7 +39,7 @@ xyz = [foo.meth]
 #^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    assert!(report.contains("(method) meth: def meth(self: Foo) -> None: ..."));
+    assert!(report.contains("(method) meth\ndef meth(self: Foo) -> None: ..."));
     assert!(report.contains("(variable) xyz: list[(self: Foo) -> None]"));
     assert!(
         report.contains("Go to [list]"),
@@ -75,7 +75,8 @@ from lib import foo_renamed
 2 | from lib import foo_renamed
                          ^
 ```python
-(function) foo: def foo() -> None: ...
+(function) foo
+def foo() -> None: ...
 ```
 
 
@@ -111,7 +112,8 @@ takes(foo=1, bar="x", baz=None)
 12 | takes(foo=1, bar="x", baz=None)
       ^
 ```python
-(function) takes: def takes(
+(function) takes
+def takes(
     *,
     foo: int,
     bar: str,
@@ -359,10 +361,11 @@ lhs @ rhs
 13 | lhs @ rhs
          ^
 ```python
-(method) __matmul__: (
+(method) __matmul__
+def __matmul__(
     self: Matrix,
     other: Matrix
-) -> Matrix
+) -> Matrix: ...
 ```
 "#
         .trim(),
