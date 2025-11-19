@@ -3269,16 +3269,16 @@ impl<'a> Transaction<'a> {
                                 .any(|kw| kw.value.range() == arg.range());
 
                             if !is_keyword_arg
-                                && let Some(
-                                    Param::Pos(name, _, _)
-                                    | Param::PosOnly(Some(name), _, _)
-                                    | Param::KwOnly(name, _, _),
-                                ) = params.get(arg_idx)
-                                && name.as_str() != "self"
-                                && name.as_str() != "cls"
+                                && let Some(param_match) =
+                                    Self::param_name_for_positional_argument(&params, arg_idx)
+                                && !param_match.is_vararg_repeat
+                                && param_match.name.as_str() != "self"
+                                && param_match.name.as_str() != "cls"
                             {
-                                param_hints
-                                    .push((arg.range().start(), format!("{}= ", name.as_str())));
+                                param_hints.push((
+                                    arg.range().start(),
+                                    format!("{}= ", param_match.name.as_str()),
+                                ));
                             }
                         }
                     }
@@ -3288,6 +3288,120 @@ impl<'a> Transaction<'a> {
 
         param_hints.sort_by_key(|(pos, _)| *pos);
         param_hints
+    }
+
+    fn param_name_for_positional_argument<'param>(
+        params: &'param [Param],
+        positional_arg_index: usize,
+    ) -> Option<ParamNameMatch<'param>> {
+        let mut positional_params_seen = 0;
+        for param in params {
+            match param {
+                Param::PosOnly(name, ..) => {
+                    if positional_params_seen == positional_arg_index {
+                        return name.as_ref().map(|name| {
+                            ParamNameMatch::new(name, /* is_vararg_repeat */ false)
+                        });
+                    }
+                    positional_params_seen += 1;
+                }
+                Param::Pos(name, ..) => {
+                    if positional_params_seen == positional_arg_index {
+                        return Some(ParamNameMatch::new(name, false));
+                    }
+                    positional_params_seen += 1;
+                }
+                Param::VarArg(name, ..) => {
+                    if positional_arg_index >= positional_params_seen {
+                        return name.as_ref().map(|name| {
+                            ParamNameMatch::new(name, positional_arg_index > positional_params_seen)
+                        });
+                    }
+                    break;
+                }
+                Param::KwOnly(..) | Param::Kwargs(..) => {}
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ParamNameMatch<'param> {
+    name: &'param Name,
+    is_vararg_repeat: bool,
+}
+
+impl<'param> ParamNameMatch<'param> {
+    fn new(name: &'param Name, is_vararg_repeat: bool) -> Self {
+        Self {
+            name,
+            is_vararg_repeat,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ruff_python_ast::name::Name;
+
+    use super::Transaction;
+    use crate::types::callable::Param;
+    use crate::types::callable::Required;
+    use crate::types::types::AnyStyle;
+    use crate::types::types::Type;
+
+    fn any_type() -> Type {
+        Type::Any(AnyStyle::Explicit)
+    }
+
+    #[test]
+    fn param_name_for_positional_argument_marks_vararg_repeats() {
+        let params = vec![
+            Param::Pos(Name::new_static("x"), any_type(), Required::Required),
+            Param::VarArg(Some(Name::new_static("columns")), any_type()),
+            Param::KwOnly(Name::new_static("kw"), any_type(), Required::Required),
+        ];
+
+        assert_eq!(match_summary(&params, 0), Some(("x", false)));
+        assert_eq!(match_summary(&params, 1), Some(("columns", false)));
+        assert_eq!(match_summary(&params, 3), Some(("columns", true)));
+    }
+
+    #[test]
+    fn param_name_for_positional_argument_handles_missing_names() {
+        let params = vec![
+            Param::PosOnly(None, any_type(), Required::Required),
+            Param::VarArg(None, any_type()),
+        ];
+
+        assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 0).is_none());
+        assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 1).is_none());
+        assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 5).is_none());
+    }
+
+    #[test]
+    fn duplicate_vararg_hints_are_not_emitted() {
+        let params = vec![
+            Param::Pos(Name::new_static("s"), any_type(), Required::Required),
+            Param::VarArg(Some(Name::new_static("args")), any_type()),
+            Param::KwOnly(Name::new_static("a"), any_type(), Required::Required),
+        ];
+
+        let labels: Vec<&str> = (0..4)
+            .filter_map(|idx| {
+                Transaction::<'static>::param_name_for_positional_argument(&params, idx)
+            })
+            .filter(|match_| !match_.is_vararg_repeat)
+            .map(|match_| match_.name.as_str())
+            .collect();
+
+        assert_eq!(labels, vec!["s", "args"]);
+    }
+
+    fn match_summary(params: &[Param], idx: usize) -> Option<(&str, bool)> {
+        Transaction::<'static>::param_name_for_positional_argument(params, idx)
+            .map(|match_| (match_.name.as_str(), match_.is_vararg_repeat))
     }
 }
 
