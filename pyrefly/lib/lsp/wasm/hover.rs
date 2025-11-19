@@ -162,7 +162,7 @@ impl HoverValue {
                 || "".to_owned(),
                 |content| format!("\n---\n{}", content.trim()),
             );
-        let kind_formatted = self.kind.map_or("".to_owned(), |kind| {
+        let mut kind_formatted = self.kind.map_or("".to_owned(), |kind| {
             format!("{} ", kind.display_for_hover())
         });
         let name_formatted = self
@@ -179,16 +179,34 @@ impl HoverValue {
             .clone()
             .unwrap_or_else(|| self.type_.as_hover_string());
 
+        let is_function = self.type_.is_function_type();
+        if is_function && kind_formatted.trim().is_empty() {
+            kind_formatted = "(function) ".to_owned();
+        }
+        let trimmed_type_display = type_display.trim_start();
+        let needs_def_wrapper = trimmed_type_display.starts_with('(');
+        let (heading, body) = if is_function {
+            let function_name = self.name.clone().unwrap_or_else(|| "function".to_owned());
+            let heading = format!("{}{}\n", kind_formatted, function_name);
+            let body = if needs_def_wrapper {
+                format!("def {}{}: ...", function_name, trimmed_type_display)
+            } else {
+                type_display
+            };
+            (heading, body)
+        } else {
+            (
+                format!("{}{}", kind_formatted, name_formatted),
+                type_display,
+            )
+        };
+
         Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: format!(
-                    "```python\n{}{}{}\n```{}{}",
-                    kind_formatted,
-                    name_formatted,
-                    type_display,
-                    docstring_formatted,
-                    symbol_def_formatted
+                    "```python\n{}{}\n```{}{}",
+                    heading, body, docstring_formatted, symbol_def_formatted
                 ),
             }),
             range: None,
