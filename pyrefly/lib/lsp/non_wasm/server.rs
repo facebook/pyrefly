@@ -395,7 +395,8 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
                             break;
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        error!("Error handling shutdown: {:?}", e);
                         return;
                     }
                 }
