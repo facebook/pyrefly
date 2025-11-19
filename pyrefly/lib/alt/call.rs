@@ -35,6 +35,7 @@ use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
+use crate::deprecation::format_deprecated_message;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
@@ -339,7 +340,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // We manually construct an error using the message from the context but a
                     // Deprecated error kind so that the error is shown at the Deprecated severity
                     // (default: WARN) rather than the severity of the context's error kind.
-                    let msg = format!("`{}` is deprecated", m.kind.format(self.module().name()));
+                    let msg = format_deprecated_message(
+                        format!("`{}` is deprecated", m.kind.format(self.module().name())),
+                        m.flags.deprecated_message.as_deref(),
+                    );
                     let full_msg = if let Some(ctx) = context {
                         vec1![ctx().format(), msg]
                     } else {

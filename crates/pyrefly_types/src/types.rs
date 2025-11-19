@@ -1103,6 +1103,10 @@ impl Type {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_deprecated)
     }
 
+    pub fn deprecated_message(&self) -> Option<String> {
+        self.check_toplevel_func_metadata(&|meta| meta.flags.deprecated_message.clone())
+    }
+
     pub fn has_final_decoration(&self) -> bool {
         self.check_toplevel_func_metadata(&|meta| meta.flags.has_final_decoration)
     }

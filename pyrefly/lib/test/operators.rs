@@ -604,7 +604,7 @@ class A:
 class B:
     def __radd__(self, other) -> Self:
         return self
-assert_type(A() + B(), A)  # E: `A.__add__` is deprecated
+assert_type(A() + B(), A)  # E: `A.__add__` is deprecated: Super deprecated
     "#,
 );
 

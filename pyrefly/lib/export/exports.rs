@@ -21,6 +21,7 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::deprecation::DeprecatedDecoration;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::DunderAllEntry;
@@ -41,6 +42,7 @@ pub struct Export {
     pub symbol_kind: Option<SymbolKind>,
     pub docstring_range: Option<TextRange>,
     pub is_deprecated: bool,
+    pub deprecation: Option<DeprecatedDecoration>,
     pub special_export: Option<SpecialExport>,
 }
 
@@ -163,7 +165,8 @@ impl Exports {
         let f = || {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
             for (name, definition) in self.0.definitions.definitions.iter_hashed() {
-                let is_deprecated = self.0.definitions.deprecated.contains_hashed(name);
+                let is_deprecated = self.0.definitions.deprecated.contains_key_hashed(name);
+                let deprecated_message = self.0.definitions.deprecated.get_hashed(name).cloned();
                 let special_export = self.0.definitions.special_exports.get_hashed(name).copied();
                 let export = match &definition.style {
                     DefinitionStyle::Annotated(symbol_kind, ..)
@@ -173,6 +176,7 @@ impl Exports {
                             symbol_kind: Some(*symbol_kind),
                             docstring_range: definition.docstring_range,
                             is_deprecated,
+                            deprecation: deprecated_message.clone(),
                             special_export,
                         })
                     }
@@ -187,6 +191,7 @@ impl Exports {
                         symbol_kind: None,
                         docstring_range: definition.docstring_range,
                         is_deprecated,
+                        deprecation: deprecated_message.clone(),
                         special_export,
                     }),
                     DefinitionStyle::ImplicitGlobal => ExportLocation::ThisModule(Export {
@@ -194,6 +199,7 @@ impl Exports {
                         symbol_kind: Some(SymbolKind::Constant),
                         docstring_range: None,
                         is_deprecated,
+                        deprecation: deprecated_message.clone(),
                         special_export,
                     }),
                     DefinitionStyle::ImportAs(from, name) => {

@@ -33,6 +33,7 @@ mod binding;
 #[cfg(not(target_arch = "wasm32"))]
 mod commands;
 mod compat;
+mod deprecation;
 mod error;
 mod export;
 mod graph;

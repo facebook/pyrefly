@@ -327,6 +327,8 @@ pub struct FuncFlags {
     pub is_classmethod: bool,
     /// A function decorated with `@deprecated`
     pub is_deprecated: bool,
+    /// Optional explanation attached to `@deprecated`
+    pub deprecated_message: Option<String>,
     /// A function decorated with `@property`
     pub is_property_getter: bool,
     /// A function decorated with `functools.cached_property` or equivalent.

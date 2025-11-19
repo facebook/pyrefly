@@ -44,6 +44,7 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
+use crate::deprecation::format_deprecated_with_decoration;
 use crate::error::context::ErrorInfo;
 use crate::export::definitions::MutableCaptureKind;
 use crate::export::exports::Export;
@@ -994,15 +995,18 @@ impl<'a> BindingsBuilder<'a> {
             if &x.name == "*" {
                 for name in module_exports.wildcard(self.lookup).iter_hashed() {
                     let key = Key::Import(name.into_key().clone(), x.range);
-                    if let Some(ExportLocation::ThisModule(Export { is_deprecated, .. })) =
-                        exported.get_hashed(name)
+                    if let Some(ExportLocation::ThisModule(Export {
+                        is_deprecated,
+                        deprecation,
+                        ..
+                    })) = exported.get_hashed(name)
                         && *is_deprecated
                     {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::Deprecated),
+                        let msg = format_deprecated_with_decoration(
                             format!("`{name}` is deprecated"),
+                            deprecation.as_ref(),
                         );
+                        self.error(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
                     let val = if exported.contains_key_hashed(name) {
                         Binding::Import(m, name.into_key().clone(), None)
@@ -1037,15 +1041,18 @@ impl<'a> BindingsBuilder<'a> {
                 // but there is an exception: if we are already looking at the
                 // `__init__` module of `x`, we always prefer the submodule.
                 let val = if (self.module_info.name() != m) && exported.contains_key(&x.name.id) {
-                    if let Some(ExportLocation::ThisModule(Export { is_deprecated, .. })) =
-                        exported.get(&x.name.id)
+                    if let Some(ExportLocation::ThisModule(Export {
+                        is_deprecated,
+                        deprecation,
+                        ..
+                    })) = exported.get(&x.name.id)
                         && *is_deprecated
                     {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::Deprecated),
+                        let msg = format_deprecated_with_decoration(
                             format!("`{}` is deprecated", x.name),
+                            deprecation.as_ref(),
                         );
+                        self.error(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
                     Binding::Import(m, x.name.id.clone(), original_name_range)
                 } else {

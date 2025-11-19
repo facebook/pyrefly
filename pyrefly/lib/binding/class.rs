@@ -68,6 +68,7 @@ use crate::binding::scope::ClassIndices;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
+use crate::deprecation::parse_deprecated_decorator;
 use crate::error::context::ErrorInfo;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
@@ -121,10 +122,10 @@ impl<'a> BindingsBuilder<'a> {
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let body = mem::take(&mut x.body);
         let field_docstrings = self.extract_field_docstrings(&body);
-        let decorators_with_ranges = self.ensure_and_bind_decorators_with_ranges(
-            mem::take(&mut x.decorator_list),
-            class_object.usage(),
-        );
+        let decorator_list = mem::take(&mut x.decorator_list);
+        let deprecated = decorator_list.iter().find_map(parse_deprecated_decorator);
+        let decorators_with_ranges =
+            self.ensure_and_bind_decorators_with_ranges(decorator_list, class_object.usage());
 
         self.scopes.push(Scope::annotation(x.range));
 
@@ -348,6 +349,7 @@ impl<'a> BindingsBuilder<'a> {
                 is_new_type: false,
                 pydantic_config_dict,
                 django_primary_key_field,
+                deprecated,
             },
         );
         self.insert_binding_idx(
@@ -495,6 +497,7 @@ impl<'a> BindingsBuilder<'a> {
                 is_new_type,
                 pydantic_config_dict: PydanticConfigDict::default(),
                 django_primary_key_field: None,
+                deprecated: None,
             },
         );
         self.insert_binding_idx(

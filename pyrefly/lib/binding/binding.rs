@@ -61,6 +61,7 @@ use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::pydantic::PydanticConfigDict;
+use crate::deprecation::DeprecatedDecoration;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
@@ -103,7 +104,7 @@ assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 23);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
-assert_words!(BindingClassMetadata, 11);
+assert_words!(BindingClassMetadata, 14);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_words!(BindingClassField, 21);
@@ -112,7 +113,7 @@ assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 21);
+assert_words!(BindingUndecoratedFunction, 24);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1044,6 +1045,7 @@ pub struct BindingUndecoratedFunction {
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[(Idx<Key>, TextRange)]>,
     pub module_style: ModuleStyle,
+    pub deprecated: Option<DeprecatedDecoration>,
 }
 
 impl DisplayWith<Bindings> for BindingUndecoratedFunction {
@@ -2085,6 +2087,7 @@ pub struct BindingClassMetadata {
     /// The name of the field that has primary_key=True, if any (for Django models).
     /// Note that we calculate this field for all classes, but it is ignored unless the class is a django model.
     pub django_primary_key_field: Option<Name>,
+    pub deprecated: Option<DeprecatedDecoration>,
 }
 
 impl DisplayWith<Bindings> for BindingClassMetadata {

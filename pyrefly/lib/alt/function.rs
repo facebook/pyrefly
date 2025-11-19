@@ -46,6 +46,7 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::config::error_kind::ErrorKind;
+use crate::deprecation::DeprecatedDecoration;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
@@ -221,6 +222,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorators: &[(Idx<Key>, TextRange)],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
         module_style: ModuleStyle,
+        deprecated: Option<&DeprecatedDecoration>,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
@@ -240,6 +242,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_classmethod: is_dunder_init_subclass,
             ..Default::default()
         };
+        if let Some(decoration) = deprecated {
+            flags.is_deprecated = true;
+            flags.deprecated_message = decoration.message.clone();
+        }
         let mut found_class_property = false;
         let decorators = Box::from_iter(
             decorators
@@ -1107,6 +1113,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut metadata = first.2.clone();
         // This does not apply to `@deprecated` - some overloads can be deprecated while others are fine.
         metadata.flags.is_deprecated = false;
+        metadata.flags.deprecated_message = None;
         // `dataclass_transform()` can be on any of the overloads.
         if metadata.flags.dataclass_transform_metadata.is_none() {
             metadata.flags.dataclass_transform_metadata = remaining

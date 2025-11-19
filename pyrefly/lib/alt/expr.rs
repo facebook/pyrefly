@@ -56,6 +56,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::config::error_kind::ErrorKind;
+use crate::deprecation::format_deprecated_message;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
@@ -247,7 +248,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 range,
                 ErrorInfo::Kind(ErrorKind::Deprecated),
-                format!("`{deprecated_function}` is deprecated"),
+                format_deprecated_message(
+                    format!("`{deprecated_function}` is deprecated"),
+                    ty.deprecated_message().as_deref(),
+                ),
             );
         }
     }

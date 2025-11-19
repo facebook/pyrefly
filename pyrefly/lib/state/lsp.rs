@@ -1172,6 +1172,7 @@ impl<'a> Transaction<'a> {
                         symbol_kind: Some(SymbolKind::Module),
                         docstring_range,
                         is_deprecated: false,
+                        deprecation: None,
                         special_export: None,
                     },
                 ))

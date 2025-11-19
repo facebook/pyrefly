@@ -32,6 +32,7 @@ use crate::alt::callable::CallWithTypes;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
+use crate::deprecation::format_deprecated_message;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
@@ -320,10 +321,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if matched {
             // If the selected overload is deprecated, we log a deprecation error.
             if closest_overload.func.1.metadata.flags.is_deprecated {
-                self.error(
-                    errors,
-                    range,
-                    ErrorInfo::new(ErrorKind::Deprecated, context),
+                let msg = format_deprecated_message(
                     format!(
                         "Call to deprecated overload `{}`",
                         closest_overload
@@ -333,6 +331,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .kind
                             .format(self.module().name())
                     ),
+                    closest_overload
+                        .func
+                        .1
+                        .metadata
+                        .flags
+                        .deprecated_message
+                        .as_deref(),
+                );
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::new(ErrorKind::Deprecated, context),
+                    msg,
                 );
             }
             (closest_overload.res, closest_overload.func.1.signature)

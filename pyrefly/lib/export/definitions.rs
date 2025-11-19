@@ -33,6 +33,8 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::deprecation::DeprecatedDecoration;
+use crate::deprecation::parse_deprecated_decorator;
 use crate::export::special::SpecialExport;
 use crate::types::globals::ImplicitGlobal;
 
@@ -136,7 +138,7 @@ pub struct Definitions {
     /// files.
     pub implicitly_imported_submodules: SmallSet<Name>,
     /// Deprecated names that are defined in this module.
-    pub deprecated: SmallSet<Name>,
+    pub deprecated: SmallMap<Name, DeprecatedDecoration>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
 }
@@ -201,16 +203,6 @@ fn implicitly_imported_submodule(
         .strip_prefix(importing_module_name.components().as_slice())
         .and_then(|components| components.first())
         .cloned()
-}
-
-fn is_deprecated_decorator(decorator: &Decorator) -> bool {
-    decorator.expression.as_call_expr().is_some_and(|x| {
-        x.func.as_name_expr().is_some_and(|x| {
-            x.id == "deprecated"
-                || x.id == "warnings.deprecated"
-                || x.id == "typing_extensions.deprecated"
-        })
-    })
 }
 
 fn is_overload_decorator(decorator: &Decorator) -> bool {
@@ -440,13 +432,9 @@ impl<'a> DefinitionsBuilder<'a> {
                 decorator_list,
                 ..
             }) => {
-                // If the class is decorated with `@deprecated`, we mark it as deprecated.
-                let mut is_deprecated = false;
-                for d in decorator_list {
-                    is_deprecated = is_deprecated || is_deprecated_decorator(d);
-                }
-                if is_deprecated {
-                    self.inner.deprecated.insert(name.id.clone());
+                if let Some(decoration) = decorator_list.iter().find_map(parse_deprecated_decorator)
+                {
+                    self.inner.deprecated.insert(name.id.clone(), decoration);
                 }
                 self.add_identifier_with_body(
                     name,
@@ -576,15 +564,19 @@ impl<'a> DefinitionsBuilder<'a> {
                 ..
             }) => {
                 let mut is_overload = false;
-                let mut is_deprecated = false;
+                let mut deprecated_decoration = None;
                 for d in decorator_list {
                     is_overload = is_overload || is_overload_decorator(d);
-                    is_deprecated = is_deprecated || is_deprecated_decorator(d);
+                    if deprecated_decoration.is_none() {
+                        deprecated_decoration = parse_deprecated_decorator(d);
+                    }
                 }
                 // If the function is not an overload and decorated with
                 // `@deprecated`, we mark it as deprecated.
-                if is_deprecated && !is_overload {
-                    self.inner.deprecated.insert(name.id.clone());
+                if deprecated_decoration.is_some() && !is_overload {
+                    self.inner
+                        .deprecated
+                        .insert(name.id.clone(), deprecated_decoration.unwrap());
                 }
                 self.add_identifier_with_body(
                     name,
