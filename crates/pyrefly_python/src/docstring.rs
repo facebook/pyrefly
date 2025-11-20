@@ -189,6 +189,7 @@ fn parse_sphinx_params(lines: &[String], docs: &mut HashMap<String, String>) {
                 .last()
                 .unwrap_or("")
                 .trim_matches(',')
+                .trim_end_matches(':')
                 .trim_start_matches('*')
                 .trim_start_matches('*')
                 .to_owned();
@@ -419,7 +420,7 @@ mod tests {
         let doc = r#"
 :param foo: first line
     second line
-:param bar: another
+:param str bar: another
 "#;
         let docs = parse_parameter_documentation(doc);
         assert_eq!(docs.get("foo").unwrap(), "first line\nsecond line");
