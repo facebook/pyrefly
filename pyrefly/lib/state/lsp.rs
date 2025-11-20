@@ -6,7 +6,6 @@
  */
 
 use std::cmp::Reverse;
-use std::collections::HashMap;
 
 use dupe::Dupe;
 use fuzzy_matcher::FuzzyMatcher;
@@ -16,10 +15,6 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemTag;
-use lsp_types::ParameterInformation;
-use lsp_types::ParameterLabel;
-use lsp_types::SignatureHelp;
-use lsp_types::SignatureInformation;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -77,7 +72,6 @@ use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
-use crate::types::callable::Params;
 use crate::types::module::ModuleType;
 use crate::types::types::Type;
 
@@ -187,7 +181,7 @@ impl DefinitionMetadata {
 }
 
 #[derive(Debug)]
-enum CalleeKind {
+pub(super) enum CalleeKind {
     // Function name
     Function(Identifier),
     // Range of the base expr + method name
@@ -219,7 +213,7 @@ where
 }
 
 #[derive(Debug)]
-enum PatternMatchParameterKind {
+pub(super) enum PatternMatchParameterKind {
     // Name defined using `as`
     // ex: `x` in `case ... as x: ...`, or `x` in `case x: ...`
     AsName,
@@ -235,7 +229,7 @@ enum PatternMatchParameterKind {
 }
 
 #[derive(Debug)]
-enum IdentifierContext {
+pub(super) enum IdentifierContext {
     /// An identifier appeared in an expression. ex: `x` in `x + 1`
     Expr(ExprContext),
     /// An identifier appeared as the name of an attribute. ex: `y` in `x.y`
@@ -299,9 +293,9 @@ enum IdentifierContext {
 }
 
 #[derive(Debug)]
-struct IdentifierWithContext {
-    identifier: Identifier,
-    context: IdentifierContext,
+pub(super) struct IdentifierWithContext {
+    pub(super) identifier: Identifier,
+    pub(super) context: IdentifierContext,
 }
 
 #[derive(PartialEq, Eq)]
@@ -310,17 +304,6 @@ pub enum AnnotationKind {
     Parameter,
     Return,
     Variable,
-}
-
-/// The currently active argument in a function call for signature help.
-#[derive(Debug)]
-enum ActiveArgument {
-    /// The cursor is within an existing positional argument at the given index.
-    Positional(usize),
-    /// The cursor is within a keyword argument whose name is provided.
-    Keyword(Name),
-    /// The cursor is in the argument list but not inside any argument expression yet.
-    Next(usize),
 }
 
 impl IdentifierWithContext {
@@ -859,91 +842,18 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Finds the callable(s) (multiple if overloads exist) at position in document, returning them, chosen overload index, and arg index
-    fn get_callables_from_call(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-    ) -> Option<(Vec<Type>, usize, ActiveArgument, TextRange)> {
-        let mod_module = self.get_ast(handle)?;
-        let mut res = None;
-        mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
-        let (callee_range, call_args_range, mut active_argument) = res?;
-        // When the cursor is in the argument list but not inside any argument yet,
-        // estimate the would-be positional index by counting commas up to the cursor.
-        // This keeps signature help useful even before the user starts typing the next arg.
-        if let ActiveArgument::Next(index) = &mut active_argument
-            && let Some(next_index) =
-                self.count_argument_separators_before(handle, call_args_range, position)
-        {
-            *index = next_index;
-        }
-        let answers = self.get_answers(handle)?;
-        if let Some((overloads, chosen_overload_index)) =
-            answers.get_all_overload_trace(call_args_range)
-        {
-            let callables = overloads.into_map(|callable| Type::Callable(Box::new(callable)));
-            Some((
-                callables,
-                chosen_overload_index.unwrap_or_default(),
-                active_argument,
-                callee_range,
-            ))
-        } else {
-            answers
-                .get_type_trace(callee_range)
-                .map(|t| (vec![t], 0, active_argument, callee_range))
-        }
-    }
-
-    pub fn get_signature_help_at(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-    ) -> Option<SignatureHelp> {
-        self.get_callables_from_call(handle, position).map(
-            |(callables, chosen_overload_index, active_argument, callee_range)| {
-                let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
-                let signatures = callables
-                    .into_iter()
-                    .map(|t| {
-                        Self::create_signature_information(
-                            t,
-                            &active_argument,
-                            parameter_docs.as_ref(),
-                        )
-                    })
-                    .collect_vec();
-                let active_parameter = signatures
-                    .get(chosen_overload_index)
-                    .and_then(|info| info.active_parameter);
-                SignatureHelp {
-                    signatures,
-                    active_signature: Some(chosen_overload_index as u32),
-                    active_parameter,
-                }
-            },
-        )
-    }
-
     pub fn keyword_argument_documentation(
         &self,
         handle: &Handle,
         position: TextSize,
     ) -> Option<(String, String)> {
         let identifier = self.identifier_at(handle, position)?;
-        let IdentifierWithContext {
-            identifier,
-            context,
-        } = identifier;
-        if !matches!(context, IdentifierContext::KeywordArgument(_)) {
+        if !matches!(identifier.context, IdentifierContext::KeywordArgument(_)) {
             return None;
         }
-        let Some((_, _, _, callee_range)) = self.get_callables_from_call(handle, position) else {
-            return None;
-        };
+        let (_, _, _, callee_range) = self.get_callables_from_call(handle, position)?;
         let docs = self.parameter_documentation_for_callee(handle, callee_range)?;
-        let name = identifier.id.to_string();
+        let name = identifier.identifier.id.to_string();
         docs.get(name.as_str()).cloned().map(|doc| (name, doc))
     }
 
@@ -969,81 +879,6 @@ impl<'a> Transaction<'a> {
         let docs = parse_parameter_documentation(module.code_at(doc_range));
         let key = name.as_str();
         docs.get(key).cloned().map(|doc| (key.to_owned(), doc))
-    }
-
-    fn parameter_documentation_for_callee(
-        &self,
-        handle: &Handle,
-        callee_range: TextRange,
-    ) -> Option<HashMap<String, String>> {
-        let position = callee_range.start();
-        let docstring = self
-            .find_definition(
-                handle,
-                position,
-                FindPreference {
-                    prefer_pyi: false,
-                    ..Default::default()
-                },
-            )
-            .into_iter()
-            .find_map(|item| {
-                item.docstring_range
-                    .map(|range| (range, item.module.clone()))
-            })
-            .or_else(|| {
-                self.find_definition(handle, position, FindPreference::default())
-                    .into_iter()
-                    .find_map(|item| {
-                        item.docstring_range
-                            .map(|range| (range, item.module.clone()))
-                    })
-            })?;
-        let (range, module) = docstring;
-        let docs = parse_parameter_documentation(module.code_at(range));
-        if docs.is_empty() { None } else { Some(docs) }
-    }
-
-    fn create_signature_information(
-        type_: Type,
-        active_argument: &ActiveArgument,
-        parameter_docs: Option<&HashMap<String, String>>,
-    ) -> SignatureInformation {
-        let type_ = type_.deterministic_printing();
-        let label = type_.as_hover_string();
-        let (parameters, active_parameter) = if let Some(params) =
-            Self::normalize_singleton_function_type_into_params(type_)
-        {
-            let active_parameter =
-                Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);
-            (
-                Some(params.map(|param| {
-                    ParameterInformation {
-                        label: ParameterLabel::Simple(format!("{param}")),
-                        documentation: param
-                            .name()
-                            .and_then(|name| {
-                                parameter_docs.and_then(|docs| docs.get(name.as_str()))
-                            })
-                            .map(|text| {
-                                lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
-                                    kind: lsp_types::MarkupKind::Markdown,
-                                    value: text.clone(),
-                                })
-                            }),
-                    }
-                })),
-                active_parameter,
-            )
-        } else {
-            (None, None)
-        };
-        SignatureInformation {
-            label,
-            documentation: None,
-            parameters,
-            active_parameter,
-        }
     }
 
     fn resolve_named_import(
