@@ -205,6 +205,32 @@ x: int = 5  # pyrefly: ignore[bad-return]
 }
 
 #[test]
+fn hover_shows_parameter_doc_for_keyword_argument() {
+    let code = r#"
+def foo(x: int, y: int) -> None:
+    """
+    Args:
+        x: documentation for x
+        y: documentation for y
+    """
+    ...
+
+foo(x=1, y=2)
+#    ^
+foo(x=1, y=2)
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("**Parameter `x`**"),
+        "Expected parameter documentation for x, got: {report}"
+    );
+    assert!(report.contains("documentation for x"));
+    assert!(report.contains("**Parameter `y`**"));
+    assert!(report.contains("documentation for y"));
+}
+
+#[test]
 fn hover_over_overloaded_binary_operator_shows_dunder_name() {
     let code = r#"
 from typing import overload

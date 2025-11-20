@@ -28,6 +28,7 @@ use ruff_text_size::TextSize;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
@@ -103,6 +104,7 @@ pub struct HoverValue {
     pub name: Option<String>,
     pub type_: Type,
     pub docstring: Option<Docstring>,
+    pub parameter_doc: Option<(String, String)>,
     pub display: Option<String>,
     pub show_go_to_links: bool,
 }
@@ -159,6 +161,18 @@ impl HoverValue {
                 || "".to_owned(),
                 |content| format!("\n---\n{}", content.trim()),
             );
+        let parameter_doc_formatted =
+            self.parameter_doc
+                .as_ref()
+                .map_or("".to_owned(), |(name, doc)| {
+                    let prefix = if self.docstring.is_some() {
+                        "\n\n---\n"
+                    } else {
+                        "\n---\n"
+                    };
+                    let cleaned = doc.trim().replace('\n', "  \n");
+                    format!("{prefix}**Parameter `{}`**\n{}", name, cleaned)
+                });
         let kind_formatted = self.kind.map_or("".to_owned(), |kind| {
             format!("{} ", kind.display_for_hover())
         });
@@ -180,11 +194,12 @@ impl HoverValue {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: format!(
-                    "```python\n{}{}{}\n```{}{}",
+                    "```python\n{}{}{}\n```{}{}{}",
                     kind_formatted,
                     name_formatted,
                     type_display,
                     docstring_formatted,
+                    parameter_doc_formatted,
                     symbol_def_formatted
                 ),
             }),
@@ -321,12 +336,38 @@ pub fn get_hover(
         None
     };
 
+    let mut parameter_doc = transaction
+        .keyword_argument_documentation(handle, position)
+        .and_then(|(name, doc)| (!doc.trim().is_empty()).then_some((name, doc)));
+
+    if parameter_doc.is_none() {
+        if let Some(FindDefinitionItemWithDocstring {
+            metadata: DefinitionMetadata::Variable(Some(SymbolKind::Parameter)),
+            definition_range,
+            module,
+            ..
+        }) = transaction
+            .find_definition(handle, position, FindPreference::default())
+            .into_iter()
+            .next()
+        {
+            let name_str = module.code_at(definition_range);
+            let name = Name::new(name_str);
+            if let Some(doc) =
+                transaction.parameter_definition_documentation(handle, definition_range, &name)
+            {
+                parameter_doc = Some(doc);
+            }
+        }
+    }
+
     Some(
         HoverValue {
             kind,
             name,
             type_,
             docstring,
+            parameter_doc,
             display: type_display,
             show_go_to_links,
         }

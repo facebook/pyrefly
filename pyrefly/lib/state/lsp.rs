@@ -1012,6 +1012,51 @@ impl<'a> Transaction<'a> {
         )
     }
 
+    pub fn keyword_argument_documentation(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<(String, String)> {
+        let identifier = self.identifier_at(handle, position)?;
+        let IdentifierWithContext {
+            identifier,
+            context,
+        } = identifier;
+        if !matches!(context, IdentifierContext::KeywordArgument(_)) {
+            return None;
+        }
+        let Some((_, _, _, callee_range)) = self.get_callables_from_call(handle, position) else {
+            return None;
+        };
+        let docs = self.parameter_documentation_for_callee(handle, callee_range)?;
+        let name = identifier.id.to_string();
+        docs.get(name.as_str()).cloned().map(|doc| (name, doc))
+    }
+
+    pub fn parameter_definition_documentation(
+        &self,
+        handle: &Handle,
+        definition_range: TextRange,
+        name: &Name,
+    ) -> Option<(String, String)> {
+        let ast = self.get_ast(handle)?;
+        let module = self.get_module_info(handle)?;
+
+        let func = ast
+            .body
+            .iter()
+            .filter_map(|stmt| match stmt {
+                ruff_python_ast::Stmt::FunctionDef(func) => Some(func),
+                _ => None,
+            })
+            .find(|func| func.range.contains_inclusive(definition_range.start()))?;
+
+        let doc_range = Docstring::range_from_stmts(func.body.as_slice())?;
+        let docs = parse_parameter_documentation(module.code_at(doc_range));
+        let key = name.as_str();
+        docs.get(key).cloned().map(|doc| (key.to_owned(), doc))
+    }
+
     fn parameter_documentation_for_callee(
         &self,
         handle: &Handle,
