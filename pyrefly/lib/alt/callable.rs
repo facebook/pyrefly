@@ -1129,6 +1129,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
-        self.solver().expand_vars(callable.ret)
+        self.solver().finish_function_return(callable.ret)
     }
 }

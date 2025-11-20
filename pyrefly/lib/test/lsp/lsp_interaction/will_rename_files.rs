@@ -6,8 +6,9 @@
  */
 
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
+use lsp_types::request::WillRenameFiles;
+use serde_json::json;
 
 use crate::commands::lsp::IndexingMode;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -34,9 +35,9 @@ fn test_will_rename_files_changes_open_files_when_indexing_disabled() {
         .will_rename_files(bar, "tests_requiring_config/baz.py");
 
     // Expect a response with edits to update imports in foo.py using "changes" format
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<WillRenameFiles>(
+        RequestId::from(2),
+        json!({
             "changes": {
                 Url::from_file_path(&foo_path).unwrap().to_string(): [
                     {
@@ -55,9 +56,8 @@ fn test_will_rename_files_changes_open_files_when_indexing_disabled() {
                     }
                 ]
             }
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -88,9 +88,9 @@ fn test_will_rename_files_with_marker_file_no_config() {
     // Expect a response with edits to update imports in foo.py using "changes" format
     // since  there's a marker file (pyproject.toml), but no pyrefly config,
     // it should still work and provide rename edits
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<WillRenameFiles>(
+        RequestId::from(2),
+        json!({
             "changes": {
                 Url::from_file_path(&foo_path).unwrap().to_string(): [
                     {
@@ -109,9 +109,8 @@ fn test_will_rename_files_with_marker_file_no_config() {
                     },
                 ]
             }
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -136,9 +135,9 @@ fn test_will_rename_files_changes_folder() {
         .will_rename_files(bar, "tests_requiring_config/subfolder/bar.py");
 
     // Expect a response with edits to update imports in foo.py using "changes" format
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<WillRenameFiles>(
+        RequestId::from(2),
+        json!({
             "changes": {
                 Url::from_file_path(&foo_path).unwrap().to_string(): [
                     {
@@ -157,9 +156,8 @@ fn test_will_rename_files_changes_folder() {
                     }
                 ]
             }
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -177,11 +175,9 @@ fn test_will_rename_files_changes_nothing_when_no_files_open() {
     );
 
     // Expect a response with no edits since indexing only happens once a file in a config is open
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!(null)),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<WillRenameFiles>(RequestId::from(2), json!(null));
 
     interaction.shutdown();
 }
@@ -210,9 +206,9 @@ fn test_will_rename_files_changes_everything_when_indexed() {
         .will_rename_files(bar, "tests_requiring_config/baz.py");
 
     // Expect a response with edits to update imports in foo.py, with_synthetic_bindings.py, and various_imports.py using "changes" format
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<WillRenameFiles>(
+        RequestId::from(2),
+        json!({
             "changes": {
                 Url::from_file_path(&foo_path).unwrap().to_string(): [
                     {
@@ -249,9 +245,8 @@ fn test_will_rename_files_changes_everything_when_indexed() {
                     }
                 ]
             }
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -272,9 +267,9 @@ fn test_will_rename_files_without_config() {
     interaction.server.will_rename_files(bar, "baz.py");
 
     // Expect a response with edits to update imports in foo.py using "changes" format
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<WillRenameFiles>(
+        RequestId::from(2),
+        json!({
             "changes": {
                 Url::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string(): [
                     {
@@ -293,9 +288,8 @@ fn test_will_rename_files_without_config() {
                     }
                 ],
             }
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -320,9 +314,9 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
     interaction.server.will_rename_files(bar, "baz.py");
 
     // Expect a response with edits to update imports in foo.py and foo_relative.py using "changes" format
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<WillRenameFiles>(
+        RequestId::from(2),
+        json!({
             "changes": {
                 Url::from_file_path(root_path.join("foo.py")).unwrap().to_string(): [
                     {
@@ -350,9 +344,8 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
                     },
                 ],
             }
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -364,7 +357,7 @@ fn test_will_rename_files_document_changes() {
     interaction.set_root(root.path().to_path_buf());
 
     let settings = InitializeSettings {
-        capabilities: Some(serde_json::json!({
+        capabilities: Some(json!({
             "workspace": {
                 "workspaceEdit": {
                     "documentChanges": true
@@ -393,9 +386,9 @@ fn test_will_rename_files_document_changes() {
 
     // Expect a response with edits to update imports in foo.py, various_imports.py, and with_synthetic_bindings.py using "documentChanges" format
     // Files are returned in alphabetical order by URI
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<WillRenameFiles>(
+        RequestId::from(2),
+        json!({
             "documentChanges": [
                 {
                     "textDocument": {
@@ -450,9 +443,8 @@ fn test_will_rename_files_document_changes() {
                     ]
                 }
             ]
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }

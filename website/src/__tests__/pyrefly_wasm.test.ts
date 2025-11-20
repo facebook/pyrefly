@@ -118,12 +118,13 @@ movie: Movie = {'name': 'Blade Runner',
         it('should return definition location for function call', () => {
             pyreService.setActiveFile('main.py');
             // Position of "test" in "test(42)"
-            const definition = pyreService.gotoDefinition(18, 13);
+            const definitions = pyreService.gotoDefinition(18, 13);
 
-            // Should return a location object
-            expect(definition).toBeDefined();
+            expect(definitions).toBeDefined();
+            expect(definitions).not.toBeNull();
+            expect(definitions!.length).toBeGreaterThan(0);
 
-            // expect that location is correct
+            const definition = definitions![0];
             expect(definition.startLineNumber).toBe(13);
             expect(definition.startColumn).toBe(5);
             expect(definition.endLineNumber).toBe(13);

@@ -14,6 +14,7 @@ use ruff_python_ast::name::Name;
 use crate::report::pysa::captured_variable::CapturedVariable;
 use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::captured_variable::export_captured_variables;
+use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::module::ModuleIds;
 use crate::test::pysa::utils::create_state;
@@ -31,7 +32,8 @@ fn captured_variables_from_actual(
     captures
         .into_iter()
         .map(|(function, captures)| (function.function_name, captures))
-        .collect::<HashMap<_, _>>()
+        .collect_no_duplicate_keys()
+        .unwrap()
 }
 
 fn captured_variables_from_expected(
@@ -40,7 +42,8 @@ fn captured_variables_from_expected(
     captures
         .into_iter()
         .map(|(function, captures)| (function, captures.into_iter().collect::<HashSet<_>>()))
-        .collect::<HashMap<_, _>>()
+        .collect_no_duplicate_keys()
+        .unwrap()
 }
 
 fn test_exported_captured_variables(

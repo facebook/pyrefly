@@ -15,6 +15,7 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 use serde::Serialize;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
@@ -231,6 +232,7 @@ impl<'a> AstScopedVisitor for CapturedVariableVisitor<'a> {
         scopes: &Scopes,
         _parent_expression: Option<&Expr>,
         _assignment_targets: Option<&Vec<&Expr>>,
+        _assignment_statement_location: Option<TextRange>,
     ) {
         if self.current_exported_function.is_none() {
             return;

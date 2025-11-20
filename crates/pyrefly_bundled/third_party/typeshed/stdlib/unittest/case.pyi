@@ -309,7 +309,13 @@ class _AssertRaisesContext(_AssertRaisesBaseContext, Generic[_E]):
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, tb: TracebackType | None
     ) -> bool: ...
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """
+        Represent a PEP 585 generic type
+
+        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        """
+        ...
 
 class _AssertWarnsContext(_AssertRaisesBaseContext):
     warning: WarningMessage

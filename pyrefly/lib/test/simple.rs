@@ -32,6 +32,19 @@ def foo(x: A | B) -> None:
 );
 
 testcase!(
+    test_union_not_callable,
+    r#"
+from typing import assert_type
+class A:
+    def foo(self) -> int: ...
+class B:
+    foo: str
+def foo(x: A | B) -> None:
+    x.foo()  # E: Expected a callable, got `str`
+"#,
+);
+
+testcase!(
     test_distribute_type_over_union,
     r#"
 from typing import assert_type
@@ -1851,9 +1864,17 @@ Z = Annotated[0, 'not a type']  # E: Expected a type form, got instance of `Lite
 );
 
 testcase!(
-    test_starred_empty_tuple_no_panic,
+    test_typing_annotated_alias,
     r#"
-(),*()
+from typing import Annotated, assert_type
+
+Alias = Annotated
+
+def takes_alias(x: Alias[int, "meta"]) -> None:
+    assert_type(x, int)
+
+takes_alias(1)
+takes_alias("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
     "#,
 );
 

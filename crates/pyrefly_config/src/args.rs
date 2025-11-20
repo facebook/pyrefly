@@ -36,6 +36,17 @@ fn absolute_path_parser(s: &str) -> Result<PathBuf, String> {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone, Default)]
 pub struct ConfigOverrideArgs {
+    /// Configures Pyrefly to replace `project-excludes` fully rather than
+    /// append whatever is in your configuration or passed by CLI to Pyrefly's
+    /// defaults.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1,
+    )]
+    disable_project_excludes_heuristics: Option<bool>,
+
     /// The list of directories where imports are imported from, including
     /// type checked files.
     #[arg(long, value_parser = absolute_path_parser)]
@@ -49,7 +60,7 @@ pub struct ConfigOverrideArgs {
         long,
         default_missing_value = "true",
         require_equals = true,
-        num_args = 0..=1
+        num_args = 0..=1,
     )]
     disable_search_path_heuristics: Option<bool>,
 
@@ -235,6 +246,9 @@ impl ConfigOverrideArgs {
         if let Some(x) = &self.disable_search_path_heuristics {
             config.disable_search_path_heuristics = *x;
         }
+        if let Some(x) = &self.disable_project_excludes_heuristics {
+            config.disable_project_excludes_heuristics = *x;
+        }
         if let Some(x) = &self.site_package_path {
             config.python_environment.site_package_path = Some(x.clone());
         }
@@ -347,5 +361,9 @@ impl ConfigOverrideArgs {
         }
         let errors = config.configure();
         (ArcId::new(config), errors)
+    }
+
+    pub fn disable_project_excludes_heuristics(&self) -> Option<bool> {
+        self.disable_project_excludes_heuristics
     }
 }

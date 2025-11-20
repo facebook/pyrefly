@@ -10,7 +10,7 @@ $ mkdir $TMPDIR/test && echo "" > $TMPDIR/test/empty.py && \
  WARN */pyrefly.toml: Invalid site-package-path: */abcd` does not exist (glob)
  WARN */pyrefly.toml: Invalid search-path: */efgh` does not exist (glob)
  INFO * errors* (glob)
-[1]
+[0]
 ```
 
 ## Dump config
@@ -333,5 +333,27 @@ $ mkdir $TMPDIR/site_package_missing_stubs && \
 > $PYREFLY check $TMPDIR/foo.py --error untyped-import --ignore missing-module-attribute --site-package-path $TMPDIR/site_package_missing_stubs --output-format=min-text
 ERROR * Missing type stubs for `django` * (glob)
  INFO * revealed type: Module[django.forms] * (glob)
+[1]
+```
+
+## We can still find hard-coded `project-excludes` when overridden
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/disable_excludes_heuristics/.src && \
+> echo "x: str = 1" > $TMPDIR/disable_excludes_heuristics/.src/main.py && \
+> touch $TMPDIR/disable_excludes_heuristics/pyrefly.toml && \
+> $PYREFLY check -c $TMPDIR/disable_excludes_heuristics/pyrefly.toml --disable-project-excludes-heuristics --output-format=min-text
+ERROR *main.py* ?bad-assignment? (glob)
+[1]
+```
+
+## We can still find hard-coded `project-excludes` when overridden in configs
+
+<!-- Uss the same test setup from "We can still find hard-coded `project-excludes` when overridden -->
+
+```scrut {output_stream: stdout}
+$ echo "disable-project-excludes-heuristics = true" > $TMPDIR/disable_excludes_heuristics/pyrefly.toml && \
+> PYREFLY_CONFIG="$TMPDIR/disable_excludes_heuristics/pyrefly.toml" $PYREFLY check $TMPDIR/disable_excludes_heuristics/.src/main.py --output-format=min-text
+ERROR *main.py* ?bad-assignment? (glob)
 [1]
 ```

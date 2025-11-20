@@ -51,6 +51,7 @@ use crate::binding::binding::Key;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::pydantic::VALIDATION_ALIAS;
 use crate::config::error_kind::ErrorKind;
+use crate::deprecation::DeprecatedDecoration;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::style::ErrorStyle;
@@ -114,6 +115,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         is_new_type: bool,
         pydantic_config_dict: &PydanticConfigDict,
         django_primary_key_field: Option<&Name>,
+        deprecated: Option<&DeprecatedDecoration>,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
         // Get class decorators.
@@ -258,9 +260,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_final = decorators.iter().any(|(decorator, _)| {
             decorator.ty().callee_kind() == Some(CalleeKind::Function(FunctionKind::Final))
         });
-        let is_deprecated = decorators
+        let mut is_deprecated = decorators
             .iter()
             .any(|(decorator, _)| decorator.ty().is_deprecation_marker());
+        if deprecated.is_some() {
+            is_deprecated = true;
+        }
+        let is_disjoint_base = decorators.iter().any(|(decorator, _)| {
+            decorator.ty().callee_kind() == Some(CalleeKind::Function(FunctionKind::DisjointBase))
+        });
 
         let total_ordering_metadata = decorators.iter().find_map(|(decorator, decorator_range)| {
             decorator.ty().callee_kind().and_then(|kind| {
@@ -328,6 +336,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .as_ref()
             .map(|m| m.pydantic_model_kind.clone());
 
+        let deprecated_message = deprecated.and_then(|d| d.message.clone());
+
         ClassMetadata::new(
             bases,
             calculated_metaclass,
@@ -343,10 +353,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_new_type,
             is_final,
             is_deprecated,
+            is_disjoint_base,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
             django_model_metadata,
+            deprecated_message,
         )
     }
 

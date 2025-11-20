@@ -8,10 +8,10 @@
 use crate::django_testcase;
 
 django_testcase!(
-    bug = "Add basic support for ManyToMany. Also, book.authors should be  ManyRelatedManager[Author, Book_authors]; potentially v2",
     test_basic,
     r#"
 from django.db.models.query import QuerySet
+from django.db.models.fields.related_descriptors import ManyRelatedManager
 from typing import assert_type
 from django.db import models
 
@@ -24,6 +24,12 @@ class Book(models.Model):
     authors = models.ManyToManyField(Author, related_name='books')
 
 book = Book()
-assert_type(book.authors.all(), QuerySet[Author, Author]) # E: assert_type(Any, QuerySet[Author, Author]) 
+assert_type(book.authors, ManyRelatedManager[Author, models.Model])
+assert_type(book.authors.all(), QuerySet[Author, Author]) 
+
+assert_type(book.authors.filter(name="Bob"), QuerySet[Author, Author])
+assert_type(book.authors.create(name="Alice"), Author) 
+
+book.authors.add("wrong type") # E: Argument `Literal['wrong type']` is not assignable to parameter `*objs` with type `Author | int` 
 "#,
 );

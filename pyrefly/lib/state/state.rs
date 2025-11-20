@@ -5,11 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// We Handle contains a ConfigFile, which contains a Regex, which has an interior cache.
-// Not relevant because we use the ArcId to compare, and never go inside.
-// Plus it's not actually mutable in practice, just for caching.
-#![allow(clippy::mutable_key_type)]
-
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;

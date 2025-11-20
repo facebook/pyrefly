@@ -14,15 +14,13 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 
-use lsp_server::Message;
-use lsp_server::Notification;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeWorkspaceFolders;
-use lsp_types::notification::Notification as _;
+use lsp_types::request::DocumentDiagnosticRequest;
+use lsp_types::request::WorkspaceConfiguration;
 use pyrefly_util::fs_anyhow::write;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -47,7 +45,7 @@ fn test_did_change_configuration() {
         .expect_configuration_request(2, Some(vec![&scope_uri]));
     interaction
         .server
-        .send_configuration_response(2, serde_json::json!([{}]));
+        .send_configuration_response(2, json!([{}]));
 
     interaction.shutdown();
 }
@@ -103,7 +101,7 @@ fn test_pythonpath_change() {
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
         )),
         ..Default::default()
     });
@@ -127,14 +125,13 @@ fn test_pythonpath_change() {
     );
 
     interaction.server.did_change_configuration();
-    interaction.client.expect_request(Request {
-        id: RequestId::from(2),
-        method: "workspace/configuration".to_owned(),
-        params: serde_json::json!({"items":[{"section":"python"}]}),
-    });
+    interaction.client.expect_request::<WorkspaceConfiguration>(
+        RequestId::from(2),
+        json!({"items":[{"section":"python"}]}),
+    );
     interaction.server.send_configuration_response(
         2,
-        serde_json::json!([
+        json!([
             {
                 "pythonPath": interpreter_path.to_str().unwrap()
             }
@@ -160,14 +157,13 @@ fn test_pythonpath_change() {
     // Try setting the interpreter back to a bad interpreter, and make sure it fails
     // successfully
     interaction.server.did_change_configuration();
-    interaction.client.expect_request(Request {
-        id: RequestId::from(3),
-        method: "workspace/configuration".to_owned(),
-        params: serde_json::json!({"items":[{"section":"python"}]}),
-    });
+    interaction.client.expect_request::<WorkspaceConfiguration>(
+        RequestId::from(3),
+        json!({"items":[{"section":"python"}]}),
+    );
     interaction.server.send_configuration_response(
         3,
-        serde_json::json!([
+        json!([
             {
                 "pythonPath": bad_interpreter_path.to_str().unwrap()
             }
@@ -216,7 +212,7 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
         )),
         ..Default::default()
     });
@@ -245,14 +241,13 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
     );
 
     interaction.server.did_change_configuration();
-    interaction.client.expect_request(Request {
-        id: RequestId::from(2),
-        method: "workspace/configuration".to_owned(),
-        params: serde_json::json!({"items":[{"section":"python"}]}),
-    });
+    interaction.client.expect_request::<WorkspaceConfiguration>(
+        RequestId::from(2),
+        json!({"items":[{"section":"python"}]}),
+    );
     interaction.server.send_configuration_response(
         2,
-        serde_json::json!([
+        json!([
             {
                 "pythonPath": bad_interpreter_path.to_str().unwrap()
             }
@@ -295,37 +290,38 @@ fn test_disable_language_services() {
 
     interaction.server.did_open("foo.py");
     interaction.server.definition("foo.py", 6, 16);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "uri": Url::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
-            "range": {
-                "start": {
-                    "line": 6,
-                    "character": 6
-                },
-                "end": {
-                    "line": 6,
-                    "character": 9
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({
+                "uri": Url::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
+                "range": {
+                    "start": {
+                        "line": 6,
+                        "character": 6
+                    },
+                    "end": {
+                        "line": 6,
+                        "character": 9
+                    }
                 }
-            }
-        })),
-        error: None,
-    });
+            }),
+        );
 
     interaction.server.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(2, Some(vec![&scope_uri]));
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"disableLanguageServices": true}}, {"pyrefly": {"disableLanguageServices": true}}]));
+    interaction
+        .server
+        .send_configuration_response(2, json!([{"pyrefly": {"disableLanguageServices": true}}]));
 
     interaction.server.definition("foo.py", 6, 16);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!([])),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(3), json!([]));
 
     interaction.shutdown();
 }
@@ -343,35 +339,36 @@ fn test_disable_language_services_default_workspace() {
 
     interaction.server.did_open("foo.py");
     interaction.server.definition("foo.py", 6, 16);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "uri": Url::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
-            "range": {
-                "start": {
-                    "line": 6,
-                    "character": 6
-                },
-                "end": {
-                    "line": 6,
-                    "character": 9
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({
+                "uri": Url::from_file_path(root_path.join("bar.py")).unwrap().to_string(),
+                "range": {
+                    "start": {
+                        "line": 6,
+                        "character": 6
+                    },
+                    "end": {
+                        "line": 6,
+                        "character": 9
+                    }
                 }
-            }
-        })),
-        error: None,
-    });
+            }),
+        );
 
     interaction.server.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"disableLanguageServices": true}}, {"pyrefly": {"disableLanguageServices": true}}]));
+    interaction
+        .server
+        .send_configuration_response(2, json!([{"pyrefly": {"disableLanguageServices": true}}]));
 
     interaction.server.definition("foo.py", 6, 16);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!([])),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(3), json!([]));
 
     interaction.shutdown();
 }
@@ -393,62 +390,53 @@ fn test_disable_specific_language_services_via_analysis_config() {
 
     // Test hover works initially
     interaction.server.hover("foo.py", 6, 17);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "contents": {
-                "kind":"markdown",
-                "value":"```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
-                    + Url::from_file_path(this_test_root.join("bar.py")).unwrap().as_str()
-                    + "#L7,7)"
-            }
-        })),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({
+                "contents": {
+                    "kind":"markdown",
+                    "value":"```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
+                        + Url::from_file_path(this_test_root.join("bar.py")).unwrap().as_str()
+                        + "#L7,7)"
+                }
+            }),
+        );
 
     // Test definition works initially
     interaction.server.definition("foo.py", 6, 16);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!({
-            "uri": Url::from_file_path(this_test_root.join("bar.py")).unwrap().to_string(),
-            "range": {
-                "start": {
-                    "line": 6,
-                    "character": 6
-                },
-                "end": {
-                    "line": 6,
-                    "character": 9
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({
+                "uri": Url::from_file_path(this_test_root.join("bar.py")).unwrap().to_string(),
+                "range": {
+                    "start": {
+                        "line": 6,
+                        "character": 6
+                    },
+                    "end": {
+                        "line": 6,
+                        "character": 9
+                    }
                 }
-            }
-        })),
-        error: None,
-    });
+            }),
+        );
 
-    // Change configuration to disable only hover (mimicking pyrefly.analysis.disabledLanguageServices)
+    // Change configuration to disable only hover (using pyrefly.disabledLanguageServices)
     interaction.server.did_change_configuration();
     interaction
         .client
         .expect_configuration_request(2, Some(vec![&scope_uri]));
     interaction.server.send_configuration_response(
         2,
-        serde_json::json!([
+        json!([
             {
                 "pyrefly": {
-                    "analysis": {
-                        "disabledLanguageServices": {
-                            "hover": true,
-                        }
-                    }
-                }
-            },
-            {
-                "pyrefly": {
-                    "analysis": {
-                        "disabledLanguageServices": {
-                            "hover": true,
-                        }
+                    "disabledLanguageServices": {
+                        "hover": true,
                     }
                 }
             }
@@ -457,31 +445,30 @@ fn test_disable_specific_language_services_via_analysis_config() {
 
     // Hover should now be disabled
     interaction.server.hover("foo.py", 6, 17);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(4),
-        result: Some(serde_json::json!({"contents": []})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(4), json!({"contents": []}));
 
     // But definition should still work
     interaction.server.definition("foo.py", 6, 16);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(5),
-        result: Some(serde_json::json!({
-            "uri": Url::from_file_path(this_test_root.join("bar.py")).unwrap().to_string(),
-            "range": {
-                "start": {
-                    "line": 6,
-                    "character": 6
-                },
-                "end": {
-                    "line": 6,
-                    "character": 9
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(5),
+            json!({
+                "uri": Url::from_file_path(this_test_root.join("bar.py")).unwrap().to_string(),
+                "range": {
+                    "start": {
+                        "line": 6,
+                        "character": 6
+                    },
+                    "end": {
+                        "line": 6,
+                        "character": 9
+                    }
                 }
-            }
-        })),
-        error: None,
-    });
+            }),
+        );
 
     interaction.shutdown();
 }
@@ -499,14 +486,11 @@ fn test_did_change_workspace_folder() {
 
     interaction
         .server
-        .send_message(Message::Notification(Notification {
-            method: DidChangeWorkspaceFolders::METHOD.to_owned(),
-            params: serde_json::json!({
-                "event": {
-                "added": [{"uri": Url::from_file_path(&root).unwrap(), "name": "test"}],
-                "removed": [],
-                }
-            }),
+        .send_notification::<DidChangeWorkspaceFolders>(json!({
+            "event": {
+            "added": [{"uri": Url::from_file_path(&root).unwrap(), "name": "test"}],
+            "removed": [],
+            }
         }));
 
     interaction
@@ -514,13 +498,13 @@ fn test_did_change_workspace_folder() {
         .expect_configuration_request(2, Some(vec![&scope_uri]));
     interaction
         .server
-        .send_configuration_response(2, serde_json::json!([{}, {}]));
+        .send_configuration_response(2, json!([{}]));
 
     interaction.shutdown();
 }
 
 fn get_diagnostics_result() -> serde_json::Value {
-    serde_json::json!({"items": [
+    json!({"items": [
             {"code":"unsupported-operation","codeDescription":{"href":"https://pyrefly.org/en/docs/error-kinds/#unsupported-operation"},"message":"`+` is not supported between `Literal[1]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
             "range":{"end":{"character":6,"line":5},"start":{"character":0,"line":5}},"severity":1,"source":"Pyrefly"}],"kind":"full"
     })
@@ -535,7 +519,9 @@ fn test_disable_type_errors_language_services_still_work() {
     interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(Some(serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-off"}}, {"pyrefly": {"displayTypeErrors": "force-off"}}]))),
+        configuration: Some(Some(
+            json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]),
+        )),
         ..Default::default()
     });
 
@@ -543,18 +529,19 @@ fn test_disable_type_errors_language_services_still_work() {
 
     interaction.server.hover("foo.py", 6, 17);
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "contents": {
-                "kind":"markdown",
-                "value":"```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
-                    + Url::from_file_path(root_path.join("bar.py")).unwrap().as_str()
-                    + "#L7,7)"
-            }
-        })),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({
+                "contents": {
+                    "kind":"markdown",
+                    "value":"```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
+                        + Url::from_file_path(root_path.join("bar.py")).unwrap().as_str()
+                        + "#L7,7)"
+                }
+            }),
+        );
 
     interaction.shutdown();
 }
@@ -575,39 +562,43 @@ fn test_disable_type_errors_workspace_folder() {
 
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.server.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(2, Some(vec![&scope_uri]));
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-off"}}, {"pyrefly": {"displayTypeErrors": "force-off"}}]));
+    interaction
+        .server
+        .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]));
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.server.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(3, Some(vec![&scope_uri]));
-    interaction.server.send_configuration_response(3, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction
+        .server
+        .send_configuration_response(3, json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(4),
-        result: Some(get_diagnostics_result()),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(4), get_diagnostics_result());
 
     interaction.shutdown();
 }
@@ -626,35 +617,39 @@ fn test_disable_type_errors_default_workspace() {
 
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.server.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-off"}}, {"pyrefly": {"displayTypeErrors": "force-off"}}]));
+    interaction
+        .server
+        .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]));
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.server.did_change_configuration();
 
     interaction.client.expect_configuration_request(3, None);
-    interaction.server.send_configuration_response(3, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction
+        .server
+        .send_configuration_response(3, json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(4),
-        result: Some(get_diagnostics_result()),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(4), get_diagnostics_result());
 
     interaction.shutdown();
 }
@@ -676,25 +671,26 @@ fn test_disable_type_errors_config() {
 
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.server.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(2, Some(vec![&scope_uri]));
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction
+        .server
+        .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(get_diagnostics_result()),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(3), get_diagnostics_result());
 
     interaction.shutdown();
 }
@@ -717,7 +713,7 @@ fn test_parse_pylance_configs() {
     interaction.client.expect_configuration_request(2, None);
     interaction.server.send_configuration_response(
         2,
-        serde_json::json!([
+        json!([
             {
                 "pyrefly": {"displayTypeErrors": "force-off"},
                 "analysis": {
@@ -735,11 +731,12 @@ fn test_parse_pylance_configs() {
     );
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.shutdown();
 }
@@ -758,22 +755,23 @@ fn test_diagnostics_default_workspace() {
 
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.server.did_change_configuration();
     interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction
+        .server
+        .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(get_diagnostics_result()),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(3), get_diagnostics_result());
 
     interaction.shutdown();
 }
@@ -793,22 +791,23 @@ fn test_diagnostics_default_workspace_with_config() {
 
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(get_diagnostics_result()),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(2), get_diagnostics_result());
 
     interaction.server.did_change_configuration();
     interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-off"}}, {"pyrefly": {"displayTypeErrors": "force-off"}}]));
+    interaction
+        .server
+        .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]));
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.shutdown();
 }
@@ -829,24 +828,25 @@ fn test_diagnostics_in_workspace() {
 
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.server.did_change_configuration();
     interaction
         .client
         .expect_configuration_request(2, Some(vec![&scope_uri]));
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction
+        .server
+        .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction.server.diagnostic("type_errors.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(get_diagnostics_result()),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(3), get_diagnostics_result());
 
     interaction.shutdown();
 }
@@ -858,7 +858,7 @@ fn test_diagnostics_file_not_in_includes() {
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
         )),
         ..Default::default()
     });
@@ -875,22 +875,21 @@ fn test_diagnostics_file_not_in_includes() {
         .diagnostic("diagnostics_file_not_in_includes/type_errors_include.py");
 
     // prove that it works for a project included
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(get_diagnostics_result()),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(2), get_diagnostics_result());
 
     interaction
         .server
         .diagnostic("diagnostics_file_not_in_includes/type_errors_exclude.py");
 
     // prove that it ignores a file not in project includes
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.shutdown();
 }
@@ -902,7 +901,7 @@ fn test_diagnostics_file_in_excludes() {
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
         )),
         ..Default::default()
     });
@@ -919,22 +918,21 @@ fn test_diagnostics_file_in_excludes() {
         .diagnostic("diagnostics_file_in_excludes/type_errors_include.py");
 
     // prove that it works for a project included
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(get_diagnostics_result()),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(RequestId::from(2), get_diagnostics_result());
 
     interaction
         .server
         .diagnostic("diagnostics_file_in_excludes/type_errors_exclude.py");
 
     // prove that it ignores a file not in project includes
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.shutdown();
 }

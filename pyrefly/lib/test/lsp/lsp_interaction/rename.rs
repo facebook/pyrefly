@@ -5,11 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
+use lsp_types::request::PrepareRenameRequest;
+use lsp_types::request::Rename;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -25,10 +25,9 @@ fn test_prepare_rename() {
     interaction.server.did_open("foo.py");
 
     let path = root.path().join("basic/foo.py");
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(2),
-        method: "textDocument/prepareRename".to_owned(),
-        params: serde_json::json!({
+    interaction.server.send_request::<PrepareRenameRequest>(
+        RequestId::from(2),
+        json!({
             "textDocument": {
                 "uri": Url::from_file_path(&path).unwrap().to_string()
             },
@@ -37,16 +36,78 @@ fn test_prepare_rename() {
                 "character": 16
             }
         }),
-    }));
+    );
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<PrepareRenameRequest>(
+        RequestId::from(2),
+        json!({
             "start": {"line": 6, "character": 16},
             "end": {"line": 6, "character": 19},
-        })),
-        error: None,
+        }),
+    );
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("rename_third_party");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction.initialize(InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+        configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
+        ..Default::default()
     });
+
+    let user_code = root_path.join("user_code.py");
+
+    interaction.server.did_open("user_code.py");
+
+    // Verify that prepareRename returns null, indicating that renaming third party symbols is not allowed
+    interaction.server.send_request::<PrepareRenameRequest>(
+        RequestId::from(2),
+        json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&user_code).unwrap().to_string()
+            },
+            "position": {
+                "line": 14,  // Line with "external_result = external_function()"
+                "character": 25  // Position on "external_function"
+            }
+        }),
+    );
+
+    interaction
+        .client
+        .expect_response::<PrepareRenameRequest>(RequestId::from(2), serde_json::Value::Null);
+
+    // Verify that attempting to rename a third party symbol returns an error
+    interaction.server.send_request::<Rename>(
+        RequestId::from(3),
+        json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&user_code).unwrap().to_string()
+            },
+            "position": {
+                "line": 14,  // Line with "external_result = external_function()"
+                "character": 25  // Position on "external_function"
+            },
+            "newName": "new_external_function"
+        }),
+    );
+
+    interaction.client.expect_response_error(
+        RequestId::from(3),
+        json!({
+            "code": -32600,
+            "message": "Third-party symbols cannot be renamed",
+            "data": null,
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -61,9 +122,7 @@ fn test_rename() {
     interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings {
         workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(Some(
-            serde_json::json!([{ "indexing_mode": "lazy_blocking" }]),
-        )),
+        configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
         ..Default::default()
     });
 
@@ -77,10 +136,9 @@ fn test_rename() {
     interaction.server.did_open("various_imports.py");
     interaction.server.did_open("with_synthetic_bindings.py");
 
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(2),
-        method: "textDocument/rename".to_owned(),
-        params: serde_json::json!({
+    interaction.server.send_request::<Rename>(
+        RequestId::from(2),
+        json!({
             "textDocument": {
                 "uri": Url::from_file_path(&bar).unwrap().to_string()
             },
@@ -90,11 +148,11 @@ fn test_rename() {
             },
             "newName": "Baz"
         }),
-    }));
+    );
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<Rename>(
+        RequestId::from(2),
+        json!({
             "changes": {
                 Url::from_file_path(&foo).unwrap().to_string(): [
                     {
@@ -141,9 +199,8 @@ fn test_rename() {
                     },
                 ]
             }
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }

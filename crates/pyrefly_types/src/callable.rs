@@ -327,6 +327,8 @@ pub struct FuncFlags {
     pub is_classmethod: bool,
     /// A function decorated with `@deprecated`
     pub is_deprecated: bool,
+    /// Optional explanation attached to `@deprecated`
+    pub deprecated_message: Option<String>,
     /// A function decorated with `@property`
     pub is_property_getter: bool,
     /// A function decorated with `functools.cached_property` or equivalent.
@@ -344,6 +346,10 @@ pub struct FuncFlags {
     pub has_final_decoration: bool,
     /// A function decorated with `@abc.abstractmethod`
     pub is_abstract_method: bool,
+    /// Function body is treated as a stub (e.g. body is `...` or absent in a stub file)
+    pub lacks_implementation: bool,
+    /// Is the function definition in a `.pyi` file
+    pub defined_in_stub_file: bool,
     /// A function decorated with `typing.dataclass_transform(...)`, turning it into a
     /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
     /// `dataclass_transform` call. See
@@ -461,6 +467,7 @@ pub enum FunctionKind {
     /// Instance of a protocol with a `__call__` method. The function has the `__call__` signature.
     CallbackProtocol(Box<ClassType>),
     TotalOrdering,
+    DisjointBase,
 }
 
 impl Callable {
@@ -660,6 +667,15 @@ impl Param {
         }
     }
 
+    pub fn name(&self) -> Option<&Name> {
+        match self {
+            Param::PosOnly(name, ..) | Param::VarArg(name, ..) | Param::Kwargs(name, ..) => {
+                name.as_ref()
+            }
+            Param::Pos(name, ..) | Param::KwOnly(name, ..) => Some(name),
+        }
+    }
+
     pub fn as_type(&self) -> &Type {
         match self {
             Param::PosOnly(_, ty, _)
@@ -711,12 +727,13 @@ impl FunctionKind {
             ("typing", None, "assert_type") => Self::AssertType,
             ("typing", None, "reveal_type") => Self::RevealType,
             ("typing", None, "final") => Self::Final,
-            ("typing", None, "runtime_checkable") => Self::RuntimeCheckable,
-            ("typing", None, "dataclass_transform") => Self::DataclassTransform,
-            ("typing_extensions", None, "dataclass_transform") => Self::DataclassTransform,
-            ("typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
+            ("typing" | "typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
+            ("typing" | "typing_extensions", None, "dataclass_transform") => {
+                Self::DataclassTransform
+            }
             ("abc", None, "abstractmethod") => Self::AbstractMethod,
             ("functools", None, "total_ordering") => Self::TotalOrdering,
+            ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
             _ => Self::Def(Box::new(FuncId {
                 module,
                 cls,
@@ -743,6 +760,7 @@ impl FunctionKind {
             Self::CallbackProtocol(cls) => cls.qname().module_name(),
             Self::AbstractMethod => ModuleName::abc(),
             Self::TotalOrdering => ModuleName::functools(),
+            Self::DisjointBase => ModuleName::typing(),
             Self::Def(func_id) => func_id.module.name().dupe(),
         }
     }
@@ -765,6 +783,7 @@ impl FunctionKind {
             Self::CallbackProtocol(_) => Cow::Owned(dunder::CALL),
             Self::AbstractMethod => Cow::Owned(Name::new_static("abstractmethod")),
             Self::TotalOrdering => Cow::Owned(Name::new_static("total_ordering")),
+            Self::DisjointBase => Cow::Owned(Name::new_static("disjoint_base")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
         }
     }
@@ -787,6 +806,7 @@ impl FunctionKind {
             Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
             Self::AbstractMethod => None,
             Self::TotalOrdering => None,
+            Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
         }
     }

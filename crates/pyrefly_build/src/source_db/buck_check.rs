@@ -19,6 +19,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::fs_anyhow;
+use pyrefly_util::watch_pattern::WatchPattern;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -170,7 +171,7 @@ impl SourceDatabase for BuckCheckSourceDatabase {
         Ok(false)
     }
 
-    fn get_critical_files(&self) -> SmallSet<PathBuf> {
+    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>> {
         SmallSet::new()
     }
 

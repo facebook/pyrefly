@@ -197,6 +197,7 @@ impl Error {
             message: self.msg().to_owned(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
+            tags: None,
             ..Default::default()
         }
     }

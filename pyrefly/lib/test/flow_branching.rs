@@ -1146,12 +1146,12 @@ def f(x: A):
 testcase!(
     test_join_with_unrelated_narrow,
     r#"
-from typing import assert_type
+from typing import assert_type, reveal_type
 class A: pass
 class B: pass
 def f(x: A):
     if isinstance(x, B):
-        assert_type(x, B)
+        reveal_type(x) # E: A & B
     assert_type(x, A)
 # (Illustrating that all code in the body of `f` is reachable)
 class C(A, B): pass
@@ -1221,5 +1221,90 @@ def test(xs: list[int], ys: list[int], zs: list[int]) -> None:
                     break
             if True and len(results) >= 0:
                 break
+"#,
+);
+
+// These types (bool, bytearray, bytes, dict, float, frozenset, int, list, set, str, tuple)
+// bind the entire narrowed value to the single positional parameter instead of using __match_args__
+testcase!(
+    test_pattern_match_single_slot_builtins,
+    r#"
+from typing import assert_type
+
+def test_float(x: object) -> None:
+    match x:
+        case float(value):
+            assert_type(value, float)
+
+def test_int(x: object) -> None:
+    match x:
+        case int(value):
+            assert_type(value, int)
+
+def test_str(x: object) -> None:
+    match x:
+        case str(value):
+            assert_type(value, str)
+
+def test_bool(x: object) -> None:
+    match x:
+        case bool(value):
+            assert_type(value, bool)
+
+def test_bytes(x: object) -> None:
+    match x:
+        case bytes(value):
+            assert_type(value, bytes)
+
+def test_bytearray(x: object) -> None:
+    match x:
+        case bytearray(value):
+            assert_type(value, bytearray)
+
+def test_list(x: list[int]) -> None:
+    match x:
+        case list(value):
+            assert_type(value, list[int])
+
+def test_tuple(x: tuple[int, str]) -> None:
+    match x:
+        case tuple(value):
+            assert_type(value, tuple[int, str])
+
+def test_set(x: set[int]) -> None:
+    match x:
+        case set(value):
+            assert_type(value, set[int])
+
+def test_frozenset(x: frozenset[int]) -> None:
+    match x:
+        case frozenset(value):
+            assert_type(value, frozenset[int])
+
+def test_dict(x: dict[str, int]) -> None:
+    match x:
+        case dict(value):
+            assert_type(value, dict[str, int])
+
+def test_narrowing_with_union(x: int | str) -> None:
+    match x:
+        case int(value):
+            assert_type(value, int)
+            assert_type(x, int)
+        case str(value):
+            assert_type(value, str)
+            assert_type(x, str)
+
+# Test that multiple positional patterns error
+def test_multiple_positional_not_special(x: int) -> None:
+    match x:
+        case int(a, b):  # E: Cannot match positional sub-patterns in `int` # E: Object of class `int` has no attribute `__match_args__`
+            pass
+
+# Test that keyword patterns still work normally
+def test_keyword_pattern_not_special(x: float) -> None:
+    match x:
+        case float(real=r):
+            assert_type(r, float)
 "#,
 );

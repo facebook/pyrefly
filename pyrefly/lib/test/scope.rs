@@ -637,6 +637,16 @@ def fun(x):
     "#,
 );
 
+testcase!(
+    test_type_statement_scope,
+    r#"
+from typing import assert_type
+class A: pass
+type X[A] = list[A]
+assert_type(A, type[A])
+    "#,
+);
+
 // This does come up in practice - see https://github.com/facebook/pyrefly/issues/1146
 testcase!(
     test_class_scope_annotation_shadows_global,

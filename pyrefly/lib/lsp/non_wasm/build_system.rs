@@ -22,6 +22,7 @@ use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use tracing::info;
 
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
@@ -82,7 +83,7 @@ pub fn queue_source_db_rebuild_and_recheck(
             .filter(|(c, files)| match c.requery_source_db(files) {
                 Ok(reloaded) => reloaded,
                 Err(error) => {
-                    eprintln!("Error reloading source database for config: {error}");
+                    info!("Error reloading source database for config: {error}");
                     false
                 }
             })

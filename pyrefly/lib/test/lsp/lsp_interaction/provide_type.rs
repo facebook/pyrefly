@@ -5,8 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Response;
+use serde_json::json;
 
+use crate::lsp::wasm::provide_type::ProvideType;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -24,16 +25,15 @@ fn test_provide_type_basic() {
     interaction.server.did_open("bar.py");
     interaction.server.provide_type("bar.py", 7, 5);
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<ProvideType>(
+        interaction.server.current_request_id(),
+        json!({
             "contents": [{
                 "kind": "plaintext",
                 "value": "typing.Literal[3]",
             }]
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -51,16 +51,15 @@ fn test_provide_type() {
     interaction.server.did_open("foo.py");
     interaction.server.provide_type("foo.py", 6, 16);
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<ProvideType>(
+        interaction.server.current_request_id(),
+        json!({
             "contents": [{
                 "kind": "plaintext",
                 "value": "type[bar.Bar]".to_owned()
             }]
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }

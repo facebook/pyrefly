@@ -54,6 +54,8 @@ pub struct ClassMetadata {
     is_new_type: bool,
     is_final: bool,
     is_deprecated: bool,
+    deprecated_message: Option<String>,
+    is_disjoint_base: bool,
     total_ordering_metadata: Option<TotalOrderingMetadata>,
     /// If this class is decorated with `typing.dataclass_transform(...)`, the keyword arguments
     /// that were passed to the `dataclass_transform` call.
@@ -91,10 +93,12 @@ impl ClassMetadata {
         is_new_type: bool,
         is_final: bool,
         is_deprecated: bool,
+        is_disjoint_base: bool,
         total_ordering_metadata: Option<TotalOrderingMetadata>,
         dataclass_transform_metadata: Option<DataclassTransformKeywords>,
         pydantic_model_kind: Option<PydanticModelKind>,
         django_model_metadata: Option<DjangoModelMetadata>,
+        deprecated_message: Option<String>,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -111,6 +115,8 @@ impl ClassMetadata {
             is_new_type,
             is_final,
             is_deprecated,
+            deprecated_message,
+            is_disjoint_base,
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
@@ -134,6 +140,8 @@ impl ClassMetadata {
             is_new_type: false,
             is_final: false,
             is_deprecated: false,
+            deprecated_message: None,
+            is_disjoint_base: false,
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
@@ -204,6 +212,14 @@ impl ClassMetadata {
 
     pub fn is_deprecated(&self) -> bool {
         self.is_deprecated
+    }
+
+    pub fn deprecated_message(&self) -> Option<&str> {
+        self.deprecated_message.as_deref()
+    }
+
+    pub fn is_disjoint_base(&self) -> bool {
+        self.is_disjoint_base
     }
 
     pub fn has_generic_base_class(&self) -> bool {

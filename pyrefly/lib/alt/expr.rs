@@ -48,7 +48,6 @@ use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
-use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
@@ -57,6 +56,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::config::error_kind::ErrorKind;
+use crate::deprecation::format_deprecated_message;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
@@ -248,7 +248,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 range,
                 ErrorInfo::Kind(ErrorKind::Deprecated),
-                format!("`{deprecated_function}` is deprecated"),
+                format_deprecated_message(
+                    format!("`{deprecated_function}` is deprecated"),
+                    ty.deprecated_message().as_deref(),
+                ),
             );
         }
     }
@@ -657,7 +660,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if !nontuples.is_empty() {
                 // The non-tuple options may contain a type like Sequence[T] that provides an additional default hint.
-                let nontuple_hint = self.unions(nontuples.into_iter().cloned().collect());
+                // Filter out top-level Vars: they don't provide any hints, and we don't want to pin them.
+                let nontuple_hint = self.unions(
+                    nontuples
+                        .into_iter()
+                        .filter(|t| !matches!(t, Type::Var(_)))
+                        .cloned()
+                        .collect(),
+                );
                 let nontuple_element_hint =
                     self.decompose_tuple(HintRef::new(&nontuple_hint, hint.errors()));
                 if let Some(nontuple_element_hint) = nontuple_element_hint {
@@ -1079,6 +1089,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
+            // If this is not the last entry, we have to make a type-dependent decision and also narrow the
+            // result; both operations require us to force `Var` first or they become unpredictable.
+            if i < last_index {
+                t = self.force_for_narrowing(&t);
+            }
             if i < last_index && should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);
                 break;
@@ -1755,35 +1770,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Apply a decorator. This effectively synthesizes a function call.
-    pub fn apply_decorator(
-        &self,
-        decorator: Type,
-        decoratee: Type,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Type {
-        if matches!(&decoratee, Type::ClassDef(cls) if cls.has_toplevel_qname("typing", "TypeVar"))
-        {
-            // Avoid recursion in TypeVar, which is decorated with `@final`, whose type signature
-            // itself depends on a TypeVar.
-            return decoratee;
-        }
-        if matches!(&decoratee, Type::ClassDef(_)) {
-            // TODO: don't blanket ignore class decorators.
-            return decoratee;
-        }
-        let call_target = self.as_call_target_or_error(
-            decorator.clone(),
-            CallStyle::FreeForm,
-            range,
-            errors,
-            None,
-        );
-        let arg = CallArg::ty(&decoratee, range);
-        self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
-    }
-
     /// Helper to infer element types for a list or set.
     fn elts_infer(
         &self,
@@ -1877,6 +1863,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if matches!(&base, Type::ClassDef(t) if t.name() == "tuple") {
                 base = Type::type_form(Type::SpecialForm(SpecialForm::Tuple));
+            }
+            if let Type::Intersect(x) = base {
+                // TODO: Handle subscription of intersections properly.
+                base = x.1;
             }
             match base {
                 Type::Forall(forall) => {
@@ -2021,6 +2011,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
                             format!(
                                 "`{}` is not subscriptable",
+                                self.for_display(base_display_ty)
+                            ),
+                        )
+                    }
+                }
+                Type::Type(inner) if self.is_enum_class_type(inner.as_ref()) => {
+                    let base_display_ty = Type::Type(inner.clone());
+                    let enum_value_ty = *inner;
+                    if self.is_subset_eq(
+                        &self.expr(slice, None, errors),
+                        &self.stdlib.str().clone().to_type(),
+                    ) {
+                        enum_value_ty
+                    } else {
+                        self.error(
+                            errors,
+                            slice.range(),
+                            ErrorInfo::Kind(ErrorKind::BadIndex),
+                            format!(
+                                "Enum type `{}` can only be indexed by strings",
                                 self.for_display(base_display_ty)
                             ),
                         )

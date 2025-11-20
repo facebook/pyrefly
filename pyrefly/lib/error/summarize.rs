@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::path::PathBuf;
-
 use dupe::Dupe;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display;
@@ -54,13 +52,42 @@ fn get_errors_per_file(errors: &[Error]) -> SmallMap<ModulePath, SmallMap<ErrorK
 /// path_index = 0 groups by /alpha, path_index = 1 groups by /alpha/beta,
 /// and path_index = 2 groups by alpha/beta/gamma.
 /// If the path_index is larger than the number of components in the path, then the entire path is used.
-pub fn print_error_summary(errors: &[Error], path_index: usize) {
+/// If filter_error_kind is provided, only shows files/directories that contain that specific error kind.
+pub fn print_error_summary(errors: &[Error], filter_error_kind: Option<ErrorKind>) {
     // TODO: Sort errors by count and then name. More consistent and human-readable.
     // TODO: Consider output formatting.
-    let path_errors = get_errors_per_file(errors);
-    eprintln!("=== Error Summary ===");
+    let mut path_errors = get_errors_per_file(errors);
+
+    // Filter by error kind if specified
+    if let Some(filter_kind) = filter_error_kind {
+        path_errors = path_errors
+            .into_iter()
+            .filter_map(|(path, error_counts)| {
+                let filtered_counts: SmallMap<ErrorKind, usize> = error_counts
+                    .into_iter()
+                    .filter(|(kind, _)| *kind == filter_kind)
+                    .collect();
+                if filtered_counts.is_empty() {
+                    None
+                } else {
+                    Some((path, filtered_counts))
+                }
+            })
+            .collect();
+        eprintln!(
+            "=== Error Summary (filtered by: {}) ===",
+            filter_kind.to_name()
+        );
+    } else {
+        eprintln!("=== Error Summary ===");
+    }
+
     if path_errors.is_empty() {
-        eprintln!("No errors found!");
+        if filter_error_kind.is_some() {
+            eprintln!("No errors of this type found!");
+        } else {
+            eprintln!("No errors found!");
+        }
         return;
     }
 

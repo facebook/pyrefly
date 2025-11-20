@@ -828,7 +828,7 @@ testcase!(
     test_import_deprecated_class_warn,
     env_class_x_deprecated(),
     r#"
-from foo import X # E: `X` is deprecated
+from foo import X # E: `X` is deprecated: Don't use this
 
 x = X()
 "#,
@@ -838,7 +838,7 @@ testcase!(
     test_import_star_deprecated_class_warn,
     env_class_x_deprecated(),
     r#"
-from foo import * # E: `X` is deprecated
+from foo import * # E: `X` is deprecated: Don't use this
 
 x = X()
 "#,
@@ -859,9 +859,9 @@ testcase!(
     test_import_deprecated_func_warn,
     env_func_x_deprecated(),
     r#"
-from foo import x # E: `x` is deprecated
+from foo import x # E: `x` is deprecated: Don't use this
 
-x()  # E: `foo.x` is deprecated
+x()  # E: `foo.x` is deprecated: Don't use this
 "#,
 );
 
@@ -869,9 +869,9 @@ testcase!(
     test_import_as_deprecated_func_warn,
     env_func_x_deprecated(),
     r#"
-from foo import x as y # E: `x` is deprecated
+from foo import x as y # E: `x` is deprecated: Don't use this
 
-y()  # E: `foo.x` is deprecated
+y()  # E: `foo.x` is deprecated: Don't use this
 "#,
 );
 
@@ -879,9 +879,9 @@ testcase!(
     test_import_star_deprecated_func_warn,
     env_func_x_deprecated(),
     r#"
-from foo import * # E: `x` is deprecated
+from foo import * # E: `x` is deprecated: Don't use this
 
-x()  # E: `foo.x` is deprecated
+x()  # E: `foo.x` is deprecated: Don't use this
 "#,
 );
 
@@ -921,9 +921,9 @@ testcase!(
     test_import_conditionally_deprecated_func_warn,
     env_func_x_deprecated_conditionally(),
     r#"
-from foo import x # E: `x` is deprecated
+from foo import x # E: `x` is deprecated: Don't use this
 
-x()  # E: `foo.x` is deprecated
+x()  # E: `foo.x` is deprecated: Don't use this
 "#,
 );
 

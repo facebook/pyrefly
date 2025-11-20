@@ -201,24 +201,8 @@ impl Scopes {
                     Self::current_exported_function_impl(iterator, module_id, module_name, flags)
                 }
                 ExportFunctionDecorators::InDecoratedTarget => {
-                    match Self::current_exported_function_impl(
-                        iterator,
-                        module_id,
-                        module_name,
-                        flags,
-                    ) {
-                        Some(FunctionRef {
-                            function_id: FunctionId::Function { location },
-                            function_name,
-                            ..
-                        }) => Some(FunctionRef {
-                            module_id,
-                            module_name,
-                            function_id: FunctionId::FunctionDecoratedTarget { location },
-                            function_name,
-                        }),
-                        _ => None,
-                    }
+                    Self::current_exported_function_impl(iterator, module_id, module_name, flags)
+                        .and_then(|function_ref| function_ref.get_decorated_target())
                 }
                 ExportFunctionDecorators::Ignore => None,
             },
@@ -271,11 +255,13 @@ pub trait AstScopedVisitor {
         parent_expression: Option<&Expr>,
         // If the current expression is in an assignment, this is the left side of the assignment
         assignment_targets: Option<&Vec<&Expr>>,
+        assignment_statement_location: Option<TextRange>,
     ) {
         let _ = expr;
         let _ = scopes;
         let _ = parent_expression;
         let _ = assignment_targets;
+        let _ = assignment_statement_location;
     }
     fn enter_function_scope(
         &mut self,
@@ -328,6 +314,7 @@ fn visit_statement<V: AstScopedVisitor>(
         module_context: &'a ModuleContext<'a>,
         parent_expression: Option<&'a Expr>,
         assignment_targets: Option<&'a Vec<&'a Expr>>,
+        assignment_statement_location: Option<TextRange>,
     }
     impl<'v, 'e: 'v, V: AstScopedVisitor>
         ruff_python_ast::visitor::source_order::SourceOrderVisitor<'e>
@@ -342,6 +329,7 @@ fn visit_statement<V: AstScopedVisitor>(
                 self.scopes,
                 self.parent_expression,
                 self.assignment_targets,
+                self.assignment_statement_location,
             );
             let current_parent_expression = self.parent_expression;
             self.parent_expression = Some(expr);
@@ -395,8 +383,8 @@ fn visit_statement<V: AstScopedVisitor>(
                 }
             };
             scopes.stack.push(function_scope);
-            visitor.enter_function_scope(function_def, scopes);
             visitor.on_scope_update(scopes);
+            visitor.enter_function_scope(function_def, scopes);
 
             if !function_def.decorator_list.is_empty() {
                 scopes.stack.push(Scope::FunctionDecorators);
@@ -409,6 +397,7 @@ fn visit_statement<V: AstScopedVisitor>(
                             module_context,
                             parent_expression: None,
                             assignment_targets: None,
+                            assignment_statement_location: None,
                         },
                         e,
                     )
@@ -427,6 +416,7 @@ fn visit_statement<V: AstScopedVisitor>(
                         module_context,
                         parent_expression: None,
                         assignment_targets: None,
+                        assignment_statement_location: None,
                     },
                     type_params,
                 );
@@ -443,6 +433,7 @@ fn visit_statement<V: AstScopedVisitor>(
                     module_context,
                     parent_expression: None,
                     assignment_targets: None,
+                    assignment_statement_location: None,
                 },
                 &function_def.parameters,
             );
@@ -460,6 +451,7 @@ fn visit_statement<V: AstScopedVisitor>(
                             module_context,
                             parent_expression: None,
                             assignment_targets: None,
+                            assignment_statement_location: None,
                         },
                         return_annotation,
                     );
@@ -472,8 +464,8 @@ fn visit_statement<V: AstScopedVisitor>(
                 visit_statement(stmt, visitor, scopes, module_context);
             }
 
-            scopes.stack.pop();
             visitor.exit_function_scope(function_def, scopes);
+            scopes.stack.pop();
             visitor.on_scope_update(scopes);
         }
         Stmt::ClassDef(class_def) => {
@@ -502,8 +494,8 @@ fn visit_statement<V: AstScopedVisitor>(
                 }
             };
             scopes.stack.push(class_scope);
-            visitor.enter_class_scope(class_def, scopes);
             visitor.on_scope_update(scopes);
+            visitor.enter_class_scope(class_def, scopes);
 
             scopes.stack.push(Scope::ClassDecorators);
             visitor.on_scope_update(scopes);
@@ -515,6 +507,7 @@ fn visit_statement<V: AstScopedVisitor>(
                         module_context,
                         parent_expression: None,
                         assignment_targets: None,
+                        assignment_statement_location: None,
                     },
                     e,
                 )
@@ -532,6 +525,7 @@ fn visit_statement<V: AstScopedVisitor>(
                         module_context,
                         parent_expression: None,
                         assignment_targets: None,
+                        assignment_statement_location: None,
                     },
                     type_params,
                 );
@@ -549,6 +543,7 @@ fn visit_statement<V: AstScopedVisitor>(
                         module_context,
                         parent_expression: None,
                         assignment_targets: None,
+                        assignment_statement_location: None,
                     },
                     arguments,
                 );
@@ -560,8 +555,8 @@ fn visit_statement<V: AstScopedVisitor>(
                 visit_statement(stmt, visitor, scopes, module_context);
             }
 
-            scopes.stack.pop();
             visitor.exit_class_scope(class_def, scopes);
+            scopes.stack.pop();
             visitor.on_scope_update(scopes);
         }
         Stmt::Assign(assign) => {
@@ -573,6 +568,7 @@ fn visit_statement<V: AstScopedVisitor>(
                     module_context,
                     parent_expression: None,
                     assignment_targets,
+                    assignment_statement_location: Some(assign.range()),
                 },
                 &assign.value,
             );
@@ -584,6 +580,7 @@ fn visit_statement<V: AstScopedVisitor>(
                         module_context,
                         parent_expression: None,
                         assignment_targets,
+                        assignment_statement_location: Some(assign.range()),
                     },
                     target,
                 );
@@ -599,6 +596,7 @@ fn visit_statement<V: AstScopedVisitor>(
                     module_context,
                     parent_expression: None,
                     assignment_targets,
+                    assignment_statement_location: Some(assign.range()),
                 },
                 &assign.value,
             );
@@ -609,6 +607,7 @@ fn visit_statement<V: AstScopedVisitor>(
                     module_context,
                     parent_expression: None,
                     assignment_targets,
+                    assignment_statement_location: Some(assign.range()),
                 },
                 &assign.target,
             );
@@ -624,6 +623,7 @@ fn visit_statement<V: AstScopedVisitor>(
                         module_context,
                         parent_expression: None,
                         assignment_targets,
+                        assignment_statement_location: Some(assign.range()),
                     },
                     value,
                 )
@@ -635,6 +635,7 @@ fn visit_statement<V: AstScopedVisitor>(
                     module_context,
                     parent_expression: None,
                     assignment_targets,
+                    assignment_statement_location: Some(assign.range()),
                 },
                 &assign.target,
             );
@@ -648,6 +649,7 @@ fn visit_statement<V: AstScopedVisitor>(
                     module_context,
                     parent_expression: None,
                     assignment_targets: None,
+                    assignment_statement_location: None,
                 },
                 stmt,
             );

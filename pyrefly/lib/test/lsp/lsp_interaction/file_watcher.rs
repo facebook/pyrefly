@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
+use lsp_types::request::RegisterCapability;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -32,11 +32,9 @@ fn setup_file_watcher_test() -> LspInteraction {
     interaction.client.expect_file_watcher_register();
 
     // Acknowledge the registration
-    interaction.server.send_message(Message::Response(Response {
-        id: RequestId::from(1),
-        result: None,
-        error: None,
-    }));
+    interaction
+        .server
+        .send_response::<RegisterCapability>(RequestId::from(1), json!(null));
 
     // Open a file to start the test
     interaction.server.did_open("text_document.py");

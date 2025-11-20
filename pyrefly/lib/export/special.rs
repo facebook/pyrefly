@@ -14,6 +14,8 @@ use ruff_python_ast::name::Name;
 /// changes the sense of the binding.
 #[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq)]
 pub enum SpecialExport {
+    ClassMethod,
+    AbstractClassMethod,
     TypeAlias,
     TypeAliasType,
     TypeVar,
@@ -41,7 +43,10 @@ pub enum SpecialExport {
     BuiltinsType,
     TypingType,
     NoTypeCheck,
+    NotImplemented,
+    NotImplementedError,
     Overload,
+    Override,
     AbstractMethod,
     SelfType,
     Generic,
@@ -58,12 +63,21 @@ pub enum SpecialExport {
     BuiltinsTuple,
     TypingTuple,
     PytestNoReturn,
+    BuiltinsInt,
+    BuiltinsStr,
+    BuiltinsBytes,
+    BuiltinsBytearray,
+    BuiltinsSet,
+    BuiltinsFrozenset,
+    BuiltinsFloat,
 }
 
 impl SpecialExport {
     pub fn new(name: &Name) -> Option<Self> {
         match name.as_str() {
             "TypeAlias" => Some(Self::TypeAlias),
+            "classmethod" => Some(Self::ClassMethod),
+            "abstractclassmethod" => Some(Self::AbstractClassMethod),
             "TypeVar" => Some(Self::TypeVar),
             "ParamSpec" => Some(Self::ParamSpec),
             "TypeVarTuple" => Some(Self::TypeVarTuple),
@@ -92,7 +106,10 @@ impl SpecialExport {
             "type" => Some(Self::BuiltinsType),
             "Type" => Some(Self::TypingType),
             "no_type_check" => Some(Self::NoTypeCheck),
+            "NotImplemented" => Some(Self::NotImplemented),
+            "NotImplementedError" => Some(Self::NotImplementedError),
             "overload" => Some(Self::Overload),
+            "override" => Some(Self::Override),
             "abstractmethod" => Some(Self::AbstractMethod),
             "ConfigDict" => Some(Self::PydanticConfigDict),
             "Field" => Some(Self::PydanticField),
@@ -107,6 +124,13 @@ impl SpecialExport {
             "tuple" => Some(Self::BuiltinsTuple),
             "Tuple" => Some(Self::TypingTuple),
             "fail" | "xfail" | "skip" => Some(Self::PytestNoReturn),
+            "int" => Some(Self::BuiltinsInt),
+            "str" => Some(Self::BuiltinsStr),
+            "bytes" => Some(Self::BuiltinsBytes),
+            "bytearray" => Some(Self::BuiltinsBytearray),
+            "set" => Some(Self::BuiltinsSet),
+            "frozenset" => Some(Self::BuiltinsFrozenset),
+            "float" => Some(Self::BuiltinsFloat),
             _ => None,
         }
     }
@@ -128,6 +152,7 @@ impl SpecialExport {
             | Self::TypeAliasType
             | Self::NoTypeCheck
             | Self::Overload
+            | Self::Override
             | Self::SelfType
             | Self::Cast
             | Self::Generic
@@ -147,14 +172,24 @@ impl SpecialExport {
             | Self::BuiltinsType
             | Self::HasAttr
             | Self::GetAttr
+            | Self::ClassMethod
             | Self::BuiltinsDict
             | Self::BuiltinsList
+            | Self::NotImplemented
+            | Self::NotImplementedError
+            | Self::BuiltinsInt
+            | Self::BuiltinsStr
+            | Self::BuiltinsBytes
+            | Self::BuiltinsBytearray
+            | Self::BuiltinsSet
+            | Self::BuiltinsFrozenset
+            | Self::BuiltinsFloat
             | Self::BuiltinsTuple => {
                 matches!(m.as_str(), "builtins")
             }
             Self::Exit => matches!(m.as_str(), "sys" | "builtins"),
             Self::OsExit => matches!(m.as_str(), "os"),
-            Self::AbstractMethod => matches!(m.as_str(), "abc"),
+            Self::AbstractMethod | Self::AbstractClassMethod => matches!(m.as_str(), "abc"),
             Self::PydanticConfigDict | Self::PydanticField => matches!(m.as_str(), "pydantic"),
             Self::Callable => matches!(
                 m.as_str(),
@@ -162,5 +197,25 @@ impl SpecialExport {
             ),
             Self::PytestNoReturn => matches!(m.as_str(), "pytest"),
         }
+    }
+
+    /// Returns true if this is a builtin type that has a single positional
+    /// slot in pattern matching that binds the entire narrowed value.
+    /// These types are: bool, bytearray, bytes, dict, float, frozenset, int, list, set, str, and tuple
+    pub fn is_single_positional_slot_builtin(self) -> bool {
+        matches!(
+            self,
+            Self::Bool
+                | Self::BuiltinsBytearray
+                | Self::BuiltinsBytes
+                | Self::BuiltinsDict
+                | Self::BuiltinsFloat
+                | Self::BuiltinsFrozenset
+                | Self::BuiltinsInt
+                | Self::BuiltinsList
+                | Self::BuiltinsSet
+                | Self::BuiltinsStr
+                | Self::BuiltinsTuple
+        )
     }
 }

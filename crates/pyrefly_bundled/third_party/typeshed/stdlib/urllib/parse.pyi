@@ -56,7 +56,13 @@ class _NetlocResultMixinBase(Generic[AnyStr]):
     def hostname(self) -> AnyStr | None: ...
     @property
     def port(self) -> int | None: ...
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """
+        Represent a PEP 585 generic type
+
+        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        """
+        ...
 
 class _NetlocResultMixinStr(_NetlocResultMixinBase[str], _ResultMixinStr):
     __slots__ = ()
@@ -173,13 +179,55 @@ def urlparse(
     url: bytes | bytearray | None, scheme: bytes | bytearray | None | Literal[""] = "", allow_fragments: bool = True
 ) -> ParseResultBytes: ...
 @overload
-def urlsplit(url: str, scheme: str = "", allow_fragments: bool = True) -> SplitResult: ...
+def urlsplit(url: str, scheme: str = "", allow_fragments: bool = True) -> SplitResult:
+    """
+    Parse a URL into 5 components:
+    <scheme>://<netloc>/<path>?<query>#<fragment>
+
+    The result is a named 5-tuple with fields corresponding to the
+    above. It is either a SplitResult or SplitResultBytes object,
+    depending on the type of the url parameter.
+
+    The username, password, hostname, and port sub-components of netloc
+    can also be accessed as attributes of the returned object.
+
+    The scheme argument provides the default value of the scheme
+    component when no scheme is found in url.
+
+    If allow_fragments is False, no attempt is made to separate the
+    fragment component from the previous component, which can be either
+    path or query.
+
+    Note that % escapes are not expanded.
+    """
+    ...
 
 if sys.version_info >= (3, 11):
     @overload
     def urlsplit(
         url: bytes | None, scheme: bytes | None | Literal[""] = "", allow_fragments: bool = True
-    ) -> SplitResultBytes: ...
+    ) -> SplitResultBytes:
+        """
+        Parse a URL into 5 components:
+        <scheme>://<netloc>/<path>?<query>#<fragment>
+
+        The result is a named 5-tuple with fields corresponding to the
+        above. It is either a SplitResult or SplitResultBytes object,
+        depending on the type of the url parameter.
+
+        The username, password, hostname, and port sub-components of netloc
+        can also be accessed as attributes of the returned object.
+
+        The scheme argument provides the default value of the scheme
+        component when no scheme is found in url.
+
+        If allow_fragments is False, no attempt is made to separate the
+        fragment component from the previous component, which can be either
+        path or query.
+
+        Note that % escapes are not expanded.
+        """
+        ...
 
 else:
     @overload

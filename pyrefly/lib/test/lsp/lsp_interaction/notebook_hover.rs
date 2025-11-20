@@ -5,8 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::env;
+
 use lsp_server::RequestId;
-use lsp_server::Response;
+use lsp_types::Url;
+use lsp_types::request::HoverRequest;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -28,16 +32,15 @@ fn test_notebook_hover_basic() {
     // Hover over the "x"
     interaction.hover_cell("notebook.ipynb", "cell1", 0, 0);
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction.client.expect_response::<HoverRequest>(
+        RequestId::from(2),
+        json!({
             "contents": {
                 "kind": "markdown",
                 "value": "```python\n(variable) x: Literal[3]\n```",
             }
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -58,16 +61,19 @@ fn test_notebook_hover_import() {
     // Hover over "List"
     interaction.hover_cell("notebook.ipynb", "cell1", 0, 20);
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    let temp_dir = env::temp_dir();
+    let expected_path = temp_dir.join("pyrefly_bundled_typeshed/builtins.pyi");
+    let expected_url = Url::from_file_path(&expected_path).unwrap();
+
+    interaction.client.expect_response::<HoverRequest>(
+        RequestId::from(2),
+        json!({
             "contents": {
                 "kind": "markdown",
-                "value": "```python\n(class) List: type[list]\n```",
+                "value": format!("```python\n(class) List: type[list]\n```\n\nGo to [list]({}#L3349,7)", expected_url.as_str()),
             }
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }

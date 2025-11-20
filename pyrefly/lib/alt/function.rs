@@ -33,6 +33,8 @@ use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::call::CallStyle;
+use crate::alt::callable::CallArg;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::alt::types::decorated_function::SpecialDecorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
@@ -44,6 +46,7 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::config::error_kind::ErrorKind;
+use crate::deprecation::DeprecatedDecoration;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
@@ -218,6 +221,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[(Idx<Key>, TextRange)],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
+        module_style: ModuleStyle,
+        deprecated: Option<&DeprecatedDecoration>,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
@@ -237,6 +242,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_classmethod: is_dunder_init_subclass,
             ..Default::default()
         };
+        if let Some(decoration) = deprecated {
+            flags.is_deprecated = true;
+            flags.deprecated_message = decoration.message.clone();
+        }
         let mut found_class_property = false;
         let decorators = Box::from_iter(
             decorators
@@ -262,6 +271,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
                 .map(|(idx, range)| (self.get_idx(*idx).arc_clone_ty(), *range)),
         );
+
+        if stub_or_impl == FunctionStubOrImpl::Stub {
+            flags.lacks_implementation = true;
+        }
+        if module_style == ModuleStyle::Interface {
+            flags.defined_in_stub_file = true;
+        }
 
         // Look for a @classmethod or @staticmethod decorator and change the "self" type
         // accordingly. This is not totally correct, since it doesn't account for chaining
@@ -872,7 +888,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         // Preserve function metadata, so things like method binding still work.
-        match self.apply_decorator(decorator, decoratee, range, errors) {
+        let call_target =
+            self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
+        let arg = CallArg::ty(&decoratee, range);
+        match self.call_infer(call_target, &[arg], &[], range, errors, None, None, None) {
             Type::Callable(c) => Type::Function(Box::new(Function {
                 signature: *c,
                 metadata: metadata.clone(),
@@ -913,7 +932,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     cls.to_type()
                 }
             }
-            t => t,
+            Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => decoratee,
+            returned_ty => returned_ty,
         }
     }
 
@@ -1093,6 +1113,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut metadata = first.2.clone();
         // This does not apply to `@deprecated` - some overloads can be deprecated while others are fine.
         metadata.flags.is_deprecated = false;
+        metadata.flags.deprecated_message = None;
         // `dataclass_transform()` can be on any of the overloads.
         if metadata.flags.dataclass_transform_metadata.is_none() {
             metadata.flags.dataclass_transform_metadata = remaining

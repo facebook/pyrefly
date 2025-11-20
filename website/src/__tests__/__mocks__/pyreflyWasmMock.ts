@@ -61,8 +61,8 @@ class MockState {
      * @param column Column number
      * @returns Empty definition result
      */
-    gotoDefinition(line?: number, column?: number): Record<string, any> {
-        return {};
+    gotoDefinition(_line?: number, _column?: number): Record<string, any>[] {
+        return [];
     }
 
     /**

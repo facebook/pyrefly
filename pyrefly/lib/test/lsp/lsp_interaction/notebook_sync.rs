@@ -6,7 +6,8 @@
  */
 
 use lsp_server::RequestId;
-use lsp_server::Response;
+use lsp_types::request::DocumentDiagnosticRequest;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -19,7 +20,7 @@ fn test_notebook_publish_diagnostics() {
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
         )),
         ..Default::default()
     });
@@ -45,7 +46,7 @@ fn test_notebook_did_open() {
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
         )),
         ..Default::default()
     });
@@ -58,33 +59,122 @@ fn test_notebook_did_open() {
 
     // Cell 1 doesn't have any errors
     interaction.diagnostic_for_cell("notebook.ipynb", "cell1");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
     // Cell 3 has an error
     interaction.diagnostic_for_cell("notebook.ipynb", "cell3");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!({
-            "items": [{
-                "code": "bad-assignment",
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({
+                "items": [{
+                    "code": "bad-assignment",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                    },
+                    "message": "`Literal[1]` is not assignable to variable `z` with type `str`",
+                    "range": {
+                        "start": {"line": 1, "character": 4},
+                        "end": {"line": 1, "character": 5}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }],
+                "kind": "full"
+            }),
+        );
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_notebook_completion_parse_error() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        )),
+        ..Default::default()
+    });
+
+    interaction.open_notebook("notebook.ipynb", vec!["x: int = 1\nx.", "x: int = 1\nx."]);
+
+    interaction.diagnostic_for_cell("notebook.ipynb", "cell1");
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [
+            {
+                "code": "missing-attribute",
                 "codeDescription": {
-                    "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                    "href": "https://pyrefly.org/en/docs/error-kinds/#missing-attribute"
                 },
-                "message": "`Literal[1]` is not assignable to variable `z` with type `str`",
+                "message": "Object of class `int` has no attribute ``",
                 "range": {
-                    "start": {"line": 1, "character": 4},
-                    "end": {"line": 1, "character": 5}
+                    "end": {"character": 2, "line": 1},
+                    "start": {"character": 0, "line": 1}
                 },
                 "severity": 1,
                 "source": "Pyrefly"
-            }],
-            "kind": "full"
-        })),
-        error: None,
-    });
+            },
+            {
+                "code": "parse-error",
+                "codeDescription": {
+                    "href": "https://pyrefly.org/en/docs/error-kinds/#parse-error"
+                },
+                "message": "Parse error: Expected an identifier",
+                "range": {
+                    "end": {"character": 0, "line": 2}, // This is actually 0:0 in the "next" cell
+                    "start": {"character": 2, "line": 1}
+                },
+                "severity": 1,
+                "source": "Pyrefly"
+            }
+        ], "kind": "full"}),
+        );
+
+    interaction.diagnostic_for_cell("notebook.ipynb", "cell2");
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({"items": [
+    {
+        "code": "missing-attribute",
+        "codeDescription": {
+            "href": "https://pyrefly.org/en/docs/error-kinds/#missing-attribute"
+        },
+        "message": "Object of class `int` has no attribute ``",
+        "range": {
+            "end": {"character": 2, "line": 1},
+            "start": {"character": 0, "line": 1}
+        },
+        "severity": 1,
+        "source": "Pyrefly"
+    },
+    {
+        "code": "parse-error",
+        "codeDescription": {
+            "href": "https://pyrefly.org/en/docs/error-kinds/#parse-error"
+        },
+        "message": "Parse error: Expected an identifier",
+        "range": {
+            "end": {"character": 0, "line": 4},
+            "start": {"character": 2, "line": 1}
+        },
+        "severity": 1,
+        "source": "Pyrefly"
+    }
+        ], "kind": "full"}),
+        );
 
     interaction.shutdown();
 }
@@ -96,7 +186,7 @@ fn test_notebook_did_change_cell_contents() {
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
         )),
         ..Default::default()
     });
@@ -111,7 +201,7 @@ fn test_notebook_did_change_cell_contents() {
     interaction.change_notebook(
         "notebook.ipynb",
         2,
-        serde_json::json!({
+        json!({
             "cells": {
                 "textContent": [{
                     "document": {
@@ -128,11 +218,12 @@ fn test_notebook_did_change_cell_contents() {
 
     // Cell 3 should now have no errors
     interaction.diagnostic_for_cell("notebook.ipynb", "cell3");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.shutdown();
 }
@@ -144,7 +235,7 @@ fn test_notebook_did_change_swap_cells() {
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
         )),
         ..Default::default()
     });
@@ -158,7 +249,7 @@ fn test_notebook_did_change_swap_cells() {
     interaction.change_notebook(
         "notebook.ipynb",
         2,
-        serde_json::json!({
+        json!({
             "cells": {
                 "structure": {
                     "array": {
@@ -178,7 +269,7 @@ fn test_notebook_did_change_swap_cells() {
     interaction.change_notebook(
         "notebook.ipynb",
         3,
-        serde_json::json!({
+        json!({
             "cells": {
                 "structure": {
                     "array": {
@@ -202,34 +293,36 @@ fn test_notebook_did_change_swap_cells() {
 
     // Cell 1 should have no errors
     interaction.diagnostic_for_cell("notebook.ipynb", "cell1");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     // Cell 2 should have an error
     interaction.diagnostic_for_cell("notebook.ipynb", "cell2");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!({
-            "items": [{
-                "code": "unbound-name",
-                "codeDescription": {
-                    "href": "https://pyrefly.org/en/docs/error-kinds/#unbound-name"
-                },
-                "message": "`x` is uninitialized",
-                "range": {
-                    "start": {"line": 0, "character": 4},
-                    "end": {"line": 0, "character": 5}
-                },
-                "severity": 1,
-                "source": "Pyrefly"
-            }],
-            "kind": "full"
-        })),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({
+                "items": [{
+                    "code": "unbound-name",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unbound-name"
+                    },
+                    "message": "`x` is uninitialized",
+                    "range": {
+                        "start": {"line": 0, "character": 4},
+                        "end": {"line": 0, "character": 5}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }],
+                "kind": "full"
+            }),
+        );
 
     interaction.shutdown();
 }
@@ -241,7 +334,7 @@ fn test_notebook_did_change_delete_cell() {
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings {
         configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
         )),
         ..Default::default()
     });
@@ -258,7 +351,7 @@ fn test_notebook_did_change_delete_cell() {
     interaction.change_notebook(
         "notebook.ipynb",
         2,
-        serde_json::json!({
+        json!({
             "cells": {
                 "structure": {
                     "array": {
@@ -276,42 +369,45 @@ fn test_notebook_did_change_delete_cell() {
 
     // Cell 1 should still have no errors
     interaction.diagnostic_for_cell("notebook.ipynb", "cell1");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     // Cell 2 does not exist, should still have no errors
     interaction.diagnostic_for_cell("notebook.ipynb", "cell2");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({"items": [], "kind": "full"}),
+        );
 
     // Cell 3 should still have the error
     interaction.diagnostic_for_cell("notebook.ipynb", "cell3");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(4),
-        result: Some(serde_json::json!({
-            "items": [{
-                "code": "unknown-name",
-                "codeDescription": {
-                    "href": "https://pyrefly.org/en/docs/error-kinds/#unknown-name"
-                },
-                "message": "Could not find name `y`",
-                "range": {
-                    "start": {"line": 0, "character": 4},
-                    "end": {"line": 0, "character": 5}
-                },
-                "severity": 1,
-                "source": "Pyrefly"
-            }],
-            "kind": "full"
-        })),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(4),
+            json!({
+                "items": [{
+                    "code": "unknown-name",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unknown-name"
+                    },
+                    "message": "Could not find name `y`",
+                    "range": {
+                        "start": {"line": 0, "character": 4},
+                        "end": {"line": 0, "character": 5}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }],
+                "kind": "full"
+            }),
+        );
 
     interaction.shutdown();
 }

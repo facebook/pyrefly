@@ -33,6 +33,7 @@ use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
 use serde::Serialize;
@@ -94,10 +95,10 @@ impl SourceDatabase for PlaygroundSourceDatabase {
         Ok(false)
     }
 
-    fn get_critical_files(&self) -> SmallSet<PathBuf> {
+    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>> {
         self.module_mappings
             .values()
-            .map(|p| p.as_path().to_path_buf())
+            .map(|p| WatchPattern::file(p.as_path().to_path_buf()))
             .collect()
     }
 
@@ -440,7 +441,7 @@ impl Playground {
         let handle = self.handles.get(&self.active_filename)?;
         let transaction = self.state.transaction();
         let position = self.to_text_size(&transaction, pos)?;
-        let hover = get_hover(&transaction, handle, position)?;
+        let hover = get_hover(&transaction, handle, position, true)?;
         Some(MonacoHover {
             contents: vec![hover.contents],
         })
@@ -467,16 +468,21 @@ impl Playground {
         SemanticTokensLegends::lsp_semantic_token_legends()
     }
 
-    pub fn goto_definition(&mut self, pos: Position) -> Option<Range> {
-        let handle = self.handles.get(&self.active_filename)?;
+    pub fn goto_definition(&mut self, pos: Position) -> Vec<Range> {
+        let handle = match self.handles.get(&self.active_filename) {
+            Some(handle) => handle,
+            None => return Vec::new(),
+        };
         let transaction = self.state.transaction();
-        let position = self.to_text_size(&transaction, pos)?;
-        // TODO: Support goto multiple definitions
+        let position = match self.to_text_size(&transaction, pos) {
+            Some(position) => position,
+            None => return Vec::new(),
+        };
         transaction
             .goto_definition(handle, position)
             .into_iter()
-            .next()
             .map(|r| Range::new(r.module.display_range(r.range)))
+            .collect()
     }
 
     pub fn autocomplete(&self, pos: Position) -> Vec<AutoCompletionItem> {
@@ -487,7 +493,7 @@ impl Playground {
         let transaction = self.state.transaction();
         self.to_text_size(&transaction, pos)
             .map_or(Vec::new(), |position| {
-                transaction.completion(handle, position, Default::default())
+                transaction.completion(handle, position, Default::default(), false)
             })
             .into_map(
                 |CompletionItem {
@@ -515,7 +521,7 @@ impl Playground {
             .get_module_info(handle)
             .zip(transaction.inlay_hints(handle, Default::default()))
             .map(|(info, hints)| {
-                hints.into_map(|(position, label)| {
+                hints.into_map(|(position, label, _locations)| {
                     let position = Position::from_display_pos(info.display_pos(position));
                     InlayHint { label, position }
                 })

@@ -14,7 +14,7 @@ Pyrefly’s language server powers a complete editing experience while **fully d
 
 ### [Go to definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition)
 
-Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
+Jump to where a symbol was originally defined with a click or <kbd>F12</kbd>. If there is both a `.pyi` and `.py` file, we will jump to the `.py`.
 <video
   src="/videos/go-to-definition.mp4"
   width="720"
@@ -27,9 +27,9 @@ Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
 
 ---
 
-<!-- ### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
+### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
 
-Navigate to the underlying type of any expression.
+Navigate to the underlying type of any expression. If the expression is a type, we will navigate to the `.pyi` file if both a `.py` and `.pyi` exist.
 <video
   src="/videos/go-to-type-definition.mp4"
   width="720"
@@ -41,7 +41,36 @@ Navigate to the underlying type of any expression.
 />
 
 ---
--->
+
+### [Go to declaration](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_declaration)
+
+Navigate to where the type was defined, but stop at imports.
+<video
+  src="/videos/go-to-declaration.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Go to implementation](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_implementation)
+
+On a method, navigate to all reimplementations.
+<video
+  src="/videos/go-to-implementation.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+
 
 ### [Find references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references)
 
@@ -206,7 +235,7 @@ Rich syntax highlighting based on token type and origin.
 Inline hints for types, parameter names, and return values.
 
 :::info
-We reuse Pyright's `pyright.analysis.inlayHints.<>` settings for backwards compatibility. If you have or had Pyright, check these settings if inlay hints do not appear.
+We reuse Pyright's `python.analysis.inlayHints.<>` settings for backwards compatibility. If you have or had Pyright, check these settings if inlay hints do not appear.
 :::
 
 You can turn inlay hints on or off using the [VSCode Setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints) `editor.inlayHints.enabled`.
@@ -226,9 +255,9 @@ You can turn inlay hints on or off using the [VSCode Setting](https://code.visua
 
 ### [Notebook support](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#notebookDocument)
 
-Right now, Pyrefly does not work with Jupyter notebooks in VS Code. Please follow [this issue](https://github.com/facebook/pyrefly/issues/381) for updates.
+Pyrefly provides language services for Jupyter notebooks directly in VS Code and also in Jupyter Lab.
 
-You may use Pyrefly with Jupyter notebooks in Jupyter Lab, via the [jupyterlab-lsp](https://jupyterlab-lsp.readthedocs.io/en/latest/Installation.html) extension. Pyrefly will appear on the list of automatically-detected language servers.
+In Jupyter Lab, once you install the [jupyterlab-lsp](https://jupyterlab-lsp.readthedocs.io/en/latest/Installation.html) extension, and Pyrefly will appear on the list of automatically-detected language servers.
 
 Notebook support is experimental. Please report any bugs on our Github.
 

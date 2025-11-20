@@ -355,7 +355,9 @@ class LogRecord:
     ) -> None: ...
     def getMessage(self) -> str: ...
     # Allows setting contextual information on LogRecord objects as per the docs, see #7833
-    def __setattr__(self, name: str, value: Any, /) -> None: ...
+    def __setattr__(self, name: str, value: Any, /) -> None:
+        """Implement setattr(self, name, value)."""
+        ...
 
 _L = TypeVar("_L", bound=Logger | LoggerAdapter[Any])
 
@@ -490,7 +492,13 @@ class LoggerAdapter(Generic[_L]):
     @property
     def name(self) -> str: ...  # undocumented
     if sys.version_info >= (3, 11):
-        def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+        def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+            """
+            Represent a PEP 585 generic type
+
+            E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+            """
+            ...
 
 def getLogger(name: str | None = None) -> Logger: ...
 def getLoggerClass() -> type[Logger]: ...
@@ -608,7 +616,13 @@ class StreamHandler(Handler, Generic[_StreamT]):
     def __init__(self: StreamHandler[_StreamT], stream: _StreamT) -> None: ...  # pyright: ignore[reportInvalidTypeVarUse]  #11780
     def setStream(self, stream: _StreamT) -> _StreamT | None: ...
     if sys.version_info >= (3, 11):
-        def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+        def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+            """
+            Represent a PEP 585 generic type
+
+            E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+            """
+            ...
 
 class FileHandler(StreamHandler[TextIOWrapper]):
     baseFilename: str  # undocumented

@@ -508,11 +508,30 @@ mod tests {
                                 &[
                                 "implicit_package/test/deeply/nested/package/file.py",
                                 ],
-                            )
+                            ),
                             ],
-                            &[],
+                            &["//external:package"],
                             "implicit_package/test/BUCK",
                             &[]
+                    ),
+                    Target::from_string("//external:package".to_owned()) => TargetManifest::lib(
+                        &[
+                        (
+                            "external_package.main",
+                            &[
+                            "/path/to/another/repository/package/external_package/main.py",
+                            ]
+                        ),
+                        (
+                            "external_package.non_python_file",
+                            &[
+                            "/path/to/another/repository/package/external_package/non_python_file.thrift",
+                            ],
+                        ),
+                        ],
+                        &[],
+                        "/path/to/another/repository/package/BUCK",
+                        &[]
                     ),
                 },
                 PathBuf::from("/path/to/this/repository"),
@@ -709,9 +728,23 @@ mod tests {
           "implicit_package.deeply.nested.package.file": [
               "implicit_package/test/deeply/nested/package/file.py"
           ]
-      },
-      "deps": [],
+      }, 
+      "deps": ["//external:package"],
       "buildfile_path": "implicit_package/test/BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//external:package": {
+      "srcs": {
+          "external_package.main": [
+              "/path/to/another/repository/package/external_package/main.py"
+          ],
+          "external_package.non_python_file": [
+              "/path/to/another/repository/package/external_package/non_python_file.thrift"
+          ]
+      }, 
+      "deps": [],
+      "buildfile_path": "/path/to/another/repository/package/BUCK",
       "python_version": "3.12",
       "python_platform": "linux"
     }
@@ -865,9 +898,9 @@ mod tests {
                     "implicit_package.deeply.nested.package.file", &[
                         "implicit_package/test/deeply/nested/package/file.py",
                     ],
-                )
+                ),
                 ],
-                &[],
+                &["//external:package"],
                 "implicit_package/test/BUCK",
                 &[
                 ("implicit_package", &[
@@ -888,6 +921,27 @@ mod tests {
                 ),
                 ("implicit_package.deeply", &[
                         "implicit_package/test/deeply",
+                    ],
+                ),
+                ],
+            ),
+            Target::from_string("//external:package".to_owned()) => PythonLibraryManifest::new(
+                &[
+                ("external_package.main", &[
+                 "/path/to/another/repository/package/external_package/main.py"
+                    ]
+                ),
+                (
+                    "external_package.non_python_file", &[
+                        "/path/to/another/repository/package/external_package/non_python_file.thrift",
+                    ],
+                ),
+                ],
+                &[],
+                "/path/to/another/repository/package/BUCK",
+                &[
+                ("external_package", &[
+                 "/path/to/another/repository/package/external_package",
                     ],
                 ),
                 ],
@@ -992,6 +1046,11 @@ mod tests {
                     "implicit_package/test/deeply/nested/package",
                 ),
             },
+            "//external:package" => smallmap! {
+                "external_package" => Err(
+                    "/path/to/another/repository/package/external_package",
+                ),
+            },
         }
         .into_iter()
         .map(|(t, m)| {
@@ -1015,7 +1074,7 @@ mod tests {
         })
         .collect();
 
-        assert_eq!(result.0, expected_start_packages,);
+        assert_eq!(result.0, expected_start_packages);
 
         let expected_ancestor_synthesized_packages = smallmap! {
             "//colorama:py" => smallmap! {
@@ -1062,6 +1121,11 @@ mod tests {
                     "implicit_package/test",
                 ],
             },
+            "//external:package" => smallmap!{
+                "external_package" => vec1![
+                    "/path/to/another/repository/package/external_package",
+                ],
+            }
         }
         .into_iter()
         .map(|(t, m)| {
@@ -1079,6 +1143,6 @@ mod tests {
         })
         .collect();
 
-        assert_eq!(result.1, expected_ancestor_synthesized_packages,);
+        assert_eq!(result.1, expected_ancestor_synthesized_packages);
     }
 }

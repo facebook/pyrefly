@@ -5,11 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Notification;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
+use lsp_types::notification::DidChangeTextDocument;
+use lsp_types::request::DocumentDiagnosticRequest;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -27,50 +27,45 @@ fn test_text_document_did_change() {
     let filepath = root.path().join("text_document.py");
     interaction
         .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&filepath).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 2
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&filepath).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 6, "character": 0},
+                    "end": {"line": 7, "character": 0}
                 },
-                "contentChanges": [{
-                    "range": {
-                        "start": {"line": 6, "character": 0},
-                        "end": {"line": 7, "character": 0}
-                    },
-                    "text": format!("{}\n", "rint(\"another change\")")
-                }],
-            }),
+                "text": format!("{}\n", "rint(\"another change\")")
+            }],
         }));
 
     interaction
         .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&filepath).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 3
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&filepath).unwrap().to_string(),
+                "languageId": "python",
+                "version": 3
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 6, "character": 0},
+                    "end": {"line": 6, "character": 0}
                 },
-                "contentChanges": [{
-                    "range": {
-                        "start": {"line": 6, "character": 0},
-                        "end": {"line": 6, "character": 0}
-                    },
-                    "text": "p"
-                }],
-            }),
+                "text": "p"
+            }],
         }));
 
     interaction.server.diagnostic("text_document.py");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.shutdown();
 }
@@ -87,52 +82,47 @@ fn test_text_document_did_change_unicode() {
     let utf_filepath = root.path().join("utf.py");
     interaction
         .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&utf_filepath).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 2
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&utf_filepath).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": { "line": 7, "character": 8 },
+                    "end": { "line": 8, "character": 2 }
                 },
-                "contentChanges": [{
-                    "range": {
-                        "start": { "line": 7, "character": 8 },
-                        "end": { "line": 8, "character": 2 }
-                    },
-                    "rangeLength": 3,
-                    "text": ""
-                }],
-            }),
+                "rangeLength": 3,
+                "text": ""
+            }],
         }));
 
     interaction
         .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: serde_json::json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&utf_filepath).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 3
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&utf_filepath).unwrap().to_string(),
+                "languageId": "python",
+                "version": 3
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": { "line": 7, "character": 8 },
+                    "end": { "line": 7, "character": 8 }
                 },
-                "contentChanges": [{
-                    "range": {
-                        "start": { "line": 7, "character": 8 },
-                        "end": { "line": 7, "character": 8 }
-                    },
-                    "rangeLength": 0,
-                    "text": format!("\n{}", "print(\"")
-                }],
-            }),
+                "rangeLength": 0,
+                "text": format!("\n{}", "print(\"")
+            }],
         }));
 
     interaction.server.diagnostic("utf.py");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({"items": [], "kind": "full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items": [], "kind": "full"}),
+        );
 
     interaction.shutdown();
 }

@@ -409,6 +409,10 @@ pub struct ConfigFile {
          )]
     pub project_excludes: Globs,
 
+    /// Should we filter out the required excludes or filter things in your site package path?
+    #[serde(default, skip_serializing_if = "crate::util::skip_default_false")]
+    pub disable_project_excludes_heuristics: bool,
+
     #[serde(skip)]
     pub search_path_from_args: Vec<PathBuf>,
 
@@ -525,6 +529,7 @@ impl Default for ConfigFile {
             search_path_from_args: Vec::new(),
             search_path_from_file: Vec::new(),
             disable_search_path_heuristics: false,
+            disable_project_excludes_heuristics: false,
             import_root: None,
             fallback_search_path: Default::default(),
             python_environment: Default::default(),
@@ -570,7 +575,7 @@ impl ConfigFile {
         excludes.append(
             &self
                 .site_package_path()
-                .filter(|p| self.import_root.as_ref().is_none_or(|r| !r.starts_with(p)))
+                .filter(|p| !self.search_path().any(|r| r.starts_with(p)))
                 .filter_map(|p| Glob::new(p.to_string_lossy().to_string()).ok())
                 .collect::<Vec<_>>(),
         );
@@ -583,7 +588,10 @@ impl ConfigFile {
     pub fn get_filtered_globs(&self, custom_excludes: Option<Globs>) -> FilteredGlobs {
         let project_excludes = match custom_excludes {
             None => self.project_excludes.clone(),
-            Some(custom_excludes) => self.get_full_project_excludes(custom_excludes),
+            Some(custom_excludes) if !self.disable_project_excludes_heuristics => {
+                self.get_full_project_excludes(custom_excludes)
+            }
+            Some(custom_excludes) => custom_excludes,
         };
         let root = if self.use_ignore_files {
             self.import_root.as_deref()
@@ -857,9 +865,7 @@ impl ConfigFile {
     pub fn get_paths_to_watch(&self) -> Vec<WatchPattern<'_>> {
         let mut result = Vec::new();
         if let Some(source_db) = &self.source_db {
-            for buildfile in source_db.get_critical_files() {
-                result.push(WatchPattern::file(buildfile));
-            }
+            result.extend(source_db.get_paths_to_watch())
         }
         let config_root = self.source.root();
         if let Some(config_root) = config_root {
@@ -916,10 +922,12 @@ impl ConfigFile {
             }
         }
 
-        let project_excludes = mem::take(&mut self.project_excludes);
-        // do this after overwriting CLI values so that we can preserve the required
-        // project excludes and add the site package path.
-        self.project_excludes = self.get_full_project_excludes(project_excludes);
+        if !self.disable_project_excludes_heuristics {
+            let project_excludes = mem::take(&mut self.project_excludes);
+            // do this after overwriting CLI values so that we can preserve the required
+            // project excludes and add the site package path.
+            self.project_excludes = self.get_full_project_excludes(project_excludes);
+        }
 
         if self.root.errors.is_none() {
             self.root.errors = Some(Default::default());
@@ -1217,6 +1225,7 @@ mod tests {
                 search_path_from_args: Vec::new(),
                 search_path_from_file: vec![PathBuf::from("../..")],
                 disable_search_path_heuristics: false,
+                disable_project_excludes_heuristics: false,
                 import_root: None,
                 build_system: Default::default(),
                 use_ignore_files: true,
@@ -1486,6 +1495,7 @@ mod tests {
             search_path_from_args: Vec::new(),
             search_path_from_file: vec![PathBuf::from("../..")],
             disable_search_path_heuristics: false,
+            disable_project_excludes_heuristics: false,
             import_root: None,
             use_ignore_files: true,
             fallback_search_path: Default::default(),
@@ -1551,6 +1561,7 @@ mod tests {
             search_path_from_args: Vec::new(),
             search_path_from_file: search_path,
             disable_search_path_heuristics: false,
+            disable_project_excludes_heuristics: false,
             use_ignore_files: true,
             import_root: None,
             fallback_search_path: Default::default(),
@@ -1800,6 +1811,7 @@ mod tests {
         let site_package_path = vec![
             "venv/site_packages".to_owned(),
             "system/site_packages".to_owned(),
+            "my_search_path".to_owned(),
         ];
         config.interpreters.skip_interpreter_query = true;
         config.python_environment.site_package_path = Some(
@@ -1808,9 +1820,15 @@ mod tests {
                 .map(PathBuf::from)
                 .collect::<Vec<_>>(),
         );
+        config.search_path_from_file = vec![PathBuf::from("my_search_path")];
         config.project_excludes = ConfigFile::required_project_excludes();
 
         config.configure();
+
+        let mut expected_site_package_path = site_package_path;
+        // get rid of "my_search_path" in site package path, since it's going to be removed
+        // when we add site package path to project excludes
+        expected_site_package_path.pop();
 
         assert_eq!(
             config.get_filtered_globs(None),
@@ -1830,7 +1848,7 @@ mod tests {
                         "**/venv/**".to_owned(),
                         "**/.[!/.]*/**".to_owned(),
                     ])
-                    .chain(site_package_path.clone())
+                    .chain(expected_site_package_path.clone())
                     .collect::<Vec<_>>()
                 )
                 .unwrap(),
@@ -1852,7 +1870,7 @@ mod tests {
                             "**/venv/**".to_owned(),
                             "**/.[!/.]*/**".to_owned(),
                         ])
-                        .chain(site_package_path)
+                        .chain(expected_site_package_path)
                         .collect::<Vec<_>>()
                 )
                 .unwrap(),
@@ -2048,5 +2066,37 @@ mod tests {
                 root.to_path_buf(),
             ],
         );
+    }
+
+    #[test]
+    fn test_disable_excludes_heuristics() {
+        let mut disabled_config = ConfigFile {
+            disable_project_excludes_heuristics: true,
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            python_environment: PythonEnvironment {
+                site_package_path: Some(vec![PathBuf::from("spp")]),
+                ..Default::default()
+            },
+            project_excludes: Globs::new(vec!["my_project_excludes".to_owned()]).unwrap(),
+            ..Default::default()
+        };
+        let mut enabled_config = disabled_config.clone();
+        enabled_config.disable_project_excludes_heuristics = false;
+
+        disabled_config.configure();
+        enabled_config.configure();
+
+        assert_eq!(
+            &disabled_config.project_excludes,
+            &Globs::new(vec!["my_project_excludes".to_owned()]).unwrap(),
+        );
+        let mut full_project_excludes = Globs::new(vec!["my_project_excludes".to_owned()]).unwrap();
+
+        full_project_excludes.append(ConfigFile::required_project_excludes().globs());
+        full_project_excludes.append(&[Glob::new("spp".to_owned()).unwrap()]);
+        assert_eq!(&enabled_config.project_excludes, &full_project_excludes);
     }
 }

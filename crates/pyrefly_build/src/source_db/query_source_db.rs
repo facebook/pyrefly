@@ -17,6 +17,7 @@ use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
+use pyrefly_util::watch_pattern::WatchPattern;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -298,16 +299,50 @@ impl SourceDatabase for QuerySourceDatabase {
         Ok(self.update_with_target_manifest(raw_db))
     }
 
-    fn get_critical_files(&self) -> SmallSet<PathBuf> {
+    fn get_paths_to_watch<'a>(&'a self) -> SmallSet<WatchPattern<'a>> {
         let read = self.inner.read();
-        read.db
-            .values()
-            .map(|m| m.buildfile_path.to_path_buf())
-            .chain(
-                read.db
-                    .values()
-                    .flat_map(|m| m.srcs.values().flatten().map(|p| p.to_path_buf())),
-            )
+        fn get_pattern(path: &Path) -> Option<String> {
+            if let Some(ext) = path.extension() {
+                Some(format!("**/*.{}", ext.to_str()?))
+            } else {
+                // this isn't a file with an extension, but we should probably
+                // still try to watch it.
+                Some(format!("**/{}", path.file_name()?.to_str()?))
+            }
+        }
+        let mut patterns: SmallMap<Option<&Path>, SmallSet<_>> = SmallMap::new();
+        for manifest in read.db.values() {
+            let Some(buildfile_pattern) = get_pattern(&manifest.buildfile_path) else {
+                continue;
+            };
+            let buildfile_root = if manifest.buildfile_path.starts_with(&self.cwd) {
+                None
+            } else if let Some(path) = manifest.buildfile_path.parent() {
+                Some(path)
+            } else {
+                continue;
+            };
+            patterns
+                .entry(buildfile_root)
+                .or_default()
+                .insert(buildfile_pattern);
+            for path in manifest.srcs.values().flatten() {
+                let Some(file_pattern) = get_pattern(path) else {
+                    continue;
+                };
+                patterns
+                    .entry(buildfile_root)
+                    .or_default()
+                    .insert(file_pattern);
+            }
+        }
+        patterns
+            .into_iter()
+            .flat_map(|(r, ps)| ps.into_iter().map(move |p| (r, p)))
+            .map(|(r, p)| match r {
+                None => WatchPattern::root(&self.cwd, p),
+                Some(buildfile_root) => WatchPattern::owned_root(buildfile_root.to_owned(), p),
+            })
             .collect()
     }
 
@@ -351,6 +386,7 @@ mod tests {
     impl QuerySourceDatabase {
         fn from_target_manifest_db(
             raw_db: TargetManifestDatabase,
+            root: PathBuf,
             files: &SmallSet<PathBuf>,
         ) -> Self {
             let new = Self {
@@ -361,7 +397,7 @@ mod tests {
                         .map(|p| Include::path(ModulePathBuf::new(p.to_path_buf())))
                         .collect(),
                 ),
-                cwd: PathBuf::new(),
+                cwd: root,
                 querier: Arc::new(DummyQuerier {}),
                 cached_modules: ModulePathCache::new(),
             };
@@ -379,7 +415,7 @@ mod tests {
         };
 
         (
-            QuerySourceDatabase::from_target_manifest_db(raw_db, &files),
+            QuerySourceDatabase::from_target_manifest_db(raw_db, root.clone(), &files),
             root,
         )
     }
@@ -413,6 +449,10 @@ mod tests {
                 Target::from_string("//implicit_package/test:lib".to_owned()),
             ModulePathBuf::new(root.join("implicit_package/test/deeply/nested/package/file.py")) =>
                 Target::from_string("//implicit_package/test:lib".to_owned()),
+            ModulePathBuf::new(PathBuf::from("/path/to/another/repository/package/external_package/main.py")) =>
+                Target::from_string("//external:package".to_owned()),
+            ModulePathBuf::new(PathBuf::from("/path/to/another/repository/package/external_package/non_python_file.thrift")) =>
+                Target::from_string("//external:package".to_owned()),
         };
 
         assert_eq!(expected, path_lookup);
@@ -455,6 +495,9 @@ mod tests {
             ModulePathBuf::new(root.join("implicit_package/test/deeply")) => smallset! {
                 Target::from_string("//implicit_package/test:lib".to_owned()),
             },
+            ModulePathBuf::new(PathBuf::from("/path/to/another/repository/package/external_package")) => smallset! {
+                Target::from_string("//external:package".to_owned()),
+            }
         };
         assert_eq!(path_lookup, expected);
     }
@@ -743,5 +786,20 @@ mod tests {
             },
         };
         assert_eq!(inner.package_lookup, expected_package_lookup);
+    }
+
+    #[test]
+    fn test_get_paths_to_watch() {
+        let (db, root) = get_db();
+
+        let expected = smallset! {
+            WatchPattern::root(&root, "**/*.py".to_owned()),
+            WatchPattern::root(&root, "**/*.pyi".to_owned()),
+            WatchPattern::root(&root, "**/BUCK".to_owned()),
+            WatchPattern::owned_root(PathBuf::from("/path/to/another/repository/package"), "**/BUCK".to_owned()),
+            WatchPattern::owned_root(PathBuf::from("/path/to/another/repository/package"), "**/*.thrift".to_owned()),
+            WatchPattern::owned_root(PathBuf::from("/path/to/another/repository/package"), "**/*.py".to_owned()),
+        };
+        assert_eq!(db.get_paths_to_watch(), expected);
     }
 }

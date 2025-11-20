@@ -22,7 +22,7 @@ fn test_report_factory(
     move |state: &State, handle: &Handle, position: TextSize| -> String {
         let results = state
             .transaction()
-            .find_definition(handle, position, &FindPreference::default())
+            .find_definition(handle, position, FindPreference::default())
             .into_iter()
             .filter_map(|t| {
                 let docstring_range = t.docstring_range?;

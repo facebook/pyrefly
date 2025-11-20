@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use crate::environment::finder::walk_interpreter;
 
-const SEARCH_DEPTH: usize = 2;
+const SEARCH_DEPTH: usize = 1;
 pub const ENV_VAR: &str = "CONDA_PREFIX";
 
 pub fn find(env_path: &Path) -> Option<PathBuf> {
@@ -62,7 +62,8 @@ pub fn get_env_path(env_name: &str) -> anyhow::Result<PathBuf> {
 }
 
 pub fn find_interpreter_from_env(env_name: &str) -> anyhow::Result<PathBuf> {
-    get_env_path(env_name).and_then(|p| {
+    get_env_path(env_name).and_then(|mut p| {
+        p.push("bin");
         find(&p).ok_or_else(|| {
             anyhow::anyhow!(
                 "Could not find interpreter for environment named `{env_name}` at `{}`",
