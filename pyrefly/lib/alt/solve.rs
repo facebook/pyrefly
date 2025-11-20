@@ -43,6 +43,7 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
@@ -62,6 +63,7 @@ use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingDecoratedFunction;
+use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BindingTParams;
@@ -97,6 +99,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
+use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::solver::solver::SubsetError;
@@ -285,7 +288,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_new_type,
             pydantic_config_dict,
             django_primary_key_field,
-            deprecated,
         } = binding;
         let metadata = match &self.get_idx(*k).0 {
             None => ClassMetadata::recursive(),
@@ -297,7 +299,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 *is_new_type,
                 pydantic_config_dict,
                 django_primary_key_field.as_ref(),
-                deprecated.as_ref(),
                 errors,
             ),
         };
@@ -1709,7 +1710,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 || field_name == &dunder::INIT_SUBCLASS
                 || field_name == &dunder::HASH
                 || field_name == &dunder::CALL
-                || Self::is_mangled_attr(field_name)
+                || Ast::is_mangled_attr(field_name)
             {
                 continue;
             }
@@ -2570,6 +2571,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             }
+            Binding::ClassBodyUnknownName(class_key, name) => {
+                // We're specifically looking for attributes that are inherited from the parent class
+                if let Some(cls) = &self.get_idx(*class_key).as_ref().0
+                    && !self.get_class_field_map(cls).contains_key(&name.id)
+                {
+                    // If the attribute lookup fails here, we'll emit an `unknown-name` error, since this
+                    // is a deferred lookup that can't be calculated at the bindings step
+                    let error_swallower = self.error_swallower();
+                    let attr_ty = self.attr_infer_for_type(
+                        &Type::ClassDef(cls.clone()),
+                        &name.id,
+                        name.range(),
+                        &error_swallower,
+                        None,
+                    );
+                    if attr_ty.is_error() {
+                        self.error(
+                            errors,
+                            name.range,
+                            ErrorInfo::Kind(ErrorKind::UnknownName),
+                            format!("Could not find name `{name}`"),
+                        )
+                    } else {
+                        attr_ty
+                    }
+                } else {
+                    self.error(
+                        errors,
+                        name.range,
+                        ErrorInfo::Kind(ErrorKind::UnknownName),
+                        format!("Could not find name `{name}`"),
+                    )
+                }
+            }
             Binding::CompletedPartialType(unpinned_idx, first_use) => {
                 // Calculate the first use for its side-effects (it might pin `Var`s)
                 match first_use {
@@ -2898,7 +2933,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if *stub_or_impl != FunctionStubOrImpl::Stub
                             && !decorators.iter().any(|k| {
                                 let decorator = self.get_idx(*k);
-                                match decorator.ty().callee_kind() {
+                                match decorator.ty.callee_kind() {
                                     Some(CalleeKind::Function(FunctionKind::AbstractMethod)) => {
                                         true
                                     }
@@ -3420,7 +3455,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ta
                 }
             }
-            Binding::Decorator(expr) => self.expr_infer(expr, errors),
             Binding::LambdaParameter(var) => var.to_type(),
             Binding::FunctionParameter(param) => {
                 let finalize = |target: &AnnotationTarget, ty| match target {
@@ -3474,6 +3508,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn solve_decorator(&self, x: &BindingDecorator, errors: &ErrorCollector) -> Arc<Decorator> {
+        let mut ty = self.expr_infer(&x.expr, errors);
+        self.pin_all_placeholder_types(&mut ty);
+        self.expand_vars_mut(&mut ty);
+        let deprecation = parse_deprecation(&x.expr);
+        Arc::new(Decorator { ty, deprecation })
+    }
+
     pub fn solve_decorated_function(
         &self,
         x: &BindingDecoratedFunction,
@@ -3496,7 +3538,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &x.decorators,
             &x.legacy_tparams,
             x.module_style,
-            x.deprecated.as_ref(),
             errors,
         )
     }

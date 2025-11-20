@@ -113,6 +113,6 @@ pub trait BundledStub {
             })?;
         Ok(())
     }
-    fn get_path_name(&self) -> &'static str;
+    fn get_path_name(&self) -> String;
     fn load_map(&self) -> impl Iterator<Item = (&PathBuf, &Arc<String>)>;
 }

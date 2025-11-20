@@ -30,7 +30,6 @@ use crate::module::bundled::BundledStub;
 pub struct BundledTypeshedStdlib {
     pub find: SmallMap<ModuleName, PathBuf>,
     pub load: SmallMap<PathBuf, Arc<String>>,
-    pub temp_dir: &'static str,
 }
 
 impl BundledStub for BundledTypeshedStdlib {
@@ -39,7 +38,6 @@ impl BundledStub for BundledTypeshedStdlib {
         let mut res = Self {
             find: SmallMap::new(),
             load: SmallMap::new(),
-            temp_dir: "pyrefly_bundled_typeshed",
         };
         for (relative_path, contents) in contents {
             let module_name = ModuleName::from_relative_path(&relative_path)?;
@@ -67,8 +65,11 @@ impl BundledStub for BundledTypeshedStdlib {
         self.find.keys().copied()
     }
 
-    fn get_path_name(&self) -> &'static str {
-        self.temp_dir
+    fn get_path_name(&self) -> String {
+        format!(
+            "pyrefly_bundled_typeshed_{}",
+            faster_hex::hex_string(&pyrefly_bundled::BUNDLED_TYPESHED_DIGEST[0..6])
+        )
     }
 
     fn config() -> ArcId<ConfigFile> {

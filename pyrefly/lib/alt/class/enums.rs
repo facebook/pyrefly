@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::annotation::Annotation;
@@ -16,6 +17,8 @@ use pyrefly_types::class::ClassType;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::read_only::ReadOnlyReason;
 use pyrefly_types::tuple::Tuple;
+use ruff_python_ast::helpers::is_dunder;
+use ruff_python_ast::helpers::is_sunder;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
@@ -58,7 +61,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> bool {
         // Names starting but not ending with __ are private
         // Names starting and ending with _ are reserved by the enum
-        if Self::is_mangled_attr(name) || name.starts_with("_") && name.ends_with("_") {
+        if Ast::is_mangled_attr(name) || (is_sunder(name.as_str()) || is_dunder(name.as_str())) {
             return false;
         }
         // Enum members must be initialized on the class

@@ -22,11 +22,11 @@ fn test_text_document_did_change() {
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("text_document.py");
+    interaction.client.did_open("text_document.py");
 
     let filepath = root.path().join("text_document.py");
     interaction
-        .server
+        .client
         .send_notification::<DidChangeTextDocument>(json!({
             "textDocument": {
                 "uri": Url::from_file_path(&filepath).unwrap().to_string(),
@@ -43,7 +43,7 @@ fn test_text_document_did_change() {
         }));
 
     interaction
-        .server
+        .client
         .send_notification::<DidChangeTextDocument>(json!({
             "textDocument": {
                 "uri": Url::from_file_path(&filepath).unwrap().to_string(),
@@ -59,7 +59,7 @@ fn test_text_document_did_change() {
             }],
         }));
 
-    interaction.server.diagnostic("text_document.py");
+    interaction.client.diagnostic("text_document.py");
     interaction
         .client
         .expect_response::<DocumentDiagnosticRequest>(
@@ -77,11 +77,11 @@ fn test_text_document_did_change_unicode() {
     interaction.set_root(root.path().to_path_buf());
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("utf.py");
+    interaction.client.did_open("utf.py");
 
     let utf_filepath = root.path().join("utf.py");
     interaction
-        .server
+        .client
         .send_notification::<DidChangeTextDocument>(json!({
             "textDocument": {
                 "uri": Url::from_file_path(&utf_filepath).unwrap().to_string(),
@@ -99,7 +99,7 @@ fn test_text_document_did_change_unicode() {
         }));
 
     interaction
-        .server
+        .client
         .send_notification::<DidChangeTextDocument>(json!({
             "textDocument": {
                 "uri": Url::from_file_path(&utf_filepath).unwrap().to_string(),
@@ -116,7 +116,7 @@ fn test_text_document_did_change_unicode() {
             }],
         }));
 
-    interaction.server.diagnostic("utf.py");
+    interaction.client.diagnostic("utf.py");
     interaction
         .client
         .expect_response::<DocumentDiagnosticRequest>(

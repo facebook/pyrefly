@@ -13,6 +13,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::Deprecation;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
@@ -33,8 +34,7 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
-use crate::deprecation::DeprecatedDecoration;
-use crate::deprecation::parse_deprecated_decorator;
+use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::types::globals::ImplicitGlobal;
 
@@ -138,7 +138,7 @@ pub struct Definitions {
     /// files.
     pub implicitly_imported_submodules: SmallSet<Name>,
     /// Deprecated names that are defined in this module.
-    pub deprecated: SmallMap<Name, DeprecatedDecoration>,
+    pub deprecated: SmallMap<Name, Deprecation>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
 }
@@ -432,7 +432,9 @@ impl<'a> DefinitionsBuilder<'a> {
                 decorator_list,
                 ..
             }) => {
-                if let Some(decoration) = decorator_list.iter().find_map(parse_deprecated_decorator)
+                if let Some(decoration) = decorator_list
+                    .iter()
+                    .find_map(|d| parse_deprecation(&d.expression))
                 {
                     self.inner.deprecated.insert(name.id.clone(), decoration);
                 }
@@ -568,7 +570,7 @@ impl<'a> DefinitionsBuilder<'a> {
                 for d in decorator_list {
                     is_overload = is_overload || is_overload_decorator(d);
                     if deprecated_decoration.is_none() {
-                        deprecated_decoration = parse_deprecated_decorator(d);
+                        deprecated_decoration = parse_deprecation(&d.expression);
                     }
                 }
                 // If the function is not an overload and decorated with

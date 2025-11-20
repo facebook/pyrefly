@@ -21,17 +21,19 @@ use pyrefly_python::dunder;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_util::display::commas_iter;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
+use vec1::Vec1;
+use vec1::vec1;
 
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::equality::TypeEq;
 use crate::keywords::DataclassTransformKeywords;
+use crate::type_output::TypeOutput;
 use crate::types::Type;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -43,7 +45,15 @@ pub struct Callable {
 
 impl Display for Callable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.fmt_with_type(f, &|t| t)
+        use crate::display::TypeDisplayContext;
+        use crate::type_output::DisplayOutput;
+
+        let ctx = TypeDisplayContext::new(&[]);
+        let mut output = DisplayOutput::new(&ctx, f);
+        self.fmt_with_type(&mut output, &|t, o| {
+            // Use the type's own Display impl to get simple names
+            o.write_str(&format!("{}", t))
+        })
     }
 }
 
@@ -109,69 +119,66 @@ impl ParamList {
         }
     }
 
-    pub fn fmt_with_type<'a, D: Display + 'a>(
-        &'a self,
-        f: &mut fmt::Formatter<'_>,
-        wrap: &'a impl Fn(&'a Type) -> D,
+    pub fn fmt_with_type<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
-        // Keep track of whether we encounter a posonly parameter with a name, so we can emit the
-        // `/` posonly marker. For conciseness, we don't want to emit this marker for
-        // `typing.Callable` and other situations where we only have anonymous posonly parameters.
         let mut named_posonly = false;
         let mut kwonly = false;
         for (i, param) in self.0.iter().enumerate() {
             if i > 0 {
-                write!(f, ", ")?;
+                output.write_str(", ")?;
             }
             if matches!(param, Param::PosOnly(Some(_), _, _)) {
                 named_posonly = true;
             } else if named_posonly {
                 named_posonly = false;
-                write!(f, "/, ")?;
+                output.write_str("/, ")?;
             }
             if !kwonly && matches!(param, Param::KwOnly(..)) {
                 kwonly = true;
-                write!(f, "*, ")?;
+                output.write_str("*, ")?;
             }
-            param.fmt_with_type(f, wrap)?;
+            param.fmt_with_type(output, write_type)?;
         }
         if named_posonly {
-            write!(f, ", /")?;
+            output.write_str(", /")?;
         }
         Ok(())
     }
 
     /// Format parameters each parameter on a new line
-    pub fn fmt_with_type_with_newlines<'a, D: Display + 'a>(
-        &'a self,
-        f: &mut fmt::Formatter<'_>,
-        wrap: &'a impl Fn(&'a Type) -> D,
+    pub fn fmt_with_type_with_newlines<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         let mut named_posonly = false;
         let mut kwonly = false;
 
         for (i, param) in self.0.iter().enumerate() {
             if i > 0 {
-                write!(f, ",\n    ")?;
+                output.write_str(",\n    ")?;
             }
 
             if matches!(param, Param::PosOnly(Some(_), _, _)) {
                 named_posonly = true;
             } else if named_posonly {
                 named_posonly = false;
-                write!(f, "/,\n    ")?;
+                output.write_str("/,\n    ")?;
             }
 
             if !kwonly && matches!(param, Param::KwOnly(..)) {
                 kwonly = true;
-                write!(f, "*,\n    ")?;
+                output.write_str("*,\n    ")?;
             }
 
-            param.fmt_with_type(f, wrap)?;
+            param.fmt_with_type(output, write_type)?;
         }
 
         if named_posonly {
-            write!(f, ",\n    /")?;
+            output.write_str(",\n    /")?;
         }
 
         Ok(())
@@ -319,6 +326,28 @@ impl FuncMetadata {
     }
 }
 
+/// Metadata extracted from a `@deprecated` decorator.
+#[derive(
+    Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash
+)]
+pub struct Deprecation {
+    pub message: Option<String>,
+}
+
+impl Deprecation {
+    pub fn new(message: Option<String>) -> Self {
+        Self { message }
+    }
+
+    /// Format a base description using deprecation metadata.
+    pub fn as_error_message(&self, base: String) -> Vec1<String> {
+        match self.message.as_ref().map(|s| s.trim()) {
+            Some(msg) if !msg.is_empty() => vec1![base, msg.to_owned()],
+            _ => vec1![base],
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct FuncFlags {
@@ -326,9 +355,7 @@ pub struct FuncFlags {
     pub is_staticmethod: bool,
     pub is_classmethod: bool,
     /// A function decorated with `@deprecated`
-    pub is_deprecated: bool,
-    /// Optional explanation attached to `@deprecated`
-    pub deprecated_message: Option<String>,
+    pub deprecation: Option<Deprecation>,
     /// A function decorated with `@property`
     pub is_property_getter: bool,
     /// A function decorated with `functools.cached_property` or equivalent.
@@ -471,64 +498,81 @@ pub enum FunctionKind {
 }
 
 impl Callable {
-    pub fn fmt_with_type<'a, D: Display + 'a>(
-        &'a self,
-        f: &mut fmt::Formatter<'_>,
-        wrap: &'a impl Fn(&'a Type) -> D,
+    pub fn fmt_with_type<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         match &self.params {
             Params::List(params) => {
-                write!(f, "(")?;
-                params.fmt_with_type(f, wrap)?;
-                write!(f, ") -> {}", wrap(&self.ret))
+                output.write_str("(")?;
+                params.fmt_with_type(output, write_type)?;
+                output.write_str(") -> ")?;
+                write_type(&self.ret, output)
             }
-            Params::Ellipsis => write!(f, "(...) -> {}", wrap(&self.ret)),
-            Params::Materialization => write!(f, "(Materialization) -> {}", wrap(&self.ret)),
+            Params::Ellipsis => {
+                output.write_str("(...) -> ")?;
+                write_type(&self.ret, output)
+            }
+            Params::Materialization => {
+                output.write_str("(Materialization) -> ")?;
+                write_type(&self.ret, output)
+            }
             Params::ParamSpec(args, pspec) => {
-                write!(f, "({}", commas_iter(|| args.iter().map(wrap)))?;
+                output.write_str("(")?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        output.write_str(", ")?;
+                    }
+                    write_type(arg, output)?;
+                }
                 match pspec {
                     Type::ParamSpecValue(params) => {
                         if !args.is_empty() && !params.is_empty() {
-                            write!(f, ", ")?;
+                            output.write_str(", ")?;
                         }
-                        params.fmt_with_type(f, wrap)?;
+                        params.fmt_with_type(output, write_type)?;
                     }
                     Type::Ellipsis => {
                         if !args.is_empty() {
-                            write!(f, ", ")?;
+                            output.write_str(", ")?;
                         }
-                        write!(f, "...")?;
+                        output.write_str("...")?;
                     }
                     _ => {
                         if !args.is_empty() {
-                            write!(f, ", ")?;
+                            output.write_str(", ")?;
                         }
-                        write!(f, "ParamSpec({})", wrap(pspec))?;
+                        output.write_str("ParamSpec(")?;
+                        write_type(pspec, output)?;
+                        output.write_str(")")?;
                     }
                 }
-                write!(f, ") -> {}", wrap(&self.ret))
+                output.write_str(") -> ")?;
+                write_type(&self.ret, output)
             }
         }
     }
 
     /// Format the function type for use in a hover tooltip. This is similar to `fmt_with_type`, but
     /// it puts args on new lines if there is more than one argument
-    pub fn fmt_with_type_with_newlines<'a, D: Display + 'a>(
-        &'a self,
-        f: &mut fmt::Formatter<'_>,
-        wrap: &'a impl Fn(&'a Type) -> D,
+    pub fn fmt_with_type_with_newlines<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         match &self.params {
             Params::List(params) if params.len() > 1 => {
                 // For multiple parameters, put each on a new line with indentation
-                write!(f, "(\n    ")?;
-                params.fmt_with_type_with_newlines(f, wrap)?;
-                write!(f, "\n) -> {}", wrap(&self.ret))
+                output.write_str("(\n    ")?;
+                params.fmt_with_type_with_newlines(output, write_type)?;
+                output.write_str("\n) -> ")?;
+                write_type(&self.ret, output)
             }
             Params::List(..)
             | Params::ParamSpec(..)
             | Params::Ellipsis
-            | Params::Materialization => self.fmt_with_type(f, wrap),
+            | Params::Materialization => self.fmt_with_type(output, write_type),
         }
     }
 
@@ -640,30 +684,55 @@ impl Param {
         }
     }
 
-    pub fn fmt_with_type<'a, D: Display + 'a>(
-        &'a self,
-        f: &mut fmt::Formatter<'_>,
-        wrap: impl Fn(&'a Type) -> D,
+    pub fn fmt_with_type<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         match self {
-            Param::PosOnly(None, ty, Required::Required) => write!(f, "{}", wrap(ty)),
+            Param::PosOnly(None, ty, Required::Required) => write_type(ty, output),
             Param::PosOnly(None, ty, Required::Optional(default)) => {
-                write!(f, "_: {} = {}", wrap(ty), self.fmt_default(default))
+                output.write_str("_: ")?;
+                write_type(ty, output)?;
+                output.write_str(" = ")?;
+                output.write_str(&self.fmt_default(default))
             }
             Param::PosOnly(Some(name), ty, Required::Required)
             | Param::Pos(name, ty, Required::Required)
             | Param::KwOnly(name, ty, Required::Required) => {
-                write!(f, "{}: {}", name, wrap(ty),)
+                output.write_str(name.as_str())?;
+                output.write_str(": ")?;
+                write_type(ty, output)
             }
             Param::PosOnly(Some(name), ty, Required::Optional(default))
             | Param::Pos(name, ty, Required::Optional(default))
             | Param::KwOnly(name, ty, Required::Optional(default)) => {
-                write!(f, "{}: {} = {}", name, wrap(ty), self.fmt_default(default))
+                output.write_str(name.as_str())?;
+                output.write_str(": ")?;
+                write_type(ty, output)?;
+                output.write_str(" = ")?;
+                output.write_str(&self.fmt_default(default))
             }
-            Param::VarArg(Some(name), ty) => write!(f, "*{}: {}", name, wrap(ty)),
-            Param::VarArg(None, ty) => write!(f, "*{}", wrap(ty)),
-            Param::Kwargs(Some(name), ty) => write!(f, "**{}: {}", name, wrap(ty)),
-            Param::Kwargs(None, ty) => write!(f, "**{}", wrap(ty)),
+            Param::VarArg(Some(name), ty) => {
+                output.write_str("*")?;
+                output.write_str(name.as_str())?;
+                output.write_str(": ")?;
+                write_type(ty, output)
+            }
+            Param::VarArg(None, ty) => {
+                output.write_str("*")?;
+                write_type(ty, output)
+            }
+            Param::Kwargs(Some(name), ty) => {
+                output.write_str("**")?;
+                output.write_str(name.as_str())?;
+                output.write_str(": ")?;
+                write_type(ty, output)
+            }
+            Param::Kwargs(None, ty) => {
+                output.write_str("**")?;
+                write_type(ty, output)
+            }
         }
     }
 
@@ -708,8 +777,15 @@ impl Param {
 
 impl Display for Param {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.fmt_with_type(f, |t| t)?;
-        Ok(())
+        use crate::display::TypeDisplayContext;
+        use crate::type_output::DisplayOutput;
+
+        let ctx = TypeDisplayContext::new(&[]);
+        let mut output = DisplayOutput::new(&ctx, f);
+        self.fmt_with_type(&mut output, &|t, o| {
+            // Use the type's own Display impl to get simple names
+            o.write_str(&format!("{}", t))
+        })
     }
 }
 

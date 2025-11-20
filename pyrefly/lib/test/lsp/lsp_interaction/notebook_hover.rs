@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::env;
-
 use lsp_server::RequestId;
 use lsp_types::Url;
 use lsp_types::request::HoverRequest;
@@ -14,6 +12,7 @@ use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -61,8 +60,7 @@ fn test_notebook_hover_import() {
     // Hover over "List"
     interaction.hover_cell("notebook.ipynb", "cell1", 0, 20);
 
-    let temp_dir = env::temp_dir();
-    let expected_path = temp_dir.join("pyrefly_bundled_typeshed/builtins.pyi");
+    let expected_path = bundled_typeshed_path().join("builtins.pyi");
     let expected_url = Url::from_file_path(&expected_path).unwrap();
 
     interaction.client.expect_response::<HoverRequest>(

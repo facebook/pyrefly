@@ -7,7 +7,6 @@
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use fuzzy_matcher::FuzzyMatcher;
@@ -17,10 +16,6 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemTag;
-use lsp_types::ParameterInformation;
-use lsp_types::ParameterLabel;
-use lsp_types::SignatureHelp;
-use lsp_types::SignatureInformation;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -48,13 +43,10 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprContext;
-use ruff_python_ast::ExprDict;
-use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::ParameterWithDefault;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -67,14 +59,12 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
-use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
-use crate::binding::bindings::Bindings;
 use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
-use crate::graph::index::Idx;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::wasm::inlay_hints::normalize_singleton_function_type_into_params;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -84,7 +74,6 @@ use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
-use crate::types::callable::Params;
 use crate::types::module::ModuleType;
 use crate::types::types::Type;
 
@@ -213,7 +202,7 @@ fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
 /// Generic helper to visit keyword arguments with a custom handler.
 /// The handler receives the keyword index and reference, and returns true to stop iteration.
 /// This function will also take in a generic function which is used a filter
-fn visit_keyword_arguments_until_match<F>(call: &ExprCall, mut filter: F) -> bool
+pub(crate) fn visit_keyword_arguments_until_match<F>(call: &ExprCall, mut filter: F) -> bool
 where
     F: FnMut(usize, &Keyword) -> bool,
 {
@@ -317,13 +306,6 @@ pub enum AnnotationKind {
     Parameter,
     Return,
     Variable,
-}
-
-#[derive(Debug)]
-pub struct ParameterAnnotation {
-    pub text_size: TextSize,
-    pub has_annotation: bool,
-    pub ty: Option<Type>,
 }
 
 impl IdentifierWithContext {
@@ -495,19 +477,8 @@ pub struct FindDefinitionItem {
     pub module: Module,
 }
 
-/// The currently active argument in a function call for signature help.
-#[derive(Debug)]
-enum ActiveArgument {
-    /// The cursor is within an existing positional argument at the given index.
-    Positional(usize),
-    /// The cursor is within a keyword argument whose name is provided.
-    Keyword(Name),
-    /// The cursor is in the argument list but not inside any argument expression yet.
-    Next(usize),
-}
-
 impl<'a> Transaction<'a> {
-    fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
+    pub fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
         let idx = self.get_bindings(handle)?.key_to_idx(key);
         let answers = self.get_answers(handle)?;
         answers.get_type_at(idx)
@@ -873,78 +844,6 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn visit_finding_signature_range(
-        x: &Expr,
-        find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
-    ) {
-        if let Expr::Call(call) = x
-            && call.arguments.range.contains_inclusive(find)
-        {
-            if Self::visit_positional_signature_args(call, find, res) {
-                return;
-            }
-            if Self::visit_keyword_signature_args(call, find, res) {
-                return;
-            }
-            if res.is_none() {
-                *res = Some((
-                    call.func.range(),
-                    call.arguments.range,
-                    ActiveArgument::Next(call.arguments.len()),
-                ));
-            }
-        } else {
-            x.recurse(&mut |x| Self::visit_finding_signature_range(x, find, res));
-        }
-    }
-
-    fn visit_positional_signature_args(
-        call: &ExprCall,
-        find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
-    ) -> bool {
-        for (i, arg) in call.arguments.args.as_ref().iter().enumerate() {
-            if arg.range().contains_inclusive(find) {
-                Self::visit_finding_signature_range(arg, find, res);
-                if res.is_some() {
-                    return true;
-                }
-                *res = Some((
-                    call.func.range(),
-                    call.arguments.range,
-                    ActiveArgument::Positional(i),
-                ));
-                return true;
-            }
-        }
-        false
-    }
-
-    fn visit_keyword_signature_args(
-        call: &ExprCall,
-        find: TextSize,
-        res: &mut Option<(TextRange, TextRange, ActiveArgument)>,
-    ) -> bool {
-        let kwarg_start_idx = call.arguments.args.len();
-        visit_keyword_arguments_until_match(call, |j, kw| {
-            if kw.range.contains_inclusive(find) {
-                Self::visit_finding_signature_range(&kw.value, find, res);
-                if res.is_some() {
-                    return true;
-                }
-                let active_argument = match kw.arg.as_ref() {
-                    Some(identifier) => ActiveArgument::Keyword(identifier.id.clone()),
-                    None => ActiveArgument::Positional(kwarg_start_idx + j),
-                };
-                *res = Some((call.func.range(), call.arguments.range, active_argument));
-                true
-            } else {
-                false
-            }
-        })
-    }
-
     /// Finds the callable(s) (multiple if overloads exist) at position in document, returning them, chosen overload index, and arg index
     fn get_callables_from_call(
         &self,
@@ -1132,52 +1031,6 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn active_parameter_index(params: &[Param], active_argument: &ActiveArgument) -> Option<usize> {
-        match active_argument {
-            ActiveArgument::Positional(index) | ActiveArgument::Next(index) => {
-                (*index < params.len()).then_some(*index)
-            }
-            ActiveArgument::Keyword(name) => params
-                .iter()
-                .position(|param| param.name().is_some_and(|param_name| param_name == name)),
-        }
-    }
-
-    fn count_argument_separators_before(
-        &self,
-        handle: &Handle,
-        arguments_range: TextRange,
-        position: TextSize,
-    ) -> Option<usize> {
-        let module = self.get_module_info(handle)?;
-        let contents = module.contents();
-        let len = contents.len();
-        let start = arguments_range.start().to_usize().min(len);
-        let end = arguments_range.end().to_usize().min(len);
-        let pos = position.to_usize().clamp(start, end);
-        contents
-            .get(start..pos)
-            .map(|slice| slice.bytes().filter(|&b| b == b',').count())
-            .or(Some(0))
-    }
-
-    fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<Param>> {
-        let callable = type_.to_callable()?;
-        // We will drop the self parameter for signature help
-        if let Params::List(params_list) = callable.params {
-            if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
-                params_list.items().first()
-                && (name.as_str() == "self" || name.as_str() == "cls")
-            {
-                let mut params = params_list.into_items();
-                params.remove(0);
-                return Some(params);
-            }
-            return Some(params_list.into_items());
-        }
-        None
-    }
-
     fn resolve_named_import(
         &self,
         handle: &Handle,
@@ -1273,7 +1126,6 @@ impl<'a> Transaction<'a> {
                         location: TextRange::default(),
                         symbol_kind: Some(SymbolKind::Module),
                         docstring_range,
-                        is_deprecated: false,
                         deprecation: None,
                         special_export: None,
                     },
@@ -2360,7 +2212,7 @@ impl<'a> Transaction<'a> {
         if let Some((callables, overload_idx, _, _)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(overload_idx).cloned()
-            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
+            && let Some(params) = normalize_singleton_function_type_into_params(callable)
         {
             for param in params {
                 match param {
@@ -2505,7 +2357,7 @@ impl<'a> Transaction<'a> {
                         }),
                     additional_text_edits,
                     label_details,
-                    tags: if export.is_deprecated {
+                    tags: if export.deprecation.is_some() {
                         Some(vec![CompletionItemTag::DEPRECATED])
                     } else {
                         None
@@ -2619,11 +2471,11 @@ impl<'a> Transaction<'a> {
                 let is_deprecated = ty.as_ref().is_some_and(|t| {
                     if let Type::ClassDef(cls) = t {
                         self.ad_hoc_solve(handle, |solver| {
-                            solver.get_metadata_for_class(cls).is_deprecated()
+                            solver.get_metadata_for_class(cls).deprecation().is_some()
                         })
                         .unwrap_or(false)
                     } else {
-                        t.is_deprecated_function()
+                        t.function_deprecation().is_some()
                     }
                 });
                 let detail = ty.map(|t| t.to_string());
@@ -2695,8 +2547,7 @@ impl<'a> Transaction<'a> {
         if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(chosen_overload_index)
-            && let Some(params) =
-                Self::normalize_singleton_function_type_into_params(callable.clone())
+            && let Some(params) = normalize_singleton_function_type_into_params(callable.clone())
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
@@ -2794,7 +2645,7 @@ impl<'a> Transaction<'a> {
                     let exports = self.get_exports(&handle);
                     for (name, export) in exports.iter() {
                         let is_deprecated = match export {
-                            ExportLocation::ThisModule(export) => export.is_deprecated,
+                            ExportLocation::ThisModule(export) => export.deprecation.is_some(),
                             ExportLocation::OtherModule(_, _) => false,
                         };
                         result.push(CompletionItem {
@@ -2949,65 +2800,6 @@ impl<'a> Transaction<'a> {
         (result, is_incomplete)
     }
 
-    fn collect_types_from_callees(&self, range: TextRange, handle: &Handle) -> Vec<Type> {
-        fn callee_at(mod_module: Arc<ModModule>, position: TextSize) -> Option<ExprCall> {
-            fn f(x: &Expr, find: TextSize, res: &mut Option<ExprCall>) {
-                if let Expr::Call(call) = x
-                    && call.func.range().contains_inclusive(find)
-                {
-                    f(call.func.as_ref(), find, res);
-                    if res.is_some() {
-                        return;
-                    }
-                    *res = Some(call.clone());
-                } else {
-                    x.recurse(&mut |x| f(x, find, res));
-                }
-            }
-            let mut res = None;
-            mod_module.visit(&mut |x| f(x, position, &mut res));
-            res
-        }
-        match self.get_ast(handle) {
-            Some(mod_module) => {
-                let callee = callee_at(mod_module, range.start());
-                match callee {
-                    Some(ExprCall {
-                        arguments: args, ..
-                    }) => args
-                        .args
-                        .iter()
-                        .filter_map(|arg| self.get_type_trace(handle, arg.range()))
-                        .collect(),
-                    None => Vec::new(),
-                }
-            }
-            None => Vec::new(),
-        }
-    }
-
-    fn collect_references(
-        &self,
-        handle: &Handle,
-        idx: Idx<Key>,
-        bindings: Bindings,
-        transaction: &mut CancellableTransaction,
-    ) -> Vec<(Module, Vec<TextRange>)> {
-        if let Key::Definition(id) = bindings.idx_to_key(idx)
-            && let Some(module_info) = self.get_module_info(handle)
-        {
-            let definition_kind = DefinitionMetadata::VariableOrAttribute(None);
-            if let Ok(references) = transaction.find_global_references_from_definition(
-                handle.sys_info(),
-                definition_kind,
-                TextRangeWithModule::new(module_info, id.range()),
-            ) {
-                return references;
-            }
-        }
-        Vec::new()
-    }
-
     pub fn search_exports_exact(&self, name: &str) -> Vec<Handle> {
         self.search_exports(|handle, exports| {
             if let Some(export) = exports.get(&Name::new(name)) {
@@ -3045,353 +2837,6 @@ impl<'a> Transaction<'a> {
         });
         res.sort_by_key(|(score, _, _, _)| Reverse(*score));
         res.into_map(|(_, handle, name, export)| (handle, name, export))
-    }
-
-    fn filter_parameters(
-        &self,
-        param_with_default: ParameterWithDefault,
-        handle: &Handle,
-    ) -> Option<ParameterAnnotation> {
-        if param_with_default.name() == "self" || param_with_default.name() == "cls" {
-            return None;
-        }
-        let ty = match param_with_default.default() {
-            Some(expr) => self.get_type_trace(handle, expr.range()),
-            None => None,
-        };
-        Some(ParameterAnnotation {
-            text_size: param_with_default.parameter.range().end(),
-            ty,
-            has_annotation: param_with_default.annotation().is_some(),
-        })
-    }
-
-    pub fn infer_parameter_annotations(
-        &self,
-        handle: &Handle,
-        cancellable_transaction: &mut CancellableTransaction,
-    ) -> Vec<ParameterAnnotation> {
-        if let Some(bindings) = self.get_bindings(handle) {
-            let transaction = cancellable_transaction;
-            fn transpose<T: Clone>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
-                if v.is_empty() {
-                    return Vec::new();
-                }
-                let max_len = v.iter().map(|row| row.len()).max().unwrap();
-                let mut result = vec![Vec::new(); max_len];
-                for row in v {
-                    for (i, elem) in row.into_iter().enumerate() {
-                        result[i].push(elem);
-                    }
-                }
-                result
-            }
-            fn zip_types(
-                inferred_types: Vec<Vec<Type>>,
-                function_arguments: Vec<ParameterAnnotation>,
-            ) -> Vec<ParameterAnnotation> {
-                let zipped_inferred_types: Vec<Vec<Type>> = transpose(inferred_types);
-                let types: Vec<(ParameterAnnotation, Vec<Type>)> =
-                    match zipped_inferred_types.is_empty() {
-                        true => function_arguments
-                            .into_iter()
-                            .map(
-                                |arg: ParameterAnnotation| -> (ParameterAnnotation, Vec<Type>) {
-                                    (arg, vec![])
-                                },
-                            )
-                            .collect(),
-                        false => function_arguments
-                            .into_iter()
-                            .zip(zipped_inferred_types)
-                            .collect(),
-                    };
-
-                types
-                    .into_iter()
-                    .map(|(arg, mut ty)| {
-                        let mut arg = arg;
-                        if let Some(default_type) = arg.ty {
-                            ty.push(default_type)
-                        }
-                        if ty.len() == 1 {
-                            arg.ty = Some(ty[0].clone());
-                        } else {
-                            let ty = ty.into_iter().filter(|x| !x.is_any()).collect();
-                            arg.ty = Some(Type::Union(ty));
-                        }
-                        arg
-                    })
-                    .collect()
-            }
-
-            bindings
-                .keys::<Key>()
-                .flat_map(|idx| {
-                    let binding = bindings.get(idx);
-                    // Check if this binding is a function
-                    if let Binding::Function(key_function, _, _) = binding {
-                        let binding_func =
-                            bindings.get(bindings.get(*key_function).undecorated_idx);
-                        let args = binding_func.def.parameters.args.clone();
-                        let func_args: Vec<ParameterAnnotation> = args
-                            .into_iter()
-                            .filter_map(|param_with_default| {
-                                self.filter_parameters(param_with_default, handle)
-                            })
-                            .collect();
-                        let references =
-                            self.collect_references(handle, idx, bindings.clone(), transaction);
-                        let ranges: Vec<&TextRange> =
-                            references.iter().flat_map(|(_, range)| range).collect();
-                        let inferred_types =
-                            ranges.map(|range| self.collect_types_from_callees(**range, handle));
-                        zip_types(inferred_types, func_args)
-                    } else {
-                        vec![]
-                    }
-                })
-                .collect()
-        } else {
-            vec![]
-        }
-    }
-
-    pub fn inferred_types(
-        &self,
-        handle: &Handle,
-        return_types: bool,
-        containers: bool,
-    ) -> Option<Vec<(TextSize, Type, AnnotationKind)>> {
-        let is_interesting_type = |x: &Type| !x.is_any();
-        let is_interesting_expr = |x: &Expr| !Ast::is_literal(x);
-        let bindings = self.get_bindings(handle)?;
-        let mut res = Vec::new();
-        for idx in bindings.keys::<Key>() {
-            match bindings.idx_to_key(idx) {
-                // Return Annotation
-                key @ Key::ReturnType(id) if return_types => {
-                    match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
-                        Binding::Function(x, _pred, _class_meta) => {
-                            if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
-                                && let Some(ty) = self.get_type(handle, key)
-                                && is_interesting_type(&ty)
-                            {
-                                let fun = bindings.get(bindings.get(*x).undecorated_idx);
-                                res.push((
-                                    fun.def.parameters.range.end(),
-                                    ty,
-                                    AnnotationKind::Return,
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                // Only annotate empty containers for now
-                key @ Key::Definition(_) if containers => {
-                    if let Some(ty) = self.get_type(handle, key) {
-                        let e = match bindings.get(idx) {
-                            Binding::NameAssign(_, None, e, _) => match &**e {
-                                Expr::List(ExprList { elts, .. }) => {
-                                    if elts.is_empty() {
-                                        Some(&**e)
-                                    } else {
-                                        None
-                                    }
-                                }
-                                Expr::Dict(ExprDict { items, .. }) => {
-                                    if items.is_empty() {
-                                        Some(&**e)
-                                    } else {
-                                        None
-                                    }
-                                }
-                                _ => None,
-                            },
-                            _ => None,
-                        };
-                        if let Some(e) = e
-                            && is_interesting_expr(e)
-                            && is_interesting_type(&ty)
-                        {
-                            res.push((key.range().end(), ty, AnnotationKind::Variable));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Some(res)
-    }
-
-    pub fn inlay_hints(
-        &self,
-        handle: &Handle,
-        inlay_hint_config: InlayHintConfig,
-    ) -> Option<Vec<(TextSize, String, Option<Vec<TextRangeWithModule>>)>> {
-        let is_interesting = |e: &Expr, ty: &Type, class_name: Option<&Name>| {
-            !ty.is_any()
-                && match e {
-                    Expr::Tuple(tuple) => {
-                        !tuple.elts.is_empty() && tuple.elts.iter().all(|x| !Ast::is_literal(x))
-                    }
-                    Expr::Call(ExprCall { func, .. }) => {
-                        if let Expr::Name(name) = &**func
-                            && let Some(class_name) = class_name
-                        {
-                            *name.id() != *class_name
-                        } else if let Expr::Attribute(attr) = &**func
-                            && let Some(class_name) = class_name
-                        {
-                            *attr.attr.id() != *class_name
-                        } else {
-                            true
-                        }
-                    }
-                    _ => !Ast::is_literal(e),
-                }
-        };
-        let bindings = self.get_bindings(handle)?;
-        let mut res = Vec::new();
-        for idx in bindings.keys::<Key>() {
-            match bindings.idx_to_key(idx) {
-                key @ Key::ReturnType(id) => {
-                    if inlay_hint_config.function_return_types {
-                        match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
-                            Binding::Function(x, _pred, _class_meta) => {
-                                if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
-                                    && let Some(mut ty) = self.get_type(handle, key)
-                                    && !ty.is_any()
-                                {
-                                    let fun = bindings.get(bindings.get(*x).undecorated_idx);
-                                    if fun.def.is_async
-                                        && let Some(Some((_, _, return_ty))) = self
-                                            .ad_hoc_solve(handle, |solver| {
-                                                solver.unwrap_coroutine(&ty)
-                                            })
-                                    {
-                                        ty = return_ty;
-                                    }
-                                    res.push((
-                                        fun.def.parameters.range.end(),
-                                        format!(" -> {ty}"),
-                                        None, // Location info will be added in a later diff
-                                    ));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                key @ Key::Definition(_)
-                    if inlay_hint_config.variable_types
-                        && let Some(ty) = self.get_type(handle, key) =>
-                {
-                    let e = match bindings.get(idx) {
-                        Binding::NameAssign(_, None, e, _) => Some(&**e),
-                        Binding::Expr(None, e) => Some(e),
-                        _ => None,
-                    };
-                    // If the inferred type is a class type w/ no type arguments and the
-                    // RHS is a call to a function that's the same name as the inferred class,
-                    // we assume it's a constructor and do not display an inlay hint
-                    let class_name = if let Type::ClassType(cls) = &ty
-                        && cls.targs().is_empty()
-                    {
-                        Some(cls.name())
-                    } else {
-                        None
-                    };
-                    if let Some(e) = e
-                        && is_interesting(e, &ty, class_name)
-                    {
-                        let ty = format!(": {ty}");
-                        res.push((key.range().end(), ty, None)); // Location info will be added in a later diff
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if inlay_hint_config.call_argument_names != AllOffPartial::Off {
-            res.extend(
-                self.add_inlay_hints_for_positional_function_args(handle)
-                    .into_iter()
-                    .map(|(pos, text)| (pos, text, None)),
-            );
-        }
-
-        Some(res)
-    }
-
-    fn collect_function_calls_from_ast(module: Arc<ModModule>) -> Vec<ExprCall> {
-        fn collect_function_calls(x: &Expr, calls: &mut Vec<ExprCall>) {
-            if let Expr::Call(call) = x {
-                calls.push(call.clone());
-            }
-            x.recurse(&mut |x| collect_function_calls(x, calls));
-        }
-
-        let mut function_calls = Vec::new();
-        module.visit(&mut |x| collect_function_calls(x, &mut function_calls));
-        function_calls
-    }
-
-    fn add_inlay_hints_for_positional_function_args(
-        &self,
-        handle: &Handle,
-    ) -> Vec<(TextSize, String)> {
-        let mut param_hints: Vec<(TextSize, String)> = Vec::new();
-
-        if let Some(mod_module) = self.get_ast(handle) {
-            let function_calls = Self::collect_function_calls_from_ast(mod_module);
-
-            for call in function_calls {
-                if let Some(answers) = self.get_answers(handle) {
-                    let callee_type = if let Some((overloads, chosen_idx)) =
-                        answers.get_all_overload_trace(call.arguments.range)
-                    {
-                        // If we have overload information, use the chosen overload
-                        overloads
-                            .get(chosen_idx.unwrap_or_default())
-                            .map(|c| Type::Callable(Box::new(c.clone())))
-                    } else {
-                        // Otherwise, try to get the type of the callee directly
-                        answers.get_type_trace(call.func.range())
-                    };
-
-                    if let Some(params) =
-                        callee_type.and_then(Self::normalize_singleton_function_type_into_params)
-                    {
-                        for (arg_idx, arg) in call.arguments.args.iter().enumerate() {
-                            // Skip keyword arguments - they already show their parameter name
-                            let is_keyword_arg = call
-                                .arguments
-                                .keywords
-                                .iter()
-                                .any(|kw| kw.value.range() == arg.range());
-
-                            if !is_keyword_arg
-                                && let Some(
-                                    Param::Pos(name, _, _)
-                                    | Param::PosOnly(Some(name), _, _)
-                                    | Param::KwOnly(name, _, _),
-                                ) = params.get(arg_idx)
-                                && name.as_str() != "self"
-                                && name.as_str() != "cls"
-                            {
-                                param_hints
-                                    .push((arg.range().start(), format!("{}= ", name.as_str())));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        param_hints.sort_by_key(|(pos, _)| *pos);
-        param_hints
     }
 }
 
@@ -3633,5 +3078,69 @@ impl<'a> CancellableTransaction<'a> {
         all_implementations.dedup_by_key(|impl_| (impl_.module.path().dupe(), impl_.range.start()));
 
         Ok(all_implementations)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ruff_python_ast::name::Name;
+
+    use super::Transaction;
+    use crate::types::callable::Param;
+    use crate::types::callable::Required;
+    use crate::types::types::AnyStyle;
+    use crate::types::types::Type;
+
+    fn any_type() -> Type {
+        Type::Any(AnyStyle::Explicit)
+    }
+
+    #[test]
+    fn param_name_for_positional_argument_marks_vararg_repeats() {
+        let params = vec![
+            Param::Pos(Name::new_static("x"), any_type(), Required::Required),
+            Param::VarArg(Some(Name::new_static("columns")), any_type()),
+            Param::KwOnly(Name::new_static("kw"), any_type(), Required::Required),
+        ];
+
+        assert_eq!(match_summary(&params, 0), Some(("x", false)));
+        assert_eq!(match_summary(&params, 1), Some(("columns", false)));
+        assert_eq!(match_summary(&params, 3), Some(("columns", true)));
+    }
+
+    #[test]
+    fn param_name_for_positional_argument_handles_missing_names() {
+        let params = vec![
+            Param::PosOnly(None, any_type(), Required::Required),
+            Param::VarArg(None, any_type()),
+        ];
+
+        assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 0).is_none());
+        assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 1).is_none());
+        assert!(Transaction::<'static>::param_name_for_positional_argument(&params, 5).is_none());
+    }
+
+    #[test]
+    fn duplicate_vararg_hints_are_not_emitted() {
+        let params = vec![
+            Param::Pos(Name::new_static("s"), any_type(), Required::Required),
+            Param::VarArg(Some(Name::new_static("args")), any_type()),
+            Param::KwOnly(Name::new_static("a"), any_type(), Required::Required),
+        ];
+
+        let labels: Vec<&str> = (0..4)
+            .filter_map(|idx| {
+                Transaction::<'static>::param_name_for_positional_argument(&params, idx)
+            })
+            .filter(|match_| !match_.is_vararg_repeat)
+            .map(|match_| match_.name.as_str())
+            .collect();
+
+        assert_eq!(labels, vec!["s", "args"]);
+    }
+
+    fn match_summary(params: &[Param], idx: usize) -> Option<(&str, bool)> {
+        Transaction::<'static>::param_name_for_positional_argument(params, idx)
+            .map(|match_| (match_.name.as_str(), match_.is_vararg_repeat))
     }
 }

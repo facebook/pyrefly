@@ -16,5 +16,6 @@ tar = "0.4.44"
 zstd = "0.13"
 
 [build-dependencies]
+sha2 = "0.10.6"
 tar = "0.4.44"
 zstd = { version = "0.13", features = ["experimental", "zstdmt"] }

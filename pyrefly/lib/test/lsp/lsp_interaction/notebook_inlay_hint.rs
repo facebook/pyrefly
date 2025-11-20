@@ -32,7 +32,7 @@ fn test_inlay_hints() {
 
     interaction.inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0);
     interaction.client.expect_response::<InlayHintRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!([{
             "label": " -> tuple[Literal[1], Literal[2]]",
             "position": {"character": 21, "line": 0},
@@ -45,7 +45,7 @@ fn test_inlay_hints() {
 
     interaction.inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0);
     interaction.client.expect_response::<InlayHintRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!([{
             "label": ": tuple[Literal[1], Literal[2]]",
             "position": {"character": 6, "line": 0},
@@ -58,7 +58,7 @@ fn test_inlay_hints() {
 
     interaction.inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0);
     interaction.client.expect_response::<InlayHintRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!([{
             "label": " -> Literal[0]",
             "position": {"character": 15, "line": 0},

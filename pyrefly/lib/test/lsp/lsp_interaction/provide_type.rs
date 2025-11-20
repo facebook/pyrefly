@@ -22,11 +22,11 @@ fn test_provide_type_basic() {
         ..Default::default()
     });
 
-    interaction.server.did_open("bar.py");
-    interaction.server.provide_type("bar.py", 7, 5);
+    interaction.client.did_open("bar.py");
+    interaction.client.provide_type("bar.py", 7, 5);
 
     interaction.client.expect_response::<ProvideType>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!({
             "contents": [{
                 "kind": "plaintext",
@@ -48,11 +48,11 @@ fn test_provide_type() {
         ..Default::default()
     });
 
-    interaction.server.did_open("foo.py");
-    interaction.server.provide_type("foo.py", 6, 16);
+    interaction.client.did_open("foo.py");
+    interaction.client.provide_type("foo.py", 6, 16);
 
     interaction.client.expect_response::<ProvideType>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!({
             "contents": [{
                 "kind": "plaintext",

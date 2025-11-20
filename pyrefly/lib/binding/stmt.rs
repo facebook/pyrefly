@@ -44,7 +44,6 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
-use crate::deprecation::format_deprecated_with_decoration;
 use crate::error::context::ErrorInfo;
 use crate::export::definitions::MutableCaptureKind;
 use crate::export::exports::Export;
@@ -870,6 +869,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     match x.asname {
                         Some(asname) => {
+                            self.scopes.register_import(&asname);
                             self.bind_definition(
                                 &asname,
                                 Binding::Module(m, m.components(), None),
@@ -883,6 +883,7 @@ impl<'a> BindingsBuilder<'a> {
                                 Key::Import(first.clone(), x.name.range),
                                 Binding::Module(m, vec![first.clone()], module_key),
                             );
+                            self.scopes.register_import(&x.name);
                             self.bind_name(&first, key, FlowStyle::MergeableImport(m));
                         }
                     }
@@ -996,17 +997,12 @@ impl<'a> BindingsBuilder<'a> {
                 for name in module_exports.wildcard(self.lookup).iter_hashed() {
                     let key = Key::Import(name.into_key().clone(), x.range);
                     if let Some(ExportLocation::ThisModule(Export {
-                        is_deprecated,
-                        deprecation,
+                        deprecation: Some(deprecation),
                         ..
                     })) = exported.get_hashed(name)
-                        && *is_deprecated
                     {
-                        let msg = format_deprecated_with_decoration(
-                            format!("`{name}` is deprecated"),
-                            deprecation.as_ref(),
-                        );
-                        self.error(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
+                        let msg = deprecation.as_error_message(format!("`{name}` is deprecated"));
+                        self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
                     let val = if exported.contains_key_hashed(name) {
                         Binding::Import(m, name.into_key().clone(), None)
@@ -1019,6 +1015,12 @@ impl<'a> BindingsBuilder<'a> {
                         Binding::Type(Type::any_error())
                     };
                     let key = self.insert_binding(key, val);
+                    // Register the imported name from wildcard imports
+                    self.scopes.register_import(&Identifier {
+                        node_index: AtomicNodeIndex::dummy(),
+                        id: name.into_key().clone(),
+                        range: x.range,
+                    });
                     self.bind_name(
                         name.key(),
                         key,
@@ -1042,17 +1044,13 @@ impl<'a> BindingsBuilder<'a> {
                 // `__init__` module of `x`, we always prefer the submodule.
                 let val = if (self.module_info.name() != m) && exported.contains_key(&x.name.id) {
                     if let Some(ExportLocation::ThisModule(Export {
-                        is_deprecated,
-                        deprecation,
+                        deprecation: Some(deprecation),
                         ..
                     })) = exported.get(&x.name.id)
-                        && *is_deprecated
                     {
-                        let msg = format_deprecated_with_decoration(
-                            format!("`{}` is deprecated", x.name),
-                            deprecation.as_ref(),
-                        );
-                        self.error(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
+                        let msg =
+                            deprecation.as_error_message(format!("`{}` is deprecated", x.name));
+                        self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
                     Binding::Import(m, x.name.id.clone(), original_name_range)
                 } else {
@@ -1077,6 +1075,7 @@ impl<'a> BindingsBuilder<'a> {
                         Binding::Type(Type::any_explicit())
                     }
                 };
+                self.scopes.register_import(&asname);
                 self.bind_definition(&asname, val, FlowStyle::Import(m, x.name.id));
             }
         }

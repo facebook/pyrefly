@@ -27,10 +27,10 @@ fn implementation_on_definition_test() {
     });
 
     // Open the base file
-    interaction.server.did_open("base.py");
+    interaction.client.did_open("base.py");
 
     // Request implementations for Base.method
-    interaction.server.implementation("base.py", 7, 8);
+    interaction.client.implementation("base.py", 7, 8);
 
     // Expect two implementations: Child.method and ChildOfChild.method
     // Note: Order may vary between runs due to HashMap ordering
@@ -59,10 +59,10 @@ fn implementation_on_call_test() {
     });
 
     // Open the usage file
-    interaction.server.did_open("usage.py");
+    interaction.client.did_open("usage.py");
 
     // Request implementations for b.method() call on line 9
-    interaction.server.implementation("usage.py", 8, 2);
+    interaction.client.implementation("usage.py", 8, 2);
 
     // Expect two implementations: Child.method and ChildOfChild.method
     // Note: Order may vary between runs due to HashMap ordering

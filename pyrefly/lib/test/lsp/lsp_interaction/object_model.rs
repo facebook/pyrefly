@@ -15,7 +15,6 @@ use std::thread::{self};
 use std::time::Duration;
 
 use crossbeam_channel::RecvTimeoutError;
-use crossbeam_channel::bounded;
 use itertools::Itertools;
 use lsp_server::Connection;
 use lsp_server::Message;
@@ -24,6 +23,11 @@ use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_server::ResponseError;
+use lsp_types::ConfigurationItem;
+use lsp_types::ConfigurationParams;
+use lsp_types::PublishDiagnosticsParams;
+use lsp_types::RegistrationParams;
+use lsp_types::UnregistrationParams;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeConfiguration;
 use lsp_types::notification::DidChangeNotebookDocument;
@@ -34,6 +38,8 @@ use lsp_types::notification::DidOpenNotebookDocument;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Initialized;
+use lsp_types::notification::Notification as _;
+use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
 use lsp_types::request::GotoDefinition;
@@ -43,11 +49,13 @@ use lsp_types::request::HoverRequest;
 use lsp_types::request::Initialize;
 use lsp_types::request::InlayHintRequest;
 use lsp_types::request::References;
+use lsp_types::request::RegisterCapability;
 use lsp_types::request::Request as _;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::Shutdown;
 use lsp_types::request::SignatureHelpRequest;
+use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
 use pretty_assertions::assert_eq;
@@ -110,33 +118,48 @@ impl FinishHandle {
     }
 }
 
-pub struct TestServer {
-    sender: Option<crossbeam_channel::Sender<Message>>,
-    timeout: Duration,
-    finish_handle: Arc<FinishHandle>,
+pub struct TestClient {
+    conn: Option<Connection>,
     root: Option<PathBuf>,
+    send_timeout: Duration,
+    recv_timeout: Duration,
     /// Request ID for requests sent to the server
-    request_idx: Arc<AtomicI32>,
+    request_idx: AtomicI32,
+    /// Handle to wait for the server to exit
+    finish_handle: Arc<FinishHandle>,
 }
 
-impl TestServer {
-    pub fn new(
-        sender: crossbeam_channel::Sender<Message>,
-        finish_handle: Arc<FinishHandle>,
-        request_idx: Arc<AtomicI32>,
-    ) -> Self {
+impl TestClient {
+    pub fn new(connection: Connection, finish_handle: Arc<FinishHandle>) -> Self {
         Self {
-            sender: Some(sender),
-            timeout: Duration::from_secs(25),
-            finish_handle,
+            conn: Some(connection),
             root: None,
-            request_idx,
+            send_timeout: Duration::from_secs(25),
+            recv_timeout: Duration::from_secs(50),
+            request_idx: AtomicI32::new(0),
+            finish_handle,
         }
     }
 
+    fn get_root_or_panic(&self) -> PathBuf {
+        self.root
+            .clone()
+            .expect("Root not set, please call set_root")
+    }
+
+    fn next_request_id(&mut self) -> RequestId {
+        let idx = self.request_idx.fetch_add(1, Ordering::SeqCst);
+        RequestId::from(idx + 1)
+    }
+
+    pub fn current_request_id(&self) -> RequestId {
+        let idx = self.request_idx.load(Ordering::Acquire);
+        RequestId::from(idx)
+    }
+
     pub fn drop_connection(&mut self) {
-        // Take and drop the sender to close the connection
-        drop(std::mem::take(&mut self.sender))
+        // Take and drop to close the connection
+        drop(std::mem::take(&mut self.conn))
     }
 
     pub fn expect_stop(&self) {
@@ -150,13 +173,21 @@ impl TestServer {
         &self,
         message: Message,
     ) -> Result<(), crossbeam_channel::SendTimeoutError<Message>> {
-        self.sender
+        self.conn
             .as_ref()
             .unwrap()
-            .send_timeout(message, self.timeout)
+            .sender
+            .send_timeout(message, self.send_timeout)
     }
 
-    /// Send a message to this server
+    fn recv_timeout(&self) -> Result<Message, crossbeam_channel::RecvTimeoutError> {
+        self.conn
+            .as_ref()
+            .unwrap()
+            .receiver
+            .recv_timeout(self.recv_timeout)
+    }
+
     pub fn send_message(&self, message: Message) {
         eprintln!(
             "client--->server {}",
@@ -524,78 +555,12 @@ impl TestServer {
         params
     }
 
-    /// Helper function to merge JSON values, with the source taking precedence
-    fn merge_json(target: &mut Value, source: &Value) {
-        if let (Some(target_obj), Some(source_obj)) = (target.as_object_mut(), source.as_object()) {
-            for (key, value) in source_obj {
-                if let Some(target_value) = target_obj.get_mut(key) {
-                    // If both are objects, merge recursively
-                    if target_value.is_object() && value.is_object() {
-                        Self::merge_json(target_value, value);
-                    } else {
-                        // Otherwise, overwrite with source value
-                        *target_value = value.clone();
-                    }
-                } else {
-                    // Key doesn't exist in target, insert it
-                    target_obj.insert(key.clone(), value.clone());
-                }
-            }
-        }
-    }
-
-    fn next_request_id(&mut self) -> RequestId {
-        let idx = self.request_idx.fetch_add(1, Ordering::SeqCst);
-        RequestId::from(idx + 1)
-    }
-
-    pub fn current_request_id(&self) -> RequestId {
-        let idx = self.request_idx.load(Ordering::Acquire);
-        RequestId::from(idx)
-    }
-
-    fn get_root_or_panic(&self) -> PathBuf {
-        self.root
-            .clone()
-            .expect("Root not set, please call set_root")
-    }
-}
-
-pub struct TestClient {
-    receiver: crossbeam_channel::Receiver<Message>,
-    timeout: Duration,
-    root: Option<PathBuf>,
-    request_idx: Arc<AtomicI32>,
-}
-
-impl TestClient {
-    pub fn new(
-        receiver: crossbeam_channel::Receiver<Message>,
-        request_idx: Arc<AtomicI32>,
-    ) -> Self {
-        Self {
-            receiver,
-            timeout: Duration::from_secs(50),
-            root: None,
-            request_idx,
-        }
-    }
-
-    fn current_request_id(&self) -> RequestId {
-        let idx = self.request_idx.load(Ordering::Acquire);
-        RequestId::from(idx)
-    }
-
-    pub fn drop_connection(self) {
-        drop(self.receiver);
-    }
-
     pub fn expect_message_helper<F>(&self, validator: F, description: &str)
     where
         F: Fn(&Message) -> ValidationResult,
     {
         loop {
-            match self.receiver.recv_timeout(self.timeout) {
+            match self.recv_timeout() {
                 Ok(msg) => {
                     eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
                     match validator(&msg) {
@@ -622,7 +587,7 @@ impl TestClient {
         matcher: impl Fn(Message) -> Option<T>,
     ) -> T {
         loop {
-            match self.receiver.recv_timeout(self.timeout) {
+            match self.recv_timeout() {
                 Ok(msg) => {
                     eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
                     if let Some(actual) = matcher(msg) {
@@ -686,76 +651,51 @@ impl TestClient {
         assert_eq!(json!(expected), json!(actual));
     }
 
-    /// Wait until we get a publishDiagnostics notification with the correct number of errors
+    /// Wait for a publishDiagnostics notification, then check if it has the correct path and count
     pub fn expect_publish_diagnostics_error_count(&self, path: PathBuf, count: usize) {
-        self.expect_message_helper(
+        self.expect_message(
+            &format!(
+                "publishDiagnostics notification with {count} errors for file: {}",
+                path.display()
+            ),
             |msg| {
-                match msg {
-                    Message::Notification(Notification { method, params}) if method == "textDocument/publishDiagnostics" => {
-                        // Check if this notification is for the expected file
-                        if let Some(uri) = params.get("uri")
-                            && let Some(uri_str) = uri.as_str()
-                            && let (Ok(expected_url), Ok(actual_url)) = (Url::parse(Url::from_file_path(&path).unwrap().as_ref()), Url::parse(uri_str))
-                            && let (Ok(expected_path), Ok(actual_path)) = (expected_url.to_file_path(), actual_url.to_file_path()) {
-                                // Canonicalize both paths for comparison to handle symlinks and normalize case
-                                // This is very relevant for publish diagnostics, where the LS might send a notification for
-                                // a file that does not exactly match the file_open message.
-                                // This is very relevant for publish diagnostics, where the LS might send a notification for
-                                // a file that does not exactly match the file_open message.
-                                // This is very relevant for publish diagnostics, where the LS might send a notification for
-                                // a file that does not exactly match the file_open message.
-                                let expected_canonical = expected_path.canonicalize().unwrap_or(expected_path);
-                                let actual_canonical = actual_path.canonicalize().unwrap_or(actual_path);
-
-                                if expected_canonical == actual_canonical
-                                    && let Some(diagnostics) = params.get("diagnostics")
-                                    && let Some(diagnostics_array) = diagnostics.as_array() {
-                                        let actual_count = diagnostics_array.len();
-                                        if actual_count == count {
-                                            return ValidationResult::Pass;
-                                        } else {
-                                            // If the counts do not match, we continue waiting
-                                            return ValidationResult::Skip;
-                                        }
-                                    } else if expected_canonical == actual_canonical {
-                                        panic!("publishDiagnostics notification malformed: missing or invalid 'diagnostics' field");
-                                    }
-                            }
-                        ValidationResult::Skip
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    let params =
+                        serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
+                    if params.uri.to_file_path().unwrap() == path
+                        && params.diagnostics.len() == count
+                    {
+                        Some(())
+                    } else {
+                        None
                     }
-                    _ => ValidationResult::Skip
+                } else {
+                    None
                 }
             },
-            &format!("publishDiagnostics notification with {count} errors for file: {}", path.display()),
         );
     }
 
-    pub fn expect_publish_diagnostics_exact_uri(&self, expected_uri: &str, count: usize) {
-        self.expect_message_helper(
-            |msg| match msg {
-                Message::Notification(Notification { method, params })
-                    if method == "textDocument/publishDiagnostics" =>
+    pub fn expect_publish_diagnostics_uri(&self, uri: &Url, count: usize) {
+        self.expect_message(
+            &format!("publishDiagnostics notification {count} errors for uri: {uri}"),
+            |msg| {
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
                 {
-                    if params.get("uri").and_then(|v| v.as_str()) == Some(expected_uri) {
-                        if let Some(diagnostics) = params.get("diagnostics")
-                            && let Some(diagnostics_array) = diagnostics.as_array()
-                        {
-                            if diagnostics_array.len() == count {
-                                return ValidationResult::Pass;
-                            } else {
-                                return ValidationResult::Skip;
-                            }
-                        } else {
-                            panic!("publishDiagnostics notification malformed: missing or invalid 'diagnostics' field");
-                        }
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(x.params).unwrap();
+                    if params.uri == *uri && params.diagnostics.len() == count {
+                        Some(())
+                    } else {
+                        None
                     }
-                    ValidationResult::Skip
+                } else {
+                    None
                 }
-                _ => ValidationResult::Skip,
             },
-            &format!(
-                "publishDiagnostics notification with uri {expected_uri} containing {count} errors"
-            ),
         );
     }
 
@@ -859,7 +799,7 @@ impl TestClient {
     }
 
     pub fn expect_any_message(&self) {
-        match self.receiver.recv_timeout(self.timeout) {
+        match self.recv_timeout() {
             Ok(msg) => {
                 eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
             }
@@ -873,110 +813,101 @@ impl TestClient {
     }
 
     pub fn expect_configuration_request(&self, id: i32, scope_uris: Option<Vec<&Url>>) {
-        use lsp_types::ConfigurationItem;
-        use lsp_types::ConfigurationParams;
-        use lsp_types::request::WorkspaceConfiguration;
-
-        let items = if let Some(uris) = scope_uris {
-            uris.into_iter()
-                .map(|uri| ConfigurationItem {
-                    scope_uri: Some(uri.clone()),
-                    section: Some("python".to_owned()),
-                })
-                .chain(once(ConfigurationItem {
-                    scope_uri: None,
-                    section: Some("python".to_owned()),
-                }))
-                .collect::<Vec<_>>()
-        } else {
-            Vec::from([ConfigurationItem {
-                scope_uri: None,
-                section: Some("python".to_owned()),
-            }])
-        };
-
-        let expected_msg = Message::Request(Request {
-            id: RequestId::from(id),
-            method: WorkspaceConfiguration::METHOD.to_owned(),
-            params: json!(ConfigurationParams { items }),
-        });
-        let expected_str = serde_json::to_string(&expected_msg).unwrap();
-        self.expect_message_helper(
-            |msg| match msg {
-                Message::Notification(_) => ValidationResult::Skip,
-                _ => {
-                    let actual_str = serde_json::to_string(msg).unwrap();
-                    assert_eq!(&expected_str, &actual_str, "Configuration request mismatch");
-                    ValidationResult::Pass
+        let params: ConfigurationParams = self.expect_message(
+            &format!("Request {}", WorkspaceConfiguration::METHOD),
+            |msg| {
+                if let Message::Request(x) = msg
+                    && x.method == WorkspaceConfiguration::METHOD
+                {
+                    assert_eq!(x.id, RequestId::from(id));
+                    Some(serde_json::from_value(x.params).unwrap())
+                } else {
+                    None
                 }
             },
-            &format!("Expected configuration request: {expected_msg:?}"),
+        );
+
+        let expected_items = scope_uris
+            .unwrap_or_default()
+            .into_iter()
+            .cloned()
+            .map(Some)
+            .chain(once(None))
+            .map(|scope_uri| ConfigurationItem {
+                scope_uri,
+                section: Some("python".to_owned()),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ConfigurationParams {
+                items: expected_items
+            },
+            params
         );
     }
 
     /// Expect a file watcher registration request.
     /// Validates that the request is specifically registering the file watcher (ID: "FILEWATCHER").
     pub fn expect_file_watcher_register(&self) {
-        self.expect_message_helper(
-            |msg| match msg {
-                Message::Request(req)
-                    if req.method == "client/registerCapability"
-                        && req
-                            .params
-                            .get("registrations")
-                            .and_then(|r| r.as_array())
-                            .map(|arr| {
-                                arr.iter().any(|reg| {
-                                    reg.get("id").and_then(|id| id.as_str()) == Some("FILEWATCHER")
-                                })
-                            })
-                            .unwrap_or(false) =>
+        let params: RegistrationParams =
+            self.expect_message(&format!("Request {}", RegisterCapability::METHOD), |msg| {
+                if let Message::Request(x) = msg
+                    && x.method == RegisterCapability::METHOD
                 {
-                    ValidationResult::Pass
+                    Some(serde_json::from_value(x.params).unwrap())
+                } else {
+                    None
                 }
-                Message::Notification(_) => ValidationResult::Skip,
-                _ => ValidationResult::Fail,
-            },
-            "Expected file watcher registerCapability",
-        );
+            });
+        assert!(params.registrations.iter().any(|x| x.id == "FILEWATCHER"));
     }
 
     /// Expect a file watcher unregistration request.
     /// Validates that the request is specifically unregistering the file watcher (ID: "FILEWATCHER").
     pub fn expect_file_watcher_unregister(&self) {
-        self.expect_message_helper(
-            |msg| match msg {
-                Message::Request(req)
-                    if req.method == "client/unregisterCapability"
-                        && req
-                            .params
-                            .get("unregisterations")
-                            .and_then(|r| r.as_array())
-                            .map(|arr| {
-                                arr.iter().any(|reg| {
-                                    reg.get("id").and_then(|id| id.as_str()) == Some("FILEWATCHER")
-                                })
-                            })
-                            .unwrap_or(false) =>
+        let params: UnregistrationParams = self.expect_message(
+            &format!("Request {}", UnregisterCapability::METHOD),
+            |msg| {
+                if let Message::Request(x) = msg
+                    && x.method == UnregisterCapability::METHOD
                 {
-                    ValidationResult::Pass
+                    Some(serde_json::from_value(x.params).unwrap())
+                } else {
+                    None
                 }
-                Message::Notification(_) => ValidationResult::Skip,
-                _ => ValidationResult::Fail,
             },
-            "Expected file watcher unregisterCapability",
+        );
+        assert!(
+            params
+                .unregisterations
+                .iter()
+                .any(|x| x.id == "FILEWATCHER")
         );
     }
 
-    fn get_root_or_panic(&self) -> PathBuf {
-        self.root
-            .clone()
-            .expect("Root not set, please call set_root")
+    /// Helper function to merge JSON values, with the source taking precedence
+    fn merge_json(target: &mut Value, source: &Value) {
+        if let (Some(target_obj), Some(source_obj)) = (target.as_object_mut(), source.as_object()) {
+            for (key, value) in source_obj {
+                if let Some(target_value) = target_obj.get_mut(key) {
+                    // If both are objects, merge recursively
+                    if target_value.is_object() && value.is_object() {
+                        Self::merge_json(target_value, value);
+                    } else {
+                        // Otherwise, overwrite with source value
+                        *target_value = value.clone();
+                    }
+                } else {
+                    // Key doesn't exist in target, insert it
+                    target_obj.insert(key.clone(), value.clone());
+                }
+            }
+        }
     }
 }
 
 pub struct LspInteraction {
-    pub server: TestServer,
     pub client: TestClient,
 }
 
@@ -988,45 +919,34 @@ impl LspInteraction {
     pub fn new_with_indexing_mode(indexing_mode: IndexingMode) -> Self {
         init_test();
 
-        let (language_client_sender, language_client_receiver) = bounded::<Message>(0);
-        let (language_server_sender, language_server_receiver) = bounded::<Message>(0);
-
-        let args = LspArgs {
-            indexing_mode,
-            workspace_indexing_limit: 50,
-        };
-        let connection = Connection {
-            sender: language_client_sender,
-            receiver: language_server_receiver,
-        };
-
-        let connection = Arc::new(connection);
-        let args = args.clone();
+        let (conn_client, conn_server) = Connection::memory();
 
         let finish_handle = Arc::new(FinishHandle::new());
         let finish_server = finish_handle.clone();
 
         // Spawn the server thread notify when finished
         thread::spawn(move || {
-            let _ = run_lsp(connection, args, "pyrefly-lsp-test-version");
+            let args = LspArgs {
+                indexing_mode,
+                workspace_indexing_limit: 50,
+            };
+            let _ = run_lsp(Arc::new(conn_server), args, "pyrefly-lsp-test-version");
             finish_server.notify_finished();
         });
 
-        let request_idx = Arc::new(AtomicI32::new(0));
-        let server = TestServer::new(language_server_sender, finish_handle, request_idx.clone());
-        let client = TestClient::new(language_client_receiver, request_idx);
+        let client = TestClient::new(conn_client, finish_handle);
 
-        Self { server, client }
+        Self { client }
     }
 
     pub fn initialize(&mut self, settings: InitializeSettings) {
-        self.server
-            .send_initialize(self.server.get_initialize_params(&settings));
+        self.client
+            .send_initialize(self.client.get_initialize_params(&settings));
         self.client.expect_any_message();
-        self.server.send_initialized();
+        self.client.send_initialized();
         if let Some(settings) = settings.configuration {
             self.client.expect_any_message();
-            self.server.send_response::<WorkspaceConfiguration>(
+            self.client.send_response::<WorkspaceConfiguration>(
                 RequestId::from(1),
                 settings.unwrap_or(json!([])),
             );
@@ -1035,23 +955,23 @@ impl LspInteraction {
 
     pub fn shutdown(&self) {
         let shutdown_id = RequestId::from(999);
-        self.server.send_shutdown(shutdown_id.clone());
+        self.client.send_shutdown(shutdown_id.clone());
 
         self.client
             .expect_response::<Shutdown>(shutdown_id, json!(null));
 
-        self.server.send_exit();
+        self.client.send_exit();
     }
 
     pub fn set_root(&mut self, root: PathBuf) {
-        self.server.root = Some(root.clone());
+        self.client.root = Some(root.clone());
         self.client.root = Some(root);
     }
 
     /// Opens a notebook document with the given cell contents.
     /// Each string in `cell_contents` becomes a separate code cell in the notebook.
     pub fn open_notebook(&mut self, file_name: &str, cell_contents: Vec<&str>) {
-        let root = self.server.get_root_or_panic();
+        let root = self.client.get_root_or_panic();
         let notebook_path = root.join(file_name);
         let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
 
@@ -1072,7 +992,7 @@ impl LspInteraction {
             }));
         }
 
-        self.server
+        self.client
             .send_notification::<DidOpenNotebookDocument>(json!({
                 "notebookDocument": {
                     "uri": notebook_uri,
@@ -1090,10 +1010,10 @@ impl LspInteraction {
     }
 
     pub fn close_notebook(&mut self, file_name: &str) {
-        let root = self.server.get_root_or_panic();
+        let root = self.client.get_root_or_panic();
         let notebook_path = root.join(file_name);
         let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
-        self.server
+        self.client
             .send_notification::<DidCloseNotebookDocument>(json!({
                 "notebookDocument": { "uri": notebook_uri },
                 "cellTextDocuments": [],
@@ -1108,11 +1028,11 @@ impl LspInteraction {
         version: i32,
         change_event: serde_json::Value,
     ) {
-        let root = self.server.get_root_or_panic();
+        let root = self.client.get_root_or_panic();
         let notebook_path = root.join(file_name);
         let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
 
-        self.server
+        self.client
             .send_notification::<DidChangeNotebookDocument>(json!({
                 "notebookDocument": {
                     "version": version,
@@ -1123,8 +1043,8 @@ impl LspInteraction {
     }
 
     pub fn diagnostic_for_cell(&mut self, file: &str, cell: &str) {
-        let id = self.server.next_request_id();
-        self.server.send_request::<DocumentDiagnosticRequest>(
+        let id = self.client.next_request_id();
+        self.client.send_request::<DocumentDiagnosticRequest>(
             id,
             json!({
             "textDocument": {
@@ -1134,26 +1054,25 @@ impl LspInteraction {
     }
 
     /// Returns the URI for a notebook cell
-    pub fn cell_uri(&self, file_name: &str, cell_name: &str) -> String {
-        let root = self.server.get_root_or_panic();
+    pub fn cell_uri(&self, file_name: &str, cell_name: &str) -> Url {
+        let root = self.client.get_root_or_panic();
         // Parse this as a file to preserve the C: prefix for windows
-        let cell_uri =
-            Url::from_file_path(format!("{}", root.join(file_name).to_string_lossy())).unwrap();
+        let file_uri = Url::from_file_path(root.join(file_name)).unwrap();
         // Replace the scheme & add the cell name as a fragment
-        format!(
-            "{}#{}",
-            cell_uri
-                .to_string()
-                .replace("file://", "vscode-notebook-cell://"),
+        // This is a bit awkward because the url library does not allow changing the scheme for file:// URLs
+        Url::parse(&format!(
+            "vscode-notebook-cell://{}#{}",
+            file_uri.path(),
             cell_name
-        )
+        ))
+        .unwrap()
     }
 
     /// Sends a hover request for a notebook cell at the specified position
     pub fn hover_cell(&mut self, file_name: &str, cell_name: &str, line: u32, col: u32) {
         let cell_uri = self.cell_uri(file_name, cell_name);
-        let id = self.server.next_request_id();
-        self.server.send_request::<HoverRequest>(
+        let id = self.client.next_request_id();
+        self.client.send_request::<HoverRequest>(
             id,
             json!({
                 "textDocument": {
@@ -1170,8 +1089,8 @@ impl LspInteraction {
     /// Sends a signature help request for a notebook cell at the specified position
     pub fn signature_help_cell(&mut self, file_name: &str, cell_name: &str, line: u32, col: u32) {
         let cell_uri = self.cell_uri(file_name, cell_name);
-        let id = self.server.next_request_id();
-        self.server.send_request::<SignatureHelpRequest>(
+        let id = self.client.next_request_id();
+        self.client.send_request::<SignatureHelpRequest>(
             id,
             json!({
                 "textDocument": {
@@ -1188,8 +1107,8 @@ impl LspInteraction {
     /// Sends a definition request for a notebook cell at the specified position
     pub fn definition_cell(&mut self, file_name: &str, cell_name: &str, line: u32, col: u32) {
         let cell_uri = self.cell_uri(file_name, cell_name);
-        let id = self.server.next_request_id();
-        self.server.send_request::<GotoDefinition>(
+        let id = self.client.next_request_id();
+        self.client.send_request::<GotoDefinition>(
             id,
             json!({
                 "textDocument": {
@@ -1213,8 +1132,8 @@ impl LspInteraction {
         include_declaration: bool,
     ) {
         let cell_uri = self.cell_uri(file_name, cell_name);
-        let id = self.server.next_request_id();
-        self.server.send_request::<References>(
+        let id = self.client.next_request_id();
+        self.client.send_request::<References>(
             id,
             json!({
                 "textDocument": {
@@ -1233,8 +1152,8 @@ impl LspInteraction {
 
     pub fn completion_cell(&mut self, file_name: &str, cell_name: &str, line: u32, col: u32) {
         let cell_uri = self.cell_uri(file_name, cell_name);
-        let id = self.server.next_request_id();
-        self.server.send_request::<Completion>(
+        let id = self.client.next_request_id();
+        self.client.send_request::<Completion>(
             id,
             json!({
                 "textDocument": {
@@ -1259,8 +1178,8 @@ impl LspInteraction {
         end_char: u32,
     ) {
         let cell_uri = self.cell_uri(file_name, cell_name);
-        let id = self.server.next_request_id();
-        self.server.send_request::<InlayHintRequest>(
+        let id = self.client.next_request_id();
+        self.client.send_request::<InlayHintRequest>(
             id,
             json!({
                 "textDocument": {
@@ -1283,8 +1202,8 @@ impl LspInteraction {
     /// Sends a full semantic tokens request for a notebook cell
     pub fn semantic_tokens_cell(&mut self, file_name: &str, cell_name: &str) {
         let cell_uri = self.cell_uri(file_name, cell_name);
-        let id = self.server.next_request_id();
-        self.server.send_request::<SemanticTokensFullRequest>(
+        let id = self.client.next_request_id();
+        self.client.send_request::<SemanticTokensFullRequest>(
             id,
             json!({
                 "textDocument": {
@@ -1305,8 +1224,8 @@ impl LspInteraction {
         end_char: u32,
     ) {
         let cell_uri = self.cell_uri(file_name, cell_name);
-        let id = self.server.next_request_id();
-        self.server.send_request::<SemanticTokensRangeRequest>(
+        let id = self.client.next_request_id();
+        self.client.send_request::<SemanticTokensRangeRequest>(
             id,
             json!({
                 "textDocument": {

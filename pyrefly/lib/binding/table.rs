@@ -28,6 +28,7 @@ macro_rules! table {
             $($vis)* expectations: $t<$crate::binding::binding::KeyExpect>,
             $($vis)* consistent_override_checks: $t<$crate::binding::binding::KeyConsistentOverrideCheck>,
             $($vis)* exports: $t<$crate::binding::binding::KeyExport>,
+            $($vis)* decorators: $t<$crate::binding::binding::KeyDecorator>,
             $($vis)* decorated_functions: $t<$crate::binding::binding::KeyDecoratedFunction>,
             $($vis)* undecorated_functions: $t<$crate::binding::binding::KeyUndecoratedFunction>,
             $($vis)* classes: $t<$crate::binding::binding::KeyClass>,
@@ -67,6 +68,12 @@ macro_rules! table {
             type Value = $t<$crate::binding::binding::KeyExport>;
             fn get(&self) -> &Self::Value { &self.exports }
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.exports }
+        }
+
+        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyDecorator> for $name {
+            type Value = $t<$crate::binding::binding::KeyDecorator>;
+            fn get(&self) -> &Self::Value { &self.decorators }
+            fn get_mut(&mut self) -> &mut Self::Value { &mut self.decorators }
         }
 
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyDecoratedFunction> for $name {
@@ -186,6 +193,7 @@ macro_rules! table_for_each(
         $f(&($e).expectations);
         $f(&($e).consistent_override_checks);
         $f(&($e).exports);
+        $f(&($e).decorators);
         $f(&($e).decorated_functions);
         $f(&($e).undecorated_functions);
         $f(&($e).classes);
@@ -211,6 +219,7 @@ macro_rules! table_mut_for_each(
         $f(&mut ($e).expectations);
         $f(&mut ($e).consistent_override_checks);
         $f(&mut ($e).exports);
+        $f(&mut ($e).decorators);
         $f(&mut ($e).decorated_functions);
         $f(&mut ($e).undecorated_functions);
         $f(&mut ($e).classes);
@@ -236,6 +245,7 @@ macro_rules! table_try_for_each(
         $f(&($e).expectations)?;
         $f(&($e).consistent_override_checks)?;
         $f(&($e).exports)?;
+        $f(&($e).decorators)?;
         $f(&($e).decorated_functions)?;
         $f(&($e).undecorated_functions)?;
         $f(&($e).classes)?;

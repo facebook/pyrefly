@@ -27,9 +27,9 @@ fn test_workspace_symbol() {
         ..Default::default()
     });
 
-    interaction.server.did_open("autoimport_provider.py");
+    interaction.client.did_open("autoimport_provider.py");
 
-    interaction.server.send_request::<WorkspaceSymbolRequest>(
+    interaction.client.send_request::<WorkspaceSymbolRequest>(
         RequestId::from(2),
         json!({
             "query": "this_is_a_very_long_function_name_so_we_can"

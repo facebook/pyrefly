@@ -22,13 +22,13 @@ fn test_inlay_hint_default_config() {
         ..Default::default()
     });
 
-    interaction.server.did_open("inlay_hint_test.py");
+    interaction.client.did_open("inlay_hint_test.py");
     interaction
-        .server
+        .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
 
     interaction.client.expect_response::<InlayHintRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!([
             {
                 "label":" -> tuple[Literal[1], Literal[2]]",
@@ -80,14 +80,14 @@ fn test_inlay_hint_default_and_pyrefly_analysis() {
         ..Default::default()
     });
 
-    interaction.server.did_open("inlay_hint_test.py");
+    interaction.client.did_open("inlay_hint_test.py");
     interaction
-        .server
+        .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
 
     interaction
         .client
-        .expect_response::<InlayHintRequest>(interaction.server.current_request_id(), json!([]));
+        .expect_response::<InlayHintRequest>(interaction.client.current_request_id(), json!([]));
 
     interaction.shutdown();
 }
@@ -111,15 +111,15 @@ fn test_inlay_hint_disable_all() {
         ..Default::default()
     });
 
-    interaction.server.did_open("inlay_hint_test.py");
+    interaction.client.did_open("inlay_hint_test.py");
 
     interaction
-        .server
+        .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
 
     interaction
         .client
-        .expect_response::<InlayHintRequest>(interaction.server.current_request_id(), json!([]));
+        .expect_response::<InlayHintRequest>(interaction.client.current_request_id(), json!([]));
 
     interaction.shutdown();
 }
@@ -140,14 +140,14 @@ fn test_inlay_hint_disable_variables() {
         ..Default::default()
     });
 
-    interaction.server.did_open("inlay_hint_test.py");
+    interaction.client.did_open("inlay_hint_test.py");
 
     interaction
-        .server
+        .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
 
     interaction.client.expect_response::<InlayHintRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!([{
             "label":" -> tuple[Literal[1], Literal[2]]",
             "position":{"character":21,"line":6},
@@ -185,14 +185,14 @@ fn test_inlay_hint_disable_returns() {
         ..Default::default()
     });
 
-    interaction.server.did_open("inlay_hint_test.py");
+    interaction.client.did_open("inlay_hint_test.py");
 
     interaction
-        .server
+        .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
 
     interaction.client.expect_response::<InlayHintRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!([{
             "label":": tuple[Literal[1], Literal[2]]",
             "position":{"character":6,"line":11},
@@ -216,13 +216,13 @@ fn test_inlay_hint_labels_do_not_support_goto_type_definition() {
         ..Default::default()
     });
 
-    interaction.server.did_open("type_def_inlay_hint_test.py");
+    interaction.client.did_open("type_def_inlay_hint_test.py");
     interaction
-        .server
+        .client
         .inlay_hint("type_def_inlay_hint_test.py", 0, 0, 100, 0);
 
     interaction.client.expect_response::<InlayHintRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!([
             {
                 "label": " -> MyClass",

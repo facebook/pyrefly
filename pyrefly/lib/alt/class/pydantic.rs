@@ -135,6 +135,53 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .find_map(|(_, metadata)| metadata.dataclass_metadata().map(&extractor))
     }
 
+    /// Check if a type is a RootModel or subclass of RootModel, and if so, recursively extract all inner types.
+    /// Returns Some(root_type) if the type is a RootModel, None otherwise.
+    /// For unions containing multiple RootModels, extracts and returns a union of all their inner types.
+    /// Recursively expands nested RootModels (e.g., RootModel[RootModel[int]] expands to RootModel[int] | int).
+    pub fn extract_root_model_inner_type(&self, ty: &Type) -> Option<Type> {
+        match ty {
+            Type::Union(types) => {
+                let root_types: Vec<Type> = types
+                    .iter()
+                    .filter_map(|t| self.extract_root_model_inner_type(t))
+                    .collect();
+
+                if root_types.is_empty() {
+                    None
+                } else {
+                    Some(self.unions(root_types))
+                }
+            }
+            Type::ClassType(cls) => {
+                if cls.has_qname(ModuleName::pydantic_root_model().as_str(), "RootModel") {
+                    let targs = cls.targs().as_slice();
+                    let root_type = targs.last().cloned().unwrap_or_else(Type::any_implicit);
+                    if let Some(nested_root_type) = self.extract_root_model_inner_type(&root_type) {
+                        return Some(self.union(root_type.clone(), nested_root_type));
+                    }
+                    return Some(root_type);
+                }
+
+                let metadata = self.get_metadata_for_class(cls.class_object());
+                if matches!(metadata.pydantic_model_kind(), Some(RootModel))
+                    && let Some((root_type, _)) =
+                        self.get_pydantic_root_model_type_via_mro(cls.class_object(), &metadata)
+                {
+                    // Recursively expand if the inner type is also a RootModel
+                    // Return union of immediate inner type AND recursive expansion
+                    if let Some(nested_root_type) = self.extract_root_model_inner_type(&root_type) {
+                        return Some(self.union(root_type.clone(), nested_root_type));
+                    }
+                    Some(root_type)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn pydantic_config(
         &self,
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],

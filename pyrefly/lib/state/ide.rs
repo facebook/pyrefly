@@ -154,7 +154,6 @@ fn create_intermediate_definition_from(
                     location: undecorated.def.name.range,
                     symbol_kind: Some(symbol_kind),
                     docstring_range: func.docstring_range,
-                    is_deprecated: false,
                     deprecation: None,
                     special_export: None,
                 }));
@@ -166,7 +165,6 @@ fn create_intermediate_definition_from(
                             location: def_key.range(),
                             symbol_kind: Some(SymbolKind::Class),
                             docstring_range: None,
-                            is_deprecated: false,
                             deprecation: None,
                             special_export: None,
                         }))
@@ -179,7 +177,6 @@ fn create_intermediate_definition_from(
                         location: def.name.range,
                         symbol_kind: Some(SymbolKind::Class),
                         docstring_range: *docstring_range,
-                        is_deprecated: false,
                         deprecation: None,
                         special_export: None,
                     })),
@@ -190,7 +187,6 @@ fn create_intermediate_definition_from(
                     location: def_key.range(),
                     symbol_kind: current_binding.symbol_kind(),
                     docstring_range: None,
-                    is_deprecated: false,
                     deprecation: None,
                     special_export: None,
                 }));

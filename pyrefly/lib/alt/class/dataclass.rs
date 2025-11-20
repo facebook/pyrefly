@@ -89,8 +89,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.get_pydantic_root_model_type_via_mro(cls, &metadata)
             {
                 self.get_pydantic_root_model_init(cls, root_model_type, has_strict)
+            } else if metadata.is_pydantic_base_model() {
+                // Pydantic models with RootModel fields need type expansion
+                let transform_type: &dyn Fn(Type) -> Type = &|ty: Type| {
+                    if let Some(root_type) = self.extract_root_model_inner_type(&ty) {
+                        self.union(ty, root_type)
+                    } else {
+                        ty
+                    }
+                };
+                self.get_dataclass_init(
+                    cls,
+                    dataclass,
+                    dataclass.kws.strict,
+                    transform_type,
+                    errors,
+                )
             } else {
-                self.get_dataclass_init(cls, dataclass, dataclass.kws.strict, errors)
+                // Regular dataclasses: no type transformation
+                self.get_dataclass_init(cls, dataclass, dataclass.kws.strict, &|ty| ty, errors)
             };
             fields.insert(dunder::INIT, init_method);
         }
@@ -191,7 +208,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut params = Vec::new();
         for (name, field, _) in self.iter_fields(cls, dataclass_metadata, true) {
             if field.is_init_var() {
-                params.push(self.as_param(&field, &name, false, false, true, None, errors));
+                params.push(self.as_param(
+                    &field,
+                    &name,
+                    false,
+                    false,
+                    true,
+                    None,
+                    &|ty| ty,
+                    errors,
+                ));
             }
         }
         let want = Type::Callable(Box::new(Callable::list(
@@ -454,6 +480,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         dataclass: &DataclassMetadata,
         strict_default: bool,
+        param_type_transform: &dyn Fn(Type) -> Type,
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         let mut params = vec![self.class_self_param(cls, false)];
@@ -490,6 +517,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         is_kw_only,
                         strict,
                         field_flags.converter_param.clone(),
+                        param_type_transform,
                         errors,
                     ));
                 }
@@ -501,6 +529,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         is_kw_only,
                         strict,
                         field_flags.converter_param.clone(),
+                        param_type_transform,
                         errors,
                     ));
                 }

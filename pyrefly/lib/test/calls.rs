@@ -93,7 +93,7 @@ testcase!(
 from warnings import deprecated
 @deprecated("function is deprecated")
 def old_function() -> None: ...
-old_function()  # E: `old_function` is deprecated: function is deprecated
+old_function()  # E: `old_function` is deprecated
     "#,
 );
 
@@ -112,7 +112,7 @@ testcase!(
 from typing_extensions import deprecated
 @deprecated("function is deprecated")
 def old_function() -> None: ...
-old_function()  # E: `old_function` is deprecated: function is deprecated
+old_function()  # E: `old_function` is deprecated
     "#,
 );
 
@@ -125,7 +125,7 @@ from warnings import deprecated
 def old_function() -> None: ...
 
 def take_callable(f: Callable) -> None: ...
-take_callable(old_function)  # E: `old_function` is deprecated: function is deprecated
+take_callable(old_function)  # E: `old_function` is deprecated
     "#,
 );
 
@@ -138,7 +138,7 @@ class C:
     def old_function(self) -> None: ...
 
 c = C()
-c.old_function()  # E: `C.old_function` is deprecated: function is deprecated
+c.old_function()  # E: `C.old_function` is deprecated
     "#,
 );
 
@@ -156,7 +156,7 @@ def f(x: str) -> str: ...
 def f(x: int | str) -> int | str:
     return x
 
-f(0)  # E: `f` is deprecated: DEPRECATED
+f(0)  # E: `f` is deprecated
     "#,
 );
 
@@ -174,7 +174,7 @@ def f(x: str) -> str: ...
 def f(x: int | str) -> int | str:
     return x
 
-f(0)  # E: Call to deprecated overload `f`: DEPRECATED
+f(0)  # E: Call to deprecated overload `f`
 f("foo") # No error
     "#,
 );
@@ -191,16 +191,37 @@ def f(x: int) -> int: ...  # E: Overloaded function must have an implementation
 @overload
 def f(x: str) -> str: ...
 
-f(0)  # E: Call to deprecated overload `f`: DEPRECATED
+f(0)  # E: Call to deprecated overload `f`
 f("foo") # No error
     "#,
 );
 
 testcase!(
-    test_deprecated_overload_shutil,
+    test_nondeprecated_overload_shutil,
     r#"
 import shutil
 shutil.rmtree("/tmp")
+    "#,
+);
+
+testcase!(
+    test_deprecated_message,
+    r#"
+from warnings import deprecated
+@deprecated("I am a special super-important message about the extended warranty on your car")
+def f(): ...
+
+f()  # E: I am a special super-important message about the extended warranty on your car
+    "#,
+);
+
+testcase!(
+    test_deprecated_fqn,
+    r#"
+import warnings
+@warnings.deprecated("Deprecated")
+def f(): ...
+f()  # E: Deprecated
     "#,
 );
 

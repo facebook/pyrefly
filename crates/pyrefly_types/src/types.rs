@@ -29,6 +29,7 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
+use crate::callable::Deprecation;
 use crate::callable::FuncMetadata;
 use crate::callable::Function;
 use crate::callable::FunctionKind;
@@ -49,6 +50,7 @@ use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
+use crate::type_output::TypeOutput;
 use crate::type_var::PreInferenceVariance;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
@@ -360,27 +362,30 @@ impl TypeAlias {
         *self.ty.clone()
     }
 
-    pub fn fmt_with_type<'a, D: Display + 'a>(
-        &'a self,
-        f: &mut fmt::Formatter<'_>,
-        wrap: &'a impl Fn(&'a Type) -> D,
+    pub fn fmt_with_type<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
         tparams: Option<&TParams>,
     ) -> fmt::Result {
+        use pyrefly_util::display::commas_iter;
         match (&self.style, tparams) {
-            (TypeAliasStyle::LegacyImplicit, _) => {
-                write!(f, "{}", wrap(&self.ty))
-            }
+            (TypeAliasStyle::LegacyImplicit, _) => write_type(&self.ty, output),
             (_, None) => {
-                write!(f, "TypeAlias[{}, {}]", self.name, wrap(&self.ty))
+                output.write_str("TypeAlias[")?;
+                output.write_str(self.name.as_str())?;
+                output.write_str(", ")?;
+                write_type(&self.ty, output)?;
+                output.write_str("]")
             }
             (_, Some(tparams)) => {
-                write!(
-                    f,
-                    "TypeAlias[{}[{}], {}]",
-                    self.name,
-                    commas_iter(|| tparams.iter()),
-                    wrap(&self.ty)
-                )
+                output.write_str("TypeAlias[")?;
+                output.write_str(self.name.as_str())?;
+                output.write_str("[")?;
+                output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                output.write_str("], ")?;
+                write_type(&self.ty, output)?;
+                output.write_str("]")
             }
         }
     }
@@ -1099,12 +1104,8 @@ impl Type {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_overload)
     }
 
-    pub fn is_deprecated_function(&self) -> bool {
-        self.check_toplevel_func_metadata(&|meta| meta.flags.is_deprecated)
-    }
-
-    pub fn deprecated_message(&self) -> Option<String> {
-        self.check_toplevel_func_metadata(&|meta| meta.flags.deprecated_message.clone())
+    pub fn function_deprecation(&self) -> Option<Deprecation> {
+        self.check_toplevel_func_metadata(&|meta| meta.flags.deprecation.clone())
     }
 
     pub fn has_final_decoration(&self) -> bool {
@@ -1558,14 +1559,6 @@ impl Type {
                 }
             })
         })
-    }
-
-    /// Is this an instance of `warnings.deprecated` or its backport `typing_extensions.deprecated`?
-    pub fn is_deprecation_marker(&self) -> bool {
-        let Type::ClassType(cls) = self else {
-            return false;
-        };
-        cls.has_qname("warnings", "deprecated") || cls.has_qname("typing_extensions", "deprecated")
     }
 }
 

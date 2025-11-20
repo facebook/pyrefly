@@ -25,10 +25,10 @@ fn test_semantic_tokens_for_unsaved_file() {
 
 foo()
 "#;
-    interaction.server.did_open_uri(&uri, "python", text);
+    interaction.client.did_open_uri(&uri, "python", text);
 
     interaction
-        .server
+        .client
         .send_request::<SemanticTokensFullRequest>(
             RequestId::from(2),
             json!({
@@ -64,9 +64,9 @@ fn test_completion_for_unsaved_file() {
     let text = r#"import math
 math.
 "#;
-    interaction.server.did_open_uri(&uri, "python", text);
+    interaction.client.did_open_uri(&uri, "python", text);
 
-    interaction.server.send_request::<Completion>(
+    interaction.client.send_request::<Completion>(
         RequestId::from(2),
         json!({
             "textDocument": {"uri": uri.to_string()},

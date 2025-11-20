@@ -29,12 +29,18 @@ fn test_notebook_publish_diagnostics() {
     let cell_uri = interaction.cell_uri("notebook.ipynb", "cell1");
     interaction
         .client
-        .expect_publish_diagnostics_exact_uri(&cell_uri, 1);
+        .expect_publish_diagnostics_uri(&cell_uri, 1);
 
-    interaction.close_notebook("notebook.ipynb");
+    // TODO: Stop sending multiple publishDiagnostics on didOpen
     interaction
         .client
-        .expect_publish_diagnostics_exact_uri(&cell_uri, 0);
+        .expect_publish_diagnostics_uri(&cell_uri, 1);
+
+    interaction.close_notebook("notebook.ipynb");
+
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell_uri, 0);
 
     interaction.shutdown();
 }

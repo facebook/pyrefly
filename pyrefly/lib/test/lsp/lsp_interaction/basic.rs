@@ -25,9 +25,9 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_initialize_basic() {
     let mut interaction = LspInteraction::new();
 
-    interaction.server.send_initialize(
+    interaction.client.send_initialize(
         interaction
-            .server
+            .client
             .get_initialize_params(&InitializeSettings::default()),
     );
     interaction.client.expect_response::<Initialize>(
@@ -79,7 +79,7 @@ fn test_initialize_basic() {
             "version":"pyrefly-lsp-test-version"
         }}),
     );
-    interaction.server.send_initialized();
+    interaction.client.send_initialized();
     interaction.shutdown();
 }
 
@@ -88,14 +88,14 @@ fn test_shutdown() {
     let mut interaction = LspInteraction::new();
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.send_shutdown(RequestId::from(2));
+    interaction.client.send_shutdown(RequestId::from(2));
 
     interaction
         .client
         .expect_response::<Shutdown>(RequestId::from(2), json!(null));
 
-    interaction.server.send_exit();
-    interaction.server.expect_stop();
+    interaction.client.send_exit();
+    interaction.client.expect_stop();
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn test_shutdown_with_messages_in_between() {
 
     // Open a file
     interaction
-        .server
+        .client
         .send_notification::<DidOpenTextDocument>(json!({
             "textDocument": {
                 "uri": uri.to_string(),
@@ -128,7 +128,7 @@ fn test_shutdown_with_messages_in_between() {
     interaction.client.expect_any_message();
 
     // Send shutdown request
-    interaction.server.send_shutdown(RequestId::from(2));
+    interaction.client.send_shutdown(RequestId::from(2));
 
     // Expect shutdown response
     interaction
@@ -138,7 +138,7 @@ fn test_shutdown_with_messages_in_between() {
     // After shutdown, send a request (simulating what might happen with :wq)
     // Per LSP spec, this should be rejected with InvalidRequest
     interaction
-        .server
+        .client
         .send_request::<DocumentDiagnosticRequest>(
             RequestId::from(3),
             json!({
@@ -148,7 +148,7 @@ fn test_shutdown_with_messages_in_between() {
             }),
         );
 
-    interaction.server.expect_stop();
+    interaction.client.expect_stop();
 }
 
 #[test]
@@ -156,8 +156,8 @@ fn test_exit_without_shutdown() {
     let mut interaction = LspInteraction::new();
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.send_exit();
-    interaction.server.expect_stop();
+    interaction.client.send_exit();
+    interaction.client.expect_stop();
 }
 
 #[test]
@@ -175,16 +175,16 @@ fn test_initialize_with_python_path() {
     };
 
     interaction
-        .server
-        .send_initialize(interaction.server.get_initialize_params(&settings));
+        .client
+        .send_initialize(interaction.client.get_initialize_params(&settings));
     interaction.client.expect_any_message();
-    interaction.server.send_initialized();
+    interaction.client.send_initialized();
 
     interaction
         .client
         .expect_configuration_request(1, Some(vec![&scope_uri]));
     interaction
-        .server
+        .client
         .send_configuration_response(1, json!([{"pythonPath": python_path}]));
 
     interaction.shutdown();
@@ -200,7 +200,7 @@ fn test_nonexistent_file() {
     interaction.initialize(InitializeSettings::default());
 
     interaction
-        .server
+        .client
         .send_notification::<DidOpenTextDocument>(json!({
             "textDocument": {
                 "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string(),
@@ -211,7 +211,7 @@ fn test_nonexistent_file() {
         }));
 
     interaction
-        .server
+        .client
         .send_request::<DocumentDiagnosticRequest>(
             RequestId::from(2),
             json!({
@@ -230,7 +230,7 @@ fn test_nonexistent_file() {
 
     let notebook_content = std::fs::read_to_string(root.path().join("notebook.py")).unwrap();
     interaction
-        .server
+        .client
         .send_notification::<DidChangeTextDocument>(json!({
             "textDocument": {
                 "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string(),
@@ -249,7 +249,7 @@ fn test_nonexistent_file() {
 fn test_unknown_request() {
     let mut interaction = LspInteraction::new();
     interaction.initialize(InitializeSettings::default());
-    interaction.server.send_message(Message::Request(Request {
+    interaction.client.send_message(Message::Request(Request {
         id: RequestId::from(1),
         method: "fake-method".to_owned(),
         params: json!(null),
@@ -272,8 +272,8 @@ fn test_connection_closed_server_stops() {
     // Close the connection by dropping both the receiver and sender
     // This simulates the client disconnecting unexpectedly
     interaction.client.drop_connection();
-    interaction.server.drop_connection();
+    interaction.client.drop_connection();
 
     // The server should stop when the connection is closed
-    interaction.server.expect_stop();
+    interaction.client.expect_stop();
 }

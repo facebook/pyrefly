@@ -33,6 +33,7 @@ use ruff_python_ast::StringFlags;
 use ruff_python_ast::StringLiteral;
 use ruff_python_ast::StringLiteralFlags;
 use ruff_python_ast::StringLiteralValue;
+use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
 use ruff_python_parser::ParseError;
@@ -337,5 +338,9 @@ impl Ast {
             }
         });
         found
+    }
+
+    pub fn is_mangled_attr(name: &Name) -> bool {
+        name.starts_with("__") && !name.ends_with("__")
     }
 }

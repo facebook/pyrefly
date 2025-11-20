@@ -87,6 +87,31 @@ y = list([1, 2, 3])
 }
 
 #[test]
+fn test_enum_literal_inlay_hint() {
+    let code = r#"
+from enum import Enum
+import ssl
+class X(Enum):
+    A = 1
+    B = 2
+
+xa = X.A
+xa2 = xa
+imported = ssl.VerifyMode.CERT_NONE
+"#;
+    // enum literals do not show inlay hints
+    assert_eq!(
+        r#"
+# main.py
+9 | xa2 = xa
+       ^ inlay-hint: `: Literal[X.A]`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
 fn test_parameter_name_hints() {
     let code = r#"
 def my_function(x: int, y: str, z: bool) -> None:
@@ -203,6 +228,36 @@ obj.method(5, "world")
             InlayHintConfig {
                 call_argument_names: AllOffPartial::All,
                 variable_types: true,
+                ..Default::default()
+            }
+        )
+        .trim()
+    );
+}
+
+#[test]
+fn test_parameter_name_hints_with_varargs() {
+    let code = r#"
+def foo(s: str, *args: int, a: int, b: int, t: int) -> None:
+    pass
+
+foo("hello", 1, 2, 3, 5, a=1, b=2, t=4)
+"#;
+    assert_eq!(
+        r#"
+# main.py
+5 | foo("hello", 1, 2, 3, 5, a=1, b=2, t=4)
+        ^ inlay-hint: `s= `
+
+5 | foo("hello", 1, 2, 3, 5, a=1, b=2, t=4)
+                 ^ inlay-hint: `args= `
+"#
+        .trim(),
+        generate_inlay_hint_report(
+            code,
+            InlayHintConfig {
+                call_argument_names: AllOffPartial::All,
+                variable_types: false,
                 ..Default::default()
             }
         )

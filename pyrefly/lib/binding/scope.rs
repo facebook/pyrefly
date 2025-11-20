@@ -801,7 +801,19 @@ struct ParameterUsage {
 }
 
 #[derive(Clone, Debug)]
+struct ImportUsage {
+    range: TextRange,
+    used: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct UnusedParameter {
+    pub name: Name,
+    pub range: TextRange,
+}
+
+#[derive(Clone, Debug)]
+pub struct UnusedImport {
     pub name: Name,
     pub range: TextRange,
 }
@@ -926,6 +938,8 @@ pub struct Scope {
     /// merge flows, including boolean ops, ternary operators, if and match statements,
     /// and exception handlers
     forks: Vec<Fork>,
+    /// Tracking imports in the current scope (module-level only)
+    imports: SmallMap<Name, ImportUsage>,
 }
 
 impl Scope {
@@ -938,6 +952,7 @@ impl Scope {
             kind,
             loops: Default::default(),
             forks: Default::default(),
+            imports: SmallMap::new(),
         }
     }
 
@@ -1176,6 +1191,14 @@ impl Scopes {
         ScopeTrace(b)
     }
 
+    pub fn collect_module_unused_imports(&self) -> Vec<UnusedImport> {
+        let module_scope = self.scopes.first();
+        if !matches!(module_scope.scope.kind, ScopeKind::Module) {
+            return Vec::new();
+        }
+        Self::collect_unused_imports(module_scope.scope.imports.clone())
+    }
+
     pub fn init_current_static(
         &mut self,
         x: &[Stmt],
@@ -1254,6 +1277,22 @@ impl Scopes {
                     None
                 } else {
                     Some(UnusedParameter {
+                        name,
+                        range: usage.range,
+                    })
+                }
+            })
+            .collect()
+    }
+
+    fn collect_unused_imports(imports: SmallMap<Name, ImportUsage>) -> Vec<UnusedImport> {
+        imports
+            .into_iter()
+            .filter_map(|(name, usage)| {
+                if usage.used {
+                    None
+                } else {
+                    Some(UnusedImport {
                         name,
                         range: usage.range,
                     })
@@ -1529,6 +1568,27 @@ impl Scopes {
             if let Some(parameters) = scope.parameters_mut()
                 && let Some(info) = parameters.get_mut(name)
             {
+                info.used = true;
+                break;
+            }
+        }
+    }
+
+    pub fn register_import(&mut self, name: &Identifier) {
+        if matches!(self.current().kind, ScopeKind::Module) {
+            self.current_mut().imports.insert(
+                name.id.clone(),
+                ImportUsage {
+                    range: name.range,
+                    used: false,
+                },
+            );
+        }
+    }
+
+    pub fn mark_import_used(&mut self, name: &Name) {
+        for scope in self.iter_rev_mut() {
+            if let Some(info) = scope.imports.get_mut(name) {
                 info.used = true;
                 break;
             }

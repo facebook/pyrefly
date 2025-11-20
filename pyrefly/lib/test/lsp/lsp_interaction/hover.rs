@@ -23,11 +23,11 @@ fn test_hover_basic() {
         ..Default::default()
     });
 
-    interaction.server.did_open("bar.py");
-    interaction.server.hover("bar.py", 7, 5);
+    interaction.client.did_open("bar.py");
+    interaction.client.hover("bar.py", 7, 5);
 
     interaction.client.expect_response::<HoverRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!({
             "contents": {
                 "kind": "markdown",
@@ -48,9 +48,9 @@ fn hover_on_attr_of_pyi_assignment_shows_pyi_type() {
         ..Default::default()
     });
     let file = "attributes_of_py/src_with_assignments.py";
-    interaction.server.did_open(file);
+    interaction.client.did_open(file);
 
-    interaction.server.hover(file, 8, 8);
+    interaction.client.hover(file, 8, 8);
     interaction.client.expect_response_with(
         |response| {
             if let Some(result) = &response.result
@@ -79,8 +79,8 @@ fn hover_attribute_prefers_py_docstring_over_pyi() {
     });
 
     let file = "attributes_of_py_docstrings/src.py";
-    interaction.server.did_open(file);
-    interaction.server.hover(file, 9, 10);
+    interaction.client.did_open(file);
+    interaction.client.hover(file, 9, 10);
     interaction.client.expect_response_with(
         |response| {
             response
@@ -111,11 +111,11 @@ fn test_hover_import() {
         ..Default::default()
     });
 
-    interaction.server.did_open("foo.py");
-    interaction.server.hover("foo.py", 6, 16);
+    interaction.client.did_open("foo.py");
+    interaction.client.hover("foo.py", 6, 16);
 
     interaction.client.expect_response::<HoverRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!({
             "contents": {
                 "kind": "markdown",
@@ -139,12 +139,12 @@ fn test_hover_suppressed_error() {
         ..Default::default()
     });
 
-    interaction.server.did_open("suppression.py");
+    interaction.client.did_open("suppression.py");
 
     // Standalone suppression, next line has a suppressed error
-    interaction.server.hover("suppression.py", 5, 10);
+    interaction.client.hover("suppression.py", 5, 10);
     interaction.client.expect_response::<HoverRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!({
             "contents": {
                 "kind": "markdown",
@@ -154,9 +154,9 @@ fn test_hover_suppressed_error() {
     );
 
     // Trailing suppression, same line has a suppressed error
-    interaction.server.hover("suppression.py", 8, 15);
+    interaction.client.hover("suppression.py", 8, 15);
     interaction.client.expect_response::<HoverRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!({
             "contents": {
                 "kind": "markdown",
@@ -166,9 +166,9 @@ fn test_hover_suppressed_error() {
     );
 
     // Trailing suppression, suppressed error does not match
-    interaction.server.hover("suppression.py", 10, 15);
+    interaction.client.hover("suppression.py", 10, 15);
     interaction.client.expect_response::<HoverRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!({
             "contents": {
                 "kind": "markdown",
@@ -178,9 +178,9 @@ fn test_hover_suppressed_error() {
     );
 
     // Trailing suppression, next line has an unsuppressed error
-    interaction.server.hover("suppression.py", 12, 15);
+    interaction.client.hover("suppression.py", 12, 15);
     interaction.client.expect_response::<HoverRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!({
             "contents": {
                 "kind": "markdown",
@@ -190,9 +190,9 @@ fn test_hover_suppressed_error() {
     );
 
     // Standalone suppression, no errors
-    interaction.server.hover("suppression.py", 15, 10);
+    interaction.client.hover("suppression.py", 15, 10);
     interaction.client.expect_response::<HoverRequest>(
-        interaction.server.current_request_id(),
+        interaction.client.current_request_id(),
         json!({
             "contents": {
                 "kind": "markdown",

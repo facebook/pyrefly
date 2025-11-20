@@ -23,12 +23,12 @@ $ echo "x: str = 12" > $TMPDIR/shown1.py && \
 > echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text
 */shown*.py:1:* (glob)
- WARN ast.pyi:1113:10-11: `Constant.n` is deprecated: Removed in Python 3.14. Use `value` instead. [deprecated]
- WARN ast.pyi:1113:10-18: `Constant.n` is deprecated: Removed in Python 3.14. Use `value` instead. [deprecated]
- WARN ast.pyi:1123:10-11: `Constant.s` is deprecated: Removed in Python 3.14. Use `value` instead. [deprecated]
- WARN ast.pyi:1123:10-18: `Constant.s` is deprecated: Removed in Python 3.14. Use `value` instead. [deprecated]
- WARN importlib/_bootstrap_external.pyi:1:40-41: `WindowsRegistryFinder` is deprecated: Deprecated since Python 3.6. Use site configuration instead. Future versions of Python may not enable this finder by default. [deprecated]
- WARN importlib/resources/__init__.pyi:51:9-29: `contents` is deprecated: Deprecated since Python 3.11. Use `files(anchor).iterdir()`. [deprecated]
+ WARN ast.pyi:1113:10-11: `Constant.n` is deprecated [deprecated]
+ WARN ast.pyi:1113:10-18: `Constant.n` is deprecated [deprecated]
+ WARN ast.pyi:1123:10-11: `Constant.s` is deprecated [deprecated]
+ WARN ast.pyi:1123:10-18: `Constant.s` is deprecated [deprecated]
+ WARN importlib/_bootstrap_external.pyi:1:40-41: `WindowsRegistryFinder` is deprecated [deprecated]
+ WARN importlib/resources/__init__.pyi:51:9-29: `contents` is deprecated [deprecated]
 */shown*.py:1:* (glob)
 [1]
 ```

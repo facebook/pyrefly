@@ -24,8 +24,8 @@ fn test_cycle_class() {
         ..Default::default()
     });
 
-    interaction.server.did_open("cycle_class/foo.py");
-    interaction.server.diagnostic("cycle_class/foo.py");
+    interaction.client.did_open("cycle_class/foo.py");
+    interaction.client.diagnostic("cycle_class/foo.py");
 
     interaction
         .client
@@ -50,15 +50,15 @@ fn test_unexpected_keyword_range() {
         ..Default::default()
     });
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
     interaction
-        .server
+        .client
         .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
-    interaction.server.did_open("unexpected_keyword.py");
-    interaction.server.diagnostic("unexpected_keyword.py");
+    interaction.client.did_open("unexpected_keyword.py");
+    interaction.client.diagnostic("unexpected_keyword.py");
 
     interaction
         .client
@@ -97,15 +97,15 @@ fn test_error_documentation_links() {
         ..Default::default()
     });
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
     interaction
-        .server
+        .client
         .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
-    interaction.server.did_open("error_docs_test.py");
-    interaction.server.diagnostic("error_docs_test.py");
+    interaction.client.did_open("error_docs_test.py");
+    interaction.client.diagnostic("error_docs_test.py");
 
     interaction.client.expect_response::<DocumentDiagnosticRequest>(
 
@@ -187,18 +187,18 @@ fn test_unreachable_branch_diagnostic() {
         ..Default::default()
     });
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(
+    interaction.client.send_configuration_response(
         2,
         json!([
             {"pyrefly": {"displayTypeErrors": "force-on"}}
         ]),
     );
 
-    interaction.server.did_open("unreachable_branch.py");
-    interaction.server.diagnostic("unreachable_branch.py");
+    interaction.client.did_open("unreachable_branch.py");
+    interaction.client.diagnostic("unreachable_branch.py");
 
     interaction
         .client
@@ -237,17 +237,17 @@ fn test_unused_parameter_diagnostic() {
         ..Default::default()
     });
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
     interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(
+    interaction.client.send_configuration_response(
         2,
         json!([
             {"pyrefly": {"displayTypeErrors": "force-on"}}
         ]),
     );
 
-    interaction.server.did_open("unused_parameter/example.py");
-    interaction.server.diagnostic("unused_parameter/example.py");
+    interaction.client.did_open("unused_parameter/example.py");
+    interaction.client.diagnostic("unused_parameter/example.py");
 
     interaction
         .client
@@ -286,18 +286,18 @@ fn test_unused_parameter_no_report() {
         ..Default::default()
     });
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
     interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(
+    interaction.client.send_configuration_response(
         2,
         json!([
             {"pyrefly": {"displayTypeErrors": "force-on"}}
         ]),
     );
 
-    interaction.server.did_open("unused_parameter/no_report.py");
+    interaction.client.did_open("unused_parameter/no_report.py");
     interaction
-        .server
+        .client
         .diagnostic("unused_parameter/no_report.py");
 
     interaction
@@ -306,6 +306,106 @@ fn test_unused_parameter_no_report() {
             RequestId::from(2),
             json!({
                 "items": [],
+                "kind": "full"
+            }),
+        );
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_unused_import_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]))),
+        ..Default::default()
+    });
+
+    interaction.client.did_change_configuration();
+    interaction.client.expect_configuration_request(2, None);
+    interaction.client.send_configuration_response(
+        2,
+        json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]),
+    );
+
+    interaction.client.did_open("unused_import/example.py");
+    interaction.client.diagnostic("unused_import/example.py");
+
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({
+                "items": [
+                    {
+                        "code": "unused-import",
+                        "message": "Import `os` is unused",
+                        "range": {
+                            "start": {"line": 6, "character": 7},
+                            "end": {"line": 6, "character": 9}
+                        },
+                        "severity": 4,
+                        "source": "Pyrefly",
+                        "tags": [1]
+                    }
+                ],
+                "kind": "full"
+            }),
+        );
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_unused_from_import_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]))),
+        ..Default::default()
+    });
+
+    interaction.client.did_change_configuration();
+    interaction.client.expect_configuration_request(2, None);
+    interaction.client.send_configuration_response(
+        2,
+        json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]),
+    );
+
+    interaction.client.did_open("unused_import/from_import.py");
+    interaction
+        .client
+        .diagnostic("unused_import/from_import.py");
+
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({
+                "items": [
+                    {
+                        "code": "unused-import",
+                        "message": "Import `Dict` is unused",
+                        "range": {
+                            "start": {"line": 6, "character": 19},
+                            "end": {"line": 6, "character": 23}
+                        },
+                        "severity": 4,
+                        "source": "Pyrefly",
+                        "tags": [1]
+                    }
+                ],
                 "kind": "full"
             }),
         );
@@ -335,11 +435,10 @@ fn test_publish_diagnostics_preserves_symlink_uri() {
         ..Default::default()
     });
 
-    interaction.server.did_open(symlink_name);
-    interaction.client.expect_publish_diagnostics_exact_uri(
-        Url::from_file_path(&symlink_path).unwrap().as_str(),
-        1,
-    );
+    interaction.client.did_open(symlink_name);
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&Url::from_file_path(&symlink_path).unwrap(), 1);
 
     interaction.shutdown();
 }
@@ -362,17 +461,17 @@ fn test_shows_stdlib_type_errors_with_force_on() {
                 .join("filtering_stdlib_errors/usr/lib/python3.12"),
         );
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
     interaction
-        .server
+        .client
         .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
     let stdlib_filepath = "filtering_stdlib_errors/usr/lib/python3.12/stdlib_file.py";
 
-    interaction.server.did_open(stdlib_filepath);
-    interaction.server.diagnostic(stdlib_filepath);
+    interaction.client.did_open(stdlib_filepath);
+    interaction.client.diagnostic(stdlib_filepath);
 
     interaction
         .client
@@ -419,18 +518,18 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
                 .join("filtering_stdlib_errors/usr/lib/python3.12"),
         );
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
     interaction
-        .server
+        .client
         .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
     interaction
-        .server
+        .client
         .did_open("filtering_stdlib_errors/usr/local/lib/python3.12/stdlib_file.py");
     interaction
-        .server
+        .client
         .diagnostic("filtering_stdlib_errors/usr/local/lib/python3.12/stdlib_file.py");
 
     interaction
@@ -466,10 +565,10 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         );
 
     interaction
-        .server
+        .client
         .did_open("filtering_stdlib_errors/usr/local/lib/python3.8/stdlib_file.py");
     interaction
-        .server
+        .client
         .diagnostic("filtering_stdlib_errors/usr/local/lib/python3.8/stdlib_file.py");
 
     interaction
@@ -497,10 +596,10 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         );
 
     interaction
-        .server
+        .client
         .did_open("filtering_stdlib_errors/usr/lib/python3.12/stdlib_file.py");
     interaction
-        .server
+        .client
         .diagnostic("filtering_stdlib_errors/usr/lib/python3.12/stdlib_file.py");
 
     interaction
@@ -536,10 +635,10 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         );
 
     interaction
-        .server
+        .client
         .did_open("filtering_stdlib_errors/usr/lib64/python3.12/stdlib_file.py");
     interaction
-        .server
+        .client
         .diagnostic("filtering_stdlib_errors/usr/lib64/python3.12/stdlib_file.py");
 
     interaction
@@ -588,17 +687,17 @@ fn test_does_not_filter_out_stdlib_errors_with_default_displaytypeerrors() {
         ..Default::default()
     });
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
     interaction
-        .server
+        .client
         .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "default"}}]));
 
     let stdlib_filepath = "filtering_stdlib_errors_with_default/usr/lib/python3.12/stdlib_file.py";
 
-    interaction.server.did_open(stdlib_filepath);
-    interaction.server.diagnostic(stdlib_filepath);
+    interaction.client.did_open(stdlib_filepath);
+    interaction.client.diagnostic(stdlib_filepath);
 
     interaction
         .client
@@ -623,17 +722,17 @@ fn test_shows_stdlib_errors_when_explicitly_included_in_project_includes() {
         ..Default::default()
     });
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
 
     interaction.client.expect_configuration_request(2, None);
     interaction
-        .server
+        .client
         .send_configuration_response(2, json!([{"pyrefly": {"displayTypeErrors": "default"}}]));
 
     let stdlib_filepath = "stdlib_with_explicit_includes/usr/lib/python3.12/stdlib_file.py";
 
-    interaction.server.did_open(stdlib_filepath);
-    interaction.server.diagnostic(stdlib_filepath);
+    interaction.client.did_open(stdlib_filepath);
+    interaction.client.diagnostic(stdlib_filepath);
 
     interaction
         .client

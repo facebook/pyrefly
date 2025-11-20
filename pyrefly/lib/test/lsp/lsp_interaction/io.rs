@@ -23,12 +23,12 @@ fn test_edits_while_recheck() {
     interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
     let path = root.path().join("basic/foo.py");
     // In this test, we trigger didSave and didChange to try to exercise the behavior
     // where we have concurrent in-memory recheck and on-disk recheck.
     interaction
-        .server
+        .client
         .send_notification::<DidSaveTextDocument>(json!({
             "textDocument": {
                 "uri": Url::from_file_path(&path).unwrap().to_string(),
@@ -39,7 +39,7 @@ fn test_edits_while_recheck() {
         }));
 
     interaction
-        .server
+        .client
         .send_notification::<DidChangeTextDocument>(json!({
             "textDocument": {
                 "uri": Url::from_file_path(&path).unwrap().to_string(),
@@ -51,7 +51,7 @@ fn test_edits_while_recheck() {
             ],
         }));
 
-    interaction.server.definition("foo.py", 6, 18);
+    interaction.client.definition("foo.py", 6, 18);
 
     interaction
         .client
@@ -93,7 +93,7 @@ fn test_file_watcher() {
     );
 
     interaction
-        .server
+        .client
         .send_response::<RegisterCapability>(RequestId::from(1), json!(null));
 
     interaction.shutdown();

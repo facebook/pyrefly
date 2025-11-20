@@ -22,10 +22,10 @@ fn test_prepare_rename() {
     interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     let path = root.path().join("basic/foo.py");
-    interaction.server.send_request::<PrepareRenameRequest>(
+    interaction.client.send_request::<PrepareRenameRequest>(
         RequestId::from(2),
         json!({
             "textDocument": {
@@ -65,10 +65,10 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
 
     let user_code = root_path.join("user_code.py");
 
-    interaction.server.did_open("user_code.py");
+    interaction.client.did_open("user_code.py");
 
     // Verify that prepareRename returns null, indicating that renaming third party symbols is not allowed
-    interaction.server.send_request::<PrepareRenameRequest>(
+    interaction.client.send_request::<PrepareRenameRequest>(
         RequestId::from(2),
         json!({
             "textDocument": {
@@ -86,7 +86,7 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
         .expect_response::<PrepareRenameRequest>(RequestId::from(2), serde_json::Value::Null);
 
     // Verify that attempting to rename a third party symbol returns an error
-    interaction.server.send_request::<Rename>(
+    interaction.client.send_request::<Rename>(
         RequestId::from(3),
         json!({
             "textDocument": {
@@ -131,12 +131,12 @@ fn test_rename() {
     let various_imports = root_path.join("various_imports.py");
     let with_synthetic_bindings = root_path.join("with_synthetic_bindings.py");
 
-    interaction.server.did_open("bar.py");
-    interaction.server.did_open("foo.py");
-    interaction.server.did_open("various_imports.py");
-    interaction.server.did_open("with_synthetic_bindings.py");
+    interaction.client.did_open("bar.py");
+    interaction.client.did_open("foo.py");
+    interaction.client.did_open("various_imports.py");
+    interaction.client.did_open("with_synthetic_bindings.py");
 
-    interaction.server.send_request::<Rename>(
+    interaction.client.send_request::<Rename>(
         RequestId::from(2),
         json!({
             "textDocument": {

@@ -6,6 +6,8 @@
  */
 
 pub mod hover;
+pub mod inlay_hints;
 pub mod notebook;
 pub mod provide_type;
 pub mod semantic_tokens;
+pub mod signature_help;

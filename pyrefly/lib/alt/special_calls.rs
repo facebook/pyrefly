@@ -25,6 +25,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::solve::TypeFormContext;
+use crate::alt::types::decorated_function::Decorator;
 use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -511,7 +512,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         kws: &[CallKeyword],
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        let special_decorator = self.get_special_decorator(callee)?;
+        let decorator = Decorator {
+            ty: callee.clone(),
+            deprecation: None,
+        };
+        let special_decorator = self.get_special_decorator(&decorator)?;
         // Does this call have a single positional argument?
         // If not, it cannot be a decorator application.
         if kws.is_empty()

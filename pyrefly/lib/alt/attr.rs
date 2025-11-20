@@ -15,6 +15,7 @@ use pyrefly_types::literal::LitEnum;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Var;
+use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
@@ -1096,8 +1097,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &ClassBase,
         attr_name: &Name,
     ) -> Option<ClassAttribute> {
-        if !attr_name.starts_with("__")
-            || !attr_name.ends_with("__")
+        if !is_dunder(attr_name)
             // Constructors and the dataclass __post_init__ method are special-cased elsewhere and
             // should not go through magic dunder lookup.
             || [dunder::NEW, dunder::INIT, dunder::POST_INIT]
@@ -2049,7 +2049,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 is_deprecated: matches!(
                                     export_location,
                                     ExportLocation::ThisModule(Export {
-                                        is_deprecated: true,
+                                        deprecation: Some(_),
                                         ..
                                     })
                                 ),
@@ -2081,7 +2081,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             is_deprecated: matches!(
                                 export_location,
                                 ExportLocation::ThisModule(Export {
-                                    is_deprecated: true,
+                                    deprecation: Some(_),
                                     ..
                                 })
                             ),
@@ -2131,7 +2131,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 | Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, _))
                                 | Attribute::Simple(ty)
                                 | Attribute::ClassAttribute(ClassAttribute::Property(ty, _, _))
-                                    if ty.is_deprecated_function() =>
+                                    if ty.function_deprecation().is_some() =>
                                 {
                                     is_deprecated = true;
                                 }

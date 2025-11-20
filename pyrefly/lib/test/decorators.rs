@@ -209,7 +209,7 @@ testcase!(
     test_invalid_top_level_function_decorators,
     r#"
 from typing import *
-from abc import abstractstaticmethod, abstractmethod # E: `abstractstaticmethod` is deprecated: Deprecated since Python 3.3. Use `@staticmethod` stacked on top of `@abstractmethod` instead.
+from abc import abstractstaticmethod, abstractmethod # E: `abstractstaticmethod` is deprecated
 from enum import member, nonmember
 
 @member  # E: can only be used on methods

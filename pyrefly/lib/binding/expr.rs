@@ -30,10 +30,12 @@ use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LinkedKey;
@@ -349,6 +351,11 @@ impl<'a> BindingsBuilder<'a> {
                             name
                         ),
                     );
+                    self.insert_binding(key, Binding::Type(Type::any_error()))
+                } else if self.scopes.in_class_body()
+                    && let Some((cls, _)) = self.scopes.current_class_and_metadata_keys()
+                {
+                    self.insert_binding(key, Binding::ClassBodyUnknownName(cls, name.clone()))
                 } else {
                     // Record a type error and fall back to `Any`.
                     self.error(
@@ -356,8 +363,8 @@ impl<'a> BindingsBuilder<'a> {
                         ErrorInfo::Kind(ErrorKind::UnknownName),
                         format!("Could not find name `{name}`"),
                     );
+                    self.insert_binding(key, Binding::Type(Type::any_error()))
                 }
-                self.insert_binding(key, Binding::Type(Type::any_error()))
             }
         }
     }
@@ -877,28 +884,16 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         decorators: Vec<Decorator>,
         usage: &mut Usage,
-    ) -> Vec<(Idx<Key>, TextRange)> {
+    ) -> Vec<Idx<KeyDecorator>> {
         let mut decorator_keys = Vec::with_capacity(decorators.len());
         for mut x in decorators {
             self.ensure_expr(&mut x.expression, usage);
-            let k = self.insert_binding(Key::Anon(x.range), Binding::Decorator(x.expression));
-            decorator_keys.push((k, x.range));
+            let k = self.insert_binding(
+                KeyDecorator(x.range),
+                BindingDecorator { expr: x.expression },
+            );
+            decorator_keys.push(k);
         }
         decorator_keys
-    }
-
-    pub fn ensure_and_bind_decorators_with_ranges(
-        &mut self,
-        decorators: Vec<Decorator>,
-        usage: &mut Usage,
-    ) -> Vec<(Idx<Key>, TextRange)> {
-        let mut decorator_keys_with_ranges = Vec::with_capacity(decorators.len());
-        for mut x in decorators {
-            self.ensure_expr(&mut x.expression, usage);
-            let range = x.range();
-            let k = self.insert_binding(Key::Anon(x.range), Binding::Decorator(x.expression));
-            decorator_keys_with_ranges.push((k, range));
-        }
-        decorator_keys_with_ranges
     }
 }

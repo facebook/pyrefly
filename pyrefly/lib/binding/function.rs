@@ -44,6 +44,7 @@ use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::LastStmt;
@@ -61,8 +62,6 @@ use crate::binding::scope::Scope;
 use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
-use crate::deprecation::DeprecatedDecoration;
-use crate::deprecation::parse_deprecated_decorator;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::types::types::Type;
@@ -73,8 +72,7 @@ struct Decorators {
     is_abstract_method: bool,
     is_override: bool,
     is_classmethod: bool,
-    decorators: Box<[(Idx<Key>, TextRange)]>,
-    deprecated: Option<DeprecatedDecoration>,
+    decorators: Box<[Idx<KeyDecorator>]>,
 }
 
 pub struct SelfAssignments {
@@ -363,7 +361,7 @@ impl<'a> BindingsBuilder<'a> {
         implicit_return: Option<Idx<Key>>,
         should_infer_return_type: bool,
         stub_or_impl: FunctionStubOrImpl,
-        decorators: Box<[(Idx<Key>, TextRange)]>,
+        decorators: Box<[Idx<KeyDecorator>]>,
     ) {
         let is_generator =
             !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
@@ -409,7 +407,7 @@ impl<'a> BindingsBuilder<'a> {
                         range,
                         annotation,
                         stub_or_impl,
-                        decorators: decorators.into_iter().map(|x| x.0).collect(),
+                        decorators,
                         implicit_return,
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                         has_explicit_return: !return_keys.is_empty(),
@@ -462,7 +460,6 @@ impl<'a> BindingsBuilder<'a> {
         let mut has_no_type_check = false;
         let mut is_abstract_method = false;
         let mut is_classmethod = false;
-        let mut deprecated = None;
         for d in &decorator_list {
             let special_export = self.as_special_export(&d.expression);
             is_overload = is_overload || matches!(special_export, Some(SpecialExport::Overload));
@@ -479,9 +476,6 @@ impl<'a> BindingsBuilder<'a> {
                     special_export,
                     Some(SpecialExport::ClassMethod | SpecialExport::AbstractClassMethod)
                 );
-            if deprecated.is_none() {
-                deprecated = parse_deprecated_decorator(d);
-            }
         }
         let decorators = self
             .ensure_and_bind_decorators(decorator_list, usage)
@@ -493,7 +487,6 @@ impl<'a> BindingsBuilder<'a> {
             is_override,
             is_classmethod,
             decorators,
-            deprecated,
         }
     }
 
@@ -713,7 +706,6 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
                 module_style: self.module_info.path().style(),
-                deprecated: decorators.deprecated,
             },
         );
 

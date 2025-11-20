@@ -52,6 +52,7 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
@@ -61,7 +62,6 @@ use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::pydantic::PydanticConfigDict;
-use crate::deprecation::DeprecatedDecoration;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
@@ -95,6 +95,7 @@ assert_bytes!(KeyAbstractClassCheck, 4);
 assert_words!(KeyLegacyTypeParam, 1);
 assert_words!(KeyYield, 1);
 assert_words!(KeyYieldFrom, 1);
+assert_words!(KeyDecorator, 1);
 assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
@@ -104,7 +105,7 @@ assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 23);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
-assert_words!(BindingClassMetadata, 14);
+assert_words!(BindingClassMetadata, 11);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_words!(BindingClassField, 21);
@@ -112,8 +113,9 @@ assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
+assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 24);
+assert_words!(BindingUndecoratedFunction, 21);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -127,6 +129,7 @@ pub enum AnyIdx {
     KeyVariance(Idx<KeyVariance>),
     KeyClassSynthesizedFields(Idx<KeyClassSynthesizedFields>),
     KeyExport(Idx<KeyExport>),
+    KeyDecorator(Idx<KeyDecorator>),
     KeyDecoratedFunction(Idx<KeyDecoratedFunction>),
     KeyUndecoratedFunction(Idx<KeyUndecoratedFunction>),
     KeyAnnotation(Idx<KeyAnnotation>),
@@ -151,6 +154,7 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::KeyVariance(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassSynthesizedFields(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyExport(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyDecorator(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyDecoratedFunction(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyUndecoratedFunction(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAnnotation(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -258,6 +262,13 @@ impl Keyed for KeyExport {
     }
 }
 impl Exported for KeyExport {}
+impl Keyed for KeyDecorator {
+    type Value = BindingDecorator;
+    type Answer = Decorator;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyDecorator(idx)
+    }
+}
 impl Keyed for KeyDecoratedFunction {
     type Value = BindingDecoratedFunction;
     type Answer = Type;
@@ -666,6 +677,21 @@ impl DisplayWith<ModuleInfo> for KeyExport {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyDecorator(pub TextRange);
+
+impl Ranged for KeyDecorator {
+    fn range(&self) -> TextRange {
+        self.0
+    }
+}
+
+impl DisplayWith<ModuleInfo> for KeyDecorator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyDecorator({})", ctx.display(&self.0))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyDecoratedFunction(pub ShortIdentifier);
 
 impl Ranged for KeyDecoratedFunction {
@@ -1023,6 +1049,17 @@ pub enum FunctionStubOrImpl {
 }
 
 #[derive(Clone, Debug)]
+pub struct BindingDecorator {
+    pub expr: Expr,
+}
+
+impl DisplayWith<Bindings> for BindingDecorator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
+        write!(f, "BindingDecorator({})", ctx.module().display(&self.expr))
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct BindingDecoratedFunction {
     pub undecorated_idx: Idx<KeyUndecoratedFunction>,
     pub successor: Option<Idx<KeyDecoratedFunction>>,
@@ -1043,9 +1080,8 @@ pub struct BindingUndecoratedFunction {
     pub stub_or_impl: FunctionStubOrImpl,
     pub class_key: Option<Idx<KeyClass>>,
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
-    pub decorators: Box<[(Idx<Key>, TextRange)]>,
+    pub decorators: Box<[Idx<KeyDecorator>]>,
     pub module_style: ModuleStyle,
-    pub deprecated: Option<DeprecatedDecoration>,
 }
 
 impl DisplayWith<Bindings> for BindingUndecoratedFunction {
@@ -1097,7 +1133,7 @@ pub enum ReturnTypeKind {
         stub_or_impl: FunctionStubOrImpl,
         /// We keep this just so we can scan for `@abstractmethod` and use the info to decide
         /// whether to skip the validation.
-        decorators: Box<[Idx<Key>]>,
+        decorators: Box<[Idx<KeyDecorator>]>,
         implicit_return: Idx<Key>,
         is_generator: bool,
         has_explicit_return: bool,
@@ -1286,7 +1322,7 @@ pub enum Binding {
     /// e.g. in `from foo import bar as baz`, we should track the range of `bar`.
     Import(ModuleName, Name, Option<TextRange>),
     /// A class definition, points to a BindingClass and any decorators.
-    ClassDef(Idx<KeyClass>, Box<[Idx<Key>]>),
+    ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
     /// A phi node, representing the union of several alternative keys.
@@ -1325,8 +1361,6 @@ pub enum Binding {
     PatternMatchClassKeyword(Box<Expr>, Identifier, Idx<Key>),
     /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean flag is true) clause
     ExceptionHandler(Box<Expr>, bool),
-    /// Binding for an `@decorator` decoration on a function or class
-    Decorator(Expr),
     /// Binding for a lambda parameter.
     LambdaParameter(Var),
     /// Binding for a function parameter. We either have an annotation, or we will determine the
@@ -1395,6 +1429,10 @@ pub enum Binding {
     PartialTypeWithUpstreamsCompleted(Idx<Key>, Box<[Idx<Key>]>),
     /// `del` statement
     Delete(Expr),
+    /// A name in the class body that wasn't found in the static scope
+    /// It could either be an unbound name or a reference to an inherited attribute
+    /// We'll find out which when we solve the class
+    ClassBodyUnknownName(Idx<KeyClass>, Identifier),
 }
 
 impl DisplayWith<Bindings> for Binding {
@@ -1574,7 +1612,6 @@ impl DisplayWith<Bindings> for Binding {
                     ctx.display(*key),
                 )
             }
-            Self::Decorator(e) => write!(f, "Decorator({})", m.display(e)),
             Self::LambdaParameter(x) => write!(f, "LambdaParameter({x})"),
             Self::FunctionParameter(x) => write!(
                 f,
@@ -1649,6 +1686,14 @@ impl DisplayWith<Bindings> for Binding {
                 )
             }
             Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
+            Self::ClassBodyUnknownName(class_key, name) => {
+                write!(
+                    f,
+                    "ClassBodyUnknownName({}, {})",
+                    m.display(ctx.idx_to_key(*class_key)),
+                    name,
+                )
+            }
         }
     }
 }
@@ -1712,7 +1757,6 @@ impl Binding {
             | Binding::PatternMatchMapping(_, _)
             | Binding::PatternMatchClassPositional(_, _, _, _)
             | Binding::PatternMatchClassKeyword(_, _, _)
-            | Binding::Decorator(_)
             | Binding::ExceptionHandler(_, _)
             | Binding::SuperInstance(_, _)
             | Binding::AssignToAttribute(_, _)
@@ -1721,7 +1765,8 @@ impl Binding {
             | Binding::AssignToSubscript(_, _)
             | Binding::CompletedPartialType(..)
             | Binding::PartialTypeWithUpstreamsCompleted(..)
-            | Binding::Delete(_) => None,
+            | Binding::Delete(_)
+            | Binding::ClassBodyUnknownName(_, _) => None,
         }
     }
 }
@@ -2080,14 +2125,13 @@ pub struct BindingClassMetadata {
     /// itself can also potentially be one of these).
     pub keywords: Box<[(Name, Expr)]>,
     /// The class decorators.
-    pub decorators: Box<[(Idx<Key>, TextRange)]>,
+    pub decorators: Box<[Idx<KeyDecorator>]>,
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
     pub is_new_type: bool,
     pub pydantic_config_dict: PydanticConfigDict,
     /// The name of the field that has primary_key=True, if any (for Django models).
     /// Note that we calculate this field for all classes, but it is ignored unless the class is a django model.
     pub django_primary_key_field: Option<Name>,
-    pub deprecated: Option<DeprecatedDecoration>,
 }
 
 impl DisplayWith<Bindings> for BindingClassMetadata {

@@ -105,7 +105,7 @@ testcase!(
     test_abstract_property,
     r#"
 from typing import assert_type
-from abc import ABC, abstractproperty # E: `abstractproperty` is deprecated: Deprecated since Python 3.3. Use `@property` stacked on top of `@abstractmethod` instead.
+from abc import ABC, abstractproperty # E: `abstractproperty` is deprecated
 class C(ABC):
     @abstractproperty
     def foo(self) -> int:

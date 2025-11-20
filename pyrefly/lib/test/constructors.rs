@@ -557,6 +557,6 @@ class A:
         return super().__new__(cls)
     def __init__(self, x: str):
         pass
-A(0) # E: `A.__new__` is deprecated: old old old # E: `Literal[0]` is not assignable to parameter `x` with type `str`
+A(0) # E: `A.__new__` is deprecated # E: `Literal[0]` is not assignable to parameter `x` with type `str`
     "#,
 );
