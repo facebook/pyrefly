@@ -264,6 +264,8 @@ export async function activate(context: ExtensionContext) {
       {scheme: 'untitled', language: 'python'},
       // Support for notebook cells
       {scheme: 'vscode-notebook-cell', language: 'python'},
+      // Support for in-memory documents like the Positron Console
+      {scheme: 'inmemory', language: 'python'},
     ],
     // Support for notebooks
     // @ts-ignore
