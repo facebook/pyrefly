@@ -330,12 +330,16 @@ impl Ast {
     }
 
     pub fn contains_await(expr: &Expr) -> bool {
-        let mut found = false;
-        expr.visit(&mut |node: &Expr| {
+        // Iterative DFS to safely visit all nodes, including the root and nested children.
+        let mut stack = vec![expr];
+
+        while let Some(node) = stack.pop() {
             if matches!(node, Expr::Await(_)) {
-                found = true;
+                return true;
             }
-        });
-        found
+            node.recurse(&mut |child| stack.push(child));
+        }
+
+        false
     }
 }

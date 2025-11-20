@@ -483,3 +483,19 @@ def f(start, iterable: Iterable[_T], step) ->  Iterator[_T]:
 
     "#,
 );
+
+testcase!(
+    test_async_generator_nested_await_in_condition,
+    r#"
+from typing import AsyncGenerator, assert_type
+
+async def some_async_func(x: int) -> bool:
+    return True
+
+async def main() -> None:
+    # Regression test for Issue #1611
+    # Previously inferred as Generator (sync) because await was nested in comparison
+    generator = (x for x in [1, 2, 3] if await some_async_func(x) == True)
+    assert_type(generator, AsyncGenerator[int, None])
+"#,
+);
