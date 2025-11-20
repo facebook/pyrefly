@@ -805,6 +805,47 @@ impl<'a> ClassDisplayContext<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct HoverCodeSnippet {
+    pub heading: Option<String>,
+    pub body: String,
+    pub default_kind_label: Option<&'static str>,
+}
+
+pub fn format_hover_code_snippet(
+    type_: &Type,
+    name: Option<&str>,
+    display: String,
+) -> HoverCodeSnippet {
+    if type_.is_function_type() {
+        if let Some(name) = name {
+            let trimmed = display.trim_start();
+            let body = if trimmed.starts_with('(') {
+                format!("def {}{}: ...", name, trimmed)
+            } else {
+                display
+            };
+            HoverCodeSnippet {
+                heading: Some(name.to_owned()),
+                body,
+                default_kind_label: Some("(function) "),
+            }
+        } else {
+            HoverCodeSnippet {
+                heading: None,
+                body: display,
+                default_kind_label: Some("(function) "),
+            }
+        }
+    } else {
+        HoverCodeSnippet {
+            heading: None,
+            body: display,
+            default_kind_label: None,
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::path::PathBuf;
