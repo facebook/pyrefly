@@ -16,6 +16,10 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemTag;
+use lsp_types::ParameterInformation;
+use lsp_types::ParameterLabel;
+use lsp_types::SignatureHelp;
+use lsp_types::SignatureInformation;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -64,7 +68,6 @@ use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
-use crate::lsp::wasm::inlay_hints::normalize_singleton_function_type_into_params;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -74,6 +77,7 @@ use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
+use crate::types::callable::Params;
 use crate::types::module::ModuleType;
 use crate::types::types::Type;
 
@@ -306,6 +310,17 @@ pub enum AnnotationKind {
     Parameter,
     Return,
     Variable,
+}
+
+/// The currently active argument in a function call for signature help.
+#[derive(Debug)]
+enum ActiveArgument {
+    /// The cursor is within an existing positional argument at the given index.
+    Positional(usize),
+    /// The cursor is within a keyword argument whose name is provided.
+    Keyword(Name),
+    /// The cursor is in the argument list but not inside any argument expression yet.
+    Next(usize),
 }
 
 impl IdentifierWithContext {
@@ -2212,7 +2227,7 @@ impl<'a> Transaction<'a> {
         if let Some((callables, overload_idx, _, _)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(overload_idx).cloned()
-            && let Some(params) = normalize_singleton_function_type_into_params(callable)
+            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
         {
             for param in params {
                 match param {
@@ -2547,7 +2562,8 @@ impl<'a> Transaction<'a> {
         if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(chosen_overload_index)
-            && let Some(params) = normalize_singleton_function_type_into_params(callable.clone())
+            && let Some(params) =
+                Self::normalize_singleton_function_type_into_params(callable.clone())
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
