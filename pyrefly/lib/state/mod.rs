@@ -17,7 +17,6 @@ pub mod memory;
 pub mod notebook;
 pub mod require;
 pub mod semantic_tokens;
-pub mod signature_help;
 pub mod state;
 pub mod steps;
 pub mod subscriber;
