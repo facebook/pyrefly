@@ -6,6 +6,7 @@
  */
 
 use itertools::Itertools;
+use lsp_types::Documentation;
 use lsp_types::ParameterLabel;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureInformation;
@@ -13,8 +14,11 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
+use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
+use crate::test::util::mk_multi_file_state;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     if let Some(SignatureHelp {
@@ -219,6 +223,47 @@ Signature Help Result: active=0
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn parameter_documentation_test() {
+    let code = r#"
+def foo(a: int, b: str) -> None:
+    """
+    Args:
+        a: first line
+            second line
+        b: final
+    """
+    pass
+
+foo(a=1, b="")
+#      ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let signature = state
+        .transaction()
+        .get_signature_help_at(handle, position)
+        .expect("signature help available");
+    let params = signature.signatures[0]
+        .parameters
+        .as_ref()
+        .expect("parameters available");
+    let param_doc = params
+        .iter()
+        .find(
+            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("a")),
+        )
+        .and_then(|param| param.documentation.as_ref())
+        .expect("parameter documentation");
+    if let Documentation::MarkupContent(content) = param_doc {
+        assert_eq!(content.value, "first line\nsecond line");
+    } else {
+        panic!("unexpected documentation variant");
+    }
 }
 
 #[test]

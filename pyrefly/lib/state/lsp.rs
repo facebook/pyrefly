@@ -6,6 +6,7 @@
  */
 
 use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -24,6 +25,7 @@ use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::dunder;
 use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
@@ -948,7 +950,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Option<(Vec<Type>, usize, ActiveArgument)> {
+    ) -> Option<(Vec<Type>, usize, ActiveArgument, TextRange)> {
         let mod_module = self.get_ast(handle)?;
         let mut res = None;
         mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
@@ -971,11 +973,12 @@ impl<'a> Transaction<'a> {
                 callables,
                 chosen_overload_index.unwrap_or_default(),
                 active_argument,
+                callee_range,
             ))
         } else {
             answers
                 .get_type_trace(callee_range)
-                .map(|t| (vec![t], 0, active_argument))
+                .map(|t| (vec![t], 0, active_argument, callee_range))
         }
     }
 
@@ -985,10 +988,17 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<SignatureHelp> {
         self.get_callables_from_call(handle, position).map(
-            |(callables, chosen_overload_index, active_argument)| {
+            |(callables, chosen_overload_index, active_argument, callee_range)| {
+                let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
                 let signatures = callables
                     .into_iter()
-                    .map(|t| Self::create_signature_information(t, &active_argument))
+                    .map(|t| {
+                        Self::create_signature_information(
+                            t,
+                            &active_argument,
+                            parameter_docs.as_ref(),
+                        )
+                    })
                     .collect_vec();
                 let active_parameter = signatures
                     .get(chosen_overload_index)
@@ -1002,26 +1012,73 @@ impl<'a> Transaction<'a> {
         )
     }
 
+    fn parameter_documentation_for_callee(
+        &self,
+        handle: &Handle,
+        callee_range: TextRange,
+    ) -> Option<HashMap<String, String>> {
+        let position = callee_range.start();
+        let docstring = self
+            .find_definition(
+                handle,
+                position,
+                FindPreference {
+                    prefer_pyi: false,
+                    ..Default::default()
+                },
+            )
+            .into_iter()
+            .find_map(|item| {
+                item.docstring_range
+                    .map(|range| (range, item.module.clone()))
+            })
+            .or_else(|| {
+                self.find_definition(handle, position, FindPreference::default())
+                    .into_iter()
+                    .find_map(|item| {
+                        item.docstring_range
+                            .map(|range| (range, item.module.clone()))
+                    })
+            })?;
+        let (range, module) = docstring;
+        let docs = parse_parameter_documentation(module.code_at(range));
+        if docs.is_empty() { None } else { Some(docs) }
+    }
+
     fn create_signature_information(
         type_: Type,
         active_argument: &ActiveArgument,
+        parameter_docs: Option<&HashMap<String, String>>,
     ) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
         let label = type_.as_hover_string();
-        let (parameters, active_parameter) =
-            if let Some(params) = Self::normalize_singleton_function_type_into_params(type_) {
-                let active_parameter =
-                    Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);
-                (
-                    Some(params.map(|param| ParameterInformation {
+        let (parameters, active_parameter) = if let Some(params) =
+            Self::normalize_singleton_function_type_into_params(type_)
+        {
+            let active_parameter =
+                Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);
+            (
+                Some(params.map(|param| {
+                    ParameterInformation {
                         label: ParameterLabel::Simple(format!("{param}")),
-                        documentation: None,
-                    })),
-                    active_parameter,
-                )
-            } else {
-                (None, None)
-            };
+                        documentation: param
+                            .name()
+                            .and_then(|name| {
+                                parameter_docs.and_then(|docs| docs.get(name.as_str()))
+                            })
+                            .map(|text| {
+                                lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
+                                    kind: lsp_types::MarkupKind::Markdown,
+                                    value: text.clone(),
+                                })
+                            }),
+                    }
+                })),
+                active_parameter,
+            )
+        } else {
+            (None, None)
+        };
         SignatureInformation {
             label,
             documentation: None,
@@ -2255,7 +2312,8 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        if let Some((callables, overload_idx, _)) = self.get_callables_from_call(handle, position)
+        if let Some((callables, overload_idx, _, _)) =
+            self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(overload_idx).cloned()
             && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
         {
@@ -2589,7 +2647,7 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        if let Some((callables, chosen_overload_index, active_argument)) =
+        if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(chosen_overload_index)
             && let Some(params) =
