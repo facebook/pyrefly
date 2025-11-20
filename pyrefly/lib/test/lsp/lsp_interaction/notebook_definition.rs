@@ -27,12 +27,12 @@ fn test_notebook_definition_import() {
     // Jump to definition of "List"
     interaction.definition_cell("notebook.ipynb", "cell1", 0, 20);
 
-    // Check that the response uri ends with "typing.py"
+    // Check that the response uri ends with "typing.pyi"
     interaction.client.expect_response_with(
         |response| {
             response.result.as_ref().is_some_and(|r| {
                 r.get("uri")
-                    .is_some_and(|uri| uri.as_str().is_some_and(|x| x.ends_with("typing.py")))
+                    .is_some_and(|uri| uri.as_str().is_some_and(|x| x.ends_with("typing.pyi")))
             })
         },
         "expected definition in typing.pyi",
