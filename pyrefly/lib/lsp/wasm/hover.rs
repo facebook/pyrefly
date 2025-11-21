@@ -18,6 +18,7 @@ use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+#[cfg(test)]
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
@@ -234,6 +235,9 @@ impl HoverValue {
             .display
             .clone()
             .unwrap_or_else(|| self.type_.as_hover_string());
+        // Ensure callable hover bodies always contain a proper `def name(...)` so IDE syntax
+        // highlighting stays consistent, even when metadata is missing and we fall back to
+        // inferred identifiers.
         let snippet = format_hover_code_snippet(&self.type_, self.name.as_deref(), type_display);
         let kind_formatted = self.kind.map_or_else(
             || {
@@ -248,11 +252,6 @@ impl HoverValue {
             .name
             .as_ref()
             .map_or("".to_owned(), |s| format!("{s}: "));
-        let heading = if let Some(callable_heading) = snippet.heading.as_ref() {
-            format!("{}{}\n", kind_formatted, callable_heading)
-        } else {
-            format!("{}{}", kind_formatted, name_formatted)
-        };
 
         Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -316,30 +315,72 @@ fn expand_callable_kwargs_for_hover<'a>(
     }
 }
 
-fn fallback_hover_name_from_type(type_: &Type, current_module: ModuleName) -> Option<String> {
+/// If we can't determine a symbol name via go-to-definition, fall back to what the
+/// type metadata knows about the callable. This primarily handles third-party stubs
+/// where we only have typeshed information.
+fn fallback_hover_name_from_type(type_: &Type) -> Option<String> {
     match type_ {
-        Type::Function(function) => Some(function.metadata.kind.format(current_module)),
+        Type::Function(function) => Some(
+            function
+                .metadata
+                .kind
+                .function_name()
+                .into_owned()
+                .to_string(),
+        ),
         Type::BoundMethod(bound_method) => match &bound_method.func {
-            BoundMethodType::Function(function) => {
-                Some(function.metadata.kind.format(current_module))
-            }
-            BoundMethodType::Forall(forall) => {
-                Some(forall.body.metadata.kind.format(current_module))
-            }
-            BoundMethodType::Overload(overload) => {
-                Some(overload.metadata.kind.format(current_module))
-            }
+            BoundMethodType::Function(function) => Some(
+                function
+                    .metadata
+                    .kind
+                    .function_name()
+                    .into_owned()
+                    .to_string(),
+            ),
+            BoundMethodType::Forall(forall) => Some(
+                forall
+                    .body
+                    .metadata
+                    .kind
+                    .function_name()
+                    .into_owned()
+                    .to_string(),
+            ),
+            BoundMethodType::Overload(overload) => Some(
+                overload
+                    .metadata
+                    .kind
+                    .function_name()
+                    .into_owned()
+                    .to_string(),
+            ),
         },
-        Type::Overload(overload) => Some(overload.metadata.kind.format(current_module)),
+        Type::Overload(overload) => Some(
+            overload
+                .metadata
+                .kind
+                .function_name()
+                .into_owned()
+                .to_string(),
+        ),
         Type::Forall(forall) => match &forall.body {
-            Forallable::Function(function) => Some(function.metadata.kind.format(current_module)),
+            Forallable::Function(function) => Some(
+                function
+                    .metadata
+                    .kind
+                    .function_name()
+                    .into_owned()
+                    .to_string(),
+            ),
             Forallable::Callable(_) | Forallable::TypeAlias(_) => None,
         },
-        Type::Type(inner) => fallback_hover_name_from_type(inner, current_module),
+        Type::Type(inner) => fallback_hover_name_from_type(inner),
         _ => None,
     }
 }
 
+/// Extract the identifier under the cursor directly from the file contents so we can
+/// label hover results even when go-to-definition fails.
 fn identifier_text_at(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -349,10 +390,7 @@ fn identifier_text_at(
     let contents = module.contents();
     let bytes = contents.as_bytes();
     let len = bytes.len();
-    let mut pos = position.to_usize();
-    if pos > len {
-        pos = len;
-    }
+    let pos = position.to_usize().min(len);
     let is_ident_char = |b: u8| b == b'_' || b.is_ascii_alphanumeric();
     let mut start = pos;
     while start > 0 && is_ident_char(bytes[start - 1]) {
@@ -363,10 +401,10 @@ fn identifier_text_at(
         end += 1;
     }
     if start == end {
-        None
-    } else {
-        Some(contents[start..end].to_string())
+        return None;
     }
+    let range = TextRange::new(TextSize::new(start as u32), TextSize::new(end as u32));
+    Some(module.code_at(range).to_owned())
 }
 
 pub fn get_hover(
@@ -411,8 +449,7 @@ pub fn get_hover(
 
     // Otherwise, fall through to the existing type hover logic
     let type_ = transaction.get_type_at(handle, position)?;
-    let current_module = handle.module();
-    let fallback_name_from_type = fallback_hover_name_from_type(&type_, current_module);
+    let fallback_name_from_type = fallback_hover_name_from_type(&type_);
     let type_display = transaction.ad_hoc_solve(handle, {
         let mut cloned = type_.clone();
         move |solver| {
@@ -422,7 +459,7 @@ pub fn get_hover(
             cloned.as_hover_string()
         }
     });
-    let (kind, mut name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
+    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,
         module,
@@ -460,9 +497,7 @@ pub fn get_hover(
         (None, fallback_name_from_type, None, None)
     };
 
-    if name.is_none() {
-        name = identifier_text_at(transaction, handle, position);
-    }
+    let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
     let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
         Some(Docstring(docstring, module))
@@ -620,14 +655,14 @@ mod tests {
     #[test]
     fn fallback_uses_function_metadata() {
         let ty = make_function_type("numpy", "arange");
-        let fallback = fallback_hover_name_from_type(&ty, ModuleName::from_str("user_code"));
-        assert_eq!(fallback.as_deref(), Some("numpy.arange"));
+        let fallback = fallback_hover_name_from_type(&ty);
+        assert_eq!(fallback.as_deref(), Some("arange"));
     }
 
     #[test]
     fn fallback_recurses_through_type_wrapper() {
         let ty = Type::Type(Box::new(make_function_type("pkg.subpkg", "run")));
-        let fallback = fallback_hover_name_from_type(&ty, ModuleName::from_str("other"));
-        assert_eq!(fallback.as_deref(), Some("pkg.subpkg.run"));
+        let fallback = fallback_hover_name_from_type(&ty);
+        assert_eq!(fallback.as_deref(), Some("run"));
     }
 }
