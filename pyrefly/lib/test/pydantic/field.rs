@@ -139,36 +139,6 @@ A()  # E: Missing argument `x`
 );
 
 pydantic_testcase!(
-    test_positive_int_default_violation,
-    r#"
-from pydantic import BaseModel, PositiveInt
-
-class Model(BaseModel):
-    value: PositiveInt = -1  # E: Default value `Literal[-1]` violates Pydantic `gt` constraint `Literal[0]` for field `value`
-    "#,
-);
-
-pydantic_testcase!(
-    test_positive_int_default_ok,
-    r#"
-from pydantic import BaseModel, PositiveInt
-
-class Model(BaseModel):
-    value: PositiveInt = 1
-    "#,
-);
-
-pydantic_testcase!(
-    test_non_negative_int_default_violation,
-    r#"
-from pydantic import BaseModel, NonNegativeInt
-
-class Model(BaseModel):
-    value: NonNegativeInt = -1  # E: Default value `Literal[-1]` violates Pydantic `ge` constraint `Literal[0]` for field `value`
-    "#,
-);
-
-pydantic_testcase!(
     test_field_default_gt_violation,
     r#"
 from pydantic import BaseModel, Field

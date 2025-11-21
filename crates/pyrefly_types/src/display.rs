@@ -24,8 +24,6 @@ use starlark_map::smallmap;
 
 use crate::callable::Function;
 use crate::class::Class;
-#[cfg(test)]
-use crate::keywords::RangeConstraints;
 use crate::literal::Lit;
 use crate::tuple::Tuple;
 use crate::type_output::DisplayOutput;
@@ -1261,7 +1259,6 @@ pub mod tests {
             Type::None,
             TypeAliasStyle::LegacyImplicit,
             Vec::new(),
-            RangeConstraints::default(),
         )));
         let wrapped = Type::concrete_tuple(vec![alias.clone()]);
         let type_of = Type::type_form(alias.clone());
