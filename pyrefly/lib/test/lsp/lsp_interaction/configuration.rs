@@ -55,7 +55,7 @@ fn setup_dummy_interpreter(custom_interpreter_path: &Path) -> PathBuf {
     // Create a mock Python interpreter script that returns the environment info
     // This simulates what a real Python interpreter would return when queried with the env script
     let python_script = format!(
-        r#"#!/bin/bash
+        r#"#!/usr/bin/env bash
 if [[ "$1" == "-c" && "$2" == *"import json, sys"* ]]; then
     cat << 'EOF'
 {{"python_platform": "linux", "python_version": "3.12.0", "site_package_path": ["{site_packages}"]}}
