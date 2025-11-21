@@ -577,7 +577,7 @@ class A:
     def f(self, x: TA1):
         pass
 class B(A):
-    def f(self, x: TA2):  # E: `B.f` has type `BoundMethod[B, (self: B, x: float | int) -> None]`, which is not assignable to `BoundMethod[B, (self: B, x: float | int | None) -> None]`, the type of `A.f`
+    def f(self, x: TA2):  # E: `B.f` has type `BoundMethod[B, (self: B, x: TA2) -> None]`, which is not assignable to `BoundMethod[B, (self: B, x: TA1) -> None]`, the type of `A.f`
         pass
     "#,
 );

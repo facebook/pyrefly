@@ -415,8 +415,8 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Union(box (types, _)) if types.is_empty() => {
                 self.maybe_fmt_with_module("typing", "Never", output)
             }
-            Type::Union(box (_, Some(name))) => output.write_str(name),
-            Type::Union(box (types, None)) => {
+            Type::Union(box (_, Some(name))) if !is_toplevel => output.write_str(name),
+            Type::Union(box (types, _)) => {
                 // All Literals will be collected into a single Literal at the index of the first Literal.
                 let mut literal_idx = None;
                 let mut literals = Vec::new();
@@ -1102,13 +1102,24 @@ pub mod tests {
             Type::union(vec![nonlit1.clone(), lit1, nonlit2.clone(), lit2]).to_string(),
             "None | Literal[True, 'test'] | LiteralString"
         );
+
+        // Unions have an optional name field, which is shown only when
+        // the union is nested in another type
         assert_eq!(
             Type::Union(Box::new((
-                vec![nonlit1, nonlit2],
+                vec![nonlit1.clone(), nonlit2.clone()],
                 Some("MyUnion".to_owned())
             )))
             .to_string(),
-            "MyUnion"
+            "None | LiteralString"
+        );
+        assert_eq!(
+            Type::Type(Box::new(Type::Union(Box::new((
+                vec![nonlit1, nonlit2],
+                Some("MyUnion".to_owned())
+            )))))
+            .to_string(),
+            "type[MyUnion]"
         );
     }
 

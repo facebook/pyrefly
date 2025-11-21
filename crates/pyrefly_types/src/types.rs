@@ -1406,10 +1406,11 @@ impl Type {
         })
     }
 
-    pub fn sort_unions(self) -> Self {
+    pub fn sort_unions_and_drop_names(self) -> Self {
         self.transform(&mut |ty| {
-            if let Type::Union(box (ts, _)) = ty {
+            if let Type::Union(box (ts, name)) = ty {
                 ts.sort();
+                *name = None;
             }
         })
     }
