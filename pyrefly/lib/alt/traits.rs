@@ -73,7 +73,6 @@ use crate::binding::binding::NoneIfRecursive;
 use crate::error::collector::ErrorCollector;
 use crate::types::annotation::Annotation;
 use crate::types::class::Class;
-use crate::types::keywords::RangeConstraints;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -342,7 +341,6 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAnnotation {
         AnnotationWithTarget {
             target: AnnotationTarget::Assign(Name::default(), AnnAssignHasValue::Yes),
             annotation: Annotation::default(),
-            range_constraints: RangeConstraints::default(),
         }
     }
 }
