@@ -104,6 +104,7 @@ pub struct HoverValue {
     pub type_: Type,
     pub docstring: Option<Docstring>,
     pub display: Option<String>,
+    pub show_go_to_links: bool,
 }
 
 impl HoverValue {
@@ -165,8 +166,11 @@ impl HoverValue {
             .name
             .as_ref()
             .map_or("".to_owned(), |s| format!("{s}: "));
-        let symbol_def_formatted =
-            HoverValue::format_symbol_def_locations(&self.type_).unwrap_or("".to_owned());
+        let symbol_def_formatted = if self.show_go_to_links {
+            HoverValue::format_symbol_def_locations(&self.type_).unwrap_or("".to_owned())
+        } else {
+            String::new()
+        };
         let type_display = self
             .display
             .clone()
@@ -236,6 +240,7 @@ pub fn get_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
     position: TextSize,
+    show_go_to_links: bool,
 ) -> Option<Hover> {
     // Handle hovering over an ignore comment
     if let Some(module) = transaction.get_module_info(handle) {
@@ -323,6 +328,7 @@ pub fn get_hover(
             type_,
             docstring,
             display: type_display,
+            show_go_to_links,
         }
         .format(),
     )

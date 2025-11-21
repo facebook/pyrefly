@@ -150,6 +150,23 @@ impl FunctionRef {
                 function_name: function_base_definition.name.clone(),
             })
     }
+
+    pub fn get_decorated_target(self) -> Option<Self> {
+        match self {
+            FunctionRef {
+                module_id,
+                module_name,
+                function_id: FunctionId::Function { location },
+                function_name,
+            } => Some(FunctionRef {
+                module_id,
+                module_name,
+                function_id: FunctionId::FunctionDecoratedTarget { location },
+                function_name,
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

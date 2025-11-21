@@ -6,7 +6,7 @@
  */
 
 use lsp_server::RequestId;
-use lsp_server::Response;
+use lsp_types::request::GotoDefinition;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -53,9 +53,9 @@ fn test_notebook_definition_cross_cell() {
 
     // Jump to definition of "x" in the second cell
     interaction.definition_cell("notebook.ipynb", "cell2", 0, 4);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(json!({
+    interaction.client.expect_response::<GotoDefinition>(
+        RequestId::from(2),
+        json!({
             "uri": interaction.cell_uri("notebook.ipynb", "cell1"),
             "range": {
                 "start": {
@@ -67,9 +67,8 @@ fn test_notebook_definition_cross_cell() {
                     "character": 1
                 }
             }
-        })),
-        error: None,
-    });
+        }),
+    );
     interaction.shutdown();
 }
 
@@ -86,9 +85,9 @@ fn test_notebook_definition_same_cell() {
 
     // Jump to definition of "x" on the second line
     interaction.definition_cell("notebook.ipynb", "cell1", 1, 4);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(json!({
+    interaction.client.expect_response::<GotoDefinition>(
+        RequestId::from(2),
+        json!({
             "uri": interaction.cell_uri("notebook.ipynb", "cell1"),
             "range": {
                 "start": {
@@ -100,8 +99,7 @@ fn test_notebook_definition_same_cell() {
                     "character": 1
                 }
             }
-        })),
-        error: None,
-    });
+        }),
+    );
     interaction.shutdown();
 }

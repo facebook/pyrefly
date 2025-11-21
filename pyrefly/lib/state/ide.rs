@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::module_name::ModuleName;
@@ -137,7 +138,20 @@ fn create_intermediate_definition_from(
                     *original_name_range,
                 ));
             }
-            Binding::Module(name, ..) => return Some(IntermediateDefinition::Module(*name)),
+            Binding::Module(name, path, ..) => {
+                let imported_module_name = if path.len() == 1 {
+                    // This corresponds to the case for `import x.y` -- the corresponding key would
+                    // always be `Key::Import(x)`, so the actual module that corresponds to the key
+                    // should be `x` instead of `x.y`.
+                    ModuleName::from_name(&path[0])
+                } else {
+                    // This corresponds to all other cases (e.g. `import x.y as z` or `from x.y
+                    // import z`) -- the corresponding key would be `Key::Definition(z)` so the
+                    // actual module that corresponds to the key must be `x.y`.
+                    name.dupe()
+                };
+                return Some(IntermediateDefinition::Module(imported_module_name));
+            }
             Binding::Function(idx, ..) => {
                 let func = bindings.get(*idx);
                 let undecorated = bindings.get(func.undecorated_idx);
@@ -150,7 +164,7 @@ fn create_intermediate_definition_from(
                     location: undecorated.def.name.range,
                     symbol_kind: Some(symbol_kind),
                     docstring_range: func.docstring_range,
-                    is_deprecated: false,
+                    deprecation: None,
                     special_export: None,
                 }));
             }
@@ -161,7 +175,7 @@ fn create_intermediate_definition_from(
                             location: def_key.range(),
                             symbol_kind: Some(SymbolKind::Class),
                             docstring_range: None,
-                            is_deprecated: false,
+                            deprecation: None,
                             special_export: None,
                         }))
                     }
@@ -173,7 +187,7 @@ fn create_intermediate_definition_from(
                         location: def.name.range,
                         symbol_kind: Some(SymbolKind::Class),
                         docstring_range: *docstring_range,
-                        is_deprecated: false,
+                        deprecation: None,
                         special_export: None,
                     })),
                 };
@@ -183,7 +197,7 @@ fn create_intermediate_definition_from(
                     location: def_key.range(),
                     symbol_kind: current_binding.symbol_kind(),
                     docstring_range: None,
-                    is_deprecated: false,
+                    deprecation: None,
                     special_export: None,
                 }));
             }

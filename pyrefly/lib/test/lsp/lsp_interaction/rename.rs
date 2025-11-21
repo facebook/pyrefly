@@ -5,12 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
-use lsp_server::ResponseError;
 use lsp_types::Url;
+use lsp_types::request::PrepareRenameRequest;
+use lsp_types::request::Rename;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -24,13 +22,12 @@ fn test_prepare_rename() {
     interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     let path = root.path().join("basic/foo.py");
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(2),
-        method: "textDocument/prepareRename".to_owned(),
-        params: json!({
+    interaction.client.send_request::<PrepareRenameRequest>(
+        RequestId::from(2),
+        json!({
             "textDocument": {
                 "uri": Url::from_file_path(&path).unwrap().to_string()
             },
@@ -39,16 +36,15 @@ fn test_prepare_rename() {
                 "character": 16
             }
         }),
-    }));
+    );
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(json!({
+    interaction.client.expect_response::<PrepareRenameRequest>(
+        RequestId::from(2),
+        json!({
             "start": {"line": 6, "character": 16},
             "end": {"line": 6, "character": 19},
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -69,13 +65,12 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
 
     let user_code = root_path.join("user_code.py");
 
-    interaction.server.did_open("user_code.py");
+    interaction.client.did_open("user_code.py");
 
     // Verify that prepareRename returns null, indicating that renaming third party symbols is not allowed
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(2),
-        method: "textDocument/prepareRename".to_owned(),
-        params: json!({
+    interaction.client.send_request::<PrepareRenameRequest>(
+        RequestId::from(2),
+        json!({
             "textDocument": {
                 "uri": Url::from_file_path(&user_code).unwrap().to_string()
             },
@@ -84,19 +79,16 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
                 "character": 25  // Position on "external_function"
             }
         }),
-    }));
+    );
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::Value::Null),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<PrepareRenameRequest>(RequestId::from(2), serde_json::Value::Null);
 
     // Verify that attempting to rename a third party symbol returns an error
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(3),
-        method: "textDocument/rename".to_owned(),
-        params: json!({
+    interaction.client.send_request::<Rename>(
+        RequestId::from(3),
+        json!({
             "textDocument": {
                 "uri": Url::from_file_path(&user_code).unwrap().to_string()
             },
@@ -106,17 +98,16 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
             },
             "newName": "new_external_function"
         }),
-    }));
+    );
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: None,
-        error: Some(ResponseError {
-            code: -32600,
-            message: "Third-party symbols cannot be renamed".to_owned(),
-            data: None,
+    interaction.client.expect_response_error(
+        RequestId::from(3),
+        json!({
+            "code": -32600,
+            "message": "Third-party symbols cannot be renamed",
+            "data": null,
         }),
-    });
+    );
 
     interaction.shutdown();
 }
@@ -140,15 +131,14 @@ fn test_rename() {
     let various_imports = root_path.join("various_imports.py");
     let with_synthetic_bindings = root_path.join("with_synthetic_bindings.py");
 
-    interaction.server.did_open("bar.py");
-    interaction.server.did_open("foo.py");
-    interaction.server.did_open("various_imports.py");
-    interaction.server.did_open("with_synthetic_bindings.py");
+    interaction.client.did_open("bar.py");
+    interaction.client.did_open("foo.py");
+    interaction.client.did_open("various_imports.py");
+    interaction.client.did_open("with_synthetic_bindings.py");
 
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(2),
-        method: "textDocument/rename".to_owned(),
-        params: json!({
+    interaction.client.send_request::<Rename>(
+        RequestId::from(2),
+        json!({
             "textDocument": {
                 "uri": Url::from_file_path(&bar).unwrap().to_string()
             },
@@ -158,11 +148,11 @@ fn test_rename() {
             },
             "newName": "Baz"
         }),
-    }));
+    );
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(json!({
+    interaction.client.expect_response::<Rename>(
+        RequestId::from(2),
+        json!({
             "changes": {
                 Url::from_file_path(&foo).unwrap().to_string(): [
                     {
@@ -209,9 +199,8 @@ fn test_rename() {
                     },
                 ]
             }
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }

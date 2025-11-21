@@ -33,16 +33,16 @@ from typing import TypedDict, ClassVar, reveal_type
 # work at runtime, type checkers seem to agree that these are not
 # permissible in typed dicts.
 class D(TypedDict):
-    cv: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict or NamedTuple members
-    x: str = "x"  # E: TypedDict item `x` may not be initialized
-    z = "z"  # E: TypedDict item `z` may not be initialized
-    def f(self) -> None:  # E: TypedDict item `f` may not be initialized
-        self.w = "w"
+    cv: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict members
+    x: str = "x"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    z = "z"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    def f(self) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+        self.w = "w"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
     @classmethod
-    def g(cls) -> None:  # E: TypedDict item `g` may not be initialized
-        cls.u = "u"  # E: TypedDict item `u` may not be initialized
+    def g(cls) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+        cls.u = "u"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
     @staticmethod
-    def h(self) -> None:  # E: TypedDict item `h` may not be initialized
+    def h(self) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
         ...
 def foo(d: D):
     reveal_type(d["cv"])  # E: revealed type: int
@@ -54,8 +54,8 @@ def foo(d: D):
     reveal_type(d["w"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
     reveal_type(d["u"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
     reveal_type(D.cv)  # E: revealed type: int
-    reveal_type(D.g)  # E: revealed type: BoundMethod[type[D], (cls: type[D]) -> None]
-    reveal_type(D.h)  # E: revealed type: (self: Unknown) -> None
+    reveal_type(D.g)  # E: revealed type: Unknown
+    reveal_type(D.h)  # E: revealed type: Unknown
     "#,
 );
 
@@ -78,8 +78,8 @@ testcase!(
     r#"
 from typing import TypedDict, Required, NotRequired, ReadOnly, ClassVar, Final
 class MyDict(TypedDict):
-    v: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict or NamedTuple members
-    w: Final[int]  # E: `Final` may not be used for TypedDict or NamedTuple members
+    v: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict members
+    w: Final[int]  # E: `Final` may not be used for TypedDict members
     x: NotRequired  # E: Expected a type argument for `NotRequired`
     y: Required  # E: Expected a type argument for `Required`
     z: ReadOnly  # E: Expected a type argument for `ReadOnly`
@@ -778,7 +778,7 @@ testcase!(
 from typing import TypedDict, NotRequired
 class D(TypedDict):
      x: int
-     y: int = 5  # E: TypedDict item `y` may not be initialized
+     y: int = 5  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
      z: NotRequired[int]
 # Default values are completely ignored in constructor behavior, so requiredness in `__init__` should be
 # determined entirely by whether the field is required in the resulting dict.
@@ -1828,13 +1828,13 @@ testcase!(
     test_unpack_inherited_typeddict,
     r#"
 import typing_extensions as te
-    
+
 class InheritFromMe(te.TypedDict):
     foo: bool
-    
+
 class TestBadUnpackingError(InheritFromMe):
     bar: bool
-    
+
 unpack_this: InheritFromMe = {"foo": True}
 test1: TestBadUnpackingError = {"bar": True, **unpack_this}
 test2: TestBadUnpackingError = {"bar": True, "foo": True}
@@ -1941,4 +1941,27 @@ def f(foo: Foo, k: Literal["bar", "baz"]):
     print(foo[k])
     foo[k] = 2
     "#,
+);
+
+testcase!(
+    test_recursive_functional_typeddict,
+    r#"
+from typing import NamedTuple, TypedDict, Optional
+ListNode = TypedDict('ListNode', {
+    'value': int,
+    'next': Optional['ListNode'],
+})
+"#,
+);
+
+testcase!(
+    test_defines_init,
+    r#"
+from typing import TypedDict, Any
+def any() -> Any: ...
+class D(TypedDict):
+    x: int
+    __init__ = any()  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+D(x=5)
+"#,
 );

@@ -6,12 +6,14 @@
  */
 
 use lsp_server::Message;
-use lsp_server::Notification;
 use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
-use lsp_server::ResponseError;
 use lsp_types::Url;
+use lsp_types::notification::DidChangeTextDocument;
+use lsp_types::notification::DidOpenTextDocument;
+use lsp_types::request::DocumentDiagnosticRequest;
+use lsp_types::request::Initialize;
+use lsp_types::request::Shutdown;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -23,64 +25,61 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 fn test_initialize_basic() {
     let mut interaction = LspInteraction::new();
 
-    interaction.server.send_initialize(
+    interaction.client.send_initialize(
         interaction
-            .server
+            .client
             .get_initialize_params(&InitializeSettings::default()),
     );
-    interaction
-        .client
-        .expect_message(Message::Response(Response {
-            id: RequestId::from(1),
-            result: Some(json!({"capabilities": {
-                "positionEncoding": "utf-16",
-                "textDocumentSync": 2,
-                "definitionProvider": true,
-                "typeDefinitionProvider": true,
-                "codeActionProvider": {
-                    "codeActionKinds": ["quickfix"]
+    interaction.client.expect_response::<Initialize>(
+        RequestId::from(1),
+        json!({"capabilities": {
+            "positionEncoding": "utf-16",
+            "textDocumentSync": 2,
+            "definitionProvider": true,
+            "typeDefinitionProvider": true,
+            "codeActionProvider": {
+                "codeActionKinds": ["quickfix"]
+            },
+            "completionProvider": {
+                "triggerCharacters": ["."]
+            },
+            "declarationProvider": true,
+            "documentHighlightProvider": true,
+            "signatureHelpProvider": {
+                "triggerCharacters": ["(", ","]
+            },
+            "hoverProvider": true,
+            "implementationProvider": true,
+            "inlayHintProvider": true,
+            "notebookDocumentSync":{"notebookSelector":[{"cells":[{"language":"python"}]}]},
+            "documentSymbolProvider": true,
+            "foldingRangeProvider":true,
+            "workspaceSymbolProvider": true,
+            "workspace": {
+                "workspaceFolders": {
+                    "supported": true,
+                    "changeNotifications": true
                 },
-                "completionProvider": {
-                    "triggerCharacters": ["."]
-                },
-                "declarationProvider": true,
-                "documentHighlightProvider": true,
-                "signatureHelpProvider": {
-                    "triggerCharacters": ["(", ","]
-                },
-                "hoverProvider": true,
-                "implementationProvider": true,
-                "inlayHintProvider": true,
-                "notebookDocumentSync":{"notebookSelector":[{"cells":[{"language":"python"}]}]},
-                "documentSymbolProvider": true,
-                "foldingRangeProvider":true,
-                "workspaceSymbolProvider": true,
-                "workspace": {
-                    "workspaceFolders": {
-                        "supported": true,
-                        "changeNotifications": true
-                    },
-                    "fileOperations": {
-                        "willRename": {
-                            "filters": [
-                                {
-                                    "pattern": {
-                                        "glob": "**/*.{py,pyi}",
-                                        "matches": "file"
-                                    },
-                                    "scheme": "file"
-                                }
-                            ]
-                        }
+                "fileOperations": {
+                    "willRename": {
+                        "filters": [
+                            {
+                                "pattern": {
+                                    "glob": "**/*.{py,pyi}",
+                                    "matches": "file"
+                                },
+                                "scheme": "file"
+                            }
+                        ]
                     }
                 }
-            }, "serverInfo": {
-                "name":"pyrefly-lsp",
-                "version":"pyrefly-lsp-test-version"
-            }})),
-            error: None,
-        }));
-    interaction.server.send_initialized();
+            }
+        }, "serverInfo": {
+            "name":"pyrefly-lsp",
+            "version":"pyrefly-lsp-test-version"
+        }}),
+    );
+    interaction.client.send_initialized();
     interaction.shutdown();
 }
 
@@ -89,18 +88,67 @@ fn test_shutdown() {
     let mut interaction = LspInteraction::new();
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.send_shutdown(RequestId::from(2));
+    interaction.client.send_shutdown(RequestId::from(2));
 
     interaction
         .client
-        .expect_message(Message::Response(Response {
-            id: RequestId::from(2),
-            result: Some(json!(null)),
-            error: None,
+        .expect_response::<Shutdown>(RequestId::from(2), json!(null));
+
+    interaction.client.send_exit();
+    interaction.client.expect_stop();
+}
+
+#[test]
+fn test_shutdown_with_messages_in_between() {
+    // This is a regression test for https://github.com/facebook/pyrefly/issues/1016
+    // nvim sometimes sends messages in between shutdown and exit. The server should
+    // handle this gracefully and not hang.
+    // Per LSP spec, requests after shutdown should be rejected with InvalidRequest.
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings::default());
+
+    let test_file = root.path().join("basic.py");
+    let uri = Url::from_file_path(&test_file).unwrap();
+
+    // Open a file
+    interaction
+        .client
+        .send_notification::<DidOpenTextDocument>(json!({
+            "textDocument": {
+                "uri": uri.to_string(),
+                "languageId": "python",
+                "version": 1,
+                "text": "def foo():\n    pass\n",
+            }
         }));
 
-    interaction.server.send_exit();
-    interaction.server.expect_stop();
+    // Expect initial diagnostics
+    interaction.client.expect_any_message();
+
+    // Send shutdown request
+    interaction.client.send_shutdown(RequestId::from(2));
+
+    // Expect shutdown response
+    interaction
+        .client
+        .expect_response::<Shutdown>(RequestId::from(2), json!(null));
+
+    // After shutdown, send a request (simulating what might happen with :wq)
+    // Per LSP spec, this should be rejected with InvalidRequest
+    interaction
+        .client
+        .send_request::<DocumentDiagnosticRequest>(
+            RequestId::from(3),
+            json!({
+                "textDocument": {
+                    "uri": uri.to_string()
+                },
+            }),
+        );
+
+    interaction.client.expect_stop();
 }
 
 #[test]
@@ -108,8 +156,8 @@ fn test_exit_without_shutdown() {
     let mut interaction = LspInteraction::new();
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.send_exit();
-    interaction.server.expect_stop();
+    interaction.client.send_exit();
+    interaction.client.expect_stop();
 }
 
 #[test]
@@ -127,16 +175,16 @@ fn test_initialize_with_python_path() {
     };
 
     interaction
-        .server
-        .send_initialize(interaction.server.get_initialize_params(&settings));
+        .client
+        .send_initialize(interaction.client.get_initialize_params(&settings));
     interaction.client.expect_any_message();
-    interaction.server.send_initialized();
+    interaction.client.send_initialized();
 
     interaction
         .client
         .expect_configuration_request(1, Some(vec![&scope_uri]));
     interaction
-        .server
+        .client
         .send_configuration_response(1, json!([{"pythonPath": python_path}]));
 
     interaction.shutdown();
@@ -152,50 +200,46 @@ fn test_nonexistent_file() {
     interaction.initialize(InitializeSettings::default());
 
     interaction
-        .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didOpen".to_owned(),
-            params: json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 1,
-                    "text": String::default(),
-                }
-            }),
+        .client
+        .send_notification::<DidOpenTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string(),
+                "languageId": "python",
+                "version": 1,
+                "text": String::default(),
+            }
         }));
 
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(2),
-        method: "textDocument/diagnostic".to_owned(),
-        params: json!({
-            "textDocument": {
-                "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string()
-            },
-        }),
-    }));
+    interaction
+        .client
+        .send_request::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({
+                "textDocument": {
+                    "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string()
+                },
+            }),
+        );
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(json!({"items":[],"kind":"full"})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<DocumentDiagnosticRequest>(
+            RequestId::from(2),
+            json!({"items":[],"kind":"full"}),
+        );
 
     let notebook_content = std::fs::read_to_string(root.path().join("notebook.py")).unwrap();
     interaction
-        .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 2
-                },
-                "contentChanges": [{
-                    "text": format!("{}\n{}\n", notebook_content, "t")
-                }],
-            }),
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": format!("{}\n{}\n", notebook_content, "t")
+            }],
         }));
 
     interaction.shutdown();
@@ -205,22 +249,19 @@ fn test_nonexistent_file() {
 fn test_unknown_request() {
     let mut interaction = LspInteraction::new();
     interaction.initialize(InitializeSettings::default());
-    interaction.server.send_message(Message::Request(Request {
+    interaction.client.send_message(Message::Request(Request {
         id: RequestId::from(1),
         method: "fake-method".to_owned(),
         params: json!(null),
     }));
-    interaction
-        .client
-        .expect_message(Message::Response(Response {
-            id: RequestId::from(1),
-            result: None,
-            error: Some(ResponseError {
-                code: -32601,
-                message: "Unknown request: fake-method".to_owned(),
-                data: None,
-            }),
-        }));
+    interaction.client.expect_response_error(
+        RequestId::from(1),
+        json!({
+            "code": -32601,
+            "message": "Unknown request: fake-method",
+            "data": null,
+        }),
+    );
 }
 
 #[test]
@@ -231,8 +272,8 @@ fn test_connection_closed_server_stops() {
     // Close the connection by dropping both the receiver and sender
     // This simulates the client disconnecting unexpectedly
     interaction.client.drop_connection();
-    interaction.server.drop_connection();
+    interaction.client.drop_connection();
 
     // The server should stop when the connection is closed
-    interaction.server.expect_stop();
+    interaction.client.expect_stop();
 }

@@ -236,18 +236,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
     pub fn check_for_deprecated_call(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
-        if !ty.is_deprecated_function() {
+        let Some(deprecation) = ty.function_deprecation() else {
             return;
-        }
+        };
         let deprecated_function = ty
             .to_func_kind()
             .map(|func_kind| func_kind.format(self.module().name()));
         if let Some(deprecated_function) = deprecated_function {
-            self.error(
-                errors,
+            errors.add(
                 range,
                 ErrorInfo::Kind(ErrorKind::Deprecated),
-                format!("`{deprecated_function}` is deprecated"),
+                deprecation.as_error_message(format!("`{deprecated_function}` is deprecated")),
             );
         }
     }

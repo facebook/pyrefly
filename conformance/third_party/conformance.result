@@ -234,13 +234,10 @@
   "overloads_definitions.py": [],
   "overloads_evaluation.py": [],
   "protocols_class_objects.py": [
-    "Line 29: Expected 1 errors",
-    "Line 34: Expected 1 errors",
     "Line 104: Expected 1 errors",
     "Line 106: Expected 1 errors",
     "Line 107: Expected 1 errors",
-    "Line 108: Expected 1 errors",
-    "Line 26: Unexpected errors ['Cannot instantiate `Proto` because it is a protocol']"
+    "Line 108: Expected 1 errors"
   ],
   "protocols_definition.py": [
     "Line 116: Expected 1 errors",
@@ -325,9 +322,7 @@
   "typeddicts_readonly_inheritance.py": [],
   "typeddicts_readonly_kwargs.py": [],
   "typeddicts_readonly_update.py": [],
-  "typeddicts_required.py": [
-    "Line 71: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMovie']`\"]"
-  ],
+  "typeddicts_required.py": [],
   "typeddicts_type_consistency.py": [],
   "typeddicts_usage.py": []
 }

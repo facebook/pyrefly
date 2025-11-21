@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Response;
+use lsp_types::request::InlayHintRequest;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -22,14 +22,14 @@ fn test_inlay_hint_default_config() {
         ..Default::default()
     });
 
-    interaction.server.did_open("inlay_hint_test.py");
+    interaction.client.did_open("inlay_hint_test.py");
     interaction
-        .server
+        .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(json!([
+    interaction.client.expect_response::<InlayHintRequest>(
+        interaction.client.current_request_id(),
+        json!([
             {
                 "label":" -> tuple[Literal[1], Literal[2]]",
                 "position":{"character":21,"line":6},
@@ -54,9 +54,8 @@ fn test_inlay_hint_default_config() {
                     "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
                 }]
             }
-        ])),
-        error: None,
-    });
+        ]),
+    );
 
     interaction.shutdown();
 }
@@ -81,16 +80,14 @@ fn test_inlay_hint_default_and_pyrefly_analysis() {
         ..Default::default()
     });
 
-    interaction.server.did_open("inlay_hint_test.py");
+    interaction.client.did_open("inlay_hint_test.py");
     interaction
-        .server
+        .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(json!([])),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<InlayHintRequest>(interaction.client.current_request_id(), json!([]));
 
     interaction.shutdown();
 }
@@ -114,17 +111,15 @@ fn test_inlay_hint_disable_all() {
         ..Default::default()
     });
 
-    interaction.server.did_open("inlay_hint_test.py");
+    interaction.client.did_open("inlay_hint_test.py");
 
     interaction
-        .server
+        .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(json!([])),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<InlayHintRequest>(interaction.client.current_request_id(), json!([]));
 
     interaction.shutdown();
 }
@@ -145,15 +140,15 @@ fn test_inlay_hint_disable_variables() {
         ..Default::default()
     });
 
-    interaction.server.did_open("inlay_hint_test.py");
+    interaction.client.did_open("inlay_hint_test.py");
 
     interaction
-        .server
+        .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(json!([{
+    interaction.client.expect_response::<InlayHintRequest>(
+        interaction.client.current_request_id(),
+        json!([{
             "label":" -> tuple[Literal[1], Literal[2]]",
             "position":{"character":21,"line":6},
             "textEdits":[{
@@ -168,9 +163,8 @@ fn test_inlay_hint_disable_variables() {
                 "newText":" -> Literal[0]",
                 "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
             }]
-        }])),
-        error: None,
-    });
+        }]),
+    );
 
     interaction.shutdown();
 }
@@ -191,24 +185,23 @@ fn test_inlay_hint_disable_returns() {
         ..Default::default()
     });
 
-    interaction.server.did_open("inlay_hint_test.py");
+    interaction.client.did_open("inlay_hint_test.py");
 
     interaction
-        .server
+        .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0);
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(json!([{
+    interaction.client.expect_response::<InlayHintRequest>(
+        interaction.client.current_request_id(),
+        json!([{
             "label":": tuple[Literal[1], Literal[2]]",
             "position":{"character":6,"line":11},
             "textEdits":[{
                 "newText":": tuple[Literal[1], Literal[2]]",
                 "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
             }]
-        }])),
-        error: None,
-    });
+        }]),
+    );
 
     interaction.shutdown();
 }
@@ -223,14 +216,14 @@ fn test_inlay_hint_labels_do_not_support_goto_type_definition() {
         ..Default::default()
     });
 
-    interaction.server.did_open("type_def_inlay_hint_test.py");
+    interaction.client.did_open("type_def_inlay_hint_test.py");
     interaction
-        .server
+        .client
         .inlay_hint("type_def_inlay_hint_test.py", 0, 0, 100, 0);
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(json!([
+    interaction.client.expect_response::<InlayHintRequest>(
+        interaction.client.current_request_id(),
+        json!([
             {
                 "label": " -> MyClass",
                 "position": {"character": 22, "line": 11},
@@ -253,9 +246,8 @@ fn test_inlay_hint_labels_do_not_support_goto_type_definition() {
                     }
                 }]
             }
-        ])),
-        error: None,
-    });
+        ]),
+    );
 
     interaction.shutdown();
 }

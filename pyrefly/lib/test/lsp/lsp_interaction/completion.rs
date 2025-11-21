@@ -5,12 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Notification;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
+use lsp_types::notification::DidChangeTextDocument;
+use lsp_types::request::Completion;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -24,31 +22,28 @@ fn test_completion_basic() {
     interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     let root_path = root.path().join("basic");
     let foo_path = root_path.join("foo.py");
     interaction
-        .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 2
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 10, "character": 0},
+                    "end": {"line": 12, "character": 0}
                 },
-                "contentChanges": [{
-                    "range": {
-                        "start": {"line": 10, "character": 0},
-                        "end": {"line": 12, "character": 0}
-                    },
-                    "text": format!("\n{}\n", "Ba")
-                }],
-            }),
+                "text": format!("\n{}\n", "Ba")
+            }],
         }));
 
-    interaction.server.completion("foo.py", 11, 1);
+    interaction.client.completion("foo.py", 11, 1);
 
     interaction.client.expect_response_with(
         |response| {
@@ -84,31 +79,28 @@ fn test_completion_sorted_in_sorttext_order() {
     interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     let root_path = root.path().join("basic");
     let foo_path = root_path.join("foo.py");
     interaction
-        .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 2
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 10, "character": 0},
+                    "end": {"line": 12, "character": 0}
                 },
-                "contentChanges": [{
-                    "range": {
-                        "start": {"line": 10, "character": 0},
-                        "end": {"line": 12, "character": 0}
-                    },
-                    "text": format!("\n{}\n", "Ba")
-                }],
-            }),
+                "text": format!("\n{}\n", "Ba")
+            }],
         }));
 
-    interaction.server.completion("foo.py", 11, 1);
+    interaction.client.completion("foo.py", 11, 1);
 
     interaction.client.expect_response_with(
         |response| {
@@ -159,32 +151,29 @@ fn test_completion_keywords() {
     interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     let root_path = root.path().join("basic");
     let foo_path = root_path.join("foo.py");
 
     interaction
-        .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 2
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 10, "character": 0},
+                    "end": {"line": 12, "character": 0}
                 },
-                "contentChanges": [{
-                    "range": {
-                        "start": {"line": 10, "character": 0},
-                        "end": {"line": 12, "character": 0}
-                    },
-                    "text": format!("\n{}\n", "i")
-                }],
-            }),
+                "text": format!("\n{}\n", "i")
+            }],
         }));
 
-    interaction.server.completion("foo.py", 11, 1);
+    interaction.client.completion("foo.py", 11, 1);
 
     interaction.client.expect_response_with(
         |response| {
@@ -233,25 +222,22 @@ fn test_import_completion_skips_hidden_directories() {
     interaction.set_root(workspace);
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     interaction
-        .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 2
-                },
-                "contentChanges": [{
-                    "text": "import ".to_owned()
-                }],
-            }),
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": "import ".to_owned()
+            }],
         }));
 
-    interaction.server.completion("foo.py", 0, 7);
+    interaction.client.completion("foo.py", 0, 7);
 
     interaction.client.expect_response_with(
         |response| {
@@ -287,25 +273,22 @@ fn test_completion_with_autoimport() {
     interaction.initialize(InitializeSettings::default());
 
     let file = root_path.join("foo.py");
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     interaction
-        .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&file).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 2
-                },
-                "contentChanges": [{
-                    "text": "this_is_a_very_long_function_name_so_we_can".to_owned()
-                }],
-            }),
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&file).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": "this_is_a_very_long_function_name_so_we_can".to_owned()
+            }],
         }));
 
-    interaction.server.completion("foo.py", 0, 43);
+    interaction.client.completion("foo.py", 0, 43);
 
     interaction.client.expect_response_with(
         |response| {
@@ -354,25 +337,22 @@ fn test_completion_with_autoimport_without_config() {
     });
 
     let foo_path = root_path.join("foo.py");
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     interaction
-        .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 2
-                },
-                "contentChanges": [{
-                    "text": "Bar".to_owned()
-                }],
-            }),
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": "Bar".to_owned()
+            }],
         }));
 
-    interaction.server.completion("foo.py", 0, 3);
+    interaction.client.completion("foo.py", 0, 3);
 
     interaction.client.expect_response_with(
         |response| {
@@ -407,14 +387,12 @@ fn test_completion_with_autoimport_in_defined_module() {
     });
 
     let file = root_path.join("autoimport_provider.py");
-    interaction.server.did_open("autoimport_provider.py");
+    interaction.client.did_open("autoimport_provider.py");
 
     let file_content = std::fs::read_to_string(&file).unwrap();
     interaction
-        .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: json!({
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
                 "textDocument": {
                     "uri": Url::from_file_path(&file).unwrap().to_string(),
                     "languageId": "python",
@@ -423,13 +401,11 @@ fn test_completion_with_autoimport_in_defined_module() {
                 "contentChanges": [{
                     "text": format!("{}\n{}", file_content, "this_is_a_very_long_function_name_so_we_can")
                 }],
-            }),
-        }));
+            }));
 
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(2),
-        method: "textDocument/completion".to_owned(),
-        params: json!({
+    interaction.client.send_request::<Completion>(
+        RequestId::from(2),
+        json!({
             "textDocument": {
                 "uri": Url::from_file_path(&file).unwrap().to_string()
             },
@@ -438,7 +414,7 @@ fn test_completion_with_autoimport_in_defined_module() {
                 "character": 95
             }
         }),
-    }));
+    );
 
     interaction.client.expect_response_with(
         |response| {
@@ -483,9 +459,9 @@ fn test_completion_with_autoimport_duplicates() {
         ..Default::default()
     });
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
-    interaction.server.completion("foo.py", 5, 14);
+    interaction.client.completion("foo.py", 5, 14);
 
     interaction.client.expect_response_with(
         |response| {
@@ -513,13 +489,13 @@ fn test_module_completion() {
     interaction.set_root(root.path().join("tests_requiring_config"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
-    interaction.server.completion("foo.py", 5, 10);
+    interaction.client.completion("foo.py", 5, 10);
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(json!({
+    interaction.client.expect_response::<Completion>(
+        RequestId::from(2),
+        json!({
             "isIncomplete": false,
             "items": [{
                 "label": "bar",
@@ -527,9 +503,8 @@ fn test_module_completion() {
                 "kind": 9,
                 "sortText": "0"
             }],
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -541,26 +516,23 @@ fn test_module_completion_reexports_sorted_lower() {
     interaction.set_root(root.path().join("reexport_test"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("test.py");
+    interaction.client.did_open("test.py");
 
     let test_path = root.path().join("reexport_test/test.py");
     interaction
-        .server
-        .send_message(Message::Notification(Notification {
-            method: "textDocument/didChange".to_owned(),
-            params: json!({
-                "textDocument": {
-                    "uri": Url::from_file_path(&test_path).unwrap().to_string(),
-                    "languageId": "python",
-                    "version": 2
-                },
-                "contentChanges": [{
-                    "text": "import module_with_reexports\n\nmodule_with_reexports.".to_owned()
-                }],
-            }),
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&test_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": "import module_with_reexports\n\nmodule_with_reexports.".to_owned()
+            }],
         }));
 
-    interaction.server.completion("test.py", 2, 23);
+    interaction.client.completion("test.py", 2, 23);
 
     interaction.client.expect_response_with(
         |response| {
@@ -619,21 +591,20 @@ fn test_relative_module_completion() {
     interaction.initialize(InitializeSettings::default());
 
     interaction
-        .server
+        .client
         .did_open("relative_test/relative_import.py");
 
     interaction
-        .server
+        .client
         .completion("relative_test/relative_import.py", 5, 10);
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(json!({
+    interaction.client.expect_response::<Completion>(
+        RequestId::from(2),
+        json!({
             "isIncomplete": false,
             "items": [],
-        })),
-        error: None,
-    });
+        }),
+    );
 
     interaction.shutdown();
 }
@@ -649,9 +620,9 @@ fn test_stdlib_submodule_completion() {
     interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
-    interaction.server.did_change("foo.py", "import email.");
-    interaction.server.completion("foo.py", 0, 13);
+    interaction.client.did_open("foo.py");
+    interaction.client.did_change("foo.py", "import email.");
+    interaction.client.completion("foo.py", 0, 13);
 
     interaction.client.expect_response_with_item(
         json!({
@@ -677,9 +648,9 @@ fn test_stdlib_class_completion() {
     interaction.set_root(root_path.clone());
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
-    interaction.server.did_change("foo.py", "FirstHeader");
-    interaction.server.completion("foo.py", 0, 11);
+    interaction.client.did_open("foo.py");
+    interaction.client.did_change("foo.py", "FirstHeader");
+    interaction.client.completion("foo.py", 0, 11);
 
     interaction.client.expect_response_with_item(
         json!({
@@ -708,12 +679,12 @@ fn test_completion_incomplete_below_autoimport_threshold() {
     interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     // Type only 2 characters (below MIN_CHARACTERS_TYPED_AUTOIMPORT = 3)
-    interaction.server.did_change("foo.py", "xy");
+    interaction.client.did_change("foo.py", "xy");
 
-    interaction.server.completion("foo.py", 0, 2);
+    interaction.client.completion("foo.py", 0, 2);
 
     interaction.client.expect_response_with(
         |response| {
@@ -744,12 +715,12 @@ fn test_completion_complete_above_autoimport_threshold() {
     interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     // Type 3 characters (meets MIN_CHARACTERS_TYPED_AUTOIMPORT = 3)
-    interaction.server.did_change("foo.py", "xyz");
+    interaction.client.did_change("foo.py", "xyz");
 
-    interaction.server.completion("foo.py", 0, 3);
+    interaction.client.completion("foo.py", 0, 3);
 
     interaction.client.expect_response_with(
         |response| {
@@ -779,12 +750,12 @@ fn test_completion_complete_with_local_completions() {
     interaction.set_root(root.path().join("basic"));
     interaction.initialize(InitializeSettings::default());
 
-    interaction.server.did_open("foo.py");
+    interaction.client.did_open("foo.py");
 
     // Type 2 characters (below threshold) but match local completion "Ba" -> "Bar"
-    interaction.server.did_change("foo.py", "Ba");
+    interaction.client.did_change("foo.py", "Ba");
 
-    interaction.server.completion("foo.py", 0, 2);
+    interaction.client.completion("foo.py", 0, 2);
 
     interaction.client.expect_response_with(
         |response| {

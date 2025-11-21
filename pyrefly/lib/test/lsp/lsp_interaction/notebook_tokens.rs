@@ -6,7 +6,8 @@
  */
 
 use lsp_server::RequestId;
-use lsp_server::Response;
+use lsp_types::request::SemanticTokensFullRequest;
+use lsp_types::request::SemanticTokensRangeRequest;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -25,18 +26,20 @@ fn test_semantic_tokens_full() {
     interaction.open_notebook("notebook.ipynb", vec!["x = 1", "x2 = 1"]);
 
     interaction.semantic_tokens_cell("notebook.ipynb", "cell1");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(json!({"data":[0,0,1,8,0]})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<SemanticTokensFullRequest>(
+            RequestId::from(2),
+            json!({"data":[0,0,1,8,0]}),
+        );
 
     interaction.semantic_tokens_cell("notebook.ipynb", "cell2");
-    interaction.client.expect_response(Response {
-        id: RequestId::from(3),
-        result: Some(json!({"data":[0,0,2,8,0]})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<SemanticTokensFullRequest>(
+            RequestId::from(3),
+            json!({"data":[0,0,2,8,0]}),
+        );
     interaction.shutdown();
 }
 
@@ -54,10 +57,11 @@ fn test_semantic_tokens_ranged() {
     // Request ranged semantic tokens for just the first line in the first cell
     // It should be the same as the cell1 semantic tokens in test_semantic_tokens_full
     interaction.semantic_tokens_ranged_cell("notebook.ipynb", "cell1", 0, 0, 1, 0);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(json!({"data":[0,0,1,8,0]})),
-        error: None,
-    });
+    interaction
+        .client
+        .expect_response::<SemanticTokensRangeRequest>(
+            RequestId::from(2),
+            json!({"data":[0,0,1,8,0]}),
+        );
     interaction.shutdown();
 }
