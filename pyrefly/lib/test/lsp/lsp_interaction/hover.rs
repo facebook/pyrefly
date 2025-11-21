@@ -100,9 +100,9 @@ fn hover_shows_third_party_function_name() {
         ..Default::default()
     });
 
-    interaction.server.did_open("user_code.py");
+    interaction.client.did_open("user_code.py");
     // Column/line values follow LSP's zero-based positions
-    interaction.server.hover("user_code.py", 14, 25);
+    interaction.client.hover("user_code.py", 14, 25);
     interaction.client.expect_response_with(
         |response| {
             response
