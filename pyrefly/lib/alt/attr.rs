@@ -1672,6 +1672,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             Type::Type(box Type::Any(style)) => acc.push(AttributeBase1::TypeAny(style)),
             Type::Type(box Type::Never(_)) => acc.push(AttributeBase1::TypeNever),
+            Type::Type(box Type::None) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(self.stdlib.none_type().clone()),
+            )),
             // At runtime, these special forms are classes. This has been tested with Python
             // versions 3.11-3.13. Note that other special forms are classes in some versions, but
             // their representations aren't stable across versions.

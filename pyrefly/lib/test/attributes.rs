@@ -1217,13 +1217,12 @@ def f[T: Foo | Bar](y: T, z: Foo | Bar) -> T:
 );
 
 testcase!(
-    bug = "type[None] should be types.NoneType",
     test_attribute_access_on_type_none,
     r#"
 # handy hack to get a type[X] for any X
 def ty[T](x: T) -> type[T]: ...
 
-ty(None).__bool__(None) # E: Expr::attr_infer_for_type attribute base undefined
+ty(None).__bool__(None)
 "#,
 );
 
