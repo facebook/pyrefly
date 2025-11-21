@@ -15,6 +15,7 @@ use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::base::ConfigBase;
 use pyrefly_config::config::DirectoryRelativeFallbackSearchPathCache;
 use pyrefly_config::config::FallbackSearchPath;
+use pyrefly_config::environment::environment::PythonEnvironment;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
@@ -150,6 +151,7 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
             cache_one.lock().clear();
             cache_parents.lock().clear();
             cache_ancestors.clear();
+            PythonEnvironment::clear_interpreter_cache();
         })
     };
 

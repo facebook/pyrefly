@@ -220,6 +220,13 @@ print(json.dumps({'python_platform': platform, 'python_version': version, 'site_
         &INTERPRETER_STDLIB_PATH_REGISTRY
     }
 
+    /// Clear the cached interpreter environments.
+    /// This should be called when the workspace configuration changes
+    /// to ensure we re-query interpreters for their current environment.
+    pub fn clear_interpreter_cache() {
+        INTERPRETER_ENV_REGISTRY.lock().clear();
+    }
+
     /// [`Self::get_default_interpreter()`] and [`Self::get_interpreter_env()`] with the resulting value,
     /// or return [`PythonEnvironment::default()`] if `None`.
     pub fn get_default_interpreter_env() -> PythonEnvironment {
@@ -311,5 +318,30 @@ mod tests {
             env1.interpreter_site_package_path,
             env2.interpreter_site_package_path
         );
+    }
+
+    #[test]
+    fn test_clear_interpreter_cache() {
+        // First, populate the cache by calling get_interpreter_env with a valid Python path
+        // We'll use "python3" which should be available in most environments
+        let python_path = PathBuf::from("python3");
+
+        // This will cache the result (whether it succeeds or fails)
+        let _ = PythonEnvironment::get_interpreter_env(&python_path);
+
+        // Verify something was cached
+        {
+            let registry = INTERPRETER_ENV_REGISTRY.lock();
+            assert!(!registry.is_empty(), "Cache should be populated after get_interpreter_env");
+        }
+
+        // Clear the cache
+        PythonEnvironment::clear_interpreter_cache();
+
+        // Verify the cache is now empty
+        {
+            let registry = INTERPRETER_ENV_REGISTRY.lock();
+            assert!(registry.is_empty(), "Cache should be empty after clear_interpreter_cache");
+        }
     }
 }
