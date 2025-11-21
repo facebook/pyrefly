@@ -19,7 +19,6 @@ use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
-use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::dunder;
 use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
@@ -181,7 +180,7 @@ impl DefinitionMetadata {
 }
 
 #[derive(Debug)]
-pub(super) enum CalleeKind {
+pub(crate) enum CalleeKind {
     // Function name
     Function(Identifier),
     // Range of the base expr + method name
@@ -213,7 +212,7 @@ where
 }
 
 #[derive(Debug)]
-pub(super) enum PatternMatchParameterKind {
+pub(crate) enum PatternMatchParameterKind {
     // Name defined using `as`
     // ex: `x` in `case ... as x: ...`, or `x` in `case x: ...`
     AsName,
@@ -229,7 +228,7 @@ pub(super) enum PatternMatchParameterKind {
 }
 
 #[derive(Debug)]
-pub(super) enum IdentifierContext {
+pub(crate) enum IdentifierContext {
     /// An identifier appeared in an expression. ex: `x` in `x + 1`
     Expr(ExprContext),
     /// An identifier appeared as the name of an attribute. ex: `y` in `x.y`
@@ -293,9 +292,9 @@ pub(super) enum IdentifierContext {
 }
 
 #[derive(Debug)]
-pub(super) struct IdentifierWithContext {
-    pub(super) identifier: Identifier,
-    pub(super) context: IdentifierContext,
+pub(crate) struct IdentifierWithContext {
+    pub(crate) identifier: Identifier,
+    pub(crate) context: IdentifierContext,
 }
 
 #[derive(PartialEq, Eq)]
@@ -510,7 +509,11 @@ impl<'a> Transaction<'a> {
         None
     }
 
-    fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<IdentifierWithContext> {
+    pub(crate) fn identifier_at(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<IdentifierWithContext> {
         let mod_module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&mod_module, position);
         Self::identifier_from_covering_nodes(&covering_nodes)
@@ -840,45 +843,6 @@ impl<'a> Transaction<'a> {
             }
             None => self.type_from_expression_at(handle, position),
         }
-    }
-
-    pub fn keyword_argument_documentation(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-    ) -> Option<(String, String)> {
-        let identifier = self.identifier_at(handle, position)?;
-        if !matches!(identifier.context, IdentifierContext::KeywordArgument(_)) {
-            return None;
-        }
-        let (_, _, _, callee_range) = self.get_callables_from_call(handle, position)?;
-        let docs = self.parameter_documentation_for_callee(handle, callee_range)?;
-        let name = identifier.identifier.id.to_string();
-        docs.get(name.as_str()).cloned().map(|doc| (name, doc))
-    }
-
-    pub fn parameter_definition_documentation(
-        &self,
-        handle: &Handle,
-        definition_range: TextRange,
-        name: &Name,
-    ) -> Option<(String, String)> {
-        let ast = self.get_ast(handle)?;
-        let module = self.get_module_info(handle)?;
-
-        let func = ast
-            .body
-            .iter()
-            .filter_map(|stmt| match stmt {
-                ruff_python_ast::Stmt::FunctionDef(func) => Some(func),
-                _ => None,
-            })
-            .find(|func| func.range.contains_inclusive(definition_range.start()))?;
-
-        let doc_range = Docstring::range_from_stmts(func.body.as_slice())?;
-        let docs = parse_parameter_documentation(module.code_at(doc_range));
-        let key = name.as_str();
-        docs.get(key).cloned().map(|doc| (key.to_owned(), doc))
     }
 
     fn resolve_named_import(

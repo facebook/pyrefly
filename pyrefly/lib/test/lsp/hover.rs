@@ -216,9 +216,9 @@ def foo(x: int, y: int) -> None:
     ...
 
 foo(x=1, y=2)
-#    ^
+#   ^
 foo(x=1, y=2)
-#         ^
+#        ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
     assert!(

@@ -54,9 +54,7 @@ impl Docstring {
 
     /// Clean a string literal ("""...""") and turn it into a docstring.
     pub fn clean(docstring: &str) -> String {
-        let normalized = docstring.replace("\r", "").replace("\t", "    ");
-        let stripped = strip_literal_quotes(&normalized);
-        let result = stripped.replace("\r", "").replace("\t", "    ");
+        let result = normalize_literal(docstring);
 
         // Remove the shortest amount of whitespace from the beginning of each line
         let min_indent = result
@@ -112,9 +110,14 @@ impl Docstring {
     }
 }
 
-fn dedented_lines_for_parsing(docstring: &str) -> Vec<String> {
+fn normalize_literal(docstring: &str) -> String {
     let normalized = docstring.replace("\r", "").replace("\t", "    ");
     let stripped = strip_literal_quotes(&normalized);
+    stripped.replace("\r", "").replace("\t", "    ")
+}
+
+fn dedented_lines_for_parsing(docstring: &str) -> Vec<String> {
+    let stripped = normalize_literal(docstring);
     let stripped = stripped.trim_matches('\n');
     if stripped.is_empty() {
         return Vec::new();
@@ -155,7 +158,8 @@ fn leading_space_count(line: &str) -> usize {
     line.as_bytes().iter().take_while(|c| **c == b' ').count()
 }
 
-fn flush_parameter_doc(
+/// Persist the documentation collected so far for the current parameter.
+fn commit_parameter_doc(
     current_param: &mut Option<String>,
     current_lines: &mut Vec<String>,
     docs: &mut HashMap<String, String>,
@@ -169,6 +173,8 @@ fn flush_parameter_doc(
     }
 }
 
+/// Parse [`Sphinx`](https://www.sphinx-doc.org/en/master/usage/extensions/napoleon.html)
+/// style `:param foo: description` blocks into a map of parameter docs.
 fn parse_sphinx_params(lines: &[String], docs: &mut HashMap<String, String>) {
     let mut current_param = None;
     let mut current_lines = Vec::new();
@@ -177,7 +183,7 @@ fn parse_sphinx_params(lines: &[String], docs: &mut HashMap<String, String>) {
     for line in lines {
         let trimmed = line.trim_start();
         if trimmed.starts_with(":param") {
-            flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
 
             let rest = trimmed.trim_start_matches(":param").trim_start();
             let (name_part, desc_part) = match rest.split_once(':') {
@@ -207,25 +213,25 @@ fn parse_sphinx_params(lines: &[String], docs: &mut HashMap<String, String>) {
         }
 
         if trimmed.starts_with(':') {
-            flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
             continue;
         }
 
         if current_param.is_some() {
             if trimmed.is_empty() {
-                flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
                 continue;
             }
             let indent = leading_space_count(line);
             if indent > base_indent {
                 current_lines.push(line.trim_start().to_owned());
             } else {
-                flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
             }
         }
     }
 
-    flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+    commit_parameter_doc(&mut current_param, &mut current_lines, docs);
 }
 
 fn is_google_section(header: &str) -> bool {
@@ -251,6 +257,15 @@ fn extract_google_param_name(header: &str) -> Option<String> {
     }
 }
 
+/// Parse Google-style `Args:`/`Arguments:` sections of the form:
+///
+/// ```text
+/// Args:
+///     foo (int): description
+///     bar: another description
+/// ```
+///
+/// See <https://google.github.io/styleguide/pyguide.html#383-functions-and-methods>.
 fn parse_google_params(lines: &[String], docs: &mut HashMap<String, String>) {
     let mut in_section = false;
     let mut section_indent = 0usize;
@@ -263,24 +278,24 @@ fn parse_google_params(lines: &[String], docs: &mut HashMap<String, String>) {
         let trimmed = line.trim();
 
         if trimmed.is_empty() {
-            flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
             continue;
         }
 
         if trimmed.ends_with(':') {
             let header = trimmed.trim_end_matches(':');
             if is_google_section(header) {
-                flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
                 in_section = true;
                 section_indent = indent;
                 continue;
             }
             if in_section && indent <= section_indent {
-                flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
                 in_section = false;
             }
         } else if in_section && indent <= section_indent {
-            flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
             in_section = false;
         }
 
@@ -289,7 +304,7 @@ fn parse_google_params(lines: &[String], docs: &mut HashMap<String, String>) {
         }
 
         if indent <= section_indent {
-            flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+            commit_parameter_doc(&mut current_param, &mut current_lines, docs);
             in_section = false;
             continue;
         }
@@ -297,7 +312,7 @@ fn parse_google_params(lines: &[String], docs: &mut HashMap<String, String>) {
         let content = line[section_indent.min(line.len())..].trim_start();
         if let Some((header, rest)) = content.split_once(':') {
             if let Some(name) = extract_google_param_name(header.trim()) {
-                flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
                 current_param = Some(name);
                 current_lines.clear();
                 param_indent = indent;
@@ -313,21 +328,23 @@ fn parse_google_params(lines: &[String], docs: &mut HashMap<String, String>) {
             if indent > param_indent {
                 current_lines.push(content.trim_start().to_owned());
             } else {
-                flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+                commit_parameter_doc(&mut current_param, &mut current_lines, docs);
             }
         }
     }
 
-    flush_parameter_doc(&mut current_param, &mut current_lines, docs);
+    commit_parameter_doc(&mut current_param, &mut current_lines, docs);
 }
 
+/// Extract a map of `parameter -> markdown` documentation snippets from the
+/// supplied docstring, supporting both Sphinx (`:param foo:`) and
+/// Google-style (`Args:`) formats.
 pub fn parse_parameter_documentation(docstring: &str) -> HashMap<String, String> {
     let lines = dedented_lines_for_parsing(docstring);
-    if lines.is_empty() {
-        return HashMap::new();
-    }
-
     let mut docs = HashMap::new();
+    if lines.is_empty() {
+        return docs;
+    }
     parse_sphinx_params(&lines, &mut docs);
     parse_google_params(&lines, &mut docs);
     docs

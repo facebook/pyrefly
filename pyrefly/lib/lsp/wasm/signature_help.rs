@@ -123,6 +123,9 @@ impl Transaction<'_> {
         let mut res = None;
         mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
         let (callee_range, call_args_range, mut active_argument) = res?;
+        // When the cursor is in the argument list but not inside any argument yet,
+        // estimate the would-be positional index by counting commas up to the cursor.
+        // This keeps signature help useful even before the user starts typing the next arg.
         if let ActiveArgument::Next(index) = &mut active_argument
             && let Some(next_index) =
                 self.count_argument_separators_before(handle, call_args_range, position)
