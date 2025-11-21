@@ -562,3 +562,28 @@ class A:
 assert_type(A.f(), type[A])  # E: assert_type(A, type[A])  # E: `type[A]` is not assignable to parameter `cls` with type `A`
     "#,
 );
+
+testcase!(
+    test_contextmanager_preserves_generics,
+    r#"
+import contextlib
+from contextlib import contextmanager
+from typing import Iterator, List, assert_type
+
+# A generic context manager
+@contextmanager
+def generic_ctx[T](val: T) -> Iterator[T]:
+    yield val
+
+def test(x: int, items: List[int]):
+    # Test 1: Simple type (int)
+    with generic_ctx(x) as val:
+        assert_type(val, int)
+    
+    # Test 2: Nested type (List[int])
+    m = generic_ctx(items)
+    
+    # Now 'contextlib' is defined, so this type check will work
+    assert_type(m, contextlib._GeneratorContextManager[List[int], None, None])
+"#,
+);
