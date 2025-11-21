@@ -681,3 +681,33 @@ def f[S, T](x: type[S], y: type[T]):
     return x == y
     "#,
 );
+
+testcase!(
+    test_or_generic_function_hint_poisoning_fix,
+    r#"
+from typing import TypeVar, assert_type
+
+T = TypeVar("T")
+
+def get_value(default: T) -> T:
+    return default
+
+def test(config: str | None):
+    # 1. Setup: config is explicitly set to None.
+    # The variable 'config' still carries the type hint 'str | None'.
+    config = None
+    
+    # 2. The Test:
+    # We reassign to 'config' using an OR expression with a generic function call.
+    #
+    # Without the fix, the 'str | None' hint from the variable definition flows 
+    # into 'get_value', causing it to infer T='str | None' instead of T='str'.
+    #
+    # With the fix, the hint is dropped for the function call, so it infers 
+    # T='str' purely from the argument "default".
+    config = config or get_value("default")
+    
+    # Since left side was None (discarded) and right side is str, result must be str.
+    assert_type(config, str)
+"#,
+);
