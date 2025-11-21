@@ -57,19 +57,7 @@ impl Docstring {
         let result = normalize_literal(docstring);
 
         // Remove the shortest amount of whitespace from the beginning of each line
-        let min_indent = result
-            .lines()
-            .skip(1)
-            .flat_map(|line| {
-                let spaces = line.bytes().take_while(|&c| c == b' ').count();
-                if spaces == line.len() {
-                    None
-                } else {
-                    Some(spaces)
-                }
-            })
-            .min()
-            .unwrap_or(0);
+        let min_indent = minimal_indentation(result.lines().skip(1));
 
         result
             .lines()
@@ -128,18 +116,7 @@ fn dedented_lines_for_parsing(docstring: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    let min_indent = lines
-        .iter()
-        .filter_map(|line| {
-            let trimmed = line.trim_end();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(leading_space_count(line))
-            }
-        })
-        .min()
-        .unwrap_or(0);
+    let min_indent = minimal_indentation(lines.iter().copied());
 
     lines
         .into_iter()
@@ -156,6 +133,23 @@ fn dedented_lines_for_parsing(docstring: &str) -> Vec<String> {
 
 fn leading_space_count(line: &str) -> usize {
     line.as_bytes().iter().take_while(|c| **c == b' ').count()
+}
+
+fn minimal_indentation<'a, I>(lines: I) -> usize
+where
+    I: Iterator<Item = &'a str>,
+{
+    lines
+        .filter_map(|line| {
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(leading_space_count(line))
+            }
+        })
+        .min()
+        .unwrap_or(0)
 }
 
 /// Persist the documentation collected so far for the current parameter.
