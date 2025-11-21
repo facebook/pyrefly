@@ -385,39 +385,34 @@ fn test_unused_variable_diagnostic() {
         ..Default::default()
     });
 
-    interaction.server.did_change_configuration();
-    interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(
-        2,
-        json!([
-            {"pyrefly": {"displayTypeErrors": "force-on"}}
-        ]),
-    );
-
-    interaction.server.did_open("unused_variable/example.py");
-    interaction.server.diagnostic("unused_variable/example.py");
-
+    interaction.client.did_change_configuration();
     interaction
         .client
-        .expect_response::<DocumentDiagnosticRequest>(
-            RequestId::from(2),
-            json!({
-                        "items": [
-                            {
-                                "code": "unused-variable",
-                                "message": "Variable `unused_var` is unused",
-                                "range": {
-                                    "start": {"line": 7, "character": 4},
-                                    "end": {"line": 7, "character": 14}
-                                },
-                                "severity": 4,
-                                "source": "Pyrefly",
-                                "tags": [1]
-                            }
-                        ],
-                        "kind": "full"
-            }),
-        );
+        .expect_configuration_request(None)
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("unused_variable/example.py");
+    interaction
+        .client
+        .diagnostic("unused_variable/example.py")
+        .expect_response(json!({
+                    "items": [
+                        {
+                            "code": "unused-variable",
+                            "message": "Variable `unused_var` is unused",
+                            "range": {
+                                "start": {"line": 7, "character": 4},
+                                "end": {"line": 7, "character": 14}
+                            },
+                            "severity": 4,
+                            "source": "Pyrefly",
+                            "tags": [1]
+                        }
+                    ],
+                    "kind": "full"
+        }));
 
     interaction.shutdown();
 }
