@@ -814,3 +814,67 @@ fn test_diagnostics_file_in_excludes() {
 
     interaction.shutdown();
 }
+
+#[test]
+fn test_initialization_options_respected() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("basic");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+
+    // Pass configuration via initialization_options instead of waiting for workspace/configuration
+    interaction.initialize(InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+        initialization_options: Some(json!({
+            "pyrefly": {
+                "disableLanguageServices": true
+            }
+        })),
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    // Open a file and immediately test that language services are disabled
+    // This proves that initialization_options were respected without needing
+    // to wait for workspace/configuration request/response
+    // Should return empty array because language services are disabled from initialization_options
+    interaction.client.did_open("foo.py");
+    interaction
+        .client
+        .definition("foo.py", 6, 16)
+        .expect_response(json!([]));
+
+    interaction.shutdown();
+}
+
+#[test]
+fn test_initialization_options_without_workspace_folders() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("basic");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+
+    // Pass configuration via initialization_options for a client that doesn't support workspace folders
+    // This should apply configuration to the default workspace
+    interaction.initialize(InitializeSettings {
+        workspace_folders: None,
+        initialization_options: Some(json!({
+            "pyrefly": {
+                "disableLanguageServices": true
+            }
+        })),
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    // Open a file and immediately test that language services are disabled
+    // This proves that initialization_options were applied to the default workspace
+    interaction.client.did_open("foo.py");
+    interaction
+        .client
+        .definition("foo.py", 6, 16)
+        .expect_response(json!([]));
+
+    interaction.shutdown();
+}
