@@ -1139,10 +1139,36 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_),
             ) => self.is_subset_eq(&self.type_order.constructor_to_callable(got), want),
             (Type::ClassDef(got), Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_)) => {
-                self.is_subset_eq(
-                    &Type::type_form(self.type_order.promote_silently(got)),
-                    want,
-                )
+                let tparams = self.type_order.get_class_tparams(got);
+                if tparams.is_empty() {
+                    // No type parameters, use existing logic
+                    self.is_subset_eq(
+                        &Type::type_form(self.type_order.promote_silently(got)),
+                        want,
+                    )
+                } else {
+                    // Generic class: instantiate fresh vars for the type parameters
+                    // and check if the constructor callable matches, similar to Forall handling
+                    let (vs, class_instance_type) =
+                        self.type_order.instantiate_fresh_class_with_handle(got);
+                    let result = match class_instance_type {
+                        Type::ClassType(cls) => {
+                            let callable = self.type_order.constructor_to_callable(&cls);
+                            self.is_subset_eq(&callable, want)
+                        }
+                        _ => {
+                            // Fall back if instantiation doesn't produce ClassType
+                            self.is_subset_eq(
+                                &Type::type_form(self.type_order.promote_silently(got)),
+                                want,
+                            )
+                        }
+                    };
+                    result.and(
+                        self.finish_quantified(vs)
+                            .map_err(SubsetError::TypeVarSpecialization),
+                    )
+                }
             }
             (Type::ClassDef(got), Type::ClassDef(want)) => ok_or(
                 self.type_order.has_superclass(got, want),
