@@ -972,14 +972,14 @@ fn has_toplevel_call(body: &[Stmt], callee_name: &'static str) -> bool {
 // This also strips `Optional[T]` since that is represented by `Union`
 fn strip_none_from_union(type_: &Type) -> Type {
     match type_ {
-        Type::Union(types) => {
+        Type::Union(box (types, _)) => {
             if let Ok(none_index) = types.binary_search(&Type::None) {
                 let mut new_types = types.clone();
                 new_types.remove(none_index);
                 match new_types.len() {
                     0 => panic!("Unexpected union type `{:#?}`", type_),
                     1 => new_types.into_iter().next().unwrap(),
-                    _ => Type::Union(new_types),
+                    _ => Type::union(new_types),
                 }
             } else {
                 type_.clone()
@@ -1142,7 +1142,7 @@ impl DirectCall {
                     Self::from_bool(false)
                 }
                 Some(Type::Function(_)) => Self::from_bool(true),
-                Some(Type::Union(types)) => {
+                Some(Type::Union(box (types, _))) => {
                     Self::is_direct_call(callee, Some(types.first().unwrap()), debug)
                 }
                 _ => Self::from_bool(false),
@@ -1461,7 +1461,7 @@ impl<'a> CallGraphVisitor<'a> {
             Some(Type::ClassType(class_type)) => {
                 call_targets_from_method_name_with_class(class_type.class_object())
             }
-            Some(Type::Union(types)) => types
+            Some(Type::Union(box (types, _))) => types
                 .iter()
                 .map(|type_| {
                     self.call_targets_from_method_name(

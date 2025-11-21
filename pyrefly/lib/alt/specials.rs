@@ -200,7 +200,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 fn is_valid_literal(x: &Type) -> bool {
                     match x {
                         Type::None | Type::Literal(_) | Type::Any(AnyStyle::Error) => true,
-                        Type::Union(xs) => xs.iter().all(is_valid_literal),
+                        Type::Union(box (xs, _)) => xs.iter().all(is_valid_literal),
                         _ => false,
                     }
                 }

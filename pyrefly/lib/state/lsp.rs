@@ -1166,7 +1166,7 @@ impl<'a> Transaction<'a> {
             let completions = |ty| solver.completions(ty, Some(name), false);
 
             match base_type {
-                Type::Union(tys) | Type::Intersect(box (tys, _)) => tys
+                Type::Union(box (tys, _)) | Type::Intersect(box (tys, _)) => tys
                     .into_iter()
                     .filter_map(|ty_| {
                         self.find_definition_for_base_type(
@@ -2376,7 +2376,7 @@ impl<'a> Transaction<'a> {
                     ..Default::default()
                 });
             }
-            Type::Union(types) => {
+            Type::Union(box (types, _)) => {
                 for union_type in types {
                     Self::add_literal_completions_from_type(union_type, completions);
                 }

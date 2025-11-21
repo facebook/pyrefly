@@ -230,7 +230,7 @@ fn python_ast_range_for_expr(
 
 fn is_static_method(ty: &Type) -> bool {
     match ty {
-        Type::Union(tys) => tys.iter().all(is_static_method),
+        Type::Union(box (tys, _)) => tys.iter().all(is_static_method),
         Type::BoundMethod(m) => m.func.metadata().flags.is_staticmethod,
         Type::Function(f) => f.metadata.flags.is_staticmethod,
         Type::Forall(f) => {
@@ -680,7 +680,7 @@ impl<'a> CalleesWithLocation<'a> {
                     .flat_map(Self::class_info_from_bound_obj)
                     .collect_vec(),
             },
-            Type::Union(tys) => tys
+            Type::Union(box (tys, _)) => tys
                 .iter()
                 .flat_map(Self::class_info_from_bound_obj)
                 .collect_vec(),
@@ -800,7 +800,7 @@ impl<'a> CalleesWithLocation<'a> {
                     self.module_info.display_range(callee_range)
                 ),
             },
-            Type::Union(tys) => self.init_or_new_from_union(tys, callee_range),
+            Type::Union(box (tys, _)) => self.init_or_new_from_union(tys, callee_range),
             x => {
                 panic!(
                     "unexpected type at [{}]: {x:?}",
@@ -827,7 +827,7 @@ impl<'a> CalleesWithLocation<'a> {
                 ),
             },
             Type::Never(_) => vec![],
-            Type::Union(tys) => {
+            Type::Union(box (tys, _)) => {
                 // get callee for each type
                 tys.iter()
                     .flat_map(|t| {

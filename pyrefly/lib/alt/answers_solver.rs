@@ -797,11 +797,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fn go(&mut self, ty: &Type, in_type: bool) {
                 match ty {
                     Type::Never(_) if !in_type => (),
-                    Type::Union(tys) => {
+                    Type::Union(box (tys, _)) => {
                         self.seen_union = true;
                         tys.iter().for_each(|ty| self.go(ty, in_type))
                     }
-                    Type::Type(box Type::Union(tys)) if !in_type => {
+                    Type::Type(box Type::Union(box (tys, _))) if !in_type => {
                         tys.iter().for_each(|ty| self.go(ty, true))
                     }
                     Type::Var(v) if let Some(_guard) = self.me.recurse(*v) => {

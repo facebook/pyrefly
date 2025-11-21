@@ -67,7 +67,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassDef(cls) => {
                 self.get_django_field_type_from_class(cls, class, field_name, initial_value_expr)
             }
-            Type::Union(union) => {
+            Type::Union(box (union, _)) => {
                 let transformed: Vec<_> = union
                     .iter()
                     .map(|variant| {
@@ -365,7 +365,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Get the related model type from the field
         let ty = class_field.ty();
         let (related_cls, is_foreign_key_nullable) = match ty {
-            Type::Union(union) => {
+            Type::Union(box (union, _)) => {
                 // Nullable foreign key: extract the class type from the union
                 let cls = union.iter().find_map(|variant| match variant {
                     Type::ClassType(cls) => Some(cls.clone()),

@@ -826,7 +826,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (Arc<TParams>, Callable) {
         let returns_callable = match &signature.ret {
             Type::Callable(_) => true,
-            Type::Union(ts) => ts.iter().any(|t| matches!(t, Type::Callable(_))),
+            Type::Union(box (ts, _)) => ts.iter().any(|t| matches!(t, Type::Callable(_))),
             _ => false,
         };
         if !returns_callable {

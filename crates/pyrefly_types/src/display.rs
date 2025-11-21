@@ -412,10 +412,11 @@ impl<'a> TypeDisplayContext<'a> {
                 self.maybe_fmt_with_module("typing", "NoReturn", output)
             }
             Type::Never(NeverStyle::Never) => self.maybe_fmt_with_module("typing", "Never", output),
-            Type::Union(types) if types.is_empty() => {
+            Type::Union(box (types, _)) if types.is_empty() => {
                 self.maybe_fmt_with_module("typing", "Never", output)
             }
-            Type::Union(types) => {
+            Type::Union(box (_, Some(name))) => output.write_str(name),
+            Type::Union(box (types, None)) => {
                 // All Literals will be collected into a single Literal at the index of the first Literal.
                 let mut literal_idx = None;
                 let mut literals = Vec::new();
@@ -1034,7 +1035,7 @@ pub mod tests {
             assert_eq!(ctx.display(&int_type).to_string(), "int");
         }
 
-        let union_foo_int = Type::Union(vec![foo_type, int_type]);
+        let union_foo_int = Type::union(vec![foo_type, int_type]);
 
         {
             let mut ctx = TypeDisplayContext::new(&[&union_foo_int]);
@@ -1050,11 +1051,11 @@ pub mod tests {
         let t3 = fake_tyvar("qux", "bar", 2);
 
         assert_eq!(
-            Type::Union(vec![t1.to_type(), t2.to_type()]).to_string(),
+            Type::union(vec![t1.to_type(), t2.to_type()]).to_string(),
             "TypeVar[bar.foo@1:2] | TypeVar[bar.foo@1:3]"
         );
         assert_eq!(
-            Type::Union(vec![t1.to_type(), t3.to_type()]).to_string(),
+            Type::union(vec![t1.to_type(), t3.to_type()]).to_string(),
             "TypeVar[foo] | TypeVar[qux]"
         );
     }
@@ -1094,12 +1095,20 @@ pub mod tests {
         let nonlit2 = Type::LiteralString;
 
         assert_eq!(
-            Type::Union(vec![nonlit1.clone(), nonlit2.clone()]).to_string(),
+            Type::union(vec![nonlit1.clone(), nonlit2.clone()]).to_string(),
             "None | LiteralString"
         );
         assert_eq!(
-            Type::Union(vec![nonlit1, lit1, nonlit2, lit2]).to_string(),
+            Type::union(vec![nonlit1.clone(), lit1, nonlit2.clone(), lit2]).to_string(),
             "None | Literal[True, 'test'] | LiteralString"
+        );
+        assert_eq!(
+            Type::Union(Box::new((
+                vec![nonlit1, nonlit2],
+                Some("MyUnion".to_owned())
+            )))
+            .to_string(),
+            "MyUnion"
         );
     }
 
@@ -1510,7 +1519,7 @@ def overloaded_func[T](
 
     #[test]
     fn test_union_of_intersection() {
-        let x = Type::Union(vec![
+        let x = Type::union(vec![
             Type::Intersect(Box::new((
                 vec![Type::any_explicit(), Type::LiteralString],
                 Type::any_implicit(),

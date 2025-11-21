@@ -499,7 +499,7 @@ fn export_signatures_from_type(ty: &Type, context: &ModuleContext) -> Vec<Functi
             BoundMethodType::Overload(overload) => export_overload_signatures(overload, context),
         },
         Type::Overload(overload) => export_overload_signatures(overload, context),
-        Type::Union(union) => union
+        Type::Union(box (union, _)) => union
             .iter()
             .flat_map(|ty| export_signatures_from_type(ty, context))
             .collect::<Vec<_>>(),

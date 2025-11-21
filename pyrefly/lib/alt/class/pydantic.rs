@@ -141,7 +141,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Recursively expands nested RootModels (e.g., RootModel[RootModel[int]] expands to RootModel[int] | int).
     pub fn extract_root_model_inner_type(&self, ty: &Type) -> Option<Type> {
         match ty {
-            Type::Union(types) => {
+            Type::Union(box (types, _)) => {
                 let root_types: Vec<Type> = types
                     .iter()
                     .filter_map(|t| self.extract_root_model_inner_type(t))

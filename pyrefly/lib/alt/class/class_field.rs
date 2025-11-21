@@ -944,7 +944,7 @@ fn make_bound_method_helper(
         Type::Overload(overload) if should_bind2(&overload.metadata) => {
             BoundMethodType::Overload(overload)
         }
-        Type::Union(ref ts) => {
+        Type::Union(box (ref ts, _)) => {
             let mut bound_methods = Vec::with_capacity(ts.len());
             for t in ts {
                 match make_bound_method_helper(obj.clone(), t.clone(), should_bind) {

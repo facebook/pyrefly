@@ -476,7 +476,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Could be anything inside here, so add in Any.
                     res.push(Type::Any(AnyStyle::Implicit));
                 }
-                Type::Tuple(Tuple::Concrete(ts)) | Type::Union(ts) => {
+                Type::Tuple(Tuple::Concrete(ts)) | Type::Union(box (ts, _)) => {
                     for t in ts {
                         f(me, t, res)
                     }
@@ -491,7 +491,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         f(me, t, res)
                     }
                 }
-                Type::Type(box Type::Union(ts)) => {
+                Type::Type(box Type::Union(box (ts, _))) => {
                     for t in ts {
                         f(me, Type::type_form(t), res)
                     }

@@ -1776,12 +1776,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SuperInstance(box (cls, obj)) => {
                 acc.push(AttributeBase1::SuperInstance(cls, obj))
             }
-            Type::Union(members) => {
+            Type::Union(box (members, _)) => {
                 for ty in members {
                     self.as_attribute_base1(ty, acc)
                 }
             }
-            Type::Type(box Type::Union(members)) => {
+            Type::Type(box Type::Union(box (members, _))) => {
                 for ty in members {
                     self.as_attribute_base1(Type::type_form(ty), acc)
                 }
