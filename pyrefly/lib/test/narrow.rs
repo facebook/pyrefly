@@ -2066,3 +2066,31 @@ def f(x: A):
         reveal_type(x) # E: A & B & C
     "#,
 );
+
+testcase!(
+    test_typed_dict_truthiness_narrowing,
+    r#"
+from typing import TypedDict, assert_type, NotRequired
+
+class RequiredDict(TypedDict):
+    val: int
+
+class EmptyDict(TypedDict):
+    val: NotRequired[int]
+
+def test_narrowing(x: RequiredDict | None, y: EmptyDict | None):
+    # Case 1: Required keys -> Always Truthy
+    # The 'and' operator should short-circuit if x is None,
+    # but NEVER if x is RequiredDict.
+    # Result should be: None | int
+    res1 = x and x['val']
+    assert_type(res1, int | None)
+
+    # Case 2: No required keys -> Maybe Falsy
+    # EmptyDict could be empty (Falsy).
+    # So 'y' might be returned by the 'and'.
+    # Result should be: None | int | EmptyDict
+    res2 = y and y.get('val')
+    assert_type(res2, int | None | EmptyDict)
+"#,
+);

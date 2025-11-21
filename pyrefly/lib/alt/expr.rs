@@ -1041,6 +1041,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///   and looking at the `__bool__` method, if it is present).
     /// - `None` if it's truthiness is not statically known.
     pub fn as_bool(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) -> Option<bool> {
+        if let Type::TypedDict(td) = ty {
+            // If a TypedDict has ANY required keys, it can never be empty.
+            // Therefore, it is always Truthy.
+            if self
+                .typed_dict_fields(td)
+                .values()
+                .any(|field| field.required)
+            {
+                return Some(true);
+            }
+        }
         ty.as_bool().or_else(|| {
             // If the object defines `__bool__`, we can check if it returns a statically known value
             if self
