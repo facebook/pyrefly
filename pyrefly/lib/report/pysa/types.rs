@@ -355,6 +355,7 @@ impl ScalarTypeProperties {
         }
     }
 
+    #[allow(dead_code)] // Used in test code
     pub fn bool() -> ScalarTypeProperties {
         ScalarTypeProperties {
             is_bool: true,

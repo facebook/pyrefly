@@ -310,7 +310,7 @@ impl TestClient {
     pub fn send_request<R: lsp_types::request::Request>(
         &self,
         params: serde_json::Value,
-    ) -> ClientRequestHandle<R> {
+    ) -> ClientRequestHandle<'_, R> {
         // Ensure the passed value can be parsed as the desired request params
         let params = serde_json::from_value::<R::Params>(params).unwrap();
         let id = self.next_request_id();
@@ -348,7 +348,7 @@ impl TestClient {
         }));
     }
 
-    pub fn send_initialize(&self, params: Value) -> ClientRequestHandle<Initialize> {
+    pub fn send_initialize(&self, params: Value) -> ClientRequestHandle<'_, Initialize> {
         self.send_request(params)
     }
 
@@ -356,7 +356,7 @@ impl TestClient {
         self.send_notification::<Initialized>(json!({}));
     }
 
-    pub fn send_shutdown(&self) -> ClientRequestHandle<Shutdown> {
+    pub fn send_shutdown(&self) -> ClientRequestHandle<'_, Shutdown> {
         self.send_request(json!(null))
     }
 
@@ -369,7 +369,7 @@ impl TestClient {
         file: &'static str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<GotoTypeDefinition> {
+    ) -> ClientRequestHandle<'_, GotoTypeDefinition> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
@@ -387,7 +387,7 @@ impl TestClient {
         file: &'static str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<GotoDefinition> {
+    ) -> ClientRequestHandle<'_, GotoDefinition> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
@@ -405,7 +405,7 @@ impl TestClient {
         file: &'static str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<GotoImplementation> {
+    ) -> ClientRequestHandle<'_, GotoImplementation> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
@@ -464,7 +464,7 @@ impl TestClient {
         file: &'static str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<Completion> {
+    ) -> ClientRequestHandle<'_, Completion> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
@@ -477,7 +477,10 @@ impl TestClient {
         }))
     }
 
-    pub fn diagnostic(&self, file: &'static str) -> ClientRequestHandle<DocumentDiagnosticRequest> {
+    pub fn diagnostic(
+        &self,
+        file: &'static str,
+    ) -> ClientRequestHandle<'_, DocumentDiagnosticRequest> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
         "textDocument": {
@@ -490,7 +493,7 @@ impl TestClient {
         file: &'static str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<HoverRequest> {
+    ) -> ClientRequestHandle<'_, HoverRequest> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
@@ -508,7 +511,7 @@ impl TestClient {
         file: &'static str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<ProvideType> {
+    ) -> ClientRequestHandle<'_, ProvideType> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
@@ -527,7 +530,7 @@ impl TestClient {
         line: u32,
         col: u32,
         include_declaration: bool,
-    ) -> ClientRequestHandle<References> {
+    ) -> ClientRequestHandle<'_, References> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
@@ -550,7 +553,7 @@ impl TestClient {
         start_char: u32,
         end_line: u32,
         end_char: u32,
-    ) -> ClientRequestHandle<InlayHintRequest> {
+    ) -> ClientRequestHandle<'_, InlayHintRequest> {
         let path = self.get_root_or_panic().join(file);
         self.send_request(json!({
             "textDocument": {
@@ -577,7 +580,7 @@ impl TestClient {
         &self,
         old_file: &'static str,
         new_file: &'static str,
-    ) -> ClientRequestHandle<WillRenameFiles> {
+    ) -> ClientRequestHandle<'_, WillRenameFiles> {
         let root = self.get_root_or_panic();
         let old_path = root.join(old_file);
         let new_path = root.join(new_file);
@@ -697,7 +700,7 @@ impl TestClient {
     pub fn expect_request<R: lsp_types::request::Request>(
         &self,
         expected: Value,
-    ) -> ServerRequestHandle<R> {
+    ) -> ServerRequestHandle<'_, R> {
         // Validate that expected can be parsed as R::Params
         let expected: R::Params = serde_json::from_value(expected.clone()).unwrap();
         let id = self.expect_message(&format!("Request {}", R::METHOD), |msg| {
@@ -927,7 +930,7 @@ impl TestClient {
     pub fn expect_configuration_request(
         &self,
         scope_uris: Option<Vec<&Url>>,
-    ) -> ServerRequestHandle<WorkspaceConfiguration> {
+    ) -> ServerRequestHandle<'_, WorkspaceConfiguration> {
         let items = scope_uris
             .unwrap_or_default()
             .into_iter()
@@ -1133,7 +1136,7 @@ impl LspInteraction {
         &self,
         file: &str,
         cell: &str,
-    ) -> ClientRequestHandle<DocumentDiagnosticRequest> {
+    ) -> ClientRequestHandle<'_, DocumentDiagnosticRequest> {
         self.client.send_request(json!({
         "textDocument": {
             "uri": self.cell_uri(file, cell)
@@ -1162,7 +1165,7 @@ impl LspInteraction {
         cell_name: &str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<HoverRequest> {
+    ) -> ClientRequestHandle<'_, HoverRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1182,7 +1185,7 @@ impl LspInteraction {
         cell_name: &str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<SignatureHelpRequest> {
+    ) -> ClientRequestHandle<'_, SignatureHelpRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1202,7 +1205,7 @@ impl LspInteraction {
         cell_name: &str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<GotoDefinition> {
+    ) -> ClientRequestHandle<'_, GotoDefinition> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1223,7 +1226,7 @@ impl LspInteraction {
         line: u32,
         col: u32,
         include_declaration: bool,
-    ) -> ClientRequestHandle<References> {
+    ) -> ClientRequestHandle<'_, References> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1245,7 +1248,7 @@ impl LspInteraction {
         cell_name: &str,
         line: u32,
         col: u32,
-    ) -> ClientRequestHandle<Completion> {
+    ) -> ClientRequestHandle<'_, Completion> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1267,7 +1270,7 @@ impl LspInteraction {
         start_char: u32,
         end_line: u32,
         end_char: u32,
-    ) -> ClientRequestHandle<InlayHintRequest> {
+    ) -> ClientRequestHandle<'_, InlayHintRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1291,7 +1294,7 @@ impl LspInteraction {
         &self,
         file_name: &str,
         cell_name: &str,
-    ) -> ClientRequestHandle<SemanticTokensFullRequest> {
+    ) -> ClientRequestHandle<'_, SemanticTokensFullRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1309,7 +1312,7 @@ impl LspInteraction {
         start_char: u32,
         end_line: u32,
         end_char: u32,
-    ) -> ClientRequestHandle<SemanticTokensRangeRequest> {
+    ) -> ClientRequestHandle<'_, SemanticTokensRangeRequest> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
