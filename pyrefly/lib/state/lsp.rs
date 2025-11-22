@@ -41,6 +41,10 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprContext;
+use ruff_python_parser::parse_module;
+use ruff_python_parser::TokenKind;
+use ruff_python_parser::ParseErrorType;
+use ruff_python_parser::LexicalErrorType;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
@@ -72,6 +76,7 @@ use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
+use crate::types::literal::Lit;
 use crate::types::module::ModuleType;
 use crate::types::types::Type;
 
@@ -2354,6 +2359,31 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
+        let mut in_string = false;
+        if let Some(module_info) = self.get_module_info(handle) {
+            let source = module_info.contents();
+            match parse_module(source) {
+                Ok(parsed) => {
+                    for token in parsed.tokens() {
+                        let range = token.range();
+                        if range.contains(position) || (range.end() == position && token.kind() == TokenKind::String) {
+                            if token.kind() == TokenKind::String {
+                                in_string = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    if let ParseErrorType::Lexical(LexicalErrorType::UnclosedStringError) = e.error {
+                         if e.location.start() < position {
+                             in_string = true;
+                         }
+                    }
+                }
+            }
+        }
+
         if let Some((callables, chosen_overload_index, active_argument)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(chosen_overload_index)
@@ -2361,16 +2391,30 @@ impl<'a> Transaction<'a> {
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
-            Self::add_literal_completions_from_type(param.as_type(), completions);
+            Self::add_literal_completions_from_type(param.as_type(), completions, in_string);
         }
     }
 
-    fn add_literal_completions_from_type(param_type: &Type, completions: &mut Vec<CompletionItem>) {
+    fn add_literal_completions_from_type(
+        param_type: &Type,
+        completions: &mut Vec<CompletionItem>,
+        in_string: bool,
+    ) {
         match param_type {
             Type::Literal(lit) => {
+                let label = lit.to_string_escaped(true);
+                let insert_text = if in_string {
+                    match lit {
+                        Lit::Str(s) => Some(s.to_string()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 completions.push(CompletionItem {
                     // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
-                    label: lit.to_string_escaped(true),
+                    label,
+                    insert_text,
                     kind: Some(CompletionItemKind::VALUE),
                     detail: Some(format!("{param_type}")),
                     ..Default::default()
@@ -2378,7 +2422,7 @@ impl<'a> Transaction<'a> {
             }
             Type::Union(types) => {
                 for union_type in types {
-                    Self::add_literal_completions_from_type(union_type, completions);
+                    Self::add_literal_completions_from_type(union_type, completions, in_string);
                 }
             }
             _ => {}

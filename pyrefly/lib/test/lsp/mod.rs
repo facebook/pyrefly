@@ -9,6 +9,7 @@
 
 mod code_actions;
 mod completion;
+mod completion_quotes;
 mod declaration;
 mod definition;
 mod document_symbols;
