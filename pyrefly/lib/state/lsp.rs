@@ -2551,15 +2551,14 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        if let Some(base_type) = self.get_type_trace(handle, base_expr.range()) {
-            if let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type) {
-                for (key, ty) in typed_keys {
-                    let entry = suggestions.entry(key).or_insert(None);
-                    if entry.is_none() {
-                        *entry = Some(ty);
-                    }
-                }
-            }
+        if let Some(base_type) = self.get_type_trace(handle, base_expr.range())
+          && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type) {
+              for (key, ty) in typed_keys {
+                  let entry = suggestions.entry(key).or_insert(None);
+                  if entry.is_none() {
+                      *entry = Some(ty);
+                  }
+              }
         }
 
         if suggestions.is_empty() {
