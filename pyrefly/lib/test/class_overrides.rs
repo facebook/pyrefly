@@ -166,6 +166,9 @@ class C(G[int]):
     def foo(self, value):
         reveal_type(value)  # E: revealed type: int
         return value
+
+    def bar(self, value):
+        reveal_type(value)  # E: revealed type: Unknown
     "#,
 );
 

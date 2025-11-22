@@ -378,6 +378,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }));
 
         let mut decorator_param_hints = self.decorator_param_hints(&decorators);
+        let mut parent_param_hints = if flags.is_override {
+            defining_cls.as_ref().and_then(|cls| {
+                self.inherited_method_signature(cls, &def.name.id).and_then(
+                    |(params, inherited_flags)| {
+                        if inherited_flags.is_staticmethod == flags.is_staticmethod
+                            && inherited_flags.is_classmethod == flags.is_classmethod
+                        {
+                            Some(ParentParamHints::new(
+                                params,
+                                !inherited_flags.is_staticmethod,
+                            ))
+                        } else {
+                            None
+                        }
+                    },
+                )
+            })
+        } else {
+            None
+        };
 
         if stub_or_impl == FunctionStubOrImpl::Stub {
             flags.lacks_implementation = true;
@@ -399,6 +419,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             stub_or_impl,
             &mut self_type,
             &mut decorator_param_hints,
+            &mut parent_param_hints,
             errors,
         );
         let mut tparams = self.scoped_type_params(def.type_params.as_deref());
@@ -663,7 +684,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         default: Option<&Expr>,
         stub_or_impl: FunctionStubOrImpl,
         self_type: &mut Option<Type>,
-        decorator_hint: Option<Type>,
+        hint: Option<Type>,
         errors: &ErrorCollector,
     ) -> (Type, Required) {
         // We only want to use self for the first param, so take & replace with None
@@ -692,7 +713,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Otherwise, it will be forced to Any
                 if let Some(ty) = self_type {
                     self.solver().solve_parameter(*var, ty);
-                } else if let Some(hint) = decorator_hint {
+                } else if let Some(hint) = hint {
                     self.solver().solve_parameter(*var, hint);
                 } else if let Required::Optional(Some(default_ty)) = &required {
                     self.solver().solve_parameter(
@@ -715,21 +736,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         stub_or_impl: FunctionStubOrImpl,
         self_type: &mut Option<Type>,
         decorator_param_hints: &mut Option<DecoratorParamHints>,
+        parent_param_hints: &mut Option<ParentParamHints>,
         errors: &ErrorCollector,
     ) -> (Vec<Param>, Option<Quantified>) {
         let mut paramspec_args = None;
         let mut paramspec_kwargs = None;
         let mut params = Vec::with_capacity(def.parameters.len());
-        params.extend(def.parameters.posonlyargs.iter().map(|x| {
+        for x in def.parameters.posonlyargs.iter() {
             let decorator_hint = decorator_param_hints
                 .as_mut()
                 .and_then(|hint| hint.next_positional());
+            let parent_hint = if self_type.is_some() {
+                None
+            } else {
+                parent_param_hints
+                    .as_mut()
+                    .and_then(|hint| hint.take_posonly())
+            };
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                decorator_hint,
+                decorator_hint.or(parent_hint),
                 errors,
             );
             params.push(Param::PosOnly(
@@ -744,16 +773,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             def.parameters.posonlyargs.is_empty() && def.parameters.kwonlyargs.is_empty();
         let mut seen_keyword_args = false;
 
-        params.extend(def.parameters.args.iter().map(|x| {
+        for x in def.parameters.args.iter() {
             let decorator_hint = decorator_param_hints
                 .as_mut()
                 .and_then(|hint| hint.next_positional());
+            let parent_hint = if self_type.is_some() {
+                None
+            } else {
+                parent_param_hints
+                    .as_mut()
+                    .and_then(|hint| hint.take_positional())
+            };
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                decorator_hint,
+                decorator_hint.or(parent_hint),
                 errors,
             );
 
@@ -785,13 +821,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         if let Some(x) = def.parameters.vararg.as_ref() {
-            let hint = parent_hints.as_mut().and_then(|h| (**h).take_vararg());
+            let parent_hint = parent_param_hints
+                .as_mut()
+                .and_then(|hint| hint.take_vararg());
             let (ty, _) = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
                 stub_or_impl,
                 self_type,
-                None,
+                parent_hint,
                 errors,
             );
             if let Type::Args(q) = &ty {
@@ -813,27 +851,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         for x in def.parameters.kwonlyargs.iter() {
-            let hint = parent_hints
+            let parent_hint = parent_param_hints
                 .as_mut()
-                .and_then(|h| (**h).take_kwonly(&x.parameter.name));
+                .and_then(|hint| hint.take_kwonly(&x.parameter.name));
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                None,
+                parent_hint,
                 errors,
             );
             params.push(Param::KwOnly(x.parameter.name.id.clone(), ty, required));
         }
         if let Some(x) = &def.parameters.kwarg {
-            let hint = parent_hints.as_mut().and_then(|h| (**h).take_kwargs());
+            let parent_hint = parent_param_hints
+                .as_mut()
+                .and_then(|hint| hint.take_kwargs());
             let (ty, _) = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
                 stub_or_impl,
                 self_type,
-                None,
+                parent_hint,
                 errors,
             );
             if let Type::Kwargs(q) = &ty {
