@@ -80,7 +80,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         return None;
                     } else {
-                        return Some((Tuple::unbounded(t.clone()), false));
+                        return Some((Tuple::Unbounded(Box::new(t.clone())), false));
                     }
                 } else {
                     self.error(
@@ -161,7 +161,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(middle) = middle {
             Some((Tuple::unpacked(prefix, middle, suffix), has_unpack))
         } else {
-            Some((Tuple::concrete(prefix), has_unpack))
+            Some((Tuple::Concrete(prefix), has_unpack))
         }
     }
 
@@ -305,7 +305,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )),
             SpecialForm::Tuple => match self.check_args_and_construct_tuple(arguments, errors) {
                 Some((tuple, _)) => Type::type_form(Type::Tuple(tuple)),
-                None => Type::type_form(Type::Tuple(Tuple::unbounded(Type::any_error()))),
+                None => Type::type_form(Type::unbounded_tuple(Type::any_error())),
             },
             SpecialForm::Literal => {
                 if parens {

@@ -86,7 +86,61 @@ fn is_class_property_decorator_type(ty: &Type) -> bool {
     }
 }
 
+#[derive(Clone, Debug)]
+struct DecoratorParamHints {
+    positional: Vec<Type>,
+    next_positional: usize,
+}
+
+impl DecoratorParamHints {
+    fn from_callable(callable: Callable) -> Option<Self> {
+        match callable.params {
+            Params::List(params) => {
+                let positional = params
+                    .items()
+                    .iter()
+                    .filter_map(|param| match param {
+                        Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) => Some(ty.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if positional.is_empty() {
+                    None
+                } else {
+                    Some(Self {
+                        positional,
+                        next_positional: 0,
+                    })
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn next_positional(&mut self) -> Option<Type> {
+        if self.next_positional >= self.positional.len() {
+            None
+        } else {
+            let ty = self.positional[self.next_positional].clone();
+            self.next_positional += 1;
+            Some(ty)
+        }
+    }
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn decorator_param_hints(
+        &self,
+        decorators: &[(Type, TextRange)],
+    ) -> Option<DecoratorParamHints> {
+        decorators.iter().rev().find_map(|(decorator_ty, _)| {
+            decorator_ty
+                .callable_first_param()
+                .and_then(|param_ty| param_ty.callable_signatures().into_iter().next().cloned())
+                .and_then(DecoratorParamHints::from_callable)
+        })
+    }
+
     pub fn solve_function_binding(
         &self,
         def: DecoratedFunction,
@@ -265,6 +319,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }));
 
+        let mut decorator_param_hints = self.decorator_param_hints(&decorators);
+
         if stub_or_impl == FunctionStubOrImpl::Stub {
             flags.lacks_implementation = true;
         }
@@ -280,8 +336,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if flags.is_staticmethod {
             self_type = None;
         }
-        let (params, paramspec) =
-            self.get_params_and_paramspec(def, stub_or_impl, &mut self_type, errors);
+        let (params, paramspec) = self.get_params_and_paramspec(
+            def,
+            stub_or_impl,
+            &mut self_type,
+            &mut decorator_param_hints,
+            errors,
+        );
         let mut tparams = self.scoped_type_params(def.type_params.as_deref());
         let legacy_tparams = legacy_tparams
             .iter()
@@ -544,6 +605,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         default: Option<&Expr>,
         stub_or_impl: FunctionStubOrImpl,
         self_type: &mut Option<Type>,
+        decorator_hint: Option<Type>,
         errors: &ErrorCollector,
     ) -> (Type, Required) {
         // We only want to use self for the first param, so take & replace with None
@@ -572,6 +634,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Otherwise, it will be forced to Any
                 if let Some(ty) = self_type {
                     self.solver().solve_parameter(*var, ty);
+                } else if let Some(hint) = decorator_hint {
+                    self.solver().solve_parameter(*var, hint);
                 } else if let Required::Optional(Some(default_ty)) = &required {
                     self.solver().solve_parameter(
                         *var,
@@ -592,17 +656,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def: &StmtFunctionDef,
         stub_or_impl: FunctionStubOrImpl,
         self_type: &mut Option<Type>,
+        decorator_param_hints: &mut Option<DecoratorParamHints>,
         errors: &ErrorCollector,
     ) -> (Vec<Param>, Option<Quantified>) {
         let mut paramspec_args = None;
         let mut paramspec_kwargs = None;
         let mut params = Vec::with_capacity(def.parameters.len());
         params.extend(def.parameters.posonlyargs.iter().map(|x| {
+            let decorator_hint = decorator_param_hints
+                .as_mut()
+                .and_then(|hint| hint.next_positional());
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
+                decorator_hint,
                 errors,
             );
             Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
@@ -614,11 +683,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut seen_keyword_args = false;
 
         params.extend(def.parameters.args.iter().map(|x| {
+            let decorator_hint = decorator_param_hints
+                .as_mut()
+                .and_then(|hint| hint.next_positional());
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
+                decorator_hint,
                 errors,
             );
 
@@ -650,6 +723,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
                 stub_or_impl,
                 self_type,
+                None,
                 errors,
             );
             if let Type::Args(q) = &ty {
@@ -676,6 +750,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
+                None,
                 errors,
             );
             Param::KwOnly(x.parameter.name.id.clone(), ty, required)
@@ -686,6 +761,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
                 stub_or_impl,
                 self_type,
+                None,
                 errors,
             );
             if let Type::Kwargs(q) = &ty {

@@ -883,7 +883,13 @@ impl<'a> BindingsBuilder<'a> {
                                 Key::Import(first.clone(), x.name.range),
                                 Binding::Module(m, vec![first.clone()], module_key),
                             );
-                            self.scopes.register_import(&x.name);
+                            // Register the import using the first component (e.g., "os" from "os.path")
+                            // since that's the name that gets bound and used in code
+                            self.scopes.register_import(&Identifier {
+                                node_index: x.name.node_index.clone(),
+                                id: first.clone(),
+                                range: x.name.range,
+                            });
                             self.bind_name(&first, key, FlowStyle::MergeableImport(m));
                         }
                     }

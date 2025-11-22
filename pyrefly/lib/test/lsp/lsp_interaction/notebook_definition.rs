@@ -17,8 +17,10 @@ fn test_notebook_definition_import() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
+    // fake configuration so we never find system python
+    // todo(kylei): better solution for this
     interaction.initialize(InitializeSettings {
-        configuration: Some(None),
+        configuration: Some(Some(json!([{"pythonPath": "/fake/python/path"}]))),
         ..Default::default()
     });
     interaction.open_notebook("notebook.ipynb", vec!["from typing import List"]);
@@ -29,7 +31,7 @@ fn test_notebook_definition_import() {
         .definition_cell("notebook.ipynb", "cell1", 0, 20)
         .expect_response_with(|response| match response {
             Some(GotoDeclarationResponse::Scalar(loc)) => {
-                loc.uri.to_file_path().unwrap().ends_with("typing.py")
+                loc.uri.to_file_path().unwrap().ends_with("typing.pyi")
             }
             _ => false,
         });

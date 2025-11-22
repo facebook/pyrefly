@@ -3458,7 +3458,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::LambdaParameter(var) => var.to_type(),
             Binding::FunctionParameter(param) => {
                 let finalize = |target: &AnnotationTarget, ty| match target {
-                    AnnotationTarget::ArgsParam(_) => Type::Tuple(Tuple::unbounded(ty)),
+                    AnnotationTarget::ArgsParam(_) => Type::unbounded_tuple(ty),
                     AnnotationTarget::KwargsParam(_) => self
                         .stdlib
                         .dict(self.stdlib.str().clone().to_type(), ty)

@@ -1912,3 +1912,12 @@ def f(x: int, y: int):
     x >> y
     "#,
 );
+
+testcase!(
+    test_assign_expression_in_annotation,
+    r#"
+from typing import reveal_type
+x: (y := 1)  # E: Expected a type form
+z: int = y
+    "#,
+);

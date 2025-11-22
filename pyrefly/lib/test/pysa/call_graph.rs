@@ -367,7 +367,6 @@ fn constructor_call_callees(
     })
 }
 
-#[allow(dead_code)]
 fn attribute_access_callees(
     call_targets: Vec<CallTarget<FunctionRefForTest>>,
     init_targets: Vec<CallTarget<FunctionRefForTest>>,
@@ -599,9 +598,7 @@ def foo(b: bool):
                 ),
                 (
                     "9:3-9:6",
-                    ExpressionCallees::Call(CallCallees::new_unresolved(
-                        UnresolvedReason::UnsupportedFunctionTarget,
-                    )),
+                    unresolved_expression_callees(UnresolvedReason::UnsupportedFunctionTarget),
                 ),
             ],
         )]
@@ -631,9 +628,9 @@ def foo(c: Optional[C]):
             vec![
                 (
                     "7:5-7:18|artificial-call|comparison",
-                    ExpressionCallees::Call(CallCallees::new_unresolved(
+                    unresolved_expression_callees(
                         UnresolvedReason::UnresolvedMagicDunderAttrDueToNoAttribute,
-                    )),
+                    ),
                 ),
                 ("8:5-8:10", regular_call_callees(call_target)),
             ],
@@ -1423,9 +1420,7 @@ def foo():
                 ("9:2-9:8", regular_call_callees(call_targets.clone())),
                 (
                     "9:2-9:8|artificial-call|for-decorated-target",
-                    ExpressionCallees::Call(CallCallees::new_unresolved(
-                        UnresolvedReason::UnexpectedCalleeExpression,
-                    )),
+                    unresolved_expression_callees(UnresolvedReason::UnexpectedCalleeExpression),
                 ),
             ],
         )]
@@ -1643,16 +1638,7 @@ class Permission(Enum):
         vec![(
             "test.Permission.action_name",
             vec![
-                (
-                    "10:8-10:23",
-                    call_callees(
-                        len,
-                        /* init_targets */ vec![],
-                        /* new_targets */ vec![],
-                        /* higher_order_parameters */ vec![],
-                        /* unresolved */ Unresolved::False,
-                    ),
-                ),
+                ("10:8-10:23", regular_call_callees(len)),
                 (
                     "10:12-10:22",
                     property_getter_callees(/* property_getters */ enum_value),
@@ -2450,9 +2436,7 @@ def foo(obj: Token):
             vec![
                 (
                     "5:3-5:30",
-                    ExpressionCallees::Call(CallCallees::new_unresolved(
-                        UnresolvedReason::UnexpectedPyreflyTarget,
-                    )),
+                    unresolved_expression_callees(UnresolvedReason::UnexpectedPyreflyTarget),
                 ),
                 (
                     "5:3-5:30|artificial-attribute-access|get-attr-constant-literal",
@@ -2460,9 +2444,7 @@ def foo(obj: Token):
                 ),
                 (
                     "5:3-5:32",
-                    ExpressionCallees::Call(CallCallees::new_unresolved(
-                        UnresolvedReason::UnexpectedCalleeExpression,
-                    )),
+                    unresolved_expression_callees(UnresolvedReason::UnexpectedCalleeExpression),
                 ),
             ],
         )]
@@ -3050,7 +3032,8 @@ call_graph_testcase!(
     test_f_string_with_multiple_typed_and_untyped_variables,
     TEST_MODULE_NAME,
     r#"
-def foo(a: int, b: float, c: str, d: typing.List[int], e):
+from typing import List
+def foo(a: int, b: float, c: str, d: List[int], e):
   w = [1, 2, 3]
   x = 1
   y = "str"
@@ -3066,11 +3049,11 @@ def foo(a: int, b: float, c: str, d: typing.List[int], e):
             "test.foo",
             vec![
                 (
-                    "7:10-7:40|artificial-call|format-string-artificial",
+                    "8:10-8:40|artificial-call|format-string-artificial",
                     format_string_artificial_callees(),
                 ),
                 (
-                    "7:13-7:14|artificial-call|format-string-stringify",
+                    "8:13-8:14|artificial-call|format-string-stringify",
                     format_string_stringify_callees(
                         "builtins",
                         "int",
@@ -3080,7 +3063,7 @@ def foo(a: int, b: float, c: str, d: typing.List[int], e):
                     ),
                 ),
                 (
-                    "7:16-7:17|artificial-call|format-string-stringify",
+                    "8:16-8:17|artificial-call|format-string-stringify",
                     format_string_stringify_callees(
                         "builtins",
                         "float",
@@ -3090,7 +3073,7 @@ def foo(a: int, b: float, c: str, d: typing.List[int], e):
                     ),
                 ),
                 (
-                    "7:19-7:20|artificial-call|format-string-stringify",
+                    "8:19-8:20|artificial-call|format-string-stringify",
                     format_string_stringify_callees(
                         "builtins",
                         "str",
@@ -3100,15 +3083,27 @@ def foo(a: int, b: float, c: str, d: typing.List[int], e):
                     ),
                 ),
                 (
-                    "7:22-7:23|artificial-call|format-string-stringify",
-                    unresolved_expression_callees(UnresolvedReason::UnexpectedPyreflyTarget),
+                    "8:22-8:23|artificial-call|format-string-stringify",
+                    format_string_stringify_callees(
+                        "builtins",
+                        "object",
+                        "__repr__",
+                        TargetType::Override,
+                        context,
+                    ),
                 ),
                 (
-                    "7:25-7:26|artificial-call|format-string-stringify",
-                    unresolved_expression_callees(UnresolvedReason::UnknownClassField),
+                    "8:25-8:26|artificial-call|format-string-stringify",
+                    format_string_stringify_callees(
+                        "builtins",
+                        "object",
+                        "__repr__",
+                        TargetType::Override,
+                        context,
+                    ),
                 ),
                 (
-                    "7:28-7:29|artificial-call|format-string-stringify",
+                    "8:28-8:29|artificial-call|format-string-stringify",
                     format_string_stringify_callees(
                         "builtins",
                         "int",
@@ -3118,11 +3113,11 @@ def foo(a: int, b: float, c: str, d: typing.List[int], e):
                     ),
                 ),
                 (
-                    "7:31-7:32|artificial-call|format-string-stringify",
+                    "8:31-8:32|artificial-call|format-string-stringify",
                     regular_call_callees(literal_string_target),
                 ),
                 (
-                    "7:34-7:35|artificial-call|format-string-stringify",
+                    "8:34-8:35|artificial-call|format-string-stringify",
                     format_string_stringify_callees(
                         "builtins",
                         "float",
@@ -3132,7 +3127,7 @@ def foo(a: int, b: float, c: str, d: typing.List[int], e):
                     ),
                 ),
                 (
-                    "7:37-7:38|artificial-call|format-string-stringify",
+                    "8:37-8:38|artificial-call|format-string-stringify",
                     unresolved_expression_callees(UnresolvedReason::UnexpectedPyreflyTarget),
                 ),
             ],
@@ -3214,7 +3209,7 @@ def foo(x: object):
 );
 
 call_graph_testcase!(
-    test_f_string_with_multiple_references_to_same_variable,
+    test_f_string_with_multiple_references_to_object_type,
     TEST_MODULE_NAME,
     r#"
 def foo(x: object):
@@ -3257,6 +3252,7 @@ call_graph_testcase!(
     test_f_string_with_any_type,
     TEST_MODULE_NAME,
     r#"
+from typing import Any
 def foo(x: Any):
   return f"{x}"
 "#,
@@ -3265,15 +3261,440 @@ def foo(x: Any):
             "test.foo",
             vec![
                 (
-                    "3:10-3:16|artificial-call|format-string-artificial",
+                    "4:10-4:16|artificial-call|format-string-artificial",
                     format_string_artificial_callees(),
                 ),
-                // TODO(T112761296): Probably wrong call resolution. Expect an additional call target.
                 (
-                    "3:13-3:14|artificial-call|format-string-stringify",
+                    "4:13-4:14|artificial-call|format-string-stringify",
                     unresolved_expression_callees(UnresolvedReason::UnexpectedPyreflyTarget),
                 ),
             ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_f_string_with_overridden_format_functions,
+    TEST_MODULE_NAME,
+    r#"
+class A:
+  def __str__(self) -> str: ...
+class B:
+  def __format__(self, spec) -> str: ...
+class C:
+  def __repr__(self) -> str: ...
+  def __ascii__(self) -> str: ...
+def foo(a: A, b: B, c: C):
+  x1 = f"{a}{b}{c}"
+  x2 = f"{a!r}{b!r}{c!r}"
+  x3 = f"{a=}{b=}{c=}"
+  x4 = f"{a!s}{b!s}{c!s}"
+  x5 = f"{a!a}{b!a}{c!a}"
+"#,
+    &|context: &ModuleContext| {
+        let a_str = vec![
+            create_call_target("test.A.__str__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.A", context),
+        ];
+        let b_format = vec![
+            create_call_target("test.B.__format__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.B", context),
+        ];
+        let c_repr = vec![
+            create_call_target("test.C.__repr__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.C", context),
+        ];
+        let c_ascii = vec![
+            create_call_target("test.C.__ascii__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.C", context),
+        ];
+        let object_repr = vec![
+            create_call_target("builtins.object.__repr__", TargetType::Override)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("builtins.object", context),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "10:8-10:20|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                (
+                    "10:11-10:12|artificial-call|format-string-stringify",
+                    regular_call_callees(a_str.clone()),
+                ),
+                (
+                    "10:14-10:15|artificial-call|format-string-stringify",
+                    regular_call_callees(b_format.clone()),
+                ),
+                (
+                    "10:17-10:18|artificial-call|format-string-stringify",
+                    regular_call_callees(c_repr.clone()),
+                ),
+                (
+                    "11:8-11:26|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                (
+                    "11:11-11:12|artificial-call|format-string-stringify",
+                    regular_call_callees(object_repr.clone()),
+                ),
+                (
+                    "11:16-11:17|artificial-call|format-string-stringify",
+                    regular_call_callees(object_repr.clone()),
+                ),
+                (
+                    "11:21-11:22|artificial-call|format-string-stringify",
+                    regular_call_callees(c_repr.clone()),
+                ),
+                (
+                    "12:8-12:23|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                (
+                    "12:11-12:12|artificial-call|format-string-stringify",
+                    regular_call_callees(a_str.clone()),
+                ),
+                (
+                    "12:15-12:16|artificial-call|format-string-stringify",
+                    regular_call_callees(b_format.clone()),
+                ),
+                (
+                    "12:19-12:20|artificial-call|format-string-stringify",
+                    regular_call_callees(c_repr.clone()),
+                ),
+                (
+                    "13:8-13:26|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                (
+                    "13:11-13:12|artificial-call|format-string-stringify",
+                    regular_call_callees(a_str),
+                ),
+                (
+                    "13:16-13:17|artificial-call|format-string-stringify",
+                    regular_call_callees(object_repr.clone()),
+                ),
+                (
+                    "13:21-13:22|artificial-call|format-string-stringify",
+                    regular_call_callees(c_repr.clone()),
+                ),
+                (
+                    "14:8-14:26|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                (
+                    "14:11-14:12|artificial-call|format-string-stringify",
+                    regular_call_callees(object_repr.clone()),
+                ),
+                (
+                    "14:16-14:17|artificial-call|format-string-stringify",
+                    regular_call_callees(object_repr.clone()),
+                ),
+                (
+                    "14:21-14:22|artificial-call|format-string-stringify",
+                    regular_call_callees(c_ascii),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_f_string_custom_str,
+    TEST_MODULE_NAME,
+    r#"
+class A:
+  def __str__(self): return "stringified"
+def foo(a: A):
+  "hello %s" % a
+"#,
+    &|_context: &ModuleContext| {
+        // TODO(T146836847): Missing the stringify callee.
+        vec![("test.foo", vec![])]
+    }
+);
+
+call_graph_testcase!(
+    test_format_string_with_exception_and_type_call,
+    TEST_MODULE_NAME,
+    r#"
+def foo(e: Exception):
+  f"{e}"
+  f"{type(e)}"
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:3-3:9|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                (
+                    "3:6-3:7|artificial-call|format-string-stringify",
+                    format_string_stringify_callees(
+                        "builtins",
+                        "object",
+                        "__repr__",
+                        TargetType::Override,
+                        context,
+                    ),
+                ),
+                (
+                    "4:3-4:15|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                (
+                    "4:6-4:13",
+                    call_callees(
+                        /* call_targets */ vec![],
+                        /* init_targets */
+                        vec![
+                            create_call_target("builtins.type.__init__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                                .with_receiver_class_for_test("builtins.type", context),
+                        ],
+                        /* new_targets */
+                        vec![
+                            create_call_target("builtins.type.__new__", TargetType::Function)
+                                .with_is_static_method(true),
+                        ],
+                        /* higher_order_parameters */ vec![],
+                        /* unresolved */
+                        Unresolved::True(UnresolvedReason::UnexpectedDefiningClass),
+                    ),
+                ),
+                // TODO(T112761296): Probably wrong call resolution
+                (
+                    "4:6-4:13|artificial-call|format-string-stringify",
+                    unresolved_expression_callees(UnresolvedReason::UnexpectedDefiningClass),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_format_string_with_union_type_parameter,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Union, Type
+def foo(error_type: Union[str, Type[Exception]]):
+  return f"{error_type}"
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "4:10-4:25|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                (
+                    "4:13-4:23",
+                    identifier_callees(
+                        /* call_targets */ vec![],
+                        /* init_targets */
+                        vec![
+                            create_call_target("builtins.object.__init__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                        ],
+                        /* new_targets */
+                        vec![
+                            create_call_target("builtins.object.__new__", TargetType::Function)
+                                .with_is_static_method(true),
+                        ],
+                        /* higher_order_parameters */ vec![],
+                        /* unresolved */ Unresolved::False,
+                    ),
+                ),
+                (
+                    "4:13-4:23|artificial-call|format-string-stringify",
+                    call_callees(
+                        /* call_targets */
+                        vec![
+                            create_call_target("builtins.str.__format__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                                .with_receiver_class_for_test("builtins.str", context),
+                        ],
+                        /* init_targets */ vec![],
+                        /* new_targets */ vec![],
+                        /* higher_order_parameters */ vec![],
+                        /* unresolved */
+                        Unresolved::True(UnresolvedReason::UnexpectedDefiningClass),
+                    ),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_format_string_with_type_parameter,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Type
+def foo(error_type: Type[Exception]):
+  return f"{error_type}"
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "4:10-4:25|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                (
+                    "4:13-4:23",
+                    identifier_callees(
+                        /* call_targets */ vec![],
+                        /* init_targets */
+                        vec![
+                            create_call_target("builtins.object.__init__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                        ],
+                        /* new_targets */
+                        vec![
+                            create_call_target("builtins.object.__new__", TargetType::Function)
+                                .with_is_static_method(true),
+                        ],
+                        /* higher_order_parameters */ vec![],
+                        /* unresolved */ Unresolved::False,
+                    ),
+                ),
+                // TODO(T112761296): Wrong call resolution
+                (
+                    "4:13-4:23|artificial-call|format-string-stringify",
+                    unresolved_expression_callees(UnresolvedReason::UnexpectedDefiningClass),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_format_string_with_class_attribute_on_union,
+    TEST_MODULE_NAME,
+    r#"
+import typing
+class A:
+  def __str__(self):
+    return "A"
+class B:
+  pass
+def foo(x: Union[A, B]):
+  f"{x.__class__}"
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "9:3-9:19|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                // TODO: Handle union types for string conversion functions. Also handle `object.__class__`
+                (
+                    "9:6-9:17|artificial-call|format-string-stringify",
+                    call_callees(
+                        /* call_targets */ vec![],
+                        /* init_targets */ vec![],
+                        /* new_targets */ vec![],
+                        /* higher_order_parameters */ vec![],
+                        /* unresolved */
+                        Unresolved::True(UnresolvedReason::UnexpectedPyreflyTarget),
+                    ),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_format_string_with_class_attribute,
+    TEST_MODULE_NAME,
+    r#"
+class A:
+  def __str__(self):
+    return "A"
+def foo(x: A):
+  f"{x.__class__}"
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "6:3-6:19|artificial-call|format-string-artificial",
+                    format_string_artificial_callees(),
+                ),
+                // TODO(T112761296): Probably wrong call resolution
+                (
+                    "6:6-6:17",
+                    attribute_access_callees(
+                        /* call_targets */ vec![],
+                        /* init_targets */
+                        vec![
+                            create_call_target("builtins.object.__init__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                        ],
+                        /* new_targets */
+                        vec![
+                            create_call_target("builtins.object.__new__", TargetType::Function)
+                                .with_is_static_method(true),
+                        ],
+                        /* property_setters */ vec![],
+                        /* property_getters */ vec![],
+                        /* higher_order_parameters */ vec![],
+                        /* unresolved */ Unresolved::False,
+                    ),
+                ),
+                (
+                    "6:6-6:17|artificial-call|format-string-stringify",
+                    call_callees(
+                        /* call_targets */ vec![],
+                        /* init_targets */ vec![],
+                        /* new_targets */ vec![],
+                        /* higher_order_parameters */ vec![],
+                        /* unresolved */
+                        Unresolved::True(UnresolvedReason::UnexpectedDefiningClass),
+                    ),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_str_constructor_call_with_exception,
+    TEST_MODULE_NAME,
+    r#"
+def foo(e: Exception):
+  return str(e) + "hello"
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "3:10-3:16",
+                constructor_call_callees(
+                    vec![
+                        create_call_target("builtins.object.__init__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                    ],
+                    vec![
+                        create_call_target("builtins.str.__new__", TargetType::Function)
+                            .with_is_static_method(true),
+                    ],
+                ),
+            )],
         )]
     }
 );

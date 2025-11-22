@@ -66,6 +66,7 @@ use crate::binding::scope::ScopeTrace;
 use crate::binding::scope::Scopes;
 use crate::binding::scope::UnusedImport;
 use crate::binding::scope::UnusedParameter;
+use crate::binding::scope::UnusedVariable;
 use crate::binding::table::TableKeyed;
 use crate::config::base::UntypedDefBehavior;
 use crate::config::error_kind::ErrorKind;
@@ -155,6 +156,7 @@ struct BindingsInner {
     scope_trace: Option<ScopeTrace>,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
+    unused_variables: Vec<UnusedVariable>,
 }
 
 impl Display for Bindings {
@@ -193,6 +195,7 @@ pub struct BindingsBuilder<'a> {
     pub untyped_def_behavior: UntypedDefBehavior,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
+    unused_variables: Vec<UnusedVariable>,
 }
 
 impl Bindings {
@@ -220,6 +223,10 @@ impl Bindings {
 
     pub fn unused_imports(&self) -> &[UnusedImport] {
         &self.0.unused_imports
+    }
+
+    pub fn unused_variables(&self) -> &[UnusedVariable] {
+        &self.0.unused_variables
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -376,6 +383,7 @@ impl Bindings {
             untyped_def_behavior,
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
+            unused_variables: Vec::new(),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -417,6 +425,7 @@ impl Bindings {
             },
             unused_parameters: builder.unused_parameters,
             unused_imports: builder.unused_imports,
+            unused_variables: builder.unused_variables,
         }))
     }
 }
@@ -574,6 +583,10 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn record_unused_imports(&mut self, unused: Vec<UnusedImport>) {
         self.unused_imports.extend(unused);
+    }
+
+    pub fn record_unused_variables(&mut self, unused: Vec<UnusedVariable>) {
+        self.unused_variables.extend(unused);
     }
 
     /// Insert a binding into the bindings table, given a `Usage`. This will panic if the usage
@@ -816,6 +829,7 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 self.scopes.mark_parameter_used(name.key());
                 self.scopes.mark_import_used(name.key());
+                self.scopes.mark_variable_used(name.key());
                 NameLookupResult::Found {
                     idx,
                     initialized: is_initialized,
@@ -827,6 +841,7 @@ impl<'a> BindingsBuilder<'a> {
             } => {
                 self.scopes.mark_parameter_used(name.key());
                 self.scopes.mark_import_used(name.key());
+                self.scopes.mark_variable_used(name.key());
                 NameLookupResult::Found {
                     idx: self.table.types.0.insert(key),
                     initialized: is_initialized,
@@ -917,6 +932,10 @@ impl<'a> BindingsBuilder<'a> {
         binding: Binding,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
+        // Ignore imports and other items from unused variable detection
+        if matches!(style, FlowStyle::Other) {
+            self.scopes.register_variable(name);
+        }
         let idx = self.insert_binding(Key::Definition(ShortIdentifier::new(name)), binding);
         self.bind_name(&name.id, idx, style)
     }

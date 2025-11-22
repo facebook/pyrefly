@@ -288,7 +288,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (
                 CHOICES,
                 self.stdlib
-                    .list(Type::Tuple(Tuple::Concrete(vec![values_type, label_type])))
+                    .list(Type::concrete_tuple(vec![values_type, label_type]))
                     .to_type(),
             ),
         ];

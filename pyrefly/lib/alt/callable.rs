@@ -45,7 +45,6 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
-use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -630,17 +629,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             let unpacked_args_ty = match middle.len() {
-                0 => Type::tuple(prefix),
-                1 => Type::Tuple(Tuple::unpacked(
+                0 => Type::concrete_tuple(prefix),
+                1 => Type::unpacked_tuple(
                     prefix,
-                    Type::Tuple(Tuple::unbounded(middle.pop().unwrap())),
+                    Type::unbounded_tuple(middle.pop().unwrap()),
                     suffix,
-                )),
-                _ => Type::Tuple(Tuple::unpacked(
-                    prefix,
-                    Type::Tuple(Tuple::unbounded(self.unions(middle))),
-                    suffix,
-                )),
+                ),
+                _ => {
+                    Type::unpacked_tuple(prefix, Type::unbounded_tuple(self.unions(middle)), suffix)
+                }
             };
             self.check_type(
                 &unpacked_args_ty,
@@ -687,6 +684,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             missing_unnamed_posonly += 1;
                         }
                     }
+                }
+                Param::VarArg(_, Type::Unpack(box unpacked)) => {
+                    // If we have a TypeVarTuple *args with no matched arguments, resolve it to empty tuple
+                    self.is_subset_eq(unpacked, &Type::concrete_tuple(Vec::new()));
                 }
                 Param::VarArg(..) => {}
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {

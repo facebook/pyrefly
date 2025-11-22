@@ -274,7 +274,7 @@ fn collapse_tuple_unions_with_empty(types: &mut Vec<Type>) {
                         .chain(suffix.iter())
                         .all(|fixed| fixed == elem.as_ref())
                 {
-                    *ty = Type::Tuple(Tuple::Unbounded(Box::new(elem.as_ref().clone())));
+                    *ty = Type::unbounded_tuple(elem.as_ref().clone());
                     empty_is_redundant = true;
                 }
             }
@@ -395,26 +395,26 @@ mod tests {
     #[test]
     fn test_union_empty_with_prefix_variadic_tuple() {
         let xs = vec![
-            Type::Tuple(Tuple::Concrete(vec![])),
+            Type::concrete_tuple(vec![]),
             Type::Tuple(Tuple::unpacked(
                 vec![Type::None],
-                Type::Tuple(Tuple::unbounded(Type::None)),
+                Type::unbounded_tuple(Type::None),
                 Vec::new(),
             )),
         ];
-        assert_eq!(unions(xs), Type::Tuple(Tuple::unbounded(Type::None)));
+        assert_eq!(unions(xs), Type::unbounded_tuple(Type::None));
     }
 
     #[test]
     fn test_union_empty_with_suffix_variadic_tuple() {
         let xs = vec![
-            Type::Tuple(Tuple::Concrete(vec![])),
+            Type::concrete_tuple(vec![]),
             Type::Tuple(Tuple::unpacked(
                 Vec::new(),
-                Type::Tuple(Tuple::unbounded(Type::None)),
+                Type::unbounded_tuple(Type::None),
                 vec![Type::None],
             )),
         ];
-        assert_eq!(unions(xs), Type::Tuple(Tuple::unbounded(Type::None)));
+        assert_eq!(unions(xs), Type::unbounded_tuple(Type::None));
     }
 }

@@ -423,7 +423,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Tuple(Tuple::Unpacked(box (prefix, _, suffix)))
                         if prefix.len() + suffix.len() == len =>
                     {
-                        Type::tuple(prefix.iter().cloned().chain(suffix.clone()).collect())
+                        Type::concrete_tuple(prefix.iter().cloned().chain(suffix.clone()).collect())
                     }
                     Type::Tuple(Tuple::Unpacked(box (
                         prefix,
@@ -432,7 +432,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))) if prefix.len() + suffix.len() < len => {
                         let middle_elements =
                             vec![(**middle).clone(); len - prefix.len() - suffix.len()];
-                        Type::tuple(
+                        Type::concrete_tuple(
                             prefix
                                 .iter()
                                 .cloned()
@@ -442,7 +442,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     }
                     Type::Tuple(Tuple::Unbounded(elements)) => {
-                        Type::tuple(vec![(**elements).clone(); len])
+                        Type::concrete_tuple(vec![(**elements).clone(); len])
                     }
                     Type::ClassType(class)
                         if let Some(Tuple::Concrete(elts)) = self.as_tuple(class)

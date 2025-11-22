@@ -213,9 +213,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Tuple(Tuple::Concrete(elements)) if is_django && elements.len() >= 2 => {
                 // The last element is the label.
                 let value_len = elements.len() - 1;
-                Type::Tuple(Tuple::Concrete(
-                    elements.into_iter().take(value_len).collect(),
-                ))
+                Type::concrete_tuple(elements.into_iter().take(value_len).collect())
             }
             ty => ty,
         };

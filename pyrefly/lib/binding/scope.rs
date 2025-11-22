@@ -807,6 +807,12 @@ struct ImportUsage {
 }
 
 #[derive(Clone, Debug)]
+struct VariableUsage {
+    range: TextRange,
+    used: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct UnusedParameter {
     pub name: Name,
     pub range: TextRange,
@@ -814,6 +820,12 @@ pub struct UnusedParameter {
 
 #[derive(Clone, Debug)]
 pub struct UnusedImport {
+    pub name: Name,
+    pub range: TextRange,
+}
+
+#[derive(Clone, Debug)]
+pub struct UnusedVariable {
     pub name: Name,
     pub range: TextRange,
 }
@@ -940,6 +952,8 @@ pub struct Scope {
     forks: Vec<Fork>,
     /// Tracking imports in the current scope (module-level only)
     imports: SmallMap<Name, ImportUsage>,
+    /// Tracking variables in the current scope (module, function, and method scopes)
+    variables: SmallMap<Name, VariableUsage>,
 }
 
 impl Scope {
@@ -953,6 +967,7 @@ impl Scope {
             loops: Default::default(),
             forks: Default::default(),
             imports: SmallMap::new(),
+            variables: SmallMap::new(),
         }
     }
 
@@ -1301,14 +1316,33 @@ impl Scopes {
             .collect()
     }
 
+    fn collect_unused_variables(variables: SmallMap<Name, VariableUsage>) -> Vec<UnusedVariable> {
+        variables
+            .into_iter()
+            .filter_map(|(name, usage)| {
+                if usage.used {
+                    None
+                } else {
+                    Some(UnusedVariable {
+                        name,
+                        range: usage.range,
+                    })
+                }
+            })
+            .collect()
+    }
+
     pub fn pop_function_scope(
         &mut self,
     ) -> (
         YieldsAndReturns,
         Option<SelfAssignments>,
         Vec<UnusedParameter>,
+        Vec<UnusedVariable>,
     ) {
-        match self.pop().kind {
+        let scope = self.pop();
+        let unused_variables = Self::collect_unused_variables(scope.variables.clone());
+        match scope.kind {
             ScopeKind::Method(method_scope) => (
                 method_scope.yields_and_returns,
                 Some(SelfAssignments {
@@ -1316,11 +1350,13 @@ impl Scopes {
                     instance_attributes: method_scope.instance_attributes,
                 }),
                 Self::collect_unused_parameters(method_scope.parameters),
+                unused_variables,
             ),
             ScopeKind::Function(function_scope) => (
                 function_scope.yields_and_returns,
                 None,
                 Self::collect_unused_parameters(function_scope.parameters),
+                unused_variables,
             ),
             unexpected => unreachable!("Tried to pop a function scope, but got {unexpected:?}"),
         }
@@ -1589,6 +1625,33 @@ impl Scopes {
     pub fn mark_import_used(&mut self, name: &Name) {
         for scope in self.iter_rev_mut() {
             if let Some(info) = scope.imports.get_mut(name) {
+                info.used = true;
+                break;
+            }
+        }
+    }
+
+    pub fn register_variable(&mut self, name: &Identifier) {
+        // Track variables in Module, Function, and Method scopes
+        // Module-level variables won't be reported as unused since they can be imported
+        // by other modules, but function/method-level variables will be reported
+        if matches!(
+            self.current().kind,
+            ScopeKind::Module | ScopeKind::Function(_) | ScopeKind::Method(_)
+        ) {
+            self.current_mut().variables.insert(
+                name.id.clone(),
+                VariableUsage {
+                    range: name.range,
+                    used: false,
+                },
+            );
+        }
+    }
+
+    pub fn mark_variable_used(&mut self, name: &Name) {
+        for scope in self.iter_rev_mut() {
+            if let Some(info) = scope.variables.get_mut(name) {
                 info.used = true;
                 break;
             }

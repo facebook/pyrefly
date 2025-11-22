@@ -73,7 +73,6 @@ use crate::types::equality::TypeEq;
 use crate::types::globals::ImplicitGlobal;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::stdlib::Stdlib;
-use crate::types::tuple::Tuple;
 use crate::types::type_info::JoinStyle;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::TParams;
@@ -1800,15 +1799,15 @@ impl AnnotationWithTarget {
         match self.target {
             AnnotationTarget::ArgsParam(_) => {
                 if let Type::Unpack(unpacked) = annotation_ty {
-                    Some(Type::Tuple(Tuple::unpacked(
+                    Some(Type::unpacked_tuple(
                         Vec::new(),
                         (**unpacked).clone(),
                         Vec::new(),
-                    )))
+                    ))
                 } else if matches!(annotation_ty, Type::Args(_)) {
                     Some(annotation_ty.clone())
                 } else {
-                    Some(Type::Tuple(Tuple::unbounded(annotation_ty.clone())))
+                    Some(Type::unbounded_tuple(annotation_ty.clone()))
                 }
             }
             AnnotationTarget::KwargsParam(_) => {

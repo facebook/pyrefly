@@ -417,7 +417,7 @@ impl<'a> BindingsBuilder<'a> {
         // TODO: We should properly handle `yield` and `yield from`; lambdas can be generators.
         // One example of this is in the standard library, in `_collections_abc.pyi`:
         // https://github.com/python/cpython/blob/965662ee4a986605b60da470d9e7c1e9a6f922b3/Lib/_collections_abc.py#L92
-        let (yields_and_returns, _, _) = self.scopes.pop_function_scope();
+        let (yields_and_returns, _, _, _) = self.scopes.pop_function_scope();
         for (idx, y) in yields_and_returns.yields {
             self.insert_binding_idx(idx, BindingYield::Invalid(y));
         }
@@ -829,6 +829,8 @@ impl<'a> BindingsBuilder<'a> {
             // test::class_super::test_super_in_base_classes for an example of a SuperInstance
             // binding that we crash looking for if we don't do this.
             Expr::Call(_) => self.ensure_expr(x, static_type_usage),
+            // Bind walrus so we don't crash when looking up the assigned name later.
+            Expr::Named(_) => self.ensure_expr(x, static_type_usage),
             Expr::Attribute(ExprAttribute { value, attr, .. })
                 if let Expr::Name(value) = &**value
                 // We assume "args" and "kwargs" are ParamSpec attributes rather than imported TypeVars.

@@ -49,14 +49,6 @@ impl Tuple {
         }
     }
 
-    pub fn concrete(elts: Vec<Type>) -> Self {
-        Self::Concrete(elts)
-    }
-
-    pub fn unbounded(elt: Type) -> Self {
-        Self::Unbounded(Box::new(elt))
-    }
-
     pub fn unpacked(prefix: Vec<Type>, middle: Type, suffix: Vec<Type>) -> Tuple {
         if prefix.is_empty()
             && suffix.is_empty()

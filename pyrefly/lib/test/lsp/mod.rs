@@ -12,6 +12,7 @@ mod completion;
 mod completion_quotes;
 mod declaration;
 mod definition;
+mod diagnostic;
 mod document_symbols;
 mod folding_ranges;
 mod hover;

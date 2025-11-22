@@ -460,6 +460,7 @@ impl<'a> BindingsBuilder<'a> {
                 initial_value: Some((*value).clone()),
             }
         } else {
+            self.scopes.register_variable(name);
             FlowStyle::Other
         };
         let canonical_ann = self.bind_name(&name.id, pinned_idx, style);

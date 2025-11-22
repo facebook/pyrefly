@@ -246,6 +246,7 @@ pub struct LspAnalysisConfig {
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub import_format: Option<ImportFormat>,
     pub inlay_hints: Option<InlayHintConfig>,
+    // TODO: this is not a pylance setting. it should be in pyrefly settings
     #[serde(default)]
     pub show_hover_go_to_links: Option<bool>,
 }
@@ -266,9 +267,12 @@ where
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LspConfig {
+    /// Settings we share with the Pylance extension for backwards compatibility
+    /// See LspAnalysisConfig's docstring for mroe details
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
     python_path: Option<String>,
+    /// Settings we've added that are specific to Pyrefly
     pyrefly: Option<PyreflyClientConfig>,
 }
 

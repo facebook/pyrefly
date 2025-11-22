@@ -1251,6 +1251,22 @@ impl Server {
             filewatcher_registered: AtomicBool::new(false),
             version_info: Mutex::new(HashMap::new()),
         };
+
+        if let Some(init_options) = &s.initialize_params.initialization_options {
+            let mut modified = false;
+            s.workspaces
+                .apply_client_configuration(&mut modified, &None, init_options.clone());
+            if let Some(workspace_folders) = &s.initialize_params.workspace_folders {
+                for folder in workspace_folders {
+                    s.workspaces.apply_client_configuration(
+                        &mut modified,
+                        &Some(folder.uri.clone()),
+                        init_options.clone(),
+                    );
+                }
+            }
+        }
+
         s.setup_file_watcher_if_necessary();
         s.request_settings_for_all_workspaces();
         s
@@ -1466,6 +1482,7 @@ impl Server {
                 Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
                 Self::append_unused_parameter_diagnostics(transaction, &handle, diagnostics);
                 Self::append_unused_import_diagnostics(transaction, &handle, diagnostics);
+                Self::append_unused_variable_diagnostics(transaction, &handle, diagnostics);
             }
             self.connection
                 .publish_diagnostics(diags, notebook_cell_urls);
@@ -2816,6 +2833,30 @@ impl Server {
         }
     }
 
+    fn append_unused_variable_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_variables() {
+                let lsp_range = module_info.to_lsp_range(unused.range);
+                items.push(Diagnostic {
+                    range: lsp_range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("Pyrefly".to_owned()),
+                    message: format!("Variable `{}` is unused", unused.name.as_str()),
+                    code: Some(NumberOrString::String("unused-variable".to_owned())),
+                    code_description: None,
+                    related_information: None,
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    data: None,
+                });
+            }
+        }
+    }
+
     fn docstring_ranges(
         &self,
         transaction: &Transaction<'_>,
@@ -2922,6 +2963,7 @@ impl Server {
         Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
         Self::append_unused_parameter_diagnostics(transaction, &handle, &mut items);
         Self::append_unused_import_diagnostics(transaction, &handle, &mut items);
+        Self::append_unused_variable_diagnostics(transaction, &handle, &mut items);
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,

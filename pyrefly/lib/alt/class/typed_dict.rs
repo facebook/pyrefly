@@ -47,7 +47,6 @@ use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
 use crate::types::read_only::ReadOnlyReason;
-use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
@@ -330,7 +329,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
 
         // ---- Overload: update(m: Iterable[tuple[Literal["key"], value]], /)
-        let get_tuple = |name, ty| Type::Tuple(Tuple::Concrete(vec![self.name_or_str(name), ty]));
+        let get_tuple = |name, ty| Type::concrete_tuple(vec![self.name_or_str(name), ty]);
         let mut tuple_types: Vec<Type> = self
             .names_to_fields(cls, fields)
             .filter(|(_, field)| !field.is_read_only()) // filter read-only fields
@@ -763,10 +762,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Function {
                 signature: Callable::list(
                     ParamList::new(vec![self.class_self_param(cls, true)]),
-                    Type::Tuple(Tuple::Concrete(vec![
+                    Type::concrete_tuple(vec![
                         self.stdlib.str().clone().to_type(),
                         self.get_typed_dict_value_type_from_fields(cls, fields),
-                    ])),
+                    ]),
                 ),
                 metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), POPITEM_METHOD),
             },

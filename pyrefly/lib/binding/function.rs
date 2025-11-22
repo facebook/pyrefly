@@ -60,6 +60,7 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
 use crate::binding::scope::UnusedParameter;
+use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
@@ -299,6 +300,7 @@ impl<'a> BindingsBuilder<'a> {
         YieldsAndReturns,
         Option<SelfAssignments>,
         Vec<UnusedParameter>,
+        Vec<UnusedVariable>,
     ) {
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
@@ -308,7 +310,14 @@ impl<'a> BindingsBuilder<'a> {
             body,
             &NestingContext::function(ShortIdentifier::new(func_name), parent.dupe()),
         );
-        self.scopes.pop_function_scope()
+        let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
+            self.scopes.pop_function_scope();
+        (
+            yields_and_returns,
+            self_assignments,
+            unused_parameters,
+            unused_variables,
+        )
     }
 
     fn unchecked_function_body_scope(
@@ -565,8 +574,8 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             match self.untyped_def_behavior {
                 UntypedDefBehavior::SkipAndInferReturnAny => {
-                    let (yields_and_returns, self_assignments, unused_parameters) = self
-                        .function_body_scope(
+                    let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
+                        self.function_body_scope(
                             parameters,
                             body,
                             range,
@@ -579,6 +588,7 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     if should_report_unused_parameters {
                         self.record_unused_parameters(unused_parameters);
+                        self.record_unused_variables(unused_variables);
                     }
                     self.analyze_return_type(
                         func_name,
@@ -594,8 +604,8 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 UntypedDefBehavior::CheckAndInferReturnAny => {
                     let implicit_return = self.implicit_return(&body, func_name);
-                    let (yields_and_returns, self_assignments, unused_parameters) = self
-                        .function_body_scope(
+                    let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
+                        self.function_body_scope(
                             parameters,
                             body,
                             range,
@@ -608,6 +618,7 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     if should_report_unused_parameters {
                         self.record_unused_parameters(unused_parameters);
+                        self.record_unused_variables(unused_variables);
                     }
                     self.analyze_return_type(
                         func_name,
@@ -623,8 +634,8 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 UntypedDefBehavior::CheckAndInferReturnType => {
                     let implicit_return = self.implicit_return(&body, func_name);
-                    let (yields_and_returns, self_assignments, unused_parameters) = self
-                        .function_body_scope(
+                    let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
+                        self.function_body_scope(
                             parameters,
                             body,
                             range,
@@ -637,6 +648,7 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     if should_report_unused_parameters {
                         self.record_unused_parameters(unused_parameters);
+                        self.record_unused_variables(unused_variables);
                     }
                     self.analyze_return_type(
                         func_name,

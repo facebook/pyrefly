@@ -2066,3 +2066,20 @@ def f(x: A):
         reveal_type(x) # E: A & B & C
     "#,
 );
+
+// Regession test for https://github.com/facebook/pyrefly/issues/1642
+testcase!(
+    test_typed_dict_truthiness_narrowing,
+    r#"
+from typing import TypedDict, assert_type, NotRequired
+class RequiredDict(TypedDict):
+    val: int
+class EmptyDict(TypedDict):
+    val: NotRequired[int]
+def test_narrowing(x: RequiredDict | None, y: EmptyDict | None):
+    xval = x and x['val']
+    assert_type(xval, int | None)
+    yval = y and y.get('val')
+    assert_type(yval, int | None | EmptyDict)
+"#,
+);

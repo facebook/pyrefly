@@ -13,6 +13,7 @@ use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::ignore::Ignore;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
@@ -55,7 +56,7 @@ fn get_suppressed_errors_for_line(
                 range.start.line_within_file(),
                 range.end.line_within_file(),
                 error.error_kind().to_name(),
-                false,
+                &Tool::default_enabled(),
             )
         })
         .collect()

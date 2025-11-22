@@ -713,11 +713,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         _ => {
                             if let Some(iterable_ty) = self.unwrap_iterable(&ty) {
                                 if !unbounded.is_empty() {
-                                    unbounded
-                                        .push(Type::Tuple(Tuple::unbounded(self.unions(suffix))));
+                                    unbounded.push(Type::unbounded_tuple(self.unions(suffix)));
                                     suffix = Vec::new();
                                 }
-                                unbounded.push(Type::Tuple(Tuple::unbounded(iterable_ty)));
+                                unbounded.push(Type::unbounded_tuple(iterable_ty));
                                 hint_ts_iter.nth(usize::MAX);
                             } else {
                                 self.error(
@@ -756,8 +755,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::any_error()
         } else {
             match unbounded.as_slice() {
-                [] => Type::tuple(prefix),
-                [middle] => Type::Tuple(Tuple::unpacked(prefix, middle.clone(), suffix)),
+                [] => Type::concrete_tuple(prefix),
+                [middle] => Type::unpacked_tuple(prefix, middle.clone(), suffix),
                 // We can't precisely model unpacking two unbounded iterables, so we'll keep any
                 // concrete prefix and suffix elements and merge everything in between into an unbounded tuple
                 _ => {
@@ -768,11 +767,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .unwrap_or(Type::Any(AnyStyle::Implicit))
                         })
                         .collect();
-                    Type::Tuple(Tuple::unpacked(
+                    Type::unpacked_tuple(
                         prefix,
-                        Type::Tuple(Tuple::unbounded(self.unions(middle_types))),
+                        Type::unbounded_tuple(self.unions(middle_types)),
                         suffix,
-                    ))
+                    )
                 }
             }
         }
@@ -1041,6 +1040,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///   and looking at the `__bool__` method, if it is present).
     /// - `None` if it's truthiness is not statically known.
     pub fn as_bool(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) -> Option<bool> {
+        if let Type::TypedDict(td) = ty {
+            // If a TypedDict has ANY required keys, it can never be empty.
+            // Therefore, it is always Truthy.
+            if self
+                .typed_dict_fields(td)
+                .values()
+                .any(|field| field.required)
+            {
+                return Some(true);
+            }
+        }
         ty.as_bool().or_else(|| {
             // If the object defines `__bool__`, we can check if it returns a statically known value
             if self
@@ -1215,7 +1225,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         ty.transform(&mut |ty| match ty {
             Type::SpecialForm(SpecialForm::Tuple) => {
-                *ty = Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)));
+                *ty = Type::unbounded_tuple(Type::Any(AnyStyle::Implicit));
             }
             Type::SpecialForm(SpecialForm::Callable) => {
                 *ty = Type::callable_ellipsis(Type::Any(AnyStyle::Implicit))
@@ -1225,9 +1235,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::ClassDef(cls) => {
                 if cls.is_builtin("tuple") {
-                    *ty = Type::type_form(Type::Tuple(Tuple::unbounded(Type::Any(
-                        AnyStyle::Implicit,
-                    ))));
+                    *ty = Type::type_form(Type::unbounded_tuple(Type::Any(AnyStyle::Implicit)));
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = Type::type_form(Type::any_explicit())
                 } else {
@@ -2193,12 +2201,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             && upper >= 0
                             && upper <= elts.len() as i64 =>
                     {
-                        Type::Tuple(Tuple::concrete(
-                            elts[lower as usize..upper as usize].to_vec(),
-                        ))
+                        Type::concrete_tuple(elts[lower as usize..upper as usize].to_vec())
                     }
                     _ => self.call_method_or_error(
-                        &Type::Tuple(Tuple::Concrete(elts)),
+                        &Type::concrete_tuple(elts),
                         &dunder::GETITEM,
                         range,
                         &[CallArg::expr(index)],
@@ -2232,7 +2238,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                     _ => self.call_method_or_error(
-                        &Type::Tuple(Tuple::Concrete(elts)),
+                        &Type::concrete_tuple(elts),
                         &dunder::GETITEM,
                         range,
                         &[CallArg::expr(index)],

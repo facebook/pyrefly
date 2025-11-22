@@ -16,8 +16,10 @@ use ruff_notebook::Notebook;
 use ruff_python_ast::PySourceType;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::small_set::SmallSet;
 
 use crate::ignore::Ignore;
+use crate::ignore::Tool;
 use crate::module_name::ModuleName;
 use crate::module_path::ModulePath;
 
@@ -168,13 +170,13 @@ impl Module {
         &self,
         source_range: &DisplayRange,
         error_kind: &str,
-        permissive_ignores: bool,
+        enabled_ignores: &SmallSet<Tool>,
     ) -> bool {
         self.0.ignore.is_ignored(
             source_range.start.line_within_file(),
             source_range.end.line_within_file(),
             error_kind,
-            permissive_ignores,
+            enabled_ignores,
         )
     }
 

@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use anyhow::anyhow;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::GENERATED_TOKEN;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::fs_anyhow;
@@ -328,7 +329,7 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
 
     let mut suppressed_errors: SmallMap<&PathBuf, SmallSet<LineNumber>> = SmallMap::new();
     for e in &errors.suppressed {
-        if e.is_ignored(false)
+        if e.is_ignored(&Tool::default_enabled())
             && let ModulePathDetails::FileSystem(path) = e.path().details()
         {
             // Insert all lines in the error's range, not just the start line.

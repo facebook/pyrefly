@@ -890,7 +890,7 @@ pub mod tests {
                 &tuple_param,
                 TArgs::new(
                     tuple_param_tparams.dupe(),
-                    vec![Type::tuple(vec![
+                    vec![Type::concrete_tuple(vec![
                         class_type(&foo1, TArgs::default()),
                         class_type(&foo1, TArgs::default())
                     ])]
@@ -902,7 +902,10 @@ pub mod tests {
         assert_eq!(
             class_type(
                 &tuple_param,
-                TArgs::new(tuple_param_tparams.dupe(), vec![Type::tuple(Vec::new())])
+                TArgs::new(
+                    tuple_param_tparams.dupe(),
+                    vec![Type::concrete_tuple(Vec::new())]
+                )
             )
             .to_string(),
             "TupleParam[*tuple[()]]"
@@ -912,10 +915,7 @@ pub mod tests {
                 &tuple_param,
                 TArgs::new(
                     tuple_param_tparams.dupe(),
-                    vec![Type::Tuple(Tuple::unbounded(class_type(
-                        &foo1,
-                        TArgs::default()
-                    )))]
+                    vec![Type::unbounded_tuple(class_type(&foo1, TArgs::default()))]
                 )
             )
             .to_string(),
@@ -928,7 +928,7 @@ pub mod tests {
                     tuple_param_tparams.dupe(),
                     vec![Type::Tuple(Tuple::Unpacked(Box::new((
                         vec![class_type(&foo1, TArgs::default())],
-                        Type::Tuple(Tuple::unbounded(class_type(&foo1, TArgs::default(),))),
+                        Type::unbounded_tuple(class_type(&foo1, TArgs::default())),
                         vec![class_type(&foo1, TArgs::default())],
                     ))))]
                 )
@@ -938,11 +938,11 @@ pub mod tests {
         );
 
         assert_eq!(
-            Type::Tuple(Tuple::unbounded(class_type(&foo1, TArgs::default()))).to_string(),
+            Type::unbounded_tuple(class_type(&foo1, TArgs::default())).to_string(),
             "tuple[foo, ...]"
         );
         assert_eq!(
-            Type::Tuple(Tuple::concrete(vec![
+            Type::concrete_tuple(vec![
                 class_type(&foo1, TArgs::default()),
                 class_type(
                     &bar,
@@ -951,12 +951,12 @@ pub mod tests {
                         vec![class_type(&foo1, TArgs::default())]
                     )
                 )
-            ]))
+            ])
             .to_string(),
             "tuple[foo, bar[foo]]"
         );
         assert_eq!(
-            Type::Tuple(Tuple::concrete(vec![
+            Type::concrete_tuple(vec![
                 class_type(&foo1, TArgs::default()),
                 class_type(
                     &bar,
@@ -965,22 +965,19 @@ pub mod tests {
                         vec![class_type(&foo2, TArgs::default())]
                     )
                 )
-            ]))
+            ])
             .to_string(),
             "tuple[mod.ule.foo@1:6, bar[mod.ule.foo@1:9]]"
         );
         assert_eq!(
-            Type::Tuple(Tuple::concrete(vec![
+            Type::concrete_tuple(vec![
                 class_type(&foo1, TArgs::default()),
                 class_type(&foo3, TArgs::default())
-            ]))
+            ])
             .to_string(),
             "tuple[mod.ule.foo, ule.foo]"
         );
-        assert_eq!(
-            Type::Tuple(Tuple::concrete(vec![])).to_string(),
-            "tuple[()]"
-        );
+        assert_eq!(Type::concrete_tuple(vec![]).to_string(), "tuple[()]");
 
         let t1 = class_type(&foo1, TArgs::default());
         let t2 = class_type(&foo2, TArgs::default());
@@ -1195,7 +1192,7 @@ pub mod tests {
         let param2 = Param::KwOnly(Name::new_static("world"), Type::None, Required::Required);
         let callable = Callable::list(ParamList::new(vec![param1, param2]), Type::None);
         let callable_type = Type::Callable(Box::new(callable));
-        let tuple = Type::Tuple(Tuple::concrete(vec![callable_type.clone()]));
+        let tuple = Type::concrete_tuple(vec![callable_type.clone()]);
         let mut ctx = TypeDisplayContext::new(&[&tuple]);
         assert_eq!(
             ctx.display(&tuple).to_string(),
@@ -1216,7 +1213,7 @@ pub mod tests {
             TypeAliasStyle::LegacyImplicit,
             Vec::new(),
         )));
-        let wrapped = Type::tuple(vec![alias.clone()]);
+        let wrapped = Type::concrete_tuple(vec![alias.clone()]);
         let type_of = Type::type_form(alias.clone());
         let mut ctx = TypeDisplayContext::new(&[]);
         // regular display

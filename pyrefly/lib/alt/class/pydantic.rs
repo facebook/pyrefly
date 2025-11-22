@@ -195,6 +195,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 base_class_object.has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
             });
 
+        let has_pydantic_base_settings_base_class =
+            bases_with_metadata.iter().any(|(base_class_object, _)| {
+                base_class_object
+                    .has_toplevel_qname(ModuleName::pydantic_settings().as_str(), "BaseSettings")
+            });
+
         let is_pydantic_base_model = has_pydantic_base_model_base_class
             || bases_with_metadata
                 .iter()
@@ -210,6 +216,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .has_toplevel_qname(ModuleName::pydantic_root_model().as_str(), "RootModel")
             });
 
+        let has_base_settings_kind = bases_with_metadata.iter().any(|(_, metadata)| {
+            matches!(
+                metadata.pydantic_model_kind(),
+                Some(PydanticModelKind::BaseSettings)
+            )
+        });
+
         let has_root_model_kind = bases_with_metadata.iter().any(|(_, metadata)| {
             matches!(
                 metadata.pydantic_model_kind(),
@@ -219,6 +232,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let pydantic_model_kind = if has_pydantic_root_model_base_class || has_root_model_kind {
             PydanticModelKind::RootModel
+        } else if has_pydantic_base_settings_base_class || has_base_settings_kind {
+            PydanticModelKind::BaseSettings
         } else {
             PydanticModelKind::BaseModel
         };

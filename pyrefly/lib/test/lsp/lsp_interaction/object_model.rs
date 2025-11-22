@@ -85,6 +85,8 @@ pub struct InitializeSettings {
     pub file_watch: bool,
     // Additional capabilities to merge into the initialize params
     pub capabilities: Option<serde_json::Value>,
+    // initialization_options to send in the initialize request
+    pub initialization_options: Option<serde_json::Value>,
 }
 
 pub struct FinishHandle {
@@ -656,6 +658,9 @@ impl TestClient {
         }
         if settings.configuration.is_some() {
             params["capabilities"]["workspace"]["configuration"] = json!(true);
+        }
+        if let Some(init_options) = &settings.initialization_options {
+            params["initializationOptions"] = init_options.clone();
         }
 
         // Merge custom capabilities if provided

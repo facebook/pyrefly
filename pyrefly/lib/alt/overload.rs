@@ -181,7 +181,7 @@ impl<'a> ArgsExpander<'a> {
                     element_expansions
                         .into_iter()
                         .multi_cartesian_product()
-                        .map(|new_elements| Type::Tuple(Tuple::Concrete(new_elements)))
+                        .map(Type::concrete_tuple)
                         .collect()
                 } else {
                     Vec::new()

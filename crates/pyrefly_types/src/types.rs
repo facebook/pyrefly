@@ -882,12 +882,20 @@ impl Type {
         Type::Type(Box::new(inner))
     }
 
-    pub fn tuple(elts: Vec<Type>) -> Self {
-        Type::Tuple(Tuple::concrete(elts))
+    pub fn concrete_tuple(elts: Vec<Type>) -> Self {
+        Type::Tuple(Tuple::Concrete(elts))
+    }
+
+    pub fn unbounded_tuple(elt: Type) -> Self {
+        Type::Tuple(Tuple::Unbounded(Box::new(elt)))
+    }
+
+    pub fn unpacked_tuple(prefix: Vec<Type>, middle: Type, suffix: Vec<Type>) -> Self {
+        Type::Tuple(Tuple::unpacked(prefix, middle, suffix))
     }
 
     pub fn any_tuple() -> Self {
-        Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)))
+        Self::unbounded_tuple(Type::Any(AnyStyle::Implicit))
     }
 
     pub fn is_any(&self) -> bool {

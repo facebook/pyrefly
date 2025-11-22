@@ -136,7 +136,7 @@ testcase!(
 from typing import TypeVarTuple
 
 _Ts = TypeVarTuple("_Ts")
-def f(*args: *_Ts) -> None: 
+def f(*args: *_Ts) -> None:
     f(*args)
 "#,
 );
@@ -149,5 +149,53 @@ from typing import Unpack, TypeVarTuple
 _Ts = TypeVarTuple("_Ts")
 class A:
     def f(self, *args: Unpack[_Ts]): ...
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_callable_resolves_to_empty,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts, T](f: Callable[[*Ts], T], *args: *Ts) -> tuple[*Ts]:
+    return (*args,)
+
+assert_type(test(lambda: 1), tuple[()])
+
+fun: Callable[[int], int] = lambda x: x + 1
+assert_type(test(fun, 1), tuple[int])
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_resolves_to_empty,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts](*args: *Ts) -> tuple[*Ts]:
+    return (*args,)
+
+assert_type(test(), tuple[()])
+assert_type(test(1), tuple[int])
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_bound_method_resolves_to_empty,
+    r#"
+from collections.abc import Callable, Awaitable
+from typing import TypeVarTuple
+
+class Nursery:
+    def start_soon[*PosArgsT](self, func: Callable[[*PosArgsT], Awaitable[None]], *args: *PosArgsT) -> None:
+        pass
+
+class B:
+    async def bound(self) -> None:
+        pass
+
+    def fn(self):
+        n = Nursery()
+        n.start_soon(self.bound)
 "#,
 );
