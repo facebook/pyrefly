@@ -1,0 +1,1 @@
+# pandas.core stub
