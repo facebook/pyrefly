@@ -197,7 +197,7 @@ fn hint_to_string(
     let hint = hint.promote_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
     let hint = match hint {
-        Type::Union(types) => unions_with_literals(types, stdlib, enum_members),
+        Type::Union(box (types, _)) => unions_with_literals(types, stdlib, enum_members),
         _ => hint,
     };
     hint.to_string()

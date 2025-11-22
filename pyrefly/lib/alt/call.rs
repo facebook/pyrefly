@@ -260,7 +260,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Var(v) if let Some(_guard) = self.recurse(v) => {
                 self.as_call_target_impl(self.solver().force_var(v), quantified, dunder_call)
             }
-            Type::Union(xs) => {
+            Type::Union(box (xs, _)) => {
                 let xs_length = xs.len();
                 let targets = xs
                     .into_iter()
@@ -315,7 +315,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
                 Restriction::Bound(bound) => match bound {
-                    Type::Union(members) => {
+                    Type::Union(box (members, _)) => {
                         let mut targets = Vec::new();
                         for member in members {
                             if let CallTargetLookup::Ok(target) = self.as_call_target_impl(

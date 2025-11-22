@@ -20,7 +20,7 @@ fn flatten_and_dedup(xs: Vec<Type>) -> Vec<Type> {
     fn flatten(xs: Vec<Type>, res: &mut Vec<Type>) {
         for x in xs {
             match x {
-                Type::Union(xs) => flatten(xs, res),
+                Type::Union(box (xs, _)) => flatten(xs, res),
                 Type::Never(_) => {}
                 _ => res.push(x),
             }
@@ -76,7 +76,7 @@ fn unions_internal(
         }
         collapse_tuple_unions_with_empty(&mut res);
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
-        try_collapse(res).unwrap_or_else(Type::Union)
+        try_collapse(res).unwrap_or_else(|members| Type::Union(Box::new((members, None))))
     })
 }
 

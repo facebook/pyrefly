@@ -940,12 +940,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }),
                 _ => Err(SubsetError::Other),
             },
-            (Type::Union(ls), u) => all(ls.iter(), |l| self.is_subset_eq(l, u)),
+            (Type::Union(box (ls, _)), u) => all(ls.iter(), |l| self.is_subset_eq(l, u)),
             (l, Type::Intersect(u)) => all(u.0.iter(), |u| self.is_subset_eq(l, u)),
             (l, Type::Overload(overload)) => all(overload.signatures.iter(), |u| {
                 self.is_subset_eq(l, &u.as_type())
             }),
-            (l, Type::Union(us)) => {
+            (l, Type::Union(box (us, _))) => {
                 // Check var and non-var elements separately, so that if we match a non-var, we
                 // don't pin the vars.
                 let (vars, nonvars): (Vec<_>, Vec<_>) = us.iter().partition(|u| {

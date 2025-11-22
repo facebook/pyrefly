@@ -172,8 +172,8 @@ fn on_class(
             Type::Quantified(q) => {
                 on_var(q.name(), variance, inj);
             }
-            Type::Union(t) => {
-                for ty in t {
+            Type::Union(box (tys, _)) => {
+                for ty in tys {
                     on_type(variance, inj, ty, on_edge, on_var);
                 }
             }

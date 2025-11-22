@@ -69,8 +69,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .distribute_type_over_union();
                 // Make assert_type(Self@SomeClass, typing.Self) work.
                 ty.subst_self_type_mut(&self_form);
-                // Re-sort unions. Make sure to keep this as the final step before comparison.
-                ty.sort_unions()
+                // Re-sort unions & drop any display names.
+                // Make sure to keep this as the final step before comparison.
+                ty.sort_unions_and_drop_names()
             };
             let a = normalize_type(a, expr_a);
             let b = normalize_type(b, expr_b);
@@ -476,7 +477,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Could be anything inside here, so add in Any.
                     res.push(Type::Any(AnyStyle::Implicit));
                 }
-                Type::Tuple(Tuple::Concrete(ts)) | Type::Union(ts) => {
+                Type::Tuple(Tuple::Concrete(ts)) | Type::Union(box (ts, _)) => {
                     for t in ts {
                         f(me, t, res)
                     }
@@ -491,7 +492,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         f(me, t, res)
                     }
                 }
-                Type::Type(box Type::Union(ts)) => {
+                Type::Type(box Type::Union(box (ts, _))) => {
                     for t in ts {
                         f(me, Type::type_form(t), res)
                     }

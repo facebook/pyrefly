@@ -51,7 +51,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SelfType(ty_cls) | Type::ClassType(ty_cls) => {
                 self.has_superclass(ty_cls.class_object(), class)
             }
-            Type::Union(xs) => xs
+            Type::Union(box (xs, _)) => xs
                 .iter()
                 .all(|x| self.is_compatible_constructor_return(x, class)),
             _ => false,
