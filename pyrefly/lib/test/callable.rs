@@ -456,7 +456,7 @@ test(1, 2, 3, *[4]) # OK
 testcase!(
     test_splat_unpacked_args,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 
 def test1(*args: *tuple[int, int, int]): ...
 test1(*(1, 2, 3)) # OK
@@ -464,11 +464,11 @@ test1(*(1, 2)) # E: Unpacked argument `tuple[Literal[1], Literal[2]]` is not ass
 test1(*(1, 2, 3, 4)) # E: Unpacked argument `tuple[Literal[1], Literal[2], Literal[3], Literal[4]]` is not assignable to parameter `*args` with type `tuple[int, int, int]` in function `test1`
 
 def test2[*T](*args: *tuple[int, *T, int]) -> tuple[*T]: ...
-assert_type(test2(*(1, 2, 3)), tuple[int])
+assert_type(test2(*(1, 2, 3)), tuple[Literal[2]])
 assert_type(test2(*(1, 2)), tuple[()])
-assert_type(test2(*(1, 2, 3, 4)), tuple[int, int])
-assert_type(test2(1, 2, *(3, 4), 5), tuple[int, int, int])
-assert_type(test2(1, *(2, 3), *("4", 5)), tuple[int, int, str])
+assert_type(test2(*(1, 2, 3, 4)), tuple[Literal[2], Literal[3]])
+assert_type(test2(1, 2, *(3, 4), 5), tuple[Literal[2], Literal[3], Literal[4]])
+assert_type(test2(1, *(2, 3), *("4", 5)), tuple[Literal[2], Literal[3], Literal['4']])
 assert_type(test2(1, *[2, 3], 4), tuple[int, ...])
 test2(1, *(2, 3), *(4, "5"))  # E: Unpacked argument `tuple[Literal[1], Literal[2], Literal[3], Literal[4], Literal['5']]` is not assignable to parameter `*args` with type `tuple[int, *@_, int]` in function `test2`
 "#,
@@ -933,13 +933,13 @@ c3: Callable[[C], C] = f # OK
 testcase!(
     test_return_generic_callable,
     r#"
-from typing import assert_type, Callable
+from typing import Literal, assert_type, Callable
 def f[T]() -> Callable[[T], T]:
     return lambda x: x
 
 g = f()
-assert_type(g(0), int)
-assert_type(g(""), str)
+assert_type(g(0), Literal[0])
+assert_type(g(""), Literal[''])
 
 @f()
 def h(x: int) -> int:
@@ -951,18 +951,18 @@ assert_type(h(0), int)
 testcase!(
     test_generic_callable_union,
     r#"
-from typing import assert_type, Callable
+from typing import Literal, assert_type, Callable
 def f[T]() -> Callable[[T], T] | Callable[[T], list[T]]: ...
 g = f()
-assert_type(g(0), int | list[int])
-assert_type(g(""), str | list[str])
+assert_type(g(0), Literal[0] | list[Literal[0]])
+assert_type(g(""), Literal[''] | list[Literal['']])
     "#,
 );
 
 testcase!(
     test_callable_returns_callable_returns_callable,
     r#"
-from typing import assert_type, Callable
+from typing import Literal, assert_type, Callable
 
 def f[T]() -> Callable[[], Callable[[T], T]]:
     def f():
@@ -970,8 +970,8 @@ def f[T]() -> Callable[[], Callable[[T], T]]:
     return f
 
 g = f()()
-assert_type(g(0), int)
-assert_type(g(""), str)
+assert_type(g(0), Literal[0])
+assert_type(g(""), Literal[''])
 
     "#,
 );
@@ -979,23 +979,23 @@ assert_type(g(""), str)
 testcase!(
     test_return_substituted_callable,
     r#"
-from typing import assert_type, Callable
+from typing import Literal, assert_type, Callable
 def f[T](x: T) -> Callable[[T], T]: ...
 g = f(0)
-assert_type(g(0), int)
-assert_type(g(""), int)  # E: `Literal['']` is not assignable to parameter with type `int`
+assert_type(g(0), Literal[0])
+assert_type(g(""), Literal[0])  # E: `Literal['']` is not assignable to parameter with type `Literal[0]`
     "#,
 );
 
 testcase!(
     test_generic_callable_or_none,
     r#"
-from typing import assert_type, Callable
+from typing import Literal, assert_type, Callable
 def f[T]() -> Callable[[T], T] | None: ...
 g = f()
 if g:
-    assert_type(g(0), int)
-    assert_type(g(""), str)
+    assert_type(g(0), Literal[0])
+    assert_type(g(""), Literal[''])
     "#,
 );
 

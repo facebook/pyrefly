@@ -62,12 +62,12 @@ x: Literal[0xFFFFFFFFFFFFFFFFFF]
 testcase!(
     test_generic_create_literal,
     r#"
-from typing import assert_type, Literal
+from typing import assert_type
 
 class Foo[T]:
     def __init__(self, x: T) -> None: ...
 
-x: Literal[42] = 42
+x = 42
 assert_type(Foo(x), Foo[int])
 "#,
 );
@@ -224,7 +224,7 @@ testcase!(
 testcase!(
     test_promote_literal,
     r#"
-from typing import assert_type, Literal
+from typing import assert_type
 
 x = list("abcdefg")
 assert_type(x, list[str])
