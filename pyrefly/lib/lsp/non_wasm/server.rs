@@ -465,7 +465,7 @@ pub fn capabilities(
             ..Default::default()
         })),
         completion_provider: Some(CompletionOptions {
-            trigger_characters: Some(vec![".".to_owned()]),
+            trigger_characters: Some(vec![".".to_owned(), "'".to_owned(), "\"".to_owned()]),
             ..Default::default()
         }),
         document_highlight_provider: Some(OneOf::Left(true)),
