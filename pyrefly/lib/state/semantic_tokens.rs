@@ -433,8 +433,67 @@ fn collect_disabled_ranges_from_stmt(
     }
 }
 
-pub(crate) fn disabled_ranges_for_module(ast: &ModModule, sys_info: &SysInfo) -> Vec<TextRange> {
+pub(crate) fn disabled_ranges_for_module(
+    ast: &ModModule,
+    sys_info: &SysInfo,
+    module: &Module,
+) -> Vec<TextRange> {
     let mut ranges = Vec::new();
     collect_disabled_ranges_from_block(&ast.body, sys_info, true, &mut ranges);
+    collect_comment_ranges(module.lined_buffer().contents(), &mut ranges);
+    collect_string_literal_ranges(&ast.body, &mut ranges);
     ranges
+}
+
+// Helper function to collect comment ranges
+fn collect_comment_ranges(source: &str, ranges: &mut Vec<TextRange>) {
+    use pyrefly_python::ignore::find_comment_start_in_line;
+    use ruff_text_size::TextSize;
+
+    let mut offset = TextSize::from(0);
+
+    for line in source.lines() {
+        if let Some(comment_pos) = find_comment_start_in_line(line) {
+            let comment_start = offset + TextSize::from(comment_pos as u32);
+            let comment_end = offset + TextSize::from(line.len() as u32);
+            ranges.push(TextRange::new(comment_start, comment_end));
+        }
+        // +1 for newline character
+        offset += TextSize::from((line.len() + 1) as u32);
+    }
+}
+
+// Helper function to collect string literal ranges
+fn collect_string_literal_ranges(stmts: &[Stmt], ranges: &mut Vec<TextRange>) {
+    for stmt in stmts {
+        collect_string_ranges_from_stmt(stmt, ranges);
+    }
+}
+
+fn collect_string_ranges_from_stmt(stmt: &Stmt, ranges: &mut Vec<TextRange>) {
+    match stmt {
+        Stmt::Expr(expr_stmt) => {
+            collect_string_ranges_from_expr(&expr_stmt.value, ranges);
+        }
+        Stmt::FunctionDef(func) => {
+            for stmt in &func.body {
+                collect_string_ranges_from_stmt(stmt, ranges);
+            }
+        }
+        Stmt::ClassDef(class) => {
+            for stmt in &class.body {
+                collect_string_ranges_from_stmt(stmt, ranges);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_string_ranges_from_expr(expr: &Expr, ranges: &mut Vec<TextRange>) {
+    match expr {
+        Expr::StringLiteral(string_lit) => {
+            ranges.push(string_lit.range());
+        }
+        _ => {}
+    }
 }

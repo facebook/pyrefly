@@ -2763,7 +2763,8 @@ impl Server {
             transaction.get_ast(handle),
             transaction.get_module_info(handle),
         ) {
-            let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), handle.sys_info());
+            let disabled_ranges =
+                disabled_ranges_for_module(ast.as_ref(), handle.sys_info(), &module_info);
             let mut seen = HashSet::new();
             for range in disabled_ranges {
                 if range.is_empty() || !seen.insert(range) {
