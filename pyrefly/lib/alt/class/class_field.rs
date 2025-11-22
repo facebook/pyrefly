@@ -1225,15 +1225,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
-        let magically_initialized = {
-            // We consider fields to be always-initialized if it's defined within stub files.
-            // See https://github.com/python/typeshed/pull/13875 for reasoning.
-            class.module_path().is_interface()
-            // We consider fields to be always-initialized if it's annotated explicitly with `ClassVar`.
-            || direct_annotation
-                .as_ref()
-                .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
-        };
         let initialization = match initial_value {
             RawClassFieldInitialization::ClassBody(None) => {
                 ClassFieldInitialization::ClassBody(None)
@@ -1275,7 +1266,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             })
             | RawClassFieldInitialization::Uninitialized
-                if magically_initialized =>
+                // We consider fields to be always-initialized if it's defined within stub files.
+                // See https://github.com/python/typeshed/pull/13875 for reasoning.
+                if class.module_path().is_interface()
+                    // We consider fields to be always-initialized if it's annotated explicitly with `ClassVar`.
+                    || direct_annotation
+                        .as_ref()
+                        .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar)) =>
             {
                 ClassFieldInitialization::Magic
             }
