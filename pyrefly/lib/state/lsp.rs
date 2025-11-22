@@ -2399,21 +2399,22 @@ impl<'a> Transaction<'a> {
         let mut best: Option<(u8, TextSize, ExprSubscript, ExprStringLiteral)> = None;
         for node in nodes {
             if let AnyNodeRef::ExprSubscript(sub) = node
-                && let Expr::StringLiteral(lit) = sub.slice.as_ref() {
-                    let (priority, dist) = Self::string_literal_priority(position, lit.range());
-                    let should_update = match &best {
-                        Some((best_prio, best_dist, _, _)) => {
-                            priority < *best_prio || (priority == *best_prio && dist < *best_dist)
-                        }
-                        None => true,
-                    };
-                    if should_update {
-                        best = Some((priority, dist, sub.clone(), lit.clone()));
-                        if priority == 0 && dist == TextSize::from(0) {
-                            break;
-                        }
+                && let Expr::StringLiteral(lit) = sub.slice.as_ref()
+            {
+                let (priority, dist) = Self::string_literal_priority(position, lit.range());
+                let should_update = match &best {
+                    Some((best_prio, best_dist, _, _)) => {
+                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                    }
+                    None => true,
+                };
+                if should_update {
+                    best = Some((priority, dist, sub.clone(), lit.clone()));
+                    if priority == 0 && dist == TextSize::from(0) {
+                        break;
                     }
                 }
+            }
         }
         best.map(|(_, _, sub, lit)| (sub, lit))
     }

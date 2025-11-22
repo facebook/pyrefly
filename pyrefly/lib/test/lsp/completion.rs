@@ -138,7 +138,7 @@ fn get_test_report(
 }
 
 fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize) -> Vec<String> {
-    txn.completion(handle, position, ImportFormat::Absolute)
+    txn.completion(handle, position, ImportFormat::Absolute, true)
         .into_iter()
         .filter(|item| item.kind == Some(CompletionItemKind::FIELD))
         .map(|item| item.label)

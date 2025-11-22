@@ -2305,7 +2305,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let Ok(chain) = Vec1::try_from_vec(prefix.clone()) {
                 let swallower = self.error_swallower();
                 let value_ty = self.expr_infer(&item.value, &swallower);
-                info.update_for_assignment(&chain, Some(value_ty.clone()));
+                info.record_key_completion(&chain, Some(value_ty.clone()));
                 self.populate_dict_literal_facets(info, prefix, &item.value);
             }
             prefix.pop();

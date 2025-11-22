@@ -121,22 +121,6 @@ foo({"x": 1, "y": 2})
 );
 
 testcase!(
-    test_typed_dict_assignment_resets_literal,
-    r#"
-from typing import Literal, TypedDict, assert_type
-
-class TD(TypedDict):
-    items: int
-
-td: TD = {"items": 1}
-assert_type(td["items"], Literal[1])
-value: int = 2
-td["items"] = value
-assert_type(td["items"], int)
-    "#,
-);
-
-testcase!(
     test_typed_dict_callable,
     r#"
 from typing import TypedDict
