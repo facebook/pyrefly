@@ -697,6 +697,54 @@ impl<'a> ClassDisplayContext<'a> {
     }
 }
 
+/// Small helper describing the formatted code that should appear inside a hover block.
+///
+/// `body` is the snippet that will live inside the fenced code block, while
+/// `default_kind_label` lets callers know which `(kind)` prefix to use when the
+/// hover metadata can't provide one (e.g. when resolving a stub-only function).
+#[derive(Debug, Clone)]
+pub struct HoverCodeSnippet {
+    pub body: String,
+    pub default_kind_label: Option<&'static str>,
+}
+
+/// Format the string returned by `Type::as_hover_string()` so that callable types
+/// always resemble real Python function definitions. When `name` is provided we
+/// will synthesize a `def name(...): ...` signature if the rendered type only
+/// contains the parenthesized parameter list. This keeps IDE syntax highlighting
+/// working even when we fall back to hover strings built from metadata alone.
+///
+/// `display` is typically `Type::as_hover_string()`, but callers may pass their
+/// own rendering (for example, after expanding TypedDict kwargs).
+pub fn format_hover_code_snippet(
+    type_: &Type,
+    name: Option<&str>,
+    display: String,
+) -> HoverCodeSnippet {
+    if type_.is_function_type() {
+        let body = match name {
+            Some(name) => {
+                let trimmed = display.trim_start();
+                if trimmed.starts_with('(') {
+                    format!("def {}{}: ...", name, trimmed)
+                } else {
+                    display
+                }
+            }
+            None => display,
+        };
+        HoverCodeSnippet {
+            body,
+            default_kind_label: Some("(function) "),
+        }
+    } else {
+        HoverCodeSnippet {
+            body: display,
+            default_kind_label: None,
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::path::PathBuf;
