@@ -1130,7 +1130,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     },
                 )
             } else {
-                self.analyze_class_field_value(value, class, name, initial_value, errors)
+                self.analyze_class_field_value(
+                    value,
+                    class,
+                    name,
+                    matches!(initial_value, RawClassFieldInitialization::Method(..)),
+                    errors,
+                )
             };
 
         // A type inferred from a method body can potentially "capture" type annotations that
@@ -1496,7 +1502,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         value: &ExprOrBinding,
         class: &Class,
         name: &Name,
-        initial_value: &RawClassFieldInitialization,
+        inferrred_from_method: bool,
         errors: &ErrorCollector,
     ) -> (Type, Option<Annotation>, IsInherited) {
         match value {
@@ -1509,7 +1515,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     IsInherited::Maybe
                 };
                 let ty = if let Some(inherited_ty) = inherited_ty
-                    && matches!(initial_value, RawClassFieldInitialization::Method(_))
+                    && inferrred_from_method
                 {
                     // Inherit the previous type of the attribute if the only declaration-like
                     // thing the current class does is assign to the attribute in a method.
