@@ -1178,7 +1178,7 @@ from typing import assert_type, TypedDict, Literal
 class TD(TypedDict):
     items: int
 td: TD = {'items': 1}
-assert_type(td['items'], Literal[1])
+assert_type(td['items'], int)
     "#,
 );
 
