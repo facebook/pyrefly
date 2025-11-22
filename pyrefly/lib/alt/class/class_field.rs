@@ -1234,26 +1234,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(dm) = metadata.dataclass_metadata()
                     && let Expr::Call(call) = e
                 {
-                    let ExprCall {
-                        node_index: _,
-                        range: _,
-                        func,
-                        arguments,
-                    } = call;
-                    // We already type-checked this expression as part of computing the type for the ClassField,
-                    // so we can ignore any errors encountered here.
-                    let ignore_errors = self.error_swallower();
-                    let func_ty = self.expr_infer(func, &ignore_errors);
-                    let func_kind = func_ty.callee_kind();
-                    if let Some(func_kind) = func_kind
-                        && dm.field_specifiers.contains(&func_kind)
-                    {
-                        let flags =
-                            self.dataclass_field_keywords(&func_ty, arguments, dm, &ignore_errors);
-                        ClassFieldInitialization::ClassBody(Some(flags))
-                    } else {
-                        ClassFieldInitialization::ClassBody(None)
-                    }
+                    let flags = self.compute_dataclass_field_initialization(call, dm);
+                    ClassFieldInitialization::ClassBody(flags)
                 } else {
                     ClassFieldInitialization::ClassBody(None)
                 }
@@ -1646,6 +1628,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
                 IsInherited::Maybe,
             ),
+        }
+    }
+
+    /// Extract dataclass field keywords from a call expression if it's a dataclass field specifier.
+    fn compute_dataclass_field_initialization(
+        &self,
+        call: &ExprCall,
+        dm: &crate::alt::types::class_metadata::DataclassMetadata,
+    ) -> Option<DataclassFieldKeywords> {
+        let ExprCall {
+            node_index: _,
+            range: _,
+            func,
+            arguments,
+        } = call;
+        // We already type-checked this expression as part of computing the type for the ClassField,
+        // so we can ignore any errors encountered here.
+        let ignore_errors = self.error_swallower();
+        let func_ty = self.expr_infer(func, &ignore_errors);
+        let func_kind = func_ty.callee_kind();
+        if let Some(func_kind) = func_kind
+            && dm.field_specifiers.contains(&func_kind)
+        {
+            let flags = self.dataclass_field_keywords(&func_ty, arguments, dm, &ignore_errors);
+            Some(flags)
+        } else {
+            None
         }
     }
 
