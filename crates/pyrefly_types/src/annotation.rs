@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(
             Annotation {
                 qualifiers: Vec::new(),
-                ty: Some(Type::None)
+                ty: Some(Type::None),
             }
             .to_string(),
             "None"
@@ -108,7 +108,7 @@ mod tests {
         assert_eq!(
             Annotation {
                 qualifiers: vec![Qualifier::Required, Qualifier::ReadOnly],
-                ty: None
+                ty: None,
             }
             .to_string(),
             "Required[ReadOnly]"

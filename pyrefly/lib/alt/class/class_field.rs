@@ -30,6 +30,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -67,10 +68,13 @@ use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::keywords::DataclassFieldKeywords;
+use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
 use crate::types::read_only::ReadOnlyReason;
 use crate::types::stdlib::Stdlib;
+use crate::types::typed_dict::ExtraItem;
+use crate::types::typed_dict::ExtraItems;
 use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
 use crate::types::types::BoundMethod;
@@ -82,6 +86,27 @@ use crate::types::types::OverloadType;
 use crate::types::types::SuperObj;
 use crate::types::types::TArgs;
 use crate::types::types::Type;
+
+fn int_literal_from_type(ty: &Type) -> Option<LitInt> {
+    // We only currently enforce range constraints for literal defaults, so carve out
+    // the `Literal[int]` case and ignore everything else.
+    match ty {
+        Type::Literal(Lit::Int(lit)) => Some(lit.clone()),
+        _ => None,
+    }
+}
+
+fn expr_qualified_name(expr: &Expr) -> Option<Vec<String>> {
+    match expr {
+        Expr::Name(name) => Some(vec![name.id.to_string()]),
+        Expr::Attribute(attr) => {
+            let mut base = expr_qualified_name(&attr.value)?;
+            base.push(attr.attr.id.to_string());
+            Some(base)
+        }
+        _ => None,
+    }
+}
 
 /// The result of looking up an attribute access on a class (either as an instance or a
 /// class access, and possibly through a special case lookup such as a type var with a bound).
@@ -1041,6 +1066,90 @@ pub enum DataclassMember {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn class_field_default_type(
+        &self,
+        expr: &Expr,
+        value_ty: &Type,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if let Some(call) = expr.as_call_expr()
+            && let Some(parts) = expr_qualified_name(&call.func)
+            && parts.last().map(|s| s.as_str()) == Some("Field")
+        {
+            if let Some(arg0) = call.arguments.args.first() {
+                return self.expr_infer(arg0, errors);
+            }
+            if let Some(keyword) = call
+                .arguments
+                .keywords
+                .iter()
+                .find(|kw| kw.arg.as_ref().map(|n| n.id.as_str()) == Some("default"))
+            {
+                return self.expr_infer(&keyword.value, errors);
+            }
+        }
+        value_ty.clone()
+    }
+
+    fn check_pydantic_range_default(
+        &self,
+        field_name: &Name,
+        expr: &Expr,
+        value_ty: &Type,
+        keywords: &DataclassFieldKeywords,
+        errors: &ErrorCollector,
+    ) {
+        // This is the connective tissue that turns the static range information into actionable
+        // diagnostics.  Whenever a field has a class-body default, we compute the literal value
+        // and ensure it satisfies every bound coming from `Field(...)` keywords as well as from
+        // type aliases layered on the annotation.  If the metadata disagrees with the default we
+        // surface a precise `BadArgumentType` error that mirrors the runtime Pydantic failure.
+        let default_ty = self.class_field_default_type(expr, value_ty, errors);
+        let Some(value_lit) = int_literal_from_type(&default_ty) else {
+            return;
+        };
+        let emit_violation = |label: &str, constraint_ty: &Type| {
+            let Some(constraint_lit) = int_literal_from_type(constraint_ty) else {
+                return;
+            };
+            let comparison = value_lit.cmp(&constraint_lit);
+            let violates = match label {
+                "gt" => !matches!(comparison, std::cmp::Ordering::Greater),
+                "ge" => matches!(comparison, std::cmp::Ordering::Less),
+                "lt" => !matches!(comparison, std::cmp::Ordering::Less),
+                "le" => matches!(comparison, std::cmp::Ordering::Greater),
+                _ => false,
+            };
+            if violates {
+                self.error(
+                    errors,
+                    expr.range(),
+                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    format!(
+                        "Default value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
+                        self.for_display(default_ty.clone()),
+                        label,
+                        self.for_display(constraint_ty.clone()),
+                        field_name
+                    ),
+                );
+            }
+        };
+
+        if let Some(gt) = &keywords.gt {
+            emit_violation("gt", gt);
+        }
+        if let Some(ge) = &keywords.ge {
+            emit_violation("ge", ge);
+        }
+        if let Some(lt) = &keywords.lt {
+            emit_violation("lt", lt);
+        }
+        if let Some(le) = &keywords.le {
+            emit_violation("le", le);
+        }
+    }
+
     pub fn calculate_class_field(
         &self,
         class: &Class,
@@ -1107,6 +1216,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 false,
             ),
         };
+        let metadata = self.get_metadata_for_class(class);
 
         // Get the inferred value type if the value is an expression
         //
@@ -1157,18 +1267,144 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .as_ref()
                 .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
         };
-        let initialization =
+        let mut initialization =
             self.get_class_field_initialization(&metadata, initial_value, magically_initialized);
 
-        if let Some(annotation) = direct_annotation.as_ref() {
-            self.validate_direct_annotation(
-                annotation,
-                &metadata,
-                &initialization,
-                name,
-                range,
-                errors,
-            );
+        // Note: the subset check here is too conservative when it comes to modeling runtime behavior
+        // we want to check if the bound_val is coercible to the annotation type at runtime.
+        // statically, this could be a challenge, which is why we go with this more conservative approach for now.
+        if metadata.is_pydantic_base_model()
+            && let Some(annot) = &direct_annotation
+            && let ClassFieldInitialization::ClassBody(Some(DataclassFieldKeywords {
+                gt,
+                lt,
+                ge,
+                ..
+            })) = &initialization
+        {
+            let field_ty = annot.get_type();
+
+            for (bound_val, label) in [(gt, "gt"), (lt, "lt"), (ge, "ge")] {
+                let Some(val) = bound_val else { continue };
+                if !self.is_subset_eq(val, field_ty) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                        format!(
+                            "Pydantic `{label}` value is of type `{}` but the field is annotated with `{}`",
+                            self.for_display(val.clone()),
+                            self.for_display(field_ty.clone())
+                        ),
+                    );
+                }
+            }
+        }
+        if metadata.is_pydantic_base_model()
+            && let ClassFieldInitialization::ClassBody(Some(keywords)) = &initialization
+            && let RawClassFieldInitialization::ClassBody(Some(expr)) = initial_value
+        {
+            self.check_pydantic_range_default(name, expr, &value_ty, keywords, errors);
+        }
+        if metadata.is_typed_dict()
+            || metadata
+                .named_tuple_metadata()
+                .is_some_and(|m| m.elements.contains(name))
+        {
+            for q in &[Qualifier::Final, Qualifier::ClassVar] {
+                if direct_annotation
+                    .as_ref()
+                    .is_some_and(|ann| ann.has_qualifier(q))
+                {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        format!("`{q}` may not be used for TypedDict or NamedTuple members",),
+                    );
+                }
+            }
+        }
+        if !metadata.is_typed_dict() {
+            for q in &[
+                Qualifier::Required,
+                Qualifier::NotRequired,
+                Qualifier::ReadOnly,
+            ] {
+                if direct_annotation
+                    .as_ref()
+                    .is_some_and(|ann| ann.has_qualifier(q))
+                {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        format!("`{q}` may only be used for TypedDict members"),
+                    );
+                }
+            }
+        }
+        if let Some(td) = metadata.typed_dict_metadata()
+            && let Some(is_total) = td.fields.get(name)
+        {
+            // If this is a TypedDict field, make sure it is compatible with any inherited metadata
+            // restricting extra items.
+            let inherited_extra = metadata.base_class_objects().iter().find_map(|base| {
+                self.get_metadata_for_class(base)
+                    .typed_dict_metadata()
+                    .map(|m| (base, m.extra_items.clone()))
+            });
+            match inherited_extra {
+                Some((base, ExtraItems::Closed)) => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        format!(
+                            "Cannot extend closed TypedDict `{}` with extra item `{}`",
+                            base.name(),
+                            name
+                        ),
+                    );
+                }
+                Some((base, ExtraItems::Extra(ExtraItem { ty, read_only })))
+                    if let Some(annot) = &direct_annotation =>
+                {
+                    let field_ty = annot.get_type();
+                    if read_only {
+                        // The field type needs to be assignable to the extra_items type.
+                        if !self.is_subset_eq(field_ty, &ty) {
+                            self.error(
+                                errors, range, ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                            format!(
+                                "`{}` is not assignable to `extra_items` type `{}` of TypedDict `{}`",
+                                self.for_display(field_ty.clone()), self.for_display(ty), base.name()));
+                        }
+                    } else {
+                        // The field needs to be non-required and its type consistent with the extra_items type.
+                        let required = annot.has_qualifier(&Qualifier::Required)
+                            || (*is_total && !annot.has_qualifier(&Qualifier::NotRequired));
+                        if required {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                format!("TypedDict `{}` with non-read-only `extra_items` cannot be extended with required extra item `{}`", base.name(), name),
+                            );
+                        } else if !self.is_equal(field_ty, &ty) {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                format!(
+                                    "`{}` is not consistent with `extra_items` type `{}` of TypedDict `{}`",
+                                    self.for_display(field_ty.clone()), self.for_display(ty), base.name()),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
 
         let annotation = direct_annotation.as_ref().or(inherited_annotation.as_ref());

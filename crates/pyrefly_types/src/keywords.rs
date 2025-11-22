@@ -132,6 +132,7 @@ pub struct DataclassFieldKeywords {
     pub lt: Option<Type>,
     pub gt: Option<Type>,
     pub ge: Option<Type>,
+    pub le: Option<Type>,
     /// Whether we should strictly evaluate the type of the field
     pub strict: Option<bool>,
     /// If a converter callable is passed in, its first positional parameter
@@ -160,6 +161,7 @@ impl DataclassFieldKeywords {
             lt: None,
             gt: None,
             ge: None,
+            le: None,
             converter_param: None,
             strict: None,
         }

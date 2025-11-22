@@ -369,9 +369,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match binding {
             BindingAnnotation::AnnotateExpr(target, x, class_key) => {
                 let type_form_context = target.type_form_context();
-                let mut ann = self.expr_annotation(x, type_form_context, errors);
+                let mut annotation = self.expr_annotation(x, type_form_context, errors);
                 if let Some(class_key) = class_key
-                    && let Some(ty) = &mut ann.ty
+                    && let Some(ty) = &mut annotation.ty
                 {
                     let class = &*self.get_idx(*class_key);
                     if let Some(cls) = &class.0 {
@@ -382,7 +382,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Arc::new(AnnotationWithTarget {
                     target: target.clone(),
-                    annotation: ann,
+                    annotation,
                 })
             }
             BindingAnnotation::Type(target, x) => Arc::new(AnnotationWithTarget {
@@ -670,8 +670,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ann
             }
             _ => {
-                let ann_ty = self.expr_untype(x, type_form_context, errors);
-                if let Type::SpecialForm(special_form) = ann_ty
+                let inferred_ty = self.expr_infer(x, errors);
+                if type_form_context == TypeFormContext::BaseClassList
+                    && let Type::TypeAlias(ta) = &inferred_ty
+                    && ta.style == TypeAliasStyle::Scoped
+                {
+                    self.error(
+                        errors,
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                        format!(
+                            "Cannot use scoped type alias `{}` as a base class. Use a legacy type alias instead: `{}: TypeAlias = {}`",
+                            ta.name,
+                            ta.name,
+                            self.for_display(ta.as_type())
+                        ),
+                    );
+                    return Annotation::new_type(Type::any_error());
+                }
+                let ann_ty = self.untype(inferred_ty.clone(), x.range(), errors);
+                let ann_ty = self.validate_type_form(ann_ty, x.range(), type_form_context, errors);
+                if let Type::SpecialForm(special_form) = ann_ty.clone()
                     && !type_form_context.is_valid_unparameterized_annotation(special_form)
                 {
                     if special_form.can_be_subscripted() {
@@ -2864,6 +2883,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ty: Some(want),
                                 qualifiers: _,
                             },
+                        ..
                     } = &*self.get_idx(*k)
                 {
                     self.check_and_return_type(ty, want, x.range, errors, &|| {
@@ -2883,6 +2903,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ty: Some(want),
                                 qualifiers: _,
                             },
+                        ..
                     } = &*self.get_idx(*k)
                 {
                     self.check_and_return_type(ty, want, x.range, errors, &|| {
@@ -2904,6 +2925,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ty: Some(want),
                                 qualifiers: _,
                             },
+                        ..
                     } = &*self.get_idx(*k)
                 {
                     self.check_and_return_type(ty, want, x.range, errors, &|| {
@@ -3446,6 +3468,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ty: Some(want),
                                 qualifiers: _,
                             },
+                        ..
                     } = &*self.get_idx(*k)
                 {
                     self.check_and_return_type(ta.clone(), want, x.range, errors, &|| {
