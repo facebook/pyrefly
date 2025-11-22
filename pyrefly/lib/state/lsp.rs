@@ -62,7 +62,6 @@ use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
-use crate::lsp::wasm::inlay_hints::normalize_singleton_function_type_into_params;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -181,7 +180,7 @@ impl DefinitionMetadata {
 }
 
 #[derive(Debug)]
-enum CalleeKind {
+pub(crate) enum CalleeKind {
     // Function name
     Function(Identifier),
     // Range of the base expr + method name
@@ -213,7 +212,7 @@ where
 }
 
 #[derive(Debug)]
-enum PatternMatchParameterKind {
+pub(crate) enum PatternMatchParameterKind {
     // Name defined using `as`
     // ex: `x` in `case ... as x: ...`, or `x` in `case x: ...`
     AsName,
@@ -229,7 +228,7 @@ enum PatternMatchParameterKind {
 }
 
 #[derive(Debug)]
-enum IdentifierContext {
+pub(crate) enum IdentifierContext {
     /// An identifier appeared in an expression. ex: `x` in `x + 1`
     Expr(ExprContext),
     /// An identifier appeared as the name of an attribute. ex: `y` in `x.y`
@@ -293,9 +292,9 @@ enum IdentifierContext {
 }
 
 #[derive(Debug)]
-struct IdentifierWithContext {
-    identifier: Identifier,
-    context: IdentifierContext,
+pub(crate) struct IdentifierWithContext {
+    pub(crate) identifier: Identifier,
+    pub(crate) context: IdentifierContext,
 }
 
 #[derive(PartialEq, Eq)]
@@ -510,7 +509,11 @@ impl<'a> Transaction<'a> {
         None
     }
 
-    fn identifier_at(&self, handle: &Handle, position: TextSize) -> Option<IdentifierWithContext> {
+    pub(crate) fn identifier_at(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<IdentifierWithContext> {
         let mod_module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&mod_module, position);
         Self::identifier_from_covering_nodes(&covering_nodes)
@@ -2020,9 +2023,10 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        if let Some((callables, overload_idx, _)) = self.get_callables_from_call(handle, position)
+        if let Some((callables, overload_idx, _, _)) =
+            self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(overload_idx).cloned()
-            && let Some(params) = normalize_singleton_function_type_into_params(callable)
+            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
         {
             for param in params {
                 match param {
@@ -2354,10 +2358,11 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        if let Some((callables, chosen_overload_index, active_argument)) =
+        if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(chosen_overload_index)
-            && let Some(params) = normalize_singleton_function_type_into_params(callable.clone())
+            && let Some(params) =
+                Self::normalize_singleton_function_type_into_params(callable.clone())
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
