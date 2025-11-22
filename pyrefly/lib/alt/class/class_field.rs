@@ -1158,8 +1158,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         },
                     )
                 } else {
-                    let (value_ty, inherited_annotation, is_inherited) =
+                    let (mut value_ty, inherited_annotation, is_inherited) =
                         self.analyze_class_field_value(value, class, name, true, errors);
+                    if matches!(method.instance_or_class, MethodSelfKind::Instance) {
+                        value_ty = self.check_and_sanitize_type_parameters(
+                            class, value_ty, name, range, errors,
+                        );
+                    }
                     (
                         initial_value,
                         false,
@@ -1218,21 +1223,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     is_inherited,
                 )
             }
-        };
-
-        // A type inferred from a method body can potentially "capture" type annotations that
-        // are method-scope. We need to complain if this happens and fall back to gradual types.
-        let value_ty = match initial_value {
-            RawClassFieldInitialization::ClassBody(_)
-            | RawClassFieldInitialization::Uninitialized
-            | RawClassFieldInitialization::Method(MethodThatSetsAttr {
-                instance_or_class: MethodSelfKind::Class,
-                ..
-            }) => value_ty,
-            RawClassFieldInitialization::Method(MethodThatSetsAttr {
-                instance_or_class: MethodSelfKind::Instance,
-                ..
-            }) => self.check_and_sanitize_type_parameters(class, value_ty, name, range, errors),
         };
 
         let magically_initialized = {
