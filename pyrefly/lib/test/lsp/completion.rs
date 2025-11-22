@@ -87,7 +87,7 @@ fn get_test_report(
                     report.push_str("[DEPRECATED] ");
                 }
                 report.push_str(&label);
-                if let Some(detail) = detail {
+                if let Some(detail) = &detail {
                     report.push_str(": ");
                     report.push_str(&detail);
                 }
@@ -100,7 +100,7 @@ fn get_test_report(
                     report.push_str(" with text edit: ");
                     report.push_str(&format!("{:?}", &text_edit));
                 }
-                if let Some(documentation) = documentation {
+                if let Some(ref documentation) = documentation {
                     report.push('\n');
                     match documentation {
                         lsp_types::Documentation::String(s) => {
