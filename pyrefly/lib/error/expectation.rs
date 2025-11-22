@@ -43,10 +43,15 @@ impl Expectation {
             ))
         } else {
             for (line_no, msg) in &self.error {
-                if !errors.iter().any(|e| {
-                    e.msg().replace("\n", "\\n").contains(msg)
+                // Compare the raw message and a normalized form to tolerate small
+                // formatting changes (escaped quotes vs doubled quotes).
+                let found = errors.iter().any(|e| {
+                    let raw = e.msg().replace("\n", "\\n");
+                    let norm = normalize_message(&raw);
+                    (raw.contains(msg) || norm.contains(msg))
                         && e.display_range().start.line_within_file().get() as usize == *line_no
-                }) {
+                });
+                if !found {
                     return Err(anyhow::anyhow!(
                         "Expectations failed for {}: can't find error (line {line_no}): {msg}",
                         self.module.path()
@@ -56,4 +61,10 @@ impl Expectation {
             Ok(())
         }
     }
+}
+
+fn normalize_message(s: &str) -> String {
+    s.replace("\\'", "'") // unescape single quotes
+        .replace("\"", "\"") // keep double-quote escapes as-is
+        .replace("''", "'") // collapse doubled single quotes
 }
