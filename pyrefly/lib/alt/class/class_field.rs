@@ -1232,13 +1232,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             RawClassFieldInitialization::ClassBody(Some(e)) => {
                 // If this field was created via a call to a dataclass field specifier, extract field flags from the call.
                 if let Some(dm) = metadata.dataclass_metadata()
-                    && let Expr::Call(ExprCall {
+                    && let Expr::Call(call) = e
+                {
+                    let ExprCall {
                         node_index: _,
                         range: _,
                         func,
                         arguments,
-                    }) = e
-                {
+                    } = call;
                     // We already type-checked this expression as part of computing the type for the ClassField,
                     // so we can ignore any errors encountered here.
                     let ignore_errors = self.error_swallower();
