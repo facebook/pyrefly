@@ -29,6 +29,7 @@ use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::class_metadata::DataclassMetadata;
+use crate::alt::types::pydantic::PydanticModelKind;
 use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
 use crate::binding::pydantic::LT;
@@ -50,7 +51,6 @@ use crate::types::display::ClassDisplayContext;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
-use crate::types::tuple::Tuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 
@@ -89,8 +89,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.get_pydantic_root_model_type_via_mro(cls, &metadata)
             {
                 self.get_pydantic_root_model_init(cls, root_model_type, has_strict)
+            } else if metadata.is_pydantic_base_model() {
+                // Pydantic models with RootModel fields need type expansion
+                let transform_type: &dyn Fn(Type) -> Type = &|ty: Type| {
+                    if let Some(root_type) = self.extract_root_model_inner_type(&ty) {
+                        self.union(ty, root_type)
+                    } else {
+                        ty
+                    }
+                };
+
+                // For BaseSettings, all fields are treated as having defaults
+                // since they can be populated from environment variables
+                let force_optional = matches!(
+                    metadata.pydantic_model_kind(),
+                    Some(PydanticModelKind::BaseSettings)
+                );
+
+                self.get_dataclass_init(
+                    cls,
+                    dataclass,
+                    dataclass.kws.strict,
+                    transform_type,
+                    force_optional,
+                    errors,
+                )
             } else {
-                self.get_dataclass_init(cls, dataclass, dataclass.kws.strict, errors)
+                // Regular dataclasses: no type transformation
+                self.get_dataclass_init(
+                    cls,
+                    dataclass,
+                    dataclass.kws.strict,
+                    &|ty| ty,
+                    false,
+                    errors,
+                )
             };
             fields.insert(dunder::INIT, init_method);
         }
@@ -191,7 +224,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut params = Vec::new();
         for (name, field, _) in self.iter_fields(cls, dataclass_metadata, true) {
             if field.is_init_var() {
-                params.push(self.as_param(&field, &name, false, false, true, None, errors));
+                params.push(self.as_param(
+                    &field,
+                    &name,
+                    false,
+                    false,
+                    true,
+                    None,
+                    &|ty| ty,
+                    errors,
+                ));
             }
         }
         let want = Type::Callable(Box::new(Callable::list(
@@ -454,6 +496,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         dataclass: &DataclassMetadata,
         strict_default: bool,
+        param_type_transform: &dyn Fn(Type) -> Type,
+        force_optional: bool,
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         let mut params = vec![self.class_self_param(cls, false)];
@@ -461,7 +505,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (name, field, field_flags) in self.iter_fields(cls, dataclass, true) {
             let strict = field_flags.strict.unwrap_or(strict_default);
             if field_flags.init {
-                let has_default = field_flags.default
+                let has_default = force_optional
+                    || field_flags.default
                     || (field_flags.init_by_name && field_flags.init_by_alias.is_some());
                 let is_kw_only = field_flags.is_kw_only();
                 if !is_kw_only {
@@ -490,6 +535,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         is_kw_only,
                         strict,
                         field_flags.converter_param.clone(),
+                        param_type_transform,
                         errors,
                     ));
                 }
@@ -501,6 +547,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         is_kw_only,
                         strict,
                         field_flags.converter_param.clone(),
+                        param_type_transform,
                         errors,
                     ));
                 }
@@ -539,7 +586,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
                 .collect()
         };
-        let ty = Type::Tuple(Tuple::Concrete(ts));
+        let ty = Type::concrete_tuple(ts);
         ClassSynthesizedField::new(ty)
     }
 
@@ -553,7 +600,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .map(|(name, _, _)| Type::Literal(Lit::Str(name.as_str().into())))
             .collect();
-        let ty = Type::Tuple(Tuple::Concrete(ts));
+        let ty = Type::concrete_tuple(ts);
         ClassSynthesizedField::new(ty)
     }
 

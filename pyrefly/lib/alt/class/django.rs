@@ -23,7 +23,6 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
-use crate::alt::class::class_field::WithDefiningClass;
 use crate::alt::class::enums::VALUE_PROP;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -41,6 +40,9 @@ const PK: Name = Name::new_static("pk");
 const AUTO_FIELD: Name = Name::new_static("AutoField");
 const FOREIGN_KEY: Name = Name::new_static("ForeignKey");
 const NULL: Name = Name::new_static("null");
+const MANY_TO_MANY_FIELD: Name = Name::new_static("ManyToManyField");
+const MODEL: Name = Name::new_static("Model");
+const MANYRELATEDMANAGER: Name = Name::new_static("ManyRelatedManager");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_django_field_type(
@@ -97,27 +99,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
 
-        // Check if this is a ForeignKey field
-        if self.is_foreign_key_field(field)
-            && field_name.is_some()
+        if field_name.is_some()
             && let Some(e) = initial_value_expr
             && let Some(call_expr) = e.as_call_expr()
             && let Some(to_expr) = call_expr.arguments.args.first()
+            && let Some(model_type) = self.resolve_target(to_expr)
         {
-            // Resolve the expression to a type and convert to instance type
-            let related_model_type = self.resolve_foreign_key_target(to_expr, class)?;
+            if self.is_foreign_key_field(field) {
+                // If nullable, union with None
+                if self.is_django_field_nullable(call_expr) {
+                    return Some(self.union(model_type, Type::None));
+                } else {
+                    return Some(model_type);
+                }
+            }
 
-            // If nullable, union with None
-            if self.is_django_field_nullable(call_expr) {
-                return Some(self.union(related_model_type, Type::None));
-            } else {
-                return Some(related_model_type);
+            if self.is_many_to_many_field(field) {
+                // TODO: check if nullability applies to this case as well
+                return self.get_manager_type(model_type);
             }
         }
 
         // Default: use _pyi_private_get_type from the field class
         self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
-            .map(|member| member.value.ty())
+            .map(|field| field.ty())
     }
 
     /// Check if a class inherits from Django's Field class
@@ -129,20 +134,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
-    fn resolve_foreign_key_target(&self, to_expr: &Expr, class: &Class) -> Option<Type> {
-        // Extract the model name from the expression
-        let model_name = match to_expr {
-            // Direct name reference. Ex: ForeignKey(Reporter, ...)
-            Expr::Name(name_expr) => name_expr.id.clone(),
-            // TODO: handle self references and forward references
+    // Get ManyRelatedManager class from django stubs
+    fn get_manager_type(&self, target_model_type: Type) -> Option<Type> {
+        let django_related_module = ModuleName::django_models_fields_related_descriptors();
+        let django_related_module_exports = self.exports.get(django_related_module).finding()?;
+        let manager_class_type = if django_related_module_exports
+            .exports(self.exports)
+            .contains_key(&MANYRELATEDMANAGER)
+        {
+            self.get_from_export(django_related_module, None, &KeyExport(MANYRELATEDMANAGER))
+        } else {
+            return None;
+        };
+
+        // Extract the Class from ClassDef
+        let manager_class = match manager_class_type.as_ref() {
+            Type::ClassDef(cls) => cls,
             _ => return None,
         };
 
-        // Look up the model in the current module and convert to instance type
-        let export_key = KeyExport(model_name);
-        let related_model_type =
-            self.get_from_export(class.module_name(), Some(class.module_path()), &export_key);
-        Some(self.class_def_to_instance_type(&related_model_type))
+        // Get Model class for the through parameter
+        let model_class =
+            self.get_from_export(ModuleName::django_models(), None, &KeyExport(MODEL));
+
+        let model_instance_type = self.class_def_to_instance_type(&model_class);
+
+        // Create type arguments vector: [TargetModel, Model]
+        let targs_vec = vec![target_model_type, model_instance_type];
+
+        // Use specialize to create ManyRelatedManager for the specific classes we defined
+        let manager_type = self.specialize(
+            manager_class,
+            targs_vec,
+            TextRange::default(),
+            &self.error_swallower(),
+        );
+
+        Some(manager_type)
+    }
+
+    fn resolve_target(&self, to_expr: &Expr) -> Option<Type> {
+        match to_expr {
+            // Use expr_infer to resolve the name in the current scope
+            Expr::Name(_) => {
+                let model_type = self.expr_infer(to_expr, &self.error_swallower());
+                Some(self.class_def_to_instance_type(&model_type))
+            }
+            // TODO: handle self references and forward references (string literals case) for foreign keys specifically
+            // we may have to extend this function to handle different kinds of fields in the future
+            _ => None,
+        }
     }
 
     fn class_def_to_instance_type(&self, ty: &Type) -> Type {
@@ -157,6 +198,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         field.has_toplevel_qname(
             ModuleName::django_models_fields_related().as_str(),
             FOREIGN_KEY.as_str(),
+        )
+    }
+
+    pub fn is_many_to_many_field(&self, field: &Class) -> bool {
+        field.has_toplevel_qname(
+            ModuleName::django_models_fields_related().as_str(),
+            MANY_TO_MANY_FIELD.as_str(),
         )
     }
 
@@ -197,10 +245,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Also include the type of __empty__ field if it exists, since it contributes to label types
         let empty_name = Name::new_static("__empty__");
-        let has_empty = if let Some(WithDefiningClass { value, .. }) =
-            self.get_class_member(cls, &empty_name)
-        {
-            label_types.push(value.ty());
+        let has_empty = if let Some(field) = self.get_class_member(cls, &empty_name) {
+            label_types.push(field.ty());
             true
         } else {
             false
@@ -216,6 +262,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let base_value_type = base_value_attr
             .and_then(|attr| {
                 self.resolve_get_class_attr(
+                    &VALUE_PROP,
                     attr,
                     TextRange::default(),
                     &self.error_swallower(),
@@ -241,7 +288,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (
                 CHOICES,
                 self.stdlib
-                    .list(Type::Tuple(Tuple::Concrete(vec![values_type, label_type])))
+                    .list(Type::concrete_tuple(vec![values_type, label_type]))
                     .to_type(),
             ),
         ];

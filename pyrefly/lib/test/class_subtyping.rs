@@ -287,8 +287,8 @@ class C(A, B): # E: Field `x` has inconsistent types inherited from multiple bas
 class D:
     x: int
 
-# Here we repeat the error on E, despite the error already being reported in C.
-class E(C, D): # E: Field `x` has inconsistent types inherited from multiple base classes
+# We do not report the error for E, since it has already been reported on C
+class E(C, D):
     pass
 "#,
 );
@@ -305,14 +305,13 @@ class C(A, B):
 class D:
     x: int
 
-# Here we still report the error on E, despite the field being overridden in C.
-class E(C, D): # E: Field `x` has inconsistent types inherited from multiple base classes
+# We do not report the error on E, since we already reported an error on C
+class E(C, D):
     pass
 "#,
 );
 
 testcase!(
-    bug = "This is currently not handled",
     test_multiple_inheritance_incompatible_methods,
     r#"
 class Foo:
@@ -320,7 +319,20 @@ class Foo:
 class Bar:
     def foo(self) -> str: ...
 
-class Both(Foo, Bar): # Expect error here
+class Both(Foo, Bar): # E: Field `foo` has inconsistent types inherited from multiple base classes
+    ...
+"#,
+);
+
+testcase!(
+    test_multiple_inheritance_compatible_generic_methods,
+    r#"
+class Foo[T1]:
+    def foo(self) -> T1: ...
+class Bar[T2]:
+    def foo(self) -> T2: ...
+
+class Both[T](Foo[T], Bar[T]): # Should have no error here
     ...
 "#,
 );
@@ -335,5 +347,52 @@ class Bar:
 
 class Both(Foo, Bar): # No error here, because __init__ is special
     ...
+"#,
+);
+
+testcase!(
+    test_multiple_inheritance_read_write,
+    r#"
+class Foo:
+    x: int
+    @property
+    def y(self) -> int:
+        return 1
+class Bar:
+    x: float
+    @property
+    def y(self) -> float:
+        return 1
+
+# For read-write fields, the inherited type from each parent should be assignable to the intersection
+class Both(Foo, Bar):  # E: Field `x` is declared `float`
+    ...
+"#,
+);
+
+testcase!(
+    test_multiple_inheritance_property,
+    r#"
+from typing import overload
+
+class A:
+    @property
+    def x(self, /) -> int: ...
+    @x.setter
+    def x(self, x: int, /) -> None: ...
+
+class B:
+    @property
+    def x(self, /) -> int: ...
+
+class C(A, B): ...
+
+class D:
+    @property
+    def x(self, /) -> str: ...
+    @x.setter
+    def x(self, x: str, /) -> None: ...
+
+class E(D, B): ...  # E: Field `x` has inconsistent types inherited from multiple base classes
 "#,
 );

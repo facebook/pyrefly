@@ -7,6 +7,7 @@
 
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lock::Mutex;
+use tempfile::NamedTempFile;
 
 pub fn set_readonly(path: &Path, value: bool) -> anyhow::Result<()> {
     let mut permissions = fs::metadata(path)?.permissions();
@@ -61,13 +63,46 @@ pub trait BundledStub {
                 fs_anyhow::create_dir_all(parent)?;
             }
 
-            // Write the file and set it as read-only in a single logical operation
-            let _ = set_readonly(&file_path, false); // Might fail (e.g. file doesn't exist)
-            fs::write(&file_path, contents.as_bytes())
-                .with_context(|| format!("When writing file `{}`", file_path.display()))?;
+            // Check if the file already exists. If it does, assume another process has already
+            // written the file and continue.
+            if fs::exists(&file_path).with_context(|| {
+                format!("When checking existence of file `{}`", file_path.display())
+            })? {
+                continue;
+            }
 
-            // We try and make the files read-only, since editing them in the IDE won't update.
-            let _ = set_readonly(&file_path, true); // If this fails, not a big deal
+            // File writes are not atomic, so we write to a tempfile then atomically _rename_ to
+            // the destination file.
+            let mut temp_file = NamedTempFile::new().with_context(|| {
+                format!("When creating temp file for `{}`", file_path.display())
+            })?;
+            temp_file.write_all(contents.as_bytes()).with_context(|| {
+                format!("When writing to temp file for `{}`", file_path.display())
+            })?;
+            temp_file.flush().with_context(|| {
+                format!("When flushing to temp file for `{}`", file_path.display())
+            })?;
+
+            // If we can't persist (atomically rename) the file, check to see if the file exists.
+            // If so, assume another process has written the file and made it readonly, causing
+            // the error.
+            match temp_file.persist(&file_path) {
+                Ok(_) => {
+                    // Make file readonly as a guardrail, since editing the bundled typeshed files
+                    // can lead to surprising behavior. This can fail, but we ignore errors because
+                    // this is not critical.
+                    let _ = set_readonly(&file_path, true);
+                    Ok(())
+                }
+                Err(e) => {
+                    if fs::exists(&file_path).is_ok_and(|b| b) {
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
+                }
+            }
+            .with_context(|| format!("When persisting temp file to `{}`", file_path.display()))?;
         }
 
         Self::config()
@@ -78,6 +113,6 @@ pub trait BundledStub {
             })?;
         Ok(())
     }
-    fn get_path_name(&self) -> &'static str;
+    fn get_path_name(&self) -> String;
     fn load_map(&self) -> impl Iterator<Item = (&PathBuf, &Arc<String>)>;
 }

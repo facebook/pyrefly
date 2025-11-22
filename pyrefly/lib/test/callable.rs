@@ -1028,3 +1028,80 @@ def _(flag: bool):
     assert_type(c[0], bytes | str)
     "#,
 );
+
+testcase!(
+    test_unknown_varargs_kwargs,
+    r#"
+from typing import Any, assert_type
+def f(*args, **kwargs):
+    assert_type(args, tuple[Any, ...])
+    assert_type(kwargs, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_bad_varargs_kwargs,
+    r#"
+from typing import Annotated, Any, assert_type
+def f(*args: Annotated, **kwargs: Annotated): # E: # E:
+    assert_type(args, tuple[Any, ...])
+    assert_type(kwargs, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_isinstance_narrow,
+    r#"
+from typing import assert_type, reveal_type, Any, Callable
+def f(x: object):
+    if isinstance(x, Callable):
+        assert_type(x, Callable[..., Any])
+def g(x: int):
+    if isinstance(x, Callable):
+        reveal_type(x)  # E: ((...) -> Unknown) & int
+    "#,
+);
+
+testcase!(
+    test_isinstance_error,
+    r#"
+from typing import Any, Callable
+def f(x: object):
+    isinstance(x, Callable[..., Any])  # E: Expected class object, got `type[(...) -> Any]`
+    "#,
+);
+
+testcase!(
+    test_unbound_name_ok_in_lambda,
+    r#"
+x: int
+f1 = lambda: x
+f2 = lambda: [x for _ in range(10)]
+    "#,
+);
+
+testcase!(
+    test_unknown_name_error_in_lambda,
+    r#"
+f = lambda: x  # E: Could not find name `x`
+    "#,
+);
+
+testcase!(
+    test_unbound_module_name_ok_in_def,
+    r#"
+from typing import assert_type
+x: int
+def f():
+    assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_unbound_local_name_error_in_def,
+    r#"
+def f():
+    x: int
+    print(x)  # E: `x` is uninitialized
+    "#,
+);

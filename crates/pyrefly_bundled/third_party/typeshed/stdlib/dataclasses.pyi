@@ -255,7 +255,13 @@ class Field(Generic[_T]):
         ) -> None: ...
 
     def __set_name__(self, owner: Type[Any], name: str) -> None: ...
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """
+        Represent a PEP 585 generic type
+
+        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        """
+        ...
 
 # NOTE: Actual return type is 'Field[_T]', but we want to help type checkers
 # to understand the magic that happens at runtime.

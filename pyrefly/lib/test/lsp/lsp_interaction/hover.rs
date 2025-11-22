@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Response;
 use lsp_types::Url;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -22,19 +22,61 @@ fn test_hover_basic() {
         ..Default::default()
     });
 
-    interaction.server.did_open("bar.py");
-    interaction.server.hover("bar.py", 7, 5);
+    interaction.client.did_open("bar.py");
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .hover("bar.py", 7, 5)
+        .expect_response(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "```python\n(variable) foo: Literal[3]\n```",
             }
-        })),
-        error: None,
+        }));
+
+    interaction.shutdown();
+}
+
+#[test]
+fn hover_on_attr_of_pyi_assignment_shows_pyi_type() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        ..Default::default()
     });
+    let file = "attributes_of_py/src_with_assignments.py";
+    interaction.client.did_open(file);
+
+    interaction
+        .client
+        .hover(file, 8, 8)
+        .expect_hover_response_with_markup(|x| x.is_some_and(|x| x.contains("y: int")));
+
+    interaction.shutdown();
+}
+
+#[test]
+fn hover_attribute_prefers_py_docstring_over_pyi() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    let file = "attributes_of_py_docstrings/src.py";
+    interaction.client.did_open(file);
+    interaction
+        .client
+        .hover(file, 9, 10)
+        .expect_hover_response_with_markup(|x| {
+            x.is_some_and(|x| {
+                // a link to the .pyi file proves that the type is coming from the .pyi
+                x.contains("Docstring coming from the .py implementation.") && x.contains("lib.pyi")
+            })
+        });
 
     interaction.shutdown();
 }
@@ -49,21 +91,19 @@ fn test_hover_import() {
         ..Default::default()
     });
 
-    interaction.server.did_open("foo.py");
-    interaction.server.hover("foo.py", 6, 16);
+    interaction.client.did_open("foo.py");
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .hover("foo.py", 6, 16)
+        .expect_response(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
                     + Url::from_file_path(root.path().join("basic/bar.py")).unwrap().as_str()
                     + "#L7,7)",
             }
-        })),
-        error: None,
-    });
+        }));
 
     interaction.shutdown();
 }
@@ -78,72 +118,62 @@ fn test_hover_suppressed_error() {
         ..Default::default()
     });
 
-    interaction.server.did_open("suppression.py");
+    interaction.client.did_open("suppression.py");
 
     // Standalone suppression, next line has a suppressed error
-    interaction.server.hover("suppression.py", 5, 10);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .hover("suppression.py", 5, 10)
+        .expect_response(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "**Suppressed Error**\n\n`unsupported-operation`: `+` is not supported between `Literal[1]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
             }
-        })),
-        error: None,
-    });
+        }));
 
     // Trailing suppression, same line has a suppressed error
-    interaction.server.hover("suppression.py", 8, 15);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .hover("suppression.py", 8, 15)
+        .expect_response(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "**Suppressed Error**\n\n`unsupported-operation`: `+` is not supported between `Literal[2]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
             }
-        })),
-        error: None,
-    });
+        }));
 
     // Trailing suppression, suppressed error does not match
-    interaction.server.hover("suppression.py", 10, 15);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .hover("suppression.py", 10, 15)
+        .expect_response(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "**No errors suppressed by this ignore**\n\n_The ignore comment may have an incorrect error code or there may be no errors on this line._",
             }
-        })),
-        error: None,
-    });
+        }));
 
     // Trailing suppression, next line has an unsuppressed error
-    interaction.server.hover("suppression.py", 12, 15);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .hover("suppression.py", 12, 15)
+        .expect_response(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "**No errors suppressed by this ignore**\n\n_The ignore comment may have an incorrect error code or there may be no errors on this line._",
             }
-        })),
-        error: None,
-    });
+        }));
 
     // Standalone suppression, no errors
-    interaction.server.hover("suppression.py", 15, 10);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .hover("suppression.py", 15, 10)
+        .expect_response(json!({
             "contents": {
                 "kind": "markdown",
                 "value": "**No errors suppressed by this ignore**\n\n_The ignore comment may have an incorrect error code or there may be no errors on this line._",
             }
-        })),
-        error: None,
-    });
+        }));
 
     interaction.shutdown();
 }

@@ -11,7 +11,9 @@ if sys.version_info >= (3, 11):
     class SimpleReader(abc.ABC):
         @property
         @abc.abstractmethod
-        def package(self) -> str: ...
+        def package(self) -> str:
+            """The name of the package for which this reader loads resources."""
+            ...
         @abc.abstractmethod
         def children(self) -> list[SimpleReader]: ...
         @abc.abstractmethod

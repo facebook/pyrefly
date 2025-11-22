@@ -8,7 +8,6 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::Path;
-use std::path::PathBuf;
 
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
@@ -16,6 +15,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_util::watch_pattern::WatchPattern;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -92,11 +92,11 @@ impl SourceDatabase for MapDatabase {
         Ok(false)
     }
 
-    fn get_critical_files(&self) -> SmallSet<PathBuf> {
+    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>> {
         self.0
             .values()
             .flatten()
-            .map(|p| p.as_path().to_path_buf())
+            .map(|p| WatchPattern::file(p.as_path().to_path_buf()))
             .collect()
     }
 

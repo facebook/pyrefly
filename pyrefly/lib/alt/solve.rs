@@ -44,6 +44,7 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
@@ -63,6 +64,7 @@ use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingDecoratedFunction;
+use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BindingTParams;
@@ -98,6 +100,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
+use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::solver::solver::SubsetError;
@@ -1491,6 +1494,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Arc::new(type_info)
     }
 
+    /// Force the outermost type, without deep-forcing. Without this, narrowing behavior
+    /// is unpredictable and has undesirable behavior particularly in loop recursion.
+    pub fn force_for_narrowing(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Var(v) => self.force_for_narrowing(&self.solver().force_var(*v)),
+            _ => ty.clone(),
+        }
+    }
+
     pub fn expand_vars_mut(&self, ty: &mut Type) {
         // Replace any solved recursive variables with their answers.
         self.solver().expand_vars_mut(ty);
@@ -1658,6 +1670,71 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Arc::new(EmptyAnswer)
     }
 
+    /// Check if a module path should be skipped for indexing purposes.
+    /// Skips typeshed (bundled stdlib and third-party stubs) and site-packages (external libraries).
+    fn should_skip_module_for_indexing(
+        module_path: &pyrefly_python::module_path::ModulePath,
+    ) -> bool {
+        use pyrefly_python::module_path::ModulePathDetails;
+        match module_path.details() {
+            ModulePathDetails::BundledTypeshed(_)
+            | ModulePathDetails::BundledTypeshedThirdParty(_) => true,
+            ModulePathDetails::FileSystem(path)
+            | ModulePathDetails::Memory(path)
+            | ModulePathDetails::Namespace(path) => {
+                // Skip site-packages
+                path.to_string_lossy().contains("site-packages")
+            }
+        }
+    }
+
+    /// Populate parent methods map for find-references on reimplementations.
+    /// This is done once per class before checking individual fields.
+    /// Uses MRO to walk ALL ancestors (not just direct bases).
+    /// Only adds if the ancestor directly declares the field.
+    /// Skips library code to keep the index focused on user source code.
+    fn populate_parent_methods_map(&self, cls: &Class) {
+        if Self::should_skip_module_for_indexing(cls.module().path()) {
+            return;
+        }
+
+        let mro = self.get_mro_for_class(cls);
+        for (field_name, _field) in self.get_class_field_map(cls).iter() {
+            // Apply the same filters as check_consistent_override_for_field.
+            // Skip special methods that don't participate in override checks:
+            // - Object construction: __new__, __init__, __init_subclass__
+            // - __hash__ (often overridden to None)
+            // - __call__ (too many typeshed issues)
+            // - Private/mangled attributes (start with __ but don't end with __)
+            if field_name == &dunder::NEW
+                || field_name == &dunder::INIT
+                || field_name == &dunder::INIT_SUBCLASS
+                || field_name == &dunder::HASH
+                || field_name == &dunder::CALL
+                || Ast::is_mangled_attr(field_name)
+            {
+                continue;
+            }
+
+            if let Some(child_range) = cls.field_decl_range(field_name) {
+                for ancestor in mro.ancestors(self.stdlib) {
+                    if let Some(ancestor_range) =
+                        ancestor.class_object().field_decl_range(field_name)
+                    {
+                        let ancestor_module_path = ancestor.class_object().module().path();
+                        if !Self::should_skip_module_for_indexing(ancestor_module_path) {
+                            self.current().add_parent_method_mapping(
+                                child_range,
+                                ancestor_module_path.dupe(),
+                                ancestor_range,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn solve_consistent_override_check(
         &self,
         binding: &BindingConsistentOverrideCheck,
@@ -1665,6 +1742,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<EmptyAnswer> {
         if let Some(cls) = &self.get_idx(binding.class_key).0 {
             let class_bases = self.get_base_types_for_class(cls);
+
+            self.populate_parent_methods_map(cls);
+
             for (name, field) in self.get_class_field_map(cls).iter() {
                 self.check_consistent_override_for_field(
                     cls,
@@ -2025,7 +2105,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match binding {
             Binding::Forward(k) => self.get_idx(*k).arc_clone(),
             Binding::Narrow(k, op, range) => {
-                self.narrow(self.get_idx(*k).as_ref(), op, *range, errors)
+                self.narrow(self.get_idx(*k).as_ref(), op, range.range(), errors)
             }
             Binding::Phi(join_style, ks) => {
                 if ks.len() == 1 {
@@ -2318,64 +2398,69 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let base = self.expr_infer(&subscript.value, errors);
         let slice_ty = self.expr_infer(&subscript.slice, errors);
         self.distribute_over_union(&base, |base| {
-            match (base, &slice_ty) {
-                (Type::TypedDict(typed_dict), Type::Literal(Lit::Str(field_name))) => {
-                    let field_name = Name::new(field_name);
-                    self.check_assign_to_typed_dict_literal_subscript(
-                        typed_dict,
-                        &field_name,
-                        value,
-                        subscript.slice.range(),
-                        subscript.range(),
-                        errors,
-                    )
-                }
-                (Type::TypedDict(typed_dict), Type::ClassType(cls))
-                    if cls.is_builtin("str")
-                        && let Some(field_ty) =
-                            self.get_typed_dict_value_type_as_builtins_dict(typed_dict) =>
-                {
-                    self.check_assign_to_typed_dict_field(
-                        typed_dict.name(),
-                        None,
-                        &field_ty,
-                        false,
-                        value,
-                        subscript.slice.range(),
-                        subscript.range(),
-                        errors,
-                    )
-                }
-                (_, _) => {
-                    let call_setitem = |value_arg| {
-                        self.call_method_or_error(
-                            base,
-                            &dunder::SETITEM,
-                            subscript.range,
-                            &[CallArg::ty(&slice_ty, subscript.slice.range()), value_arg],
-                            &[],
+            self.distribute_over_union(&slice_ty, |key| {
+                match (base, key) {
+                    (Type::TypedDict(typed_dict), Type::Literal(Lit::Str(field_name))) => {
+                        let field_name = Name::new(field_name);
+                        self.check_assign_to_typed_dict_literal_subscript(
+                            typed_dict,
+                            &field_name,
+                            value,
+                            subscript.slice.range(),
+                            subscript.range(),
                             errors,
-                            Some(&|| ErrorContext::SetItem(self.for_display(base.clone()))),
                         )
-                    };
-                    match value {
-                        ExprOrBinding::Expr(e) => {
-                            call_setitem(CallArg::expr(e));
-                            // We already emit errors for `e` during `call_method_or_error`
-                            self.expr_infer(
-                                e,
-                                &ErrorCollector::new(errors.module().clone(), ErrorStyle::Never),
+                    }
+                    (Type::TypedDict(typed_dict), Type::ClassType(cls))
+                        if cls.is_builtin("str")
+                            && let Some(field_ty) =
+                                self.get_typed_dict_value_type_as_builtins_dict(typed_dict) =>
+                    {
+                        self.check_assign_to_typed_dict_field(
+                            typed_dict.name(),
+                            None,
+                            &field_ty,
+                            false,
+                            value,
+                            subscript.slice.range(),
+                            subscript.range(),
+                            errors,
+                        )
+                    }
+                    (_, _) => {
+                        let call_setitem = |value_arg| {
+                            self.call_method_or_error(
+                                base,
+                                &dunder::SETITEM,
+                                subscript.range,
+                                &[CallArg::ty(key, subscript.slice.range()), value_arg],
+                                &[],
+                                errors,
+                                Some(&|| ErrorContext::SetItem(self.for_display(base.clone()))),
                             )
-                        }
-                        ExprOrBinding::Binding(b) => {
-                            let binding_ty = self.solve_binding(b, errors).arc_clone_ty();
-                            // Use the subscript's location
-                            call_setitem(CallArg::ty(&binding_ty, subscript.range));
-                            binding_ty
+                        };
+                        match value {
+                            ExprOrBinding::Expr(e) => {
+                                call_setitem(CallArg::expr(e));
+                                // We already emit errors for `e` during `call_method_or_error`
+                                self.expr_infer(
+                                    e,
+                                    &ErrorCollector::new(
+                                        errors.module().clone(),
+                                        ErrorStyle::Never,
+                                    ),
+                                )
+                            }
+                            ExprOrBinding::Binding(b) => {
+                                let binding_ty = self.solve_binding(b, errors).arc_clone_ty();
+                                // Use the subscript's location
+                                call_setitem(CallArg::ty(&binding_ty, subscript.range));
+                                binding_ty
+                            }
                         }
                     }
                 }
-            }
+            })
         })
     }
 
@@ -2518,6 +2603,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         *r,
                         ErrorInfo::Kind(ErrorKind::InvalidSelfType),
                         "Could not resolve the class for `typing.Self` (may indicate unexpected recursion resolving types)".to_owned(),
+                    )
+                }
+            }
+            Binding::ClassBodyUnknownName(class_key, name) => {
+                // We're specifically looking for attributes that are inherited from the parent class
+                if let Some(cls) = &self.get_idx(*class_key).as_ref().0
+                    && !self.get_class_field_map(cls).contains_key(&name.id)
+                {
+                    // If the attribute lookup fails here, we'll emit an `unknown-name` error, since this
+                    // is a deferred lookup that can't be calculated at the bindings step
+                    let error_swallower = self.error_swallower();
+                    let attr_ty = self.attr_infer_for_type(
+                        &Type::ClassDef(cls.clone()),
+                        &name.id,
+                        name.range(),
+                        &error_swallower,
+                        None,
+                    );
+                    if attr_ty.is_error() {
+                        self.error(
+                            errors,
+                            name.range,
+                            ErrorInfo::Kind(ErrorKind::UnknownName),
+                            format!("Could not find name `{name}`"),
+                        )
+                    } else {
+                        attr_ty
+                    }
+                } else {
+                    self.error(
+                        errors,
+                        name.range,
+                        ErrorInfo::Kind(ErrorKind::UnknownName),
+                        format!("Could not find name `{name}`"),
                     )
                 }
             }
@@ -2732,31 +2851,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     None => (None, self.expr(expr, None, errors)),
                 };
-                // Then, handle the possibility that we need to treat the type as a type alias
-                match has_type_alias_qualifier {
-                    Some(true) => self.as_type_alias(
-                        name,
-                        TypeAliasStyle::LegacyExplicit,
-                        ty,
-                        expr,
-                        None,
-                        legacy_tparams,
-                        errors,
-                    ),
-                    None if Self::may_be_implicit_type_alias(&ty)
-                        && self.has_valid_annotation_syntax(expr, &self.error_swallower()) =>
-                    {
-                        self.as_type_alias(
+                let is_bare_annotated = has_type_alias_qualifier != Some(true)
+                    && matches!(expr.as_ref(), Expr::Name(_) | Expr::Attribute(_))
+                    && matches!(
+                        &ty,
+                        Type::Type(inner)
+                            if matches!(inner.as_ref(), Type::SpecialForm(SpecialForm::Annotated))
+                    );
+                if is_bare_annotated {
+                    ty
+                } else {
+                    // Then, handle the possibility that we need to treat the type as a type alias
+                    match has_type_alias_qualifier {
+                        Some(true) => self.as_type_alias(
                             name,
-                            TypeAliasStyle::LegacyImplicit,
+                            TypeAliasStyle::LegacyExplicit,
                             ty,
                             expr,
                             None,
                             legacy_tparams,
                             errors,
-                        )
+                        ),
+                        None if Self::may_be_implicit_type_alias(&ty)
+                            && self.has_valid_annotation_syntax(expr, &self.error_swallower()) =>
+                        {
+                            self.as_type_alias(
+                                name,
+                                TypeAliasStyle::LegacyImplicit,
+                                ty,
+                                expr,
+                                None,
+                                legacy_tparams,
+                                errors,
+                            )
+                        }
+                        _ => ty,
                     }
-                    _ => ty,
                 }
             }
             Binding::TypeVar(ann, name, x) => {
@@ -2838,7 +2968,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if *stub_or_impl != FunctionStubOrImpl::Stub
                             && !decorators.iter().any(|k| {
                                 let decorator = self.get_idx(*k);
-                                match decorator.ty().callee_kind() {
+                                match decorator.ty.callee_kind() {
                                     Some(CalleeKind::Function(FunctionKind::AbstractMethod)) => {
                                         true
                                     }
@@ -2929,8 +3059,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let annot = x.annot.map(|k| self.get_idx(k));
                 let hint = annot.as_ref().and_then(|ann| ann.ty(self.stdlib));
 
-                if let Some(expr) = &x.expr {
-                    if x.is_async && x.is_generator {
+                if x.is_async && x.is_generator {
+                    if let Some(box expr) = &x.expr {
                         self.expr_infer(expr, errors);
                         self.error(
                             errors,
@@ -2939,24 +3069,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             "Return statement with value is not allowed in async generator"
                                 .to_owned(),
                         )
-                    } else if x.is_generator {
-                        let hint =
-                            hint.and_then(|ty| self.decompose_generator(&ty).map(|(_, _, r)| r));
-                        let tcc: &dyn Fn() -> TypeCheckContext =
-                            &|| TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn);
-                        self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
-                    } else if matches!(hint, Some(Type::TypeGuard(_) | Type::TypeIs(_))) {
-                        let hint = Some(Type::ClassType(self.stdlib.bool().clone()));
-                        let tcc: &dyn Fn() -> TypeCheckContext =
-                            &|| TypeCheckContext::of_kind(TypeCheckKind::TypeGuardReturn);
-                        self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
                     } else {
-                        let tcc: &dyn Fn() -> TypeCheckContext =
-                            &|| TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn);
+                        Type::None
+                    }
+                } else if x.is_generator {
+                    let hint = hint.and_then(|ty| self.decompose_generator(&ty).map(|(_, _, r)| r));
+                    let tcc: &dyn Fn() -> TypeCheckContext =
+                        &|| TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn);
+                    if let Some(box expr) = &x.expr {
                         self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
+                    } else if let Some(hint) = hint {
+                        self.check_type(&Type::None, &hint, x.range, errors, tcc);
+                        Type::None
+                    } else {
+                        Type::None
+                    }
+                } else if matches!(hint, Some(Type::TypeGuard(_) | Type::TypeIs(_))) {
+                    let hint = Some(Type::ClassType(self.stdlib.bool().clone()));
+                    let tcc: &dyn Fn() -> TypeCheckContext =
+                        &|| TypeCheckContext::of_kind(TypeCheckKind::TypeGuardReturn);
+                    if let Some(box expr) = &x.expr {
+                        self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
+                    } else if let Some(hint) = hint {
+                        self.check_type(&Type::None, &hint, x.range, errors, tcc);
+                        Type::None
+                    } else {
+                        Type::None
                     }
                 } else {
-                    Type::None
+                    let tcc: &dyn Fn() -> TypeCheckContext =
+                        &|| TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn);
+                    if let Some(box expr) = &x.expr {
+                        self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
+                    } else if let Some(hint) = hint {
+                        self.check_type(&Type::None, &hint, x.range, errors, tcc);
+                        Type::None
+                    } else {
+                        Type::None
+                    }
                 }
             }
             Binding::ReturnImplicit(x) => {
@@ -3195,16 +3345,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::Import(m, name, _aliased) => self
                 .get_from_export(*m, None, &KeyExport(name.clone()))
                 .arc_clone(),
-            Binding::ClassDef(x, decorators) => match &self.get_idx(*x).0 {
+            Binding::ClassDef(x, _decorators) => match &self.get_idx(*x).0 {
                 None => Type::any_implicit(),
                 Some(cls) => {
-                    let mut ty = Type::ClassDef(cls.dupe());
-                    for x in decorators.iter().rev() {
-                        let decorator = self.get_idx(*x).arc_clone_ty();
-                        let range = self.bindings().idx_to_key(*x).range();
-                        ty = self.apply_decorator(decorator, ty, range, errors)
-                    }
-                    ty
+                    // TODO: analyze the class decorators. At the moment, we don't actually support any type-level
+                    // analysis of class decorators (the decorators we do support like dataclass-related ones are
+                    // handled via custom bindings).
+                    //
+                    // Note that all decorators have their own binding so they are still type checked for errors
+                    // *inside* the decorator, we just don't analyze the application.
+                    Type::ClassDef(cls.dupe())
                 }
             },
             Binding::AnnotatedType(ann, val) => match &self.get_idx(*ann).ty(self.stdlib) {
@@ -3340,26 +3490,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ta
                 }
             }
-            Binding::Decorator(expr) => self.expr_infer(expr, errors),
             Binding::LambdaParameter(var) => var.to_type(),
             Binding::FunctionParameter(param) => {
+                let finalize = |target: &AnnotationTarget, ty| match target {
+                    AnnotationTarget::ArgsParam(_) => Type::unbounded_tuple(ty),
+                    AnnotationTarget::KwargsParam(_) => self
+                        .stdlib
+                        .dict(self.stdlib.str().clone().to_type(), ty)
+                        .to_type(),
+                    _ => ty,
+                };
                 match param {
                     FunctionParameter::Annotated(key) => {
                         let annotation = self.get_idx(*key);
                         annotation.ty(self.stdlib).clone().unwrap_or_else(|| {
                             // This annotation isn't valid. It's something like `: Final` that doesn't
                             // have enough information to create a real type.
-                            Type::any_implicit()
+                            finalize(&annotation.target, Type::any_implicit())
                         })
                     }
-                    FunctionParameter::Unannotated(var, function_idx) => {
+                    FunctionParameter::Unannotated(var, function_idx, target) => {
                         // It's important that we force the undecorated function binding before reading
                         // from this var. Solving the undecorated function binding pins the type of the var,
                         // either to a concrete type or to any. Without this we can have non-determinism
                         // where the reader can observe an unresolved var or a resolved type, depending on
                         // the order of solved bindings.
                         self.get_idx(*function_idx);
-                        self.solver().force_var(*var)
+                        let ty = self.solver().force_var(*var);
+                        finalize(target, ty)
                     }
                 }
             }
@@ -3385,6 +3543,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn solve_decorator(&self, x: &BindingDecorator, errors: &ErrorCollector) -> Arc<Decorator> {
+        let mut ty = self.expr_infer(&x.expr, errors);
+        self.pin_all_placeholder_types(&mut ty);
+        self.expand_vars_mut(&mut ty);
+        let deprecation = parse_deprecation(&x.expr);
+        Arc::new(Decorator { ty, deprecation })
+    }
+
     pub fn solve_decorated_function(
         &self,
         x: &BindingDecoratedFunction,
@@ -3406,6 +3572,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             x.class_key.as_ref(),
             &x.decorators,
             &x.legacy_tparams,
+            x.module_style,
             errors,
         )
     }

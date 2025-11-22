@@ -26,9 +26,11 @@ use pyrefly_util::lock::RwLock;
 use rayon::prelude::*;
 use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
+use tracing::info;
 
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
+use crate::state::load::LspFile;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
@@ -76,7 +78,7 @@ impl<'a> RenameUsageVisitor<'a> {
                         };
 
                         self.edits.push(TextEdit {
-                            range: self.lined_buffer.to_lsp_range(alias.name.range()),
+                            range: self.lined_buffer.to_lsp_range(alias.name.range(), None),
                             new_text: new_import_name,
                         });
                     }
@@ -102,7 +104,7 @@ impl<'a> RenameUsageVisitor<'a> {
                         };
 
                         self.edits.push(TextEdit {
-                            range: self.lined_buffer.to_lsp_range(module.range()),
+                            range: self.lined_buffer.to_lsp_range(module.range(), None),
                             new_text: new_import_name,
                         });
                     }
@@ -130,11 +132,11 @@ impl<'a> RenameUsageVisitor<'a> {
 pub fn will_rename_files(
     state: &Arc<State>,
     transaction: &Transaction<'_>,
-    _open_files: &Arc<RwLock<HashMap<std::path::PathBuf, Arc<String>>>>,
+    _open_files: &Arc<RwLock<HashMap<std::path::PathBuf, Arc<LspFile>>>>,
     params: RenameFilesParams,
     supports_document_changes: bool,
 ) -> Option<WorkspaceEdit> {
-    eprintln!(
+    info!(
         "will_rename_files called with {} file(s)",
         params.files.len()
     );
@@ -142,7 +144,7 @@ pub fn will_rename_files(
     let mut all_changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
 
     for file_rename in &params.files {
-        eprintln!(
+        info!(
             "  Processing rename: {} -> {}",
             file_rename.old_uri, file_rename.new_uri
         );
@@ -151,7 +153,7 @@ pub fn will_rename_files(
         let old_uri = match Url::parse(&file_rename.old_uri) {
             Ok(uri) => uri,
             Err(_) => {
-                eprintln!("    Failed to parse old_uri");
+                info!("    Failed to parse old_uri");
                 continue;
             }
         };
@@ -159,7 +161,7 @@ pub fn will_rename_files(
         let new_uri = match Url::parse(&file_rename.new_uri) {
             Ok(uri) => uri,
             Err(_) => {
-                eprintln!("    Failed to parse new_uri");
+                info!("    Failed to parse new_uri");
                 continue;
             }
         };
@@ -167,7 +169,7 @@ pub fn will_rename_files(
         let old_path = match old_uri.to_file_path() {
             Ok(path) => path,
             Err(_) => {
-                eprintln!("    Failed to convert old_uri to path");
+                info!("    Failed to convert old_uri to path");
                 continue;
             }
         };
@@ -175,7 +177,7 @@ pub fn will_rename_files(
         let new_path = match new_uri.to_file_path() {
             Ok(path) => path,
             Err(_) => {
-                eprintln!("    Failed to convert new_uri to path");
+                info!("    Failed to convert new_uri to path");
                 continue;
             }
         };
@@ -185,7 +187,7 @@ pub fn will_rename_files(
             .iter()
             .any(|ext| old_path.extension().and_then(|e| e.to_str()) == Some(*ext))
         {
-            eprintln!("    Skipping non-Python file");
+            info!("    Skipping non-Python file");
             continue;
         }
 
@@ -212,26 +214,26 @@ pub fn will_rename_files(
         let new_module_name = match new_module_name {
             Some(name) => name,
             None => {
-                eprintln!("    Could not determine new module name, skipping");
+                info!("    Could not determine new module name, skipping");
                 continue;
             }
         };
 
-        eprintln!(
+        info!(
             "    Module rename: {} -> {}",
             old_module_name, new_module_name
         );
 
         // If module names are the same, no need to update imports
         if old_module_name == new_module_name {
-            eprintln!("    Module names are the same, skipping");
+            info!("    Module names are the same, skipping");
             continue;
         }
 
         // Use get_transitive_rdeps to find all files that depend on this module
         let rdeps = transaction.get_transitive_rdeps(old_handle.clone());
 
-        eprintln!("    Found {} transitive rdeps", rdeps.len());
+        info!("    Found {} transitive rdeps", rdeps.len());
 
         // Deduplicate rdeps by module path string (get_transitive_rdeps might return duplicates
         // with different variants like FileSystem vs Memory for the same path)
@@ -264,7 +266,7 @@ pub fn will_rename_files(
 
                 if !edits_for_file.is_empty() {
                     let uri = module_info_to_uri(&module_info)?;
-                    eprintln!(
+                    info!(
                         "    Found {} import(s) to update in {}",
                         edits_for_file.len(),
                         uri
@@ -283,10 +285,10 @@ pub fn will_rename_files(
     }
 
     if all_changes.is_empty() {
-        eprintln!("  No import updates needed");
+        info!("  No import updates needed");
         None
     } else {
-        eprintln!(
+        info!(
             "  Returning {} file(s) with import updates",
             all_changes.len()
         );

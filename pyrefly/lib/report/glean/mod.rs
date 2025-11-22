@@ -99,7 +99,12 @@ x = 42
 """Answer to everything"""
 y = hello_world()"#;
 
-    let classes_code = r#"class Animal:
+    let classes_code = r#"
+import typing
+
+T = typing.TypeVar('T')
+
+class Animal(typing.Generic[T]):
     def __init__(self, name: str):
         self.name = name
 

@@ -100,10 +100,22 @@ self.onmessage = async (event: MessageEvent<string | MultiFilePayload>) => {
         } else {
             // Else Multi-file execution
             const { activeFile, allFiles } = event.data as MultiFilePayload;
-            
+
             // Write all the files to Pyodide's filesystem
             for (const [filename, content] of Object.entries(allFiles)) {
-                pyodideInstance.FS.writeFile(`/${filename}`, new TextEncoder().encode(content));
+                // Create parent directories if the filename contains a path separator
+                const filePath = `/${filename}`;
+                const lastSlashIndex = filePath.lastIndexOf('/');
+                if (lastSlashIndex > 0) {
+                    const dirPath = filePath.substring(0, lastSlashIndex);
+                    // Create directory recursively, ignore if it already exists
+                    try {
+                        pyodideInstance.FS.mkdirTree(dirPath);
+                    } catch (e) {
+                        // Directory might already exist, that's ok
+                    }
+                }
+                pyodideInstance.FS.writeFile(filePath, new TextEncoder().encode(content));
             }
             
             // Add root directory to Python path and invalidate caches

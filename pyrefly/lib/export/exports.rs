@@ -15,6 +15,7 @@ use pyrefly_python::docstring::Docstring;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::Deprecation;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -40,7 +41,7 @@ pub struct Export {
     pub location: TextRange,
     pub symbol_kind: Option<SymbolKind>,
     pub docstring_range: Option<TextRange>,
-    pub is_deprecated: bool,
+    pub deprecation: Option<Deprecation>,
     pub special_export: Option<SpecialExport>,
 }
 
@@ -68,6 +69,9 @@ struct ExportsInner {
     /// Names that are available via `from <this_module> import <name>` along with their locations
     exports: Calculation<Arc<SmallMap<Name, ExportLocation>>>,
     /// If this module has a docstring, the range is stored here. Docstrings for exports themselves are stored in exports.
+    /// While putting the module docstring range on exports is a bit weird (it doesn't actually have much to do with exports),
+    /// we can't put it on the Module as that doesn't have the AST, and we can't get it from the AST as we often throw that away,
+    /// so here makes sense.
     docstring_range: Option<TextRange>,
 }
 
@@ -160,7 +164,7 @@ impl Exports {
         let f = || {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
             for (name, definition) in self.0.definitions.definitions.iter_hashed() {
-                let is_deprecated = self.0.definitions.deprecated.contains_hashed(name);
+                let deprecation = self.0.definitions.deprecated.get_hashed(name).cloned();
                 let special_export = self.0.definitions.special_exports.get_hashed(name).copied();
                 let export = match &definition.style {
                     DefinitionStyle::Annotated(symbol_kind, ..)
@@ -169,7 +173,7 @@ impl Exports {
                             location: definition.range,
                             symbol_kind: Some(*symbol_kind),
                             docstring_range: definition.docstring_range,
-                            is_deprecated,
+                            deprecation,
                             special_export,
                         })
                     }
@@ -183,14 +187,14 @@ impl Exports {
                         location: definition.range,
                         symbol_kind: None,
                         docstring_range: definition.docstring_range,
-                        is_deprecated,
+                        deprecation,
                         special_export,
                     }),
                     DefinitionStyle::ImplicitGlobal => ExportLocation::ThisModule(Export {
                         location: definition.range,
                         symbol_kind: Some(SymbolKind::Constant),
                         docstring_range: None,
-                        is_deprecated,
+                        deprecation,
                         special_export,
                     }),
                     DefinitionStyle::ImportAs(from, name) => {

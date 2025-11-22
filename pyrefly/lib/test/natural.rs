@@ -124,13 +124,12 @@ assert_type(C(42), C[int])
 );
 
 testcase!(
-    bug = "Broken literal promotion for tuples, something happening during contextual typing against T",
     test_generic_tuple,
     r#"
 from typing import assert_type
 
 def f[T](x: T) -> list[T]: ...
 
-assert_type(f((1,)), list[tuple[int]]) # E: assert_type(list[tuple[Literal[1], ...]], list[tuple[int]]) failed
+assert_type(f((1,)), list[tuple[int]])
 "#,
 );

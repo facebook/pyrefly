@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Response;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -21,19 +21,17 @@ fn test_provide_type_basic() {
         ..Default::default()
     });
 
-    interaction.server.did_open("bar.py");
-    interaction.server.provide_type("bar.py", 7, 5);
+    interaction.client.did_open("bar.py");
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .provide_type("bar.py", 7, 5)
+        .expect_response(json!({
             "contents": [{
                 "kind": "plaintext",
                 "value": "typing.Literal[3]",
             }]
-        })),
-        error: None,
-    });
+        }));
 
     interaction.shutdown();
 }
@@ -48,19 +46,17 @@ fn test_provide_type() {
         ..Default::default()
     });
 
-    interaction.server.did_open("foo.py");
-    interaction.server.provide_type("foo.py", 6, 16);
+    interaction.client.did_open("foo.py");
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .provide_type("foo.py", 6, 16)
+        .expect_response(json!({
             "contents": [{
                 "kind": "plaintext",
                 "value": "type[bar.Bar]".to_owned()
             }]
-        })),
-        error: None,
-    });
+        }));
 
     interaction.shutdown();
 }

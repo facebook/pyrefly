@@ -24,7 +24,6 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -108,6 +107,24 @@ impl CallTarget {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum CallTargetLookup {
+    /// When a type is callable, this represents what can be called.
+    Ok(Box<CallTarget>),
+    /// When a type is not callable, still collect what can be called in callable "subcases". This is
+    /// for example used for a union type that is not callable, but some of its "subcases" are callable.
+    Error(Vec<CallTarget>),
+}
+
+impl CallTargetLookup {
+    pub fn is_error(&self) -> bool {
+        match self {
+            CallTargetLookup::Ok(..) => false,
+            CallTargetLookup::Error(..) => true,
+        }
+    }
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn error_call_target(
         &self,
@@ -121,7 +138,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         CallTarget::Any(AnyStyle::Error)
     }
 
-    pub fn as_call_target(&self, ty: Type) -> Option<CallTarget> {
+    /// We only raise here for calls where we know the callee is the
+    /// abstract definition itself. That includes:
+    ///   * direct calls on the defining class object (e.g. Base.build())
+    ///   * super() lookups that surface the abstract method
+    ///
+    /// We skip calls via variables of type[Base] for non-final concrete classes,
+    /// because those values might point at a concrete subclass.
+    fn should_error_for_abstract_call(&self, call_target: &CallTarget) -> bool {
+        match call_target {
+            CallTarget::BoundMethod(obj, _) | CallTarget::BoundMethodOverload(obj, ..) => match obj
+            {
+                Type::ClassDef(_) | Type::SuperInstance(_) => true,
+                Type::ClassType(cls) | Type::SelfType(cls) => {
+                    let metadata = self.get_metadata_for_class(cls.class_object());
+                    metadata.is_final() && !metadata.is_protocol()
+                }
+                Type::Type(inner) => match &**inner {
+                    Type::ClassType(cls) | Type::SelfType(cls) => {
+                        let metadata = self.get_metadata_for_class(cls.class_object());
+                        metadata.is_final() && !metadata.is_protocol()
+                    }
+                    _ => false,
+                },
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    pub fn as_call_target(&self, ty: Type) -> CallTargetLookup {
         self.as_call_target_impl(ty, None, /* dunder_call */ false)
     }
 
@@ -130,10 +176,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty: Type,
         quantified: Option<Quantified>,
         dunder_call: bool,
-    ) -> Option<CallTarget> {
+    ) -> CallTargetLookup {
         match ty {
-            Type::Callable(c) => Some(CallTarget::Callable(TargetWithTParams(None, *c))),
-            Type::Function(func) => Some(CallTarget::Function(TargetWithTParams(None, *func))),
+            Type::Callable(c) => {
+                CallTargetLookup::Ok(Box::new(CallTarget::Callable(TargetWithTParams(None, *c))))
+            }
+            Type::Function(func) => CallTargetLookup::Ok(Box::new(CallTarget::Function(
+                TargetWithTParams(None, *func),
+            ))),
             Type::Overload(overload) => {
                 let funcs = overload.signatures.mapped(|ty| match ty {
                     OverloadType::Function(function) => TargetWithTParams(None, function),
@@ -141,51 +191,65 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         TargetWithTParams(Some(forall.tparams), forall.body)
                     }
                 });
-                Some(CallTarget::FunctionOverload(funcs, *overload.metadata))
+                CallTargetLookup::Ok(Box::new(CallTarget::FunctionOverload(
+                    funcs,
+                    *overload.metadata,
+                )))
             }
             Type::BoundMethod(bm) => {
                 let BoundMethod { obj, func } = *bm;
                 match self.as_call_target_impl(func.as_type(), quantified, dunder_call) {
-                    Some(CallTarget::Function(func)) => Some(CallTarget::BoundMethod(obj, func)),
-                    Some(CallTarget::FunctionOverload(overloads, meta)) => {
-                        Some(CallTarget::BoundMethodOverload(obj, overloads, meta))
+                    CallTargetLookup::Ok(box CallTarget::Function(func)) => {
+                        CallTargetLookup::Ok(Box::new(CallTarget::BoundMethod(obj, func)))
                     }
-                    _ => None,
+                    CallTargetLookup::Ok(box CallTarget::FunctionOverload(overloads, meta)) => {
+                        CallTargetLookup::Ok(Box::new(CallTarget::BoundMethodOverload(
+                            obj, overloads, meta,
+                        )))
+                    }
+                    _ => CallTargetLookup::Error(vec![]),
                 }
             }
             Type::ClassDef(cls) => match self.instantiate(&cls) {
                 // `instantiate` can only return `ClassType` or `TypedDict`
-                Type::ClassType(cls) => {
-                    Some(CallTarget::Class(cls, ConstructorKind::BareClassName))
+                Type::ClassType(cls) => CallTargetLookup::Ok(Box::new(CallTarget::Class(
+                    cls,
+                    ConstructorKind::BareClassName,
+                ))),
+                Type::TypedDict(typed_dict) => {
+                    CallTargetLookup::Ok(Box::new(CallTarget::TypedDict(typed_dict)))
                 }
-                Type::TypedDict(typed_dict) => Some(CallTarget::TypedDict(typed_dict)),
                 _ => unreachable!(),
             },
             Type::Type(box Type::ClassType(cls)) | Type::Type(box Type::SelfType(cls)) => {
-                Some(CallTarget::Class(cls, ConstructorKind::TypeOfClass))
+                CallTargetLookup::Ok(Box::new(CallTarget::Class(
+                    cls,
+                    ConstructorKind::TypeOfClass,
+                )))
             }
-            Type::Type(box Type::Tuple(tuple)) => Some(CallTarget::Class(
-                self.erase_tuple_type(tuple),
-                ConstructorKind::TypeOfClass,
+            Type::Type(box Type::Tuple(tuple)) => CallTargetLookup::Ok(Box::new(
+                CallTarget::Class(self.erase_tuple_type(tuple), ConstructorKind::TypeOfClass),
             )),
             Type::Type(box Type::Quantified(quantified)) => {
-                Some(CallTarget::Callable(TargetWithTParams(
+                CallTargetLookup::Ok(Box::new(CallTarget::Callable(TargetWithTParams(
                     None,
                     Callable {
                         // TODO: use upper bound to determine input parameters
                         params: Params::Ellipsis,
                         ret: Type::Quantified(quantified),
                     },
-                )))
+                ))))
             }
-            Type::Type(inner) if let Type::Any(style) = *inner => Some(CallTarget::Any(style)),
+            Type::Type(inner) if let Type::Any(style) = *inner => {
+                CallTargetLookup::Ok(Box::new(CallTarget::Any(style)))
+            }
             Type::Forall(forall) => {
                 let mut target =
                     self.as_call_target_impl(forall.body.as_type(), quantified, dunder_call);
                 match &mut target {
-                    Some(
-                        CallTarget::Callable(TargetWithTParams(x, _))
-                        | CallTarget::Function(TargetWithTParams(x, _)),
+                    CallTargetLookup::Ok(
+                        box (CallTarget::Callable(TargetWithTParams(x, _))
+                        | CallTarget::Function(TargetWithTParams(x, _))),
                     ) => {
                         *x = Some(forall.tparams);
                     }
@@ -197,46 +261,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.as_call_target_impl(self.solver().force_var(v), quantified, dunder_call)
             }
             Type::Union(xs) => {
+                let xs_length = xs.len();
                 let targets = xs
                     .into_iter()
-                    .map(|x| self.as_call_target_impl(x, quantified.clone(), dunder_call))
-                    .collect::<Option<Vec<_>>>()?;
-                if targets.len() == 1 {
-                    Some(targets.into_iter().next().unwrap())
+                    .filter_map(|x| {
+                        match self.as_call_target_impl(x, quantified.clone(), dunder_call) {
+                            CallTargetLookup::Ok(target) => Some(*target),
+                            CallTargetLookup::Error(..) => None,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let targets_length = targets.len();
+                if xs_length > targets_length {
+                    CallTargetLookup::Error(targets)
+                } else if targets_length == 1 {
+                    CallTargetLookup::Ok(Box::new(targets.into_iter().next().unwrap()))
                 } else {
-                    Some(CallTarget::Union(targets))
+                    CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                 }
             }
-            Type::Any(style) => Some(CallTarget::Any(style)),
+            Type::Any(style) => CallTargetLookup::Ok(Box::new(CallTarget::Any(style))),
             Type::TypeAlias(ta) => {
                 self.as_call_target_impl(ta.as_value(self.stdlib), quantified, dunder_call)
             }
             Type::ClassType(cls) => {
                 if let Some(quantified) = quantified {
                     self.quantified_instance_as_dunder_call(quantified.clone(), &cls)
-                        .and_then(|ty| self.as_call_target_impl(ty, Some(quantified), dunder_call))
+                        .map_or(CallTargetLookup::Error(vec![]), |ty| {
+                            self.as_call_target_impl(ty, Some(quantified), dunder_call)
+                        })
                 } else if dunder_call {
                     // Avoid infinite recursion
-                    None
+                    CallTargetLookup::Error(vec![])
                 } else {
-                    self.instance_as_dunder_call(&cls).and_then(|ty| {
-                        self.as_call_target_impl(ty, quantified, /* dunder_call */ true)
-                    })
+                    self.instance_as_dunder_call(&cls).map_or(
+                        CallTargetLookup::Error(vec![]),
+                        |ty| {
+                            self.as_call_target_impl(ty, quantified, /* dunder_call */ true)
+                        },
+                    )
                 }
             }
             Type::SelfType(cls) => {
                 // Ignoring `quantified` is okay here because Self is not a valid typevar bound.
                 self.self_as_dunder_call(&cls)
-                    .and_then(|ty| self.as_call_target_impl(ty, None, dunder_call))
+                    .map_or(CallTargetLookup::Error(vec![]), |ty| {
+                        self.as_call_target_impl(ty, None, dunder_call)
+                    })
             }
-            Type::Type(box Type::TypedDict(typed_dict)) => Some(CallTarget::TypedDict(typed_dict)),
+            Type::Type(box Type::TypedDict(typed_dict)) => {
+                CallTargetLookup::Ok(Box::new(CallTarget::TypedDict(typed_dict)))
+            }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
-                Restriction::Unrestricted => None,
+                Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
                 Restriction::Bound(bound) => match bound {
                     Type::Union(members) => {
                         let mut targets = Vec::new();
                         for member in members {
-                            if let Some(target) = self.as_call_target_impl(
+                            if let CallTargetLookup::Ok(target) = self.as_call_target_impl(
                                 member.clone(),
                                 Some(
                                     q.clone()
@@ -244,35 +326,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ),
                                 dunder_call,
                             ) {
-                                targets.push(target);
+                                targets.push(*target);
                             } else {
-                                return None;
+                                return CallTargetLookup::Error(vec![]);
                             }
                         }
-                        Some(CallTarget::Union(targets))
+                        CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                     }
                     _ => self.as_call_target_impl(bound.clone(), Some(*q), dunder_call),
                 },
                 Restriction::Constraints(constraints) => {
                     let mut targets = Vec::new();
                     for constraint in constraints {
-                        if let Some(target) = self.as_call_target_impl(
+                        if let CallTargetLookup::Ok(target) = self.as_call_target_impl(
                             constraint.clone(),
                             Some(q.clone().with_restriction(Restriction::Constraints(vec![
                                 constraint.clone(),
                             ]))),
                             dunder_call,
                         ) {
-                            targets.push(target);
+                            targets.push(*target);
                         } else {
-                            return None;
+                            return CallTargetLookup::Error(vec![]);
                         }
                     }
-                    Some(CallTarget::Union(targets))
+                    CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                 }
             },
             Type::KwCall(call) => self.as_call_target_impl(call.return_ty, quantified, dunder_call),
-            _ => None,
+            _ => CallTargetLookup::Error(vec![]),
         }
     }
 
@@ -285,25 +367,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> CallTarget {
         match self.as_call_target(ty.clone()) {
-            Some(target) => {
+            CallTargetLookup::Ok(target) => {
                 let metadata = target.function_metadata();
                 if let Some(m) = metadata
-                    && m.flags.is_deprecated
+                    && let Some(deprecation) = &m.flags.deprecation
                 {
                     // We manually construct an error using the message from the context but a
                     // Deprecated error kind so that the error is shown at the Deprecated severity
                     // (default: WARN) rather than the severity of the context's error kind.
-                    let msg = format!("`{}` is deprecated", m.kind.format(self.module().name()));
-                    let full_msg = if let Some(ctx) = context {
-                        vec1![ctx().format(), msg]
-                    } else {
-                        vec1![msg]
-                    };
-                    errors.add(range, ErrorInfo::Kind(ErrorKind::Deprecated), full_msg);
+                    let mut msg = deprecation.as_error_message(format!(
+                        "`{}` is deprecated",
+                        m.kind.format(self.module().name())
+                    ));
+                    if let Some(ctx) = context {
+                        msg.insert(0, ctx().format());
+                    }
+                    errors.add(range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                 }
-                target
+                *target
             }
-            None => {
+            CallTargetLookup::Error(..) => {
                 let expect_message = match call_style {
                     CallStyle::Method(method) => {
                         format!("Expected `{method}` to be a callable")
@@ -453,7 +536,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut cls: ClassType,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
+        callee_range: Option<TextRange>,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
@@ -467,12 +551,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.solver().generalize_class_targs(cls.targs_mut());
         }
         let hint = None; // discard hint
-        if let Some(ret) = self.call_metaclass(&cls, range, args, keywords, errors, context, hint)
+        if let Some(ret) =
+            self.call_metaclass(&cls, arguments_range, args, keywords, errors, context, hint)
             && !self.is_compatible_constructor_return(&ret, cls.class_object())
         {
             if let Some(metaclass_dunder_call) = self.get_metaclass_dunder_call(&cls) {
-                // Not quite an overload, but close enough
-                self.record_overload_trace_from_type(range, metaclass_dunder_call);
+                if let Some(callee_range) = callee_range
+                    && let Some(metaclass) = self
+                        .get_metadata_for_class(cls.class_object())
+                        .custom_metaclass()
+                {
+                    self.record_external_attribute_definition_index(
+                        &metaclass.clone().to_type(),
+                        &dunder::CALL,
+                        callee_range,
+                    );
+                }
+                self.record_resolved_trace(arguments_range, metaclass_dunder_call);
             }
             // Got something other than an instance of the class under construction.
             return ret;
@@ -481,7 +576,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let (overrides_new, dunder_new_has_errors) =
             if let Some(new_method) = self.get_dunder_new(&cls) {
                 let cls_ty = Type::type_form(cls.clone().to_type());
-                let full_args = iter::once(CallArg::ty(&cls_ty, range))
+                let full_args = iter::once(CallArg::ty(&cls_ty, arguments_range))
                     .chain(args.iter().cloned())
                     .collect::<Vec<_>>();
                 let dunder_new_errors = self.error_collector();
@@ -489,13 +584,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.as_call_target_or_error(
                         new_method.clone(),
                         CallStyle::Method(&dunder::NEW),
-                        range,
+                        arguments_range,
                         errors,
                         context,
                     ),
                     &full_args,
                     keywords,
-                    range,
+                    arguments_range,
                     &dunder_new_errors,
                     context,
                     hint,
@@ -503,8 +598,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 let has_errors = !dunder_new_errors.is_empty();
                 errors.extend(dunder_new_errors);
-                // Not quite an overload, but close enough
-                self.record_overload_trace_from_type(range, new_method);
+                if let Some(callee_range) = callee_range {
+                    self.record_external_attribute_definition_index(
+                        &cls.clone().to_type(),
+                        &dunder::NEW,
+                        callee_range,
+                    );
+                }
+                self.record_resolved_trace(arguments_range, new_method);
                 if self.is_compatible_constructor_return(&ret, cls.class_object()) {
                     dunder_new_ret = Some(ret);
                 } else if !matches!(ret, Type::Any(AnyStyle::Error | AnyStyle::Implicit)) {
@@ -530,13 +631,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.as_call_target_or_error(
                     init_method.clone(),
                     CallStyle::Method(&dunder::INIT),
-                    range,
+                    arguments_range,
                     errors,
                     context,
                 ),
                 args,
                 keywords,
-                range,
+                arguments_range,
                 &dunder_init_errors,
                 context,
                 hint,
@@ -546,8 +647,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if !dunder_new_has_errors {
                 errors.extend(dunder_init_errors);
             }
-            // Not quite an overload, but close enough
-            self.record_overload_trace_from_type(range, init_method);
+            if let Some(callee_range) = callee_range {
+                self.record_external_attribute_definition_index(
+                    &cls.clone().to_type(),
+                    &dunder::INIT,
+                    callee_range,
+                );
+            }
+            self.record_resolved_trace(arguments_range, init_method);
         }
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
@@ -577,8 +684,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.solver().generalize_class_targs(typed_dict.targs_mut());
         }
         let hint = None; // discard hint
-        // We know `__init__` exists because we synthesize it.
-        let init_method = self.get_typed_dict_dunder_init(&typed_dict).unwrap();
+        let init_method = self.get_typed_dict_dunder_init(&typed_dict);
         self.call_infer(
             self.as_call_target_or_error(
                 init_method,
@@ -611,18 +717,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn call_infer(
+    fn call_infer_with_range(
         &self,
         call_target: CallTarget,
         args: &[CallArg],
         keywords: &[CallKeyword],
         range: TextRange,
+        callee_range: Option<TextRange>,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
         let metadata = call_target.function_metadata();
+        if let Some(meta) = metadata
+            && meta.flags.is_abstract_method
+            && self.should_error_for_abstract_call(&call_target)
+        {
+            let method_name = meta.kind.format(self.module().name());
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::AbstractMethodCall, context),
+                format!("Cannot call abstract method `{method_name}`"),
+            );
+        }
         // Does this call target correspond to a function whose keyword arguments we should save?
         let kw_metadata = {
             if let Some(m) = metadata
@@ -647,7 +766,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 let metadata = self.get_metadata_for_class(cls.class_object());
-                if metadata.is_protocol() {
+                if metadata.is_protocol() && constructor_kind == ConstructorKind::BareClassName {
                     self.error(
                         errors,
                         range,
@@ -686,7 +805,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(ty) => self.check_dunder_bool_is_callable(&ty, range, errors),
                     }
                 };
-                self.construct_class(cls, args, keywords, range, errors, context, hint)
+                self.construct_class(
+                    cls,
+                    args,
+                    keywords,
+                    range,
+                    callee_range,
+                    errors,
+                    context,
+                    hint,
+                )
             }
             CallTarget::TypedDict(td) => {
                 self.construct_typed_dict(td, args, keywords, range, errors, context, hint)
@@ -776,8 +904,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let keywords = call.vec_call_keyword(keywords, self, errors);
                 self.unions(targets.into_map(|t| {
                     let ctor_targs = None; // hack
-                    self.call_infer(
-                        t, &args, &keywords, range, errors, context, hint, ctor_targs,
+                    self.call_infer_with_range(
+                        t,
+                        &args,
+                        &keywords,
+                        range,
+                        callee_range,
+                        errors,
+                        context,
+                        hint,
+                        ctor_targs,
                     )
                 }))
             }
@@ -811,6 +947,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             res
         }
+    }
+
+    pub fn call_infer(
+        &self,
+        call_target: CallTarget,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        hint: Option<HintRef>,
+        ctor_targs: Option<&mut TArgs>,
+    ) -> Type {
+        self.call_infer_with_range(
+            call_target,
+            args,
+            keywords,
+            range,
+            None,
+            errors,
+            context,
+            hint,
+            ctor_targs,
+        )
     }
 
     /// Helper function hide details of call synthesis from the attribute resolution code.
@@ -1121,11 +1281,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         None,
                     );
-                    self.call_infer(
+                    self.call_infer_with_range(
                         callable,
                         &args,
                         &kws,
                         x.arguments.range,
+                        Some(x.func.range()),
                         errors,
                         None,
                         hint,

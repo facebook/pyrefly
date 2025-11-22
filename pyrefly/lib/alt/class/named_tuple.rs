@@ -27,7 +27,6 @@ use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
-use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -148,12 +147,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn get_named_tuple_match_args(&self, elements: &SmallSet<Name>) -> ClassSynthesizedField {
-        let ty = Type::Tuple(Tuple::Concrete(
+        let ty = Type::concrete_tuple(
             elements
                 .iter()
                 .map(|e| Type::Literal(Lit::Str(e.as_str().into())))
                 .collect(),
-        ));
+        );
         ClassSynthesizedField::new(ty)
     }
 

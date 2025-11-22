@@ -9,7 +9,6 @@ use std::collections::HashMap;
 
 use pretty_assertions::assert_eq;
 use pyrefly_types::class::ClassType;
-use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
 
 use crate::report::pysa::call_graph::Target;
@@ -320,10 +319,10 @@ Point = namedtuple('Point', ['x', 'y'])
                     "__match_args__".into(),
                     PysaClassField {
                         type_: PysaType::from_type(
-                            &Type::Tuple(Tuple::Concrete(vec![
+                            &Type::concrete_tuple(vec![
                                 context.stdlib.str().clone().to_type(),
                                 context.stdlib.str().clone().to_type(),
-                            ])),
+                            ]),
                             context,
                         ),
                         explicit_annotation: None,
@@ -479,10 +478,10 @@ class Foo:
                     "__match_args__".into(),
                     PysaClassField {
                         type_: PysaType::from_type(
-                            &Type::Tuple(Tuple::Concrete(vec![
+                            &Type::concrete_tuple(vec![
                                 context.stdlib.str().clone().to_type(),
                                 context.stdlib.str().clone().to_type(),
-                            ])),
+                            ]),
                             context,
                         ),
                         explicit_annotation: None,

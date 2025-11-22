@@ -98,8 +98,8 @@ testcase!(
     r#"
 from typing import NamedTuple, Required, NotRequired, ReadOnly, ClassVar, Final
 class MyTuple(NamedTuple):
-    v: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict or NamedTuple members
-    w: Final[int]  # E: `Final` may not be used for TypedDict or NamedTuple members
+    v: ClassVar[int]  # E: `ClassVar` may not be used for NamedTuple members
+    w: Final[int]  # E: `Final` may not be used for NamedTuple members
     x: NotRequired[int]  # E: `NotRequired` may only be used for TypedDict members
     y: Required[int]  # E: `Required` may only be used for TypedDict members
     z: ReadOnly[int]  # E: `ReadOnly` may only be used for TypedDict members

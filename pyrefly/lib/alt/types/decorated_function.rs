@@ -18,6 +18,7 @@ use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::callable::Deprecation;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
@@ -65,6 +66,19 @@ pub struct DecoratedFunction {
     pub undecorated: Arc<UndecoratedFunction>,
 }
 
+/// Answer for BindingDecorator
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq)]
+pub struct Decorator {
+    pub ty: Type,
+    pub deprecation: Option<Deprecation>,
+}
+
+impl Display for Decorator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Decorator[{}]", self.ty)
+    }
+}
+
 /// Decorators that need special handling
 pub enum SpecialDecorator<'a> {
     Overload,
@@ -75,7 +89,7 @@ pub enum SpecialDecorator<'a> {
     EnumMember,
     Override,
     Final,
-    Deprecated,
+    Deprecated(&'a Deprecation),
     PropertySetter(&'a Type),
     DataclassTransformCall(&'a TypeMap),
     EnumNonmember,

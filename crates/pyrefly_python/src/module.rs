@@ -16,8 +16,10 @@ use ruff_notebook::Notebook;
 use ruff_python_ast::PySourceType;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::small_set::SmallSet;
 
 use crate::ignore::Ignore;
+use crate::ignore::Tool;
 use crate::module_name::ModuleName;
 use crate::module_path::ModulePath;
 
@@ -34,7 +36,7 @@ struct ModuleInner {
     ignore: Ignore,
     is_generated: bool,
     contents: LinedBuffer,
-    notebook: Option<Box<Notebook>>,
+    notebook: Option<Arc<Notebook>>,
 }
 
 impl Module {
@@ -53,7 +55,7 @@ impl Module {
         }))
     }
 
-    pub fn new_notebook(name: ModuleName, path: ModulePath, notebook: Notebook) -> Self {
+    pub fn new_notebook(name: ModuleName, path: ModulePath, notebook: Arc<Notebook>) -> Self {
         let contents: Arc<String> = Arc::from(notebook.source_code().to_owned());
         let ignore = Ignore::new(&contents);
         let is_generated = contents.contains(GENERATED_TOKEN);
@@ -64,7 +66,7 @@ impl Module {
             ignore,
             is_generated,
             contents,
-            notebook: Some(Box::new(notebook)),
+            notebook: Some(notebook),
         }))
     }
 
@@ -98,6 +100,48 @@ impl Module {
         self.0.contents.display_pos(offset, self.notebook())
     }
 
+    pub fn to_lsp_range(&self, x: TextRange) -> lsp_types::Range {
+        self.lined_buffer().to_lsp_range(x, self.notebook())
+    }
+
+    pub fn to_lsp_position(&self, x: TextSize) -> lsp_types::Position {
+        self.lined_buffer().to_lsp_position(x, self.notebook())
+    }
+
+    /// If the module is a notebook, take an input position relative to the concatenated contents
+    /// and return the index of the corresponding notebook cell.
+    pub fn to_cell_for_lsp(&self, x: TextSize) -> Option<usize> {
+        self.lined_buffer().to_cell_for_lsp(x, self.notebook())
+    }
+
+    /// Translates an LSP position to a text size.
+    /// For notebooks, the input position is relative to a notebook cell and the output
+    /// position is relative to the concatenated contents of the notebook.
+    pub fn from_lsp_position(
+        &self,
+        position: lsp_types::Position,
+        notebook_cell: Option<usize>,
+    ) -> TextSize {
+        self.lined_buffer().from_lsp_position(
+            position,
+            notebook_cell.map(|c| (self.notebook().unwrap(), c)),
+        )
+    }
+
+    /// Translates an LSP position to a text range.
+    /// For notebooks, the input range is relative to a notebook cell and the output
+    /// position is range to the concatenated contents of the notebook.
+    pub fn from_lsp_range(
+        &self,
+        position: lsp_types::Range,
+        notebook_cell: Option<usize>,
+    ) -> TextRange {
+        self.lined_buffer().from_lsp_range(
+            position,
+            notebook_cell.map(|c| (self.notebook().unwrap(), c)),
+        )
+    }
+
     pub fn code_at(&self, range: TextRange) -> &str {
         self.0.contents.code_at(range)
     }
@@ -126,13 +170,13 @@ impl Module {
         &self,
         source_range: &DisplayRange,
         error_kind: &str,
-        permissive_ignores: bool,
+        enabled_ignores: &SmallSet<Tool>,
     ) -> bool {
         self.0.ignore.is_ignored(
             source_range.start.line_within_file(),
             source_range.end.line_within_file(),
             error_kind,
-            permissive_ignores,
+            enabled_ignores,
         )
     }
 

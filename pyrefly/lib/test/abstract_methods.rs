@@ -191,6 +191,141 @@ c = Concrete()
 );
 
 testcase!(
+    test_call_abstract_classmethod_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "Base": ...
+
+Base.build()  # E: Cannot call abstract method `Base.build`
+
+cls: type[Base] = Base
+cls.build()  # OK
+"#,
+);
+
+testcase!(
+    bug = "We should error on abstract static method calls when the class name is directly referenced",
+    test_call_abstract_staticmethod_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @staticmethod
+    @abstractmethod
+    def helper() -> None: ...
+
+Base.helper()  # This should error
+
+cls: type[Base] = Base
+cls.helper()  # This should not error
+"#,
+);
+
+testcase!(
+    test_call_abstract_method_on_final_class_errors,
+    r#"
+from abc import ABC, abstractmethod
+from typing import final, Protocol
+
+@final
+class FinalBase(ABC):  # E: Final class `FinalBase` cannot have unimplemented abstract members: `build`
+    @classmethod
+    @abstractmethod
+    def build(cls) -> int: ...
+
+@final
+class FinalProtocol(Protocol):
+    @classmethod
+    def build(cls) -> int: ...
+
+class NotFinalBase(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> int: ...
+
+def err(cls: type[FinalBase]):
+    cls.build()  # E: Cannot call abstract method `FinalBase.build`
+
+def ok(cls: type[NotFinalBase]):
+    cls.build()  # OK
+
+def ok(cls: type[FinalProtocol]):
+    cls.build()  # OK
+"#,
+);
+
+testcase!(
+    bug = "We should error on method calls from the class, when the class name is directly referenced",
+    test_call_base_method_directly_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self) -> None: ...
+
+class Concrete(Base):
+    def foo(self) -> None:
+        print("ok")
+
+Base.foo(Concrete())  # This should error
+
+cls: type[Base] = Base
+cls.foo(Concrete())  # This should not error
+"#,
+);
+
+fn env_super_protocol() -> TestEnv {
+    let mut env = TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+from typing import Protocol
+class P1(Protocol):
+  def method(self) -> str: ...
+"#,
+    );
+    env.add(
+        "bar",
+        r#"
+from typing import Protocol
+class P2(Protocol):
+  def method(self) -> str: ...
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_super_protocol_call,
+    env_super_protocol(),
+    r#"
+from foo import P1
+from bar import P2
+from typing import Protocol
+
+class P3(Protocol):
+  def method(self) -> str: ...
+
+class Child1(P1):
+    def method(self) -> str:
+        return super().method()  # OK, since P1 comes from a stub file
+
+class Child2(P2):
+    def method(self) -> str:
+        return super().method()  # E: Method `method` inherited from class `P2` has no implementation and cannot be accessed via `super()`
+
+class Child3(P3):
+    def method(self) -> str:
+        return super().method()  # E: Method `method` inherited from class `P3` has no implementation and cannot be accessed via `super()`
+"#,
+);
+
+testcase!(
     test_super_abstract_call,
     r#"
 from abc import ABC, abstractmethod
@@ -202,9 +337,7 @@ class Base(ABC):
 
 class Child(Base):
     def method(self) -> str:
-        # Calling abstract method via super() should be allowed (no error)
-        # Even though it would fail at runtime, type checkers don't error here
-        super().method()
+        super().method()  # E: Method `method` inherited from class `Base` has no implementation and cannot be accessed via `super()`
         return "child"
 
 # Child is concrete, so this works

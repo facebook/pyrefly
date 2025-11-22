@@ -124,3 +124,17 @@ assert_type(b.reporter, Reporter)
 assert_type(b.reporter_id, UUID)
 "#,
 );
+
+django_testcase!(
+    test_foreign_key_in_function,
+    r#"
+from django.db import models
+
+def test_through_db_table_mutually_exclusive(self):
+    class Child(models.Model):
+        pass
+
+    class Through(models.Model):
+        referred = models.ForeignKey(Child, on_delete=models.CASCADE)
+"#,
+);

@@ -134,9 +134,13 @@ if sys.version_info >= (3, 12):
             extras: list[str] = ...,
         ) -> EntryPoints: ...
         @property
-        def names(self) -> set[str]: ...
+        def names(self) -> set[str]:
+            """Return the set of all names of all entry points."""
+            ...
         @property
-        def groups(self) -> set[str]: ...
+        def groups(self) -> set[str]:
+            """Return the set of all groups of all entry points."""
+            ...
 
 elif sys.version_info >= (3, 10):
     class DeprecatedList(list[_T]):
@@ -237,7 +241,14 @@ class Distribution(_distribution_parent):
 
     if sys.version_info >= (3, 10):
         @property
-        def metadata(self) -> PackageMetadata: ...
+        def metadata(self) -> PackageMetadata:
+            """
+            Return the parsed metadata for this Distribution.
+
+            The returned object will have keys that name the various bits of
+            metadata.  See PEP 566 for details.
+            """
+            ...
         @property
         def entry_points(self) -> EntryPoints: ...
     else:
@@ -247,14 +258,31 @@ class Distribution(_distribution_parent):
         def entry_points(self) -> list[EntryPoint]: ...
 
     @property
-    def version(self) -> str: ...
+    def version(self) -> str:
+        """Return the 'Version' metadata for the distribution package."""
+        ...
     @property
-    def files(self) -> list[PackagePath] | None: ...
+    def files(self) -> list[PackagePath] | None:
+        """
+        Files in this distribution.
+
+        :return: List of PackagePath for this distribution or None
+
+        Result is `None` if the metadata file that enumerates files
+        (i.e. RECORD for dist-info, or installed-files.txt or
+        SOURCES.txt for egg-info) is missing.
+        Result may be empty if the metadata exists but is empty.
+        """
+        ...
     @property
-    def requires(self) -> list[str] | None: ...
+    def requires(self) -> list[str] | None:
+        """Generated requirements specified for this Distribution"""
+        ...
     if sys.version_info >= (3, 10):
         @property
-        def name(self) -> str: ...
+        def name(self) -> str:
+            """Return the 'Name' metadata for the distribution package."""
+            ...
     if sys.version_info >= (3, 13):
         @property
         def origin(self) -> types.SimpleNamespace | None: ...
@@ -264,7 +292,15 @@ class DistributionFinder(MetaPathFinder):
         name: str | None
         def __init__(self, *, name: str | None = ..., path: list[str] = ..., **kwargs: Any) -> None: ...
         @property
-        def path(self) -> list[str]: ...
+        def path(self) -> list[str]:
+            """
+            The sequence of directory path that a distribution finder
+            should search.
+
+            Typically refers to Python installed package paths such as
+            "site-packages" directories and defaults to ``sys.path``.
+            """
+            ...
 
     @abc.abstractmethod
     def find_distributions(self, context: DistributionFinder.Context = ...) -> Iterable[Distribution]: ...

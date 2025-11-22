@@ -37,6 +37,8 @@ The following configuration options are IDE-specific and exposed as VSCode setti
 - Use a specific interpreter
   - If the [`Python`](https://marketplace.visualstudio.com/items?itemName=ms-python.python) VSCode extension is installed, [selecting an interpreter](https://code.visualstudio.com/docs/python/environments) will override the interpreter and settings Pyrefly uses to type check your project, even if one is specified in your Pyrefly configuration.
   - `python.defaultInterpreterPath` will override the default interpreter selected by VSCode for your workspace.
+- Control hover tooltip links
+  - `python.analysis.showHoverGoToLinks` [boolean: true]: Controls whether hover tooltips include "Go to definition" and "Go to type definition" navigation links. Set to `false` for cleaner tooltips with only type information.
 
 ## Issues?
 If you experience issues with the Pyrefly extension, please create an [issue](https://github.com/facebook/pyrefly/issues) on github.
@@ -61,7 +63,18 @@ To avoid conflicts, you should disable other Python language servers by either s
 />
 
 ### Jetbrains / Pycharm
-An unofficial Jetbrains extension has been developed [here](https://plugins.jetbrains.com/plugin/26829-pyrefly)
+PyCharm users can enable native Pyrefly support in the settings:
+1. Go to **Python | Tools | Pyrefly** in the Settings dialog.
+2. Select the **Enable** checkbox.
+3. In the Execution mode setting, select how PyCharm should search for the executable:
+
+    **Interpreter** mode: PyCharm searches for an executable installed in your interpreter. To install the Pyrefly package for the selected interpreter, click *Install Pyrefly*.
+
+    **Path** mode: PyCharm searches for an executable in `$PATH`. If the executable is not found, you can specify the path by clicking the  Browse... icon.
+
+4. Select which options should be enabled.
+
+For more information, refer to [PyCharm documentation](https://www.jetbrains.com/help/pycharm/2025.3/lsp-tools.html#pyrefly).
 
 ### Neovim
 

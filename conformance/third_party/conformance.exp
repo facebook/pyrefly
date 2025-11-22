@@ -3372,6 +3372,17 @@
     {
       "code": -2,
       "column": 1,
+      "concise_description": "Cannot set field `final_no_default`",
+      "description": "Cannot set field `final_no_default`\n  This field is marked as Final",
+      "line": 35,
+      "name": "read-only",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 35
+    },
+    {
+      "code": -2,
+      "column": 1,
       "concise_description": "Cannot set field `final_with_default`",
       "description": "Cannot set field `final_with_default`\n  This field is marked as Final",
       "line": 36,
@@ -3379,6 +3390,17 @@
       "severity": "error",
       "stop_column": 21,
       "stop_line": 36
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Cannot set field `final_no_default`",
+      "description": "Cannot set field `final_no_default`\n  This field is marked as Final",
+      "line": 37,
+      "name": "read-only",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 37
     },
     {
       "code": -2,
@@ -3733,30 +3755,8 @@
     {
       "code": -2,
       "column": 41,
-      "concise_description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
-      "description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
-      "line": 48,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 55,
-      "stop_line": 48
-    },
-    {
-      "code": -2,
-      "column": 41,
       "concise_description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
       "description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
-      "line": 49,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 55,
-      "stop_line": 49
-    },
-    {
-      "code": -2,
-      "column": 41,
-      "concise_description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
-      "description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
       "line": 49,
       "name": "bad-argument-type",
       "severity": "error",
@@ -4276,7 +4276,7 @@
       "code": -2,
       "column": 44,
       "concise_description": "`Ham` is deprecated",
-      "description": "`Ham` is deprecated",
+      "description": "`Ham` is deprecated\n  Use Spam instead",
       "line": 18,
       "name": "deprecated",
       "severity": "warn",
@@ -4287,7 +4287,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
-      "description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
+      "description": "`_directives_deprecated_library.norwegian_blue` is deprecated\n  It is pining for the fjords",
       "line": 24,
       "name": "deprecated",
       "severity": "warn",
@@ -4298,7 +4298,7 @@
       "code": -2,
       "column": 5,
       "concise_description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
-      "description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
+      "description": "`_directives_deprecated_library.norwegian_blue` is deprecated\n  It is pining for the fjords",
       "line": 25,
       "name": "deprecated",
       "severity": "warn",
@@ -4309,7 +4309,7 @@
       "code": -2,
       "column": 12,
       "concise_description": "Call to deprecated overload `_directives_deprecated_library.foo`",
-      "description": "Call to deprecated overload `_directives_deprecated_library.foo`",
+      "description": "Call to deprecated overload `_directives_deprecated_library.foo`\n  Only str will be allowed",
       "line": 30,
       "name": "deprecated",
       "severity": "warn",
@@ -4320,7 +4320,7 @@
       "code": -2,
       "column": 5,
       "concise_description": "`+` is not supported between `Spam` and `Literal[1]`",
-      "description": "`+` is not supported between `Spam` and `Literal[1]`\n  `_directives_deprecated_library.Spam.__add__` is deprecated",
+      "description": "`+` is not supported between `Spam` and `Literal[1]`\n  `_directives_deprecated_library.Spam.__add__` is deprecated\n  There is enough spam in the world",
       "line": 41,
       "name": "deprecated",
       "severity": "warn",
@@ -4331,7 +4331,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`+=` is not supported between `Spam` and `Literal[1]`",
-      "description": "`+=` is not supported between `Spam` and `Literal[1]`\n  `_directives_deprecated_library.Spam.__add__` is deprecated",
+      "description": "`+=` is not supported between `Spam` and `Literal[1]`\n  `_directives_deprecated_library.Spam.__add__` is deprecated\n  There is enough spam in the world",
       "line": 42,
       "name": "deprecated",
       "severity": "warn",
@@ -4342,7 +4342,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`_directives_deprecated_library.Spam.greasy` is deprecated",
-      "description": "`_directives_deprecated_library.Spam.greasy` is deprecated",
+      "description": "`_directives_deprecated_library.Spam.greasy` is deprecated\n  All spam will be equally greasy",
       "line": 44,
       "name": "deprecated",
       "severity": "warn",
@@ -4353,7 +4353,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`_directives_deprecated_library.Spam.shape` is deprecated",
-      "description": "`_directives_deprecated_library.Spam.shape` is deprecated",
+      "description": "`_directives_deprecated_library.Spam.shape` is deprecated\n  Shapes are becoming immutable",
       "line": 47,
       "name": "deprecated",
       "severity": "warn",
@@ -4364,7 +4364,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`_directives_deprecated_library.Spam.shape` is deprecated",
-      "description": "`_directives_deprecated_library.Spam.shape` is deprecated",
+      "description": "`_directives_deprecated_library.Spam.shape` is deprecated\n  Shapes are becoming immutable",
       "line": 48,
       "name": "deprecated",
       "severity": "warn",
@@ -4375,7 +4375,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`Invocable.__call__` is deprecated",
-      "description": "`Invocable.__call__` is deprecated",
+      "description": "`Invocable.__call__` is deprecated\n  Deprecated",
       "line": 58,
       "name": "deprecated",
       "severity": "warn",
@@ -4386,7 +4386,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`lorem` is deprecated",
-      "description": "`lorem` is deprecated",
+      "description": "`lorem` is deprecated\n  Deprecated",
       "line": 69,
       "name": "deprecated",
       "severity": "warn",
@@ -4397,7 +4397,7 @@
       "code": -2,
       "column": 5,
       "concise_description": "`SupportsFoo1.foo` is deprecated",
-      "description": "`SupportsFoo1.foo` is deprecated",
+      "description": "`SupportsFoo1.foo` is deprecated\n  Deprecated",
       "line": 98,
       "name": "deprecated",
       "severity": "warn",
@@ -5262,13 +5262,13 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(Any, int) failed",
-      "description": "assert_type(Any, int) failed",
-      "line": 130,
+      "concise_description": "assert_type(int, Any) failed",
+      "description": "assert_type(int, Any) failed",
+      "line": 131,
       "name": "assert-type",
       "severity": "error",
       "stop_column": 27,
-      "stop_line": 130
+      "stop_line": 131
     },
     {
       "code": -2,
@@ -6422,6 +6422,39 @@
       "severity": "error",
       "stop_column": 18,
       "stop_line": 44
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 92,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 92
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 95,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 95
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "description": "Type parameter `T` shadows a type parameter of the same name from an enclosing scope",
+      "line": 98,
+      "name": "invalid-type-var",
+      "severity": "error",
+      "stop_column": 18,
+      "stop_line": 98
     }
   ],
   "generics_type_erasure.py": [
@@ -8491,14 +8524,25 @@
   "protocols_class_objects.py": [
     {
       "code": -2,
-      "column": 15,
-      "concise_description": "Cannot instantiate `Proto` because it is a protocol",
-      "description": "Cannot instantiate `Proto` because it is a protocol",
-      "line": 26,
-      "name": "bad-instantiation",
+      "column": 5,
+      "concise_description": "Argument `type[Proto]` is not assignable to parameter `cls` with type `type[Proto]` in function `fun`",
+      "description": "Argument `type[Proto]` is not assignable to parameter `cls` with type `type[Proto]` in function `fun`\n  Only concrete classes may be assigned to `type[Proto]` because `Proto` is a protocol",
+      "line": 29,
+      "name": "bad-argument-type",
       "severity": "error",
-      "stop_column": 17,
-      "stop_line": 26
+      "stop_column": 10,
+      "stop_line": 29
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "`type[Proto]` is not assignable to variable `var` with type `type[Proto]`",
+      "description": "`type[Proto]` is not assignable to variable `var` with type `type[Proto]`\n  Only concrete classes may be assigned to `type[Proto]` because `Proto` is a protocol",
+      "line": 34,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 12,
+      "stop_line": 34
     },
     {
       "code": -2,
@@ -8746,6 +8790,17 @@
     }
   ],
   "protocols_explicit.py": [
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Method `draw` inherited from class `PColor` has no implementation and cannot be accessed via `super()`",
+      "description": "Method `draw` inherited from class `PColor` has no implementation and cannot be accessed via `super()`",
+      "line": 27,
+      "name": "missing-attribute",
+      "severity": "error",
+      "stop_column": 28,
+      "stop_line": 27
+    },
     {
       "code": -2,
       "column": 20,
@@ -10492,8 +10547,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "TypedDict item `method1` may not be initialized",
-      "description": "TypedDict item `method1` may not be initialized",
+      "concise_description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
+      "description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
       "line": 29,
       "name": "bad-class-definition",
       "severity": "error",
@@ -10503,8 +10558,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "TypedDict item `method2` may not be initialized",
-      "description": "TypedDict item `method2` may not be initialized",
+      "concise_description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
+      "description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
       "line": 34,
       "name": "bad-class-definition",
       "severity": "error",
@@ -10514,8 +10569,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "TypedDict item `method3` may not be initialized",
-      "description": "TypedDict item `method3` may not be initialized",
+      "concise_description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
+      "description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
       "line": 39,
       "name": "bad-class-definition",
       "severity": "error",
@@ -11275,6 +11330,17 @@
     {
       "code": -2,
       "column": 7,
+      "concise_description": "Field `x` is declared `float` in ancestor `class TD_A2: ...\n`, which is not assignable to the type `int` implied by multiple inheritance",
+      "description": "Field `x` is declared `float` in ancestor `class TD_A2: ...\n`, which is not assignable to the type `int` implied by multiple inheritance",
+      "line": 119,
+      "name": "inconsistent-inheritance",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 119
+    },
+    {
+      "code": -2,
+      "column": 7,
       "concise_description": "TypedDict field `x` in `TD_B` cannot be made non-required; parent TypedDict `TD_B2` defines it as required",
       "description": "TypedDict field `x` in `TD_B` cannot be made non-required; parent TypedDict `TD_B2` defines it as required",
       "line": 132,
@@ -11365,17 +11431,6 @@
       "severity": "error",
       "stop_column": 34,
       "stop_line": 60
-    },
-    {
-      "code": -2,
-      "column": 75,
-      "concise_description": "Expected a type form, got instance of `Literal['RecursiveMovie']`",
-      "description": "Expected a type form, got instance of `Literal['RecursiveMovie']`",
-      "line": 71,
-      "name": "not-a-type",
-      "severity": "error",
-      "stop_column": 91,
-      "stop_line": 71
     }
   ],
   "typeddicts_type_consistency.py": [

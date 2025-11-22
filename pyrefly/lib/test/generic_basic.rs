@@ -392,3 +392,108 @@ class A[T]:  # E: Cannot use type parameter lists on Python 3.8 (syntax was adde
     x: T
     "#,
 );
+
+testcase!(
+    test_shadowing_scoped_type_vars,
+    r#"
+from typing import TypeVar, Generic
+class C0[T]:
+    def foo[T](self, x: T) -> T:  # E: Type parameter `T` shadows a type parameter of the same name from an enclosing scope
+        return x
+T = TypeVar("T")
+class C1(Generic[T]):
+    def foo[T](self, x: T) -> T:  # E: Type parameter `T` shadows a type parameter of the same name from an enclosing scope
+        return x
+    "#,
+);
+
+testcase!(
+    test_typevar_or_none,
+    r#"
+from typing import assert_type
+def f[T1, T2](x: T1, y: T2 | None = None) -> T1 | T2: ...
+assert_type(f(1), int)
+assert_type(f(1, "2"), int | str)
+assert_type(f(1, None), int)
+    "#,
+);
+
+testcase!(
+    test_typevar_solved_in_one_path,
+    r#"
+from typing import assert_type
+def f[T1, T2](x: T1, y: T2 | None, z: T2) -> T1 | T2: ...
+assert_type(f(1, None, ""), int | str)
+    "#,
+);
+
+testcase!(
+    test_return_only_unsolved_typevars,
+    r#"
+from typing import Any, assert_type
+
+def f1[T](x: T | None = None) -> T: ...
+assert_type(f1(), Any)
+
+def f2[T1, T2](x: T1 | None = None, y: T2 | None = None) -> T1 | T2: ...
+assert_type(f2(), Any)
+    "#,
+);
+
+testcase!(
+    test_unsolved_typevar_multiple_occurrences,
+    r#"
+from typing import Any, assert_type
+def f[T](x: T | None = None) -> tuple[T, T | int]: ...
+assert_type(f(), tuple[Any, int])
+    "#,
+);
+
+testcase!(
+    test_pass_tuple_literal_through_identity_function,
+    r#"
+def f[T](x: T) -> T:
+    return x
+def g() -> int:
+    return f((1, "hello world"))[0]
+    "#,
+);
+
+testcase!(
+    test_type_attr,
+    r#"
+from typing import assert_type
+def f[T](
+    config_type: type[T],
+) -> T:
+    assert_type(config_type.__name__, str)
+    return config_type()
+    "#,
+);
+
+testcase!(
+    test_nested_typevar,
+    r#"
+from typing import assert_type
+def f[T](x: list[T] | list[None], y: list[T]) -> T:
+    return y[0]
+assert_type(f([None], [0]), int)
+    "#,
+);
+
+testcase!(
+    test_generator_iterable,
+    r#"
+from typing import Any
+
+type TypeForm[T] = type[T] | Any
+
+def _to_list[T](
+    value: Any,
+    kind: type[list[T]] = list,
+) -> list[T]:
+    return kind(to_type(val, Any) for val in value)
+
+def to_type[T](value: Any, kind: TypeForm[T]) -> T: ...
+    "#,
+);

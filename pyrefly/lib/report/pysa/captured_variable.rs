@@ -230,7 +230,7 @@ impl<'a> AstScopedVisitor for CapturedVariableVisitor<'a> {
         expr: &Expr,
         scopes: &Scopes,
         _parent_expression: Option<&Expr>,
-        _assignment_targets: Option<&Vec<&Expr>>,
+        _current_statement: Option<&Stmt>,
     ) {
         if self.current_exported_function.is_none() {
             return;

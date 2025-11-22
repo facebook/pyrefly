@@ -16,6 +16,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::lock::RwLock;
+use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -116,7 +117,7 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// The source database-related configuration files a watcher should wait for
     /// changes on. Changes to one of these returned watchfiles should force
     /// a sourcedb rebuild.
-    fn get_critical_files(&self) -> SmallSet<PathBuf>;
+    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>>;
     /// Get the target for the given [`ModulePath`], if one exists.
     fn get_target(&self, origin: Option<&Path>) -> Option<Target>;
 }

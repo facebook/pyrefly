@@ -345,14 +345,6 @@ impl ScalarTypeProperties {
         }
     }
 
-    pub fn join(mut self, other: ScalarTypeProperties) -> Self {
-        self.is_bool &= other.is_bool;
-        self.is_int &= other.is_int;
-        self.is_float &= other.is_float;
-        self.is_enum &= other.is_enum;
-        self
-    }
-
     #[cfg(test)]
     pub fn int() -> ScalarTypeProperties {
         ScalarTypeProperties {
@@ -363,7 +355,6 @@ impl ScalarTypeProperties {
         }
     }
 
-    #[cfg(test)]
     pub fn bool() -> ScalarTypeProperties {
         ScalarTypeProperties {
             is_bool: true,

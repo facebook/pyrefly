@@ -33,6 +33,7 @@ use ruff_python_ast::StringFlags;
 use ruff_python_ast::StringLiteral;
 use ruff_python_ast::StringLiteralFlags;
 use ruff_python_ast::StringLiteralValue;
+use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
 use ruff_python_parser::ParseError;
@@ -331,11 +332,18 @@ impl Ast {
 
     pub fn contains_await(expr: &Expr) -> bool {
         let mut found = false;
-        expr.visit(&mut |node: &Expr| {
-            if matches!(node, Expr::Await(_)) {
-                found = true;
+        // Recursive function that checks this node and recurses to children
+        fn check(expr: &Expr, found: &mut bool) {
+            if matches!(expr, Expr::Await(_)) {
+                *found = true;
             }
-        });
+            expr.recurse(&mut |child: &Expr| check(child, found));
+        }
+        expr.visit(&mut |node: &Expr| check(node, &mut found));
         found
+    }
+
+    pub fn is_mangled_attr(name: &Name) -> bool {
+        name.starts_with("__") && !name.ends_with("__")
     }
 }

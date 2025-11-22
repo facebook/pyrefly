@@ -15,6 +15,7 @@ use itertools::Itertools;
 use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
 use lsp_types::Url;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::number_thousands;
@@ -28,6 +29,7 @@ use ruff_annotate_snippets::Snippet;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 use yansi::Paint;
 
@@ -185,7 +187,7 @@ impl Error {
             .ok()
             .map(|href| CodeDescription { href });
         Diagnostic {
-            range: self.lined_buffer().to_lsp_range(self.range()),
+            range: self.module.to_lsp_range(self.range()),
             severity: Some(match self.severity() {
                 Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
                 Severity::Warn => lsp_types::DiagnosticSeverity::WARNING,
@@ -197,8 +199,13 @@ impl Error {
             message: self.msg().to_owned(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
+            tags: None,
             ..Default::default()
         }
+    }
+
+    pub fn get_notebook_cell(&self) -> Option<usize> {
+        self.module.to_cell_for_lsp(self.range().start())
     }
 
     pub fn module(&self) -> &Module {
@@ -286,11 +293,11 @@ impl Error {
         }
     }
 
-    pub fn is_ignored(&self, permissive_ignores: bool) -> bool {
+    pub fn is_ignored(&self, enabled_ignores: &SmallSet<Tool>) -> bool {
         self.module.is_ignored(
             &self.display_range,
             self.error_kind.to_name(),
-            permissive_ignores,
+            enabled_ignores,
         )
     }
 

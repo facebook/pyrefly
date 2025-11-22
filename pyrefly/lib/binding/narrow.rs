@@ -31,13 +31,18 @@ use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
+use crate::binding::binding::Binding;
+use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
+use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::types::facet::FacetChain;
 use crate::types::facet::FacetKind;
@@ -432,14 +437,25 @@ impl NarrowOps {
     }
 
     pub fn from_expr(builder: &BindingsBuilder, test: Option<&Expr>) -> Self {
+        Self::from_expr_helper(builder, test, SmallSet::new())
+    }
+
+    fn from_expr_helper<'a>(
+        builder: &BindingsBuilder,
+        test: Option<&'a Expr>,
+        mut seen: SmallSet<&'a Name>,
+    ) -> Self {
+        let Some(test) = test else {
+            return Self::new();
+        };
         match test {
-            Some(Expr::Compare(ExprCompare {
+            Expr::Compare(ExprCompare {
                 node_index: _,
                 range: _,
                 left,
                 ops: cmp_ops,
                 comparators,
-            })) => {
+            }) => {
                 // If the left expression is a call to `len()` or `getattr()`, we're narrowing the first argument
                 let mut left = &**left;
                 // If the left expression is a call to `getattr()` we store attribute name and default
@@ -538,46 +554,49 @@ impl NarrowOps {
                     }
                 }
             }
-            Some(Expr::BoolOp(ExprBoolOp {
+            Expr::BoolOp(ExprBoolOp {
                 node_index: _,
                 range: _,
                 op,
                 values,
-            })) => {
+            }) => {
                 let extend = match op {
                     BoolOp::And => NarrowOps::and_all,
                     BoolOp::Or => NarrowOps::or_all,
                 };
                 let mut exprs = values.iter();
-                let mut narrow_ops = Self::from_expr(builder, exprs.next());
+                let mut narrow_ops = Self::from_expr_helper(builder, exprs.next(), seen.clone());
                 for next_val in exprs {
-                    extend(&mut narrow_ops, Self::from_expr(builder, Some(next_val)))
+                    extend(
+                        &mut narrow_ops,
+                        Self::from_expr_helper(builder, Some(next_val), seen.clone()),
+                    )
                 }
                 narrow_ops
             }
-            Some(Expr::UnaryOp(ExprUnaryOp {
+            Expr::UnaryOp(ExprUnaryOp {
                 node_index: _,
                 range: _,
                 op: UnaryOp::Not,
                 operand: e,
-            })) => Self::from_expr(builder, Some(e)).negate(),
-            Some(Expr::Call(ExprCall {
+            }) => Self::from_expr_helper(builder, Some(e), seen).negate(),
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments,
-            })) if builder.as_special_export(func) == Some(SpecialExport::Bool)
+            }) if builder.as_special_export(func) == Some(SpecialExport::Bool)
                 && arguments.args.len() == 1
                 && arguments.keywords.is_empty() =>
             {
                 Self::from_single_narrow_op(&arguments.args[0], AtomicNarrowOp::IsTruthy, *range)
             }
-            Some(Expr::Call(ExprCall {
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments,
-            })) if builder.as_special_export(func) == Some(SpecialExport::HasAttr)
+            }) if builder.as_special_export(func) == Some(SpecialExport::HasAttr)
                 && arguments.args.len() == 2
                 && arguments.keywords.is_empty()
                 && let Expr::StringLiteral(ExprStringLiteral { value, .. }) =
@@ -589,12 +608,12 @@ impl NarrowOps {
                     *range,
                 )
             }
-            Some(Expr::Call(ExprCall {
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments,
-            })) if builder.as_special_export(func) == Some(SpecialExport::GetAttr)
+            }) if builder.as_special_export(func) == Some(SpecialExport::GetAttr)
                 && (arguments.args.len() == 2 || arguments.args.len() == 3)
                 && arguments.keywords.is_empty()
                 && let Expr::StringLiteral(ExprStringLiteral { value, .. }) =
@@ -613,18 +632,18 @@ impl NarrowOps {
                     *range,
                 )
             }
-            Some(e @ Expr::Call(call)) if dict_get_subject_for_call_expr(call).is_some() => {
+            e @ Expr::Call(call) if dict_get_subject_for_call_expr(call).is_some() => {
                 // When the guard is something like `x.get("key")`, we narrow it like `x["key"]` if `x` resolves to a dict
                 // in the answers step.
                 // This cannot be a TypeGuard/TypeIs function call, since the first argument is a string literal
                 Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range())
             }
-            Some(Expr::Call(ExprCall {
+            Expr::Call(ExprCall {
                 node_index: _,
                 range,
                 func,
                 arguments: args @ Arguments { args: posargs, .. },
-            })) if !posargs.is_empty() => {
+            }) if !posargs.is_empty() => {
                 // This may be a function call that narrows the type of its first argument. Record
                 // it as a possible narrowing operation that we'll resolve in the answers phase.
                 Self::from_single_narrow_op(
@@ -633,13 +652,14 @@ impl NarrowOps {
                     *range,
                 )
             }
-            Some(Expr::Named(named)) => {
+            Expr::Named(named) => {
                 let mut target_narrow = Self::from_single_narrow_op(
                     &named.target,
                     AtomicNarrowOp::IsTruthy,
                     named.target.range(),
                 );
-                let value_narrow = Self::from_expr(builder, Some(*named.value.clone()).as_ref());
+                let value_narrow =
+                    Self::from_expr_helper(builder, Some(*named.value.clone()).as_ref(), seen);
                 // Merge the entries from the two `NarrowOps`
                 // We don't use `and_all` because it always generates placeholders when the entry is not present.
                 // This causes `Or` ops to be generated when the narrowing is negated, which is correct for
@@ -657,8 +677,94 @@ impl NarrowOps {
                 }
                 target_narrow
             }
-            Some(e) => Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range()),
-            None => Self::new(),
+            e @ Expr::Name(name) => {
+                if !seen.insert(name.id()) {
+                    Self::new()
+                } else {
+                    // Look up the definition of `name`.
+                    let original_expr = match Self::get_original_binding(builder, &name.id) {
+                        Some((_, Some(Binding::NameAssign(_, _, original_expr, _)))) => {
+                            Some(&**original_expr)
+                        }
+                        _ => None,
+                    };
+                    let mut ops = Self::from_expr_helper(builder, original_expr, seen);
+                    ops.0.retain(|name, (op, op_range)| {
+                        Self::op_is_still_valid(builder, name, op, *op_range)
+                    });
+                    // Merge the narrow ops from the original definition with IsTruthy(name).
+                    ops.0.insert(
+                        name.id.clone(),
+                        (NarrowOp::Atomic(None, AtomicNarrowOp::IsTruthy), e.range()),
+                    );
+                    ops
+                }
+            }
+            e => Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range()),
+        }
+    }
+
+    fn get_original_binding<'a>(
+        builder: &'a BindingsBuilder,
+        name: &Name,
+    ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
+        let name_read_info = builder.scopes.look_up_name_for_read(Hashed::new(name));
+        match name_read_info {
+            NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
+            _ => None,
+        }
+    }
+
+    fn op_is_still_valid(
+        builder: &BindingsBuilder,
+        name: &Name,
+        op: &NarrowOp,
+        op_range: TextRange,
+    ) -> bool {
+        // Check (1) if `op` checks a property of `name` that can't be invalidated without
+        // reassigning `name` and (2) whether `name` is reassigned after `op` is computed.
+        match op {
+            NarrowOp::And(ops) | NarrowOp::Or(ops) => ops
+                .iter()
+                .all(|op| Self::op_is_still_valid(builder, name, op, op_range)),
+            // A non-None facet subject means we're narrowing something like an attribute or a dict item.
+            NarrowOp::Atomic(Some(_), _) => false,
+            NarrowOp::Atomic(None, op) => match op {
+                AtomicNarrowOp::Is(..)
+                | AtomicNarrowOp::IsNot(..)
+                | AtomicNarrowOp::Eq(..)
+                | AtomicNarrowOp::NotEq(..)
+                // Technically the `__class__` attribute can be mutated, but code that does that
+                // probably isn't statically analyzable anyway.
+                | AtomicNarrowOp::IsInstance(..)
+                | AtomicNarrowOp::IsNotInstance(..)
+                | AtomicNarrowOp::IsSubclass(..)
+                | AtomicNarrowOp::IsNotSubclass(..)
+                | AtomicNarrowOp::TypeEq(..)
+                | AtomicNarrowOp::TypeNotEq(..)
+                // The len ops are only applied to tuples, which are immutable.
+                | AtomicNarrowOp::LenEq(..)
+                | AtomicNarrowOp::LenNotEq(..)
+                | AtomicNarrowOp::LenGt(..)
+                | AtomicNarrowOp::LenGte(..)
+                | AtomicNarrowOp::LenLt(..)
+                | AtomicNarrowOp::LenLte(..)
+                // This is technically unsafe, because it marks arbitrary TypeGuard/TypeIs results
+                // as still valid, but we need to allow this for `isinstance` and friends to work.
+                | AtomicNarrowOp::Call(..)
+                | AtomicNarrowOp::NotCall(..)
+                // The only objects that have different truthy and falsy types
+                // (True vs. False, empty vs. non-empty tuple, etc.) are immutable.
+                | AtomicNarrowOp::IsTruthy
+                | AtomicNarrowOp::IsFalsy
+                | AtomicNarrowOp::Placeholder => match builder.scopes.binding_idx_for_name(name) {
+                    // Make sure the last definition of `name` is before the narrowing operation,
+                    // so we know that `name` hasn't been redefined post-narrowing.
+                    Some((idx, _)) => builder.idx_to_key(idx).range().end() <= op_range.start(),
+                    None => true,
+                },
+                _ => false,
+            },
         }
     }
 }

@@ -32,6 +32,19 @@ def foo(x: A | B) -> None:
 );
 
 testcase!(
+    test_union_not_callable,
+    r#"
+from typing import assert_type
+class A:
+    def foo(self) -> int: ...
+class B:
+    foo: str
+def foo(x: A | B) -> None:
+    x.foo()  # E: Expected a callable, got `str`
+"#,
+);
+
+testcase!(
     test_distribute_type_over_union,
     r#"
 from typing import assert_type
@@ -1851,9 +1864,17 @@ Z = Annotated[0, 'not a type']  # E: Expected a type form, got instance of `Lite
 );
 
 testcase!(
-    test_starred_empty_tuple_no_panic,
+    test_typing_annotated_alias,
     r#"
-(),*()
+from typing import Annotated, assert_type
+
+Alias = Annotated
+
+def takes_alias(x: Alias[int, "meta"]) -> None:
+    assert_type(x, int)
+
+takes_alias(1)
+takes_alias("bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
     "#,
 );
 
@@ -1878,5 +1899,25 @@ testcase!(
     r#"
 from typing import SupportsIndex
 x: SupportsIndex = 3
+    "#,
+);
+
+// A request from Apache Airflow: make sure we don't add logic that complains on
+// an unused bitshift expression - some linters dislike this, but Airflow uses it
+// as a side-effecting operation to express DAG dependencies.
+testcase!(
+    test_bitshift_as_side_effect_does_not_error,
+    r#"
+def f(x: int, y: int):
+    x >> y
+    "#,
+);
+
+testcase!(
+    test_assign_expression_in_annotation,
+    r#"
+from typing import reveal_type
+x: (y := 1)  # E: Expected a type form
+z: int = y
     "#,
 );

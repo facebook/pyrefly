@@ -41,7 +41,8 @@ async function updateStatusBar() {
   const document = vscode.window.activeTextEditor?.document;
   if (
     document == null ||
-    document.uri.scheme !== 'file' ||
+    (document.uri.scheme !== 'file' &&
+      document.uri.scheme !== 'vscode-notebook-cell' && document.uri.scheme !== 'untitled') ||
     document.languageId !== 'python'
   ) {
     statusBarItem?.hide();
@@ -256,8 +257,26 @@ export async function activate(context: ExtensionContext) {
   // Options to control the language client
   let clientOptions: LanguageClientOptions = {
     initializationOptions: rawInitialisationOptions,
-    // Register the server for Starlark documents
-    documentSelector: [{scheme: 'file', language: 'python'}],
+    // Register the server for Python documents
+    documentSelector: [
+      {scheme: 'file', language: 'python'},
+      // Support for unsaved/untitled files
+      {scheme: 'untitled', language: 'python'},
+      // Support for notebook cells
+      {scheme: 'vscode-notebook-cell', language: 'python'},
+      // Support for in-memory documents like the Positron Console
+      {scheme: 'inmemory', language: 'python'},
+    ],
+    // Support for notebooks
+    // @ts-ignore
+    notebookDocumentSync: {
+      notebookSelector: [
+        {
+          notebook: {notebookType: 'jupyter-notebook'},
+          cells: [{language: 'python'}],
+        },
+      ],
+    },
     outputChannel: outputChannel,
     middleware: {
       workspace: {

@@ -32,7 +32,7 @@
           "call_args": [],
           "callee_span": {
             "length": 11,
-            "start": 259
+            "start": 319
           },
           "file": {
             "id": 0,
@@ -53,13 +53,40 @@
               },
               "span": {
                 "length": 7,
-                "start": 242
+                "start": 302
               }
             }
           ],
           "callee_span": {
             "length": 12,
-            "start": 238
+            "start": 298
+          },
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "call_args": [
+            {
+              "argument": {
+                "lit": {
+                  "id": 0,
+                  "key": "T"
+                }
+              },
+              "span": {
+                "length": 3,
+                "start": 35
+              }
+            }
+          ],
+          "callee_span": {
+            "length": 19,
+            "start": 20
           },
           "file": {
             "id": 0,
@@ -357,12 +384,70 @@
             }
           },
           "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "classes.typing"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "typing"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
             "module": {
               "id": 0,
               "key": {
                 "name": {
                   "id": 0,
                   "key": "classes"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "classes"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "classes"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "classes.T"
                 }
               }
             }
@@ -447,8 +532,8 @@
             "key": "classes.py"
           },
           "span": {
-            "length": 146,
-            "start": 0
+            "length": 165,
+            "start": 41
           }
         }
       },
@@ -472,7 +557,7 @@
           },
           "span": {
             "length": 82,
-            "start": 148
+            "start": 208
           }
         }
       },
@@ -496,7 +581,7 @@
           },
           "span": {
             "length": 55,
-            "start": 18
+            "start": 78
           }
         }
       },
@@ -520,7 +605,7 @@
           },
           "span": {
             "length": 67,
-            "start": 79
+            "start": 139
           }
         }
       },
@@ -544,7 +629,35 @@
           },
           "span": {
             "length": 59,
-            "start": 171
+            "start": 231
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "classes.typing"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "typing"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "span": {
+            "length": 6,
+            "start": 8
           }
         }
       },
@@ -567,7 +680,7 @@
             "key": "classes.py"
           },
           "span": {
-            "length": 270,
+            "length": 330,
             "start": 0
           }
         }
@@ -592,7 +705,7 @@
           },
           "span": {
             "length": 4,
-            "start": 37
+            "start": 97
           }
         }
       },
@@ -616,7 +729,7 @@
           },
           "span": {
             "length": 16,
-            "start": 57
+            "start": 117
           }
         }
       },
@@ -640,7 +753,7 @@
           },
           "span": {
             "length": 4,
-            "start": 31
+            "start": 91
           }
         }
       },
@@ -664,7 +777,7 @@
           },
           "span": {
             "length": 4,
-            "start": 89
+            "start": 149
           }
         }
       },
@@ -688,7 +801,31 @@
           },
           "span": {
             "length": 4,
-            "start": 181
+            "start": 241
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "classes.T"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "span": {
+            "length": 23,
+            "start": 16
           }
         }
       },
@@ -712,7 +849,7 @@
           },
           "span": {
             "length": 18,
-            "start": 232
+            "start": 292
           }
         }
       },
@@ -736,7 +873,7 @@
           },
           "span": {
             "length": 19,
-            "start": 251
+            "start": 311
           }
         }
       }
@@ -745,47 +882,6 @@
   },
   {
     "facts": [
-      {
-        "id": 0,
-        "key": {
-          "definition": {
-            "cls": {
-              "id": 0,
-              "key": {
-                "bases": [],
-                "container": {
-                  "module": {
-                    "id": 0,
-                    "key": {
-                      "name": {
-                        "id": 0,
-                        "key": "classes"
-                      }
-                    }
-                  }
-                },
-                "declaration": {
-                  "id": 0,
-                  "key": {
-                    "name": {
-                      "id": 0,
-                      "key": "classes.Animal"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "file": {
-            "id": 0,
-            "key": "classes.py"
-          },
-          "span": {
-            "length": 146,
-            "start": 0
-          }
-        }
-      },
       {
         "id": 0,
         "key": {
@@ -833,7 +929,58 @@
           },
           "span": {
             "length": 82,
-            "start": 148
+            "start": 208
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "bases": [
+                  {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "typing.Generic"
+                      }
+                    }
+                  }
+                ],
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "classes"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "classes.Animal"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "span": {
+            "length": 165,
+            "start": 41
           }
         }
       },
@@ -908,7 +1055,7 @@
           },
           "span": {
             "length": 55,
-            "start": 18
+            "start": 78
           }
         }
       },
@@ -977,7 +1124,7 @@
           },
           "span": {
             "length": 67,
-            "start": 79
+            "start": 139
           }
         }
       },
@@ -1046,7 +1193,7 @@
           },
           "span": {
             "length": 59,
-            "start": 171
+            "start": 231
           }
         }
       },
@@ -1074,7 +1221,7 @@
             "key": "classes.py"
           },
           "span": {
-            "length": 270,
+            "length": 330,
             "start": 0
           }
         }
@@ -1133,7 +1280,7 @@
           },
           "span": {
             "length": 4,
-            "start": 37
+            "start": 97
           }
         }
       },
@@ -1173,7 +1320,7 @@
           },
           "span": {
             "length": 16,
-            "start": 57
+            "start": 117
           }
         }
       },
@@ -1213,7 +1360,7 @@
           },
           "span": {
             "length": 4,
-            "start": 31
+            "start": 91
           }
         }
       },
@@ -1253,7 +1400,7 @@
           },
           "span": {
             "length": 4,
-            "start": 89
+            "start": 149
           }
         }
       },
@@ -1293,7 +1440,47 @@
           },
           "span": {
             "length": 4,
-            "start": 181
+            "start": 241
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "classes"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "classes.T"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "span": {
+            "length": 23,
+            "start": 16
           }
         }
       },
@@ -1333,7 +1520,7 @@
           },
           "span": {
             "length": 18,
-            "start": 232
+            "start": 292
           }
         }
       },
@@ -1373,7 +1560,7 @@
           },
           "span": {
             "length": 19,
-            "start": 251
+            "start": 311
           }
         }
       }
@@ -1386,8 +1573,8 @@
         "id": 0,
         "key": {
           "digest": {
-            "hash": "69c6baa9e7ab9828f09c6be44a0bb4527406bfc3009ee68caa44e0da1e10f473",
-            "size": 270
+            "hash": "d15c35ce09bf1daf42e110d702ef2ed08f22cec6882cf86a84c34506bab78b6a",
+            "size": 330
           },
           "file": {
             "id": 0,
@@ -1413,13 +1600,18 @@
             1,
             1,
             1,
+            1,
+            1,
+            1,
             14,
             19,
             19,
             20,
+            24,
             25,
             28,
             28,
+            33,
             35,
             36,
             44
@@ -1455,16 +1647,35 @@
           },
           "spans": [
             {
+              "length": 1,
+              "start": 69
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "classes.T"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
               "length": 3,
-              "start": 190
+              "start": 103
             },
             {
               "length": 3,
-              "start": 43
+              "start": 158
             },
             {
               "length": 3,
-              "start": 98
+              "start": 250
             }
           ],
           "target": {
@@ -1483,7 +1694,7 @@
           "spans": [
             {
               "length": 3,
-              "start": 238
+              "start": 298
             }
           ],
           "target": {
@@ -1502,7 +1713,7 @@
           "spans": [
             {
               "length": 3,
-              "start": 259
+              "start": 319
             }
           ],
           "target": {
@@ -1521,7 +1732,26 @@
           "spans": [
             {
               "length": 4,
-              "start": 121
+              "start": 129
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "classes.Animal.__init__.<locals>.name"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 181
             }
           ],
           "target": {
@@ -1540,7 +1770,7 @@
           "spans": [
             {
               "length": 4,
-              "start": 126
+              "start": 186
             }
           ],
           "target": {
@@ -1559,7 +1789,7 @@
           "spans": [
             {
               "length": 4,
-              "start": 213
+              "start": 273
             }
           ],
           "target": {
@@ -1578,7 +1808,7 @@
           "spans": [
             {
               "length": 4,
-              "start": 218
+              "start": 278
             }
           ],
           "target": {
@@ -1596,27 +1826,8 @@
           },
           "spans": [
             {
-              "length": 4,
-              "start": 69
-            }
-          ],
-          "target": {
-            "id": 0,
-            "key": "classes.Animal.__init__.<locals>.name"
-          }
-        }
-      },
-      {
-        "id": 0,
-        "key": {
-          "file": {
-            "id": 0,
-            "key": "classes.py"
-          },
-          "spans": [
-            {
               "length": 5,
-              "start": 263
+              "start": 323
             }
           ],
           "target": {
@@ -1635,12 +1846,77 @@
           "spans": [
             {
               "length": 6,
-              "start": 158
+              "start": 20
+            },
+            {
+              "length": 6,
+              "start": 54
+            },
+            {
+              "length": 6,
+              "start": 8
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "typing"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 6,
+              "start": 218
             }
           ],
           "target": {
             "id": 0,
             "key": "classes.Animal"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 7,
+              "start": 27
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "typing.TypeVar"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 7,
+              "start": 61
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "typing.Generic"
           }
         }
       }
@@ -1659,8 +1935,18 @@
           "xrefs": [
             {
               "source": {
+                "length": 1,
+                "start": 69
+              },
+              "target": {
+                "id": 0,
+                "key": "classes.T"
+              }
+            },
+            {
+              "source": {
                 "length": 3,
-                "start": 190
+                "start": 103
               },
               "target": {
                 "id": 0,
@@ -1670,7 +1956,27 @@
             {
               "source": {
                 "length": 3,
-                "start": 238
+                "start": 158
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 250
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 298
               },
               "target": {
                 "id": 0,
@@ -1680,7 +1986,7 @@
             {
               "source": {
                 "length": 3,
-                "start": 259
+                "start": 319
               },
               "target": {
                 "id": 0,
@@ -1689,28 +1995,18 @@
             },
             {
               "source": {
-                "length": 3,
-                "start": 43
+                "length": 4,
+                "start": 129
               },
               "target": {
                 "id": 0,
-                "key": "str"
-              }
-            },
-            {
-              "source": {
-                "length": 3,
-                "start": 98
-              },
-              "target": {
-                "id": 0,
-                "key": "str"
+                "key": "classes.Animal.__init__.<locals>.name"
               }
             },
             {
               "source": {
                 "length": 4,
-                "start": 121
+                "start": 181
               },
               "target": {
                 "id": 0,
@@ -1720,7 +2016,7 @@
             {
               "source": {
                 "length": 4,
-                "start": 126
+                "start": 186
               },
               "target": {
                 "id": 0,
@@ -1730,7 +2026,7 @@
             {
               "source": {
                 "length": 4,
-                "start": 213
+                "start": 273
               },
               "target": {
                 "id": 0,
@@ -1740,7 +2036,7 @@
             {
               "source": {
                 "length": 4,
-                "start": 218
+                "start": 278
               },
               "target": {
                 "id": 0,
@@ -1749,18 +2045,8 @@
             },
             {
               "source": {
-                "length": 4,
-                "start": 69
-              },
-              "target": {
-                "id": 0,
-                "key": "classes.Animal.__init__.<locals>.name"
-              }
-            },
-            {
-              "source": {
                 "length": 5,
-                "start": 263
+                "start": 323
               },
               "target": {
                 "id": 0,
@@ -1770,11 +2056,61 @@
             {
               "source": {
                 "length": 6,
-                "start": 158
+                "start": 20
+              },
+              "target": {
+                "id": 0,
+                "key": "typing"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 218
               },
               "target": {
                 "id": 0,
                 "key": "classes.Animal"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 54
+              },
+              "target": {
+                "id": 0,
+                "key": "typing"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 8
+              },
+              "target": {
+                "id": 0,
+                "key": "typing"
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 27
+              },
+              "target": {
+                "id": 0,
+                "key": "typing.TypeVar"
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 61
+              },
+              "target": {
+                "id": 0,
+                "key": "typing.Generic"
               }
             }
           ]
@@ -2310,6 +2646,31 @@
         "id": 0,
         "key": {
           "id": 0,
+          "key": "classes.T"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "T"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "classes"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
           "key": "classes.dog"
         },
         "value": {
@@ -2352,6 +2713,47 @@
                   "key": "classes"
                 }
               }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "classes.typing"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "typing"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "classes"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "typing"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "typing"
             }
           }
         }

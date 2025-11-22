@@ -25,6 +25,41 @@ def baz(c: Coord) -> Mapping[str, str]:
 );
 
 testcase!(
+    bug = "Our handling of ClassVar and methods is fishy, and our error messages are not clear",
+    test_typed_dict_with_illegal_members,
+    r#"
+from typing import TypedDict, ClassVar, reveal_type
+# Although classmethods, classvars, and static methods do actually
+# work at runtime, type checkers seem to agree that these are not
+# permissible in typed dicts.
+class D(TypedDict):
+    cv: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict members
+    x: str = "x"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    z = "z"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    def f(self) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+        self.w = "w"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    @classmethod
+    def g(cls) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+        cls.u = "u"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    @staticmethod
+    def h(self) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+        ...
+def foo(d: D):
+    reveal_type(d["cv"])  # E: revealed type: int
+    reveal_type(d["x"])  # E: revealed type: str
+    reveal_type(d["z"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have key `z`
+    reveal_type(d["f"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
+    reveal_type(d["g"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
+    reveal_type(d["h"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
+    reveal_type(d["w"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
+    reveal_type(d["u"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
+    reveal_type(D.cv)  # E: revealed type: int
+    reveal_type(D.g)  # E: revealed type: Unknown
+    reveal_type(D.h)  # E: revealed type: Unknown
+    "#,
+);
+
+testcase!(
     test_typed_dict_kwargs_type,
     r#"
 from typing import assert_type, TypedDict, Unpack
@@ -43,8 +78,8 @@ testcase!(
     r#"
 from typing import TypedDict, Required, NotRequired, ReadOnly, ClassVar, Final
 class MyDict(TypedDict):
-    v: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict or NamedTuple members
-    w: Final[int]  # E: `Final` may not be used for TypedDict or NamedTuple members
+    v: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict members
+    w: Final[int]  # E: `Final` may not be used for TypedDict members
     x: NotRequired  # E: Expected a type argument for `NotRequired`
     y: Required  # E: Expected a type argument for `Required`
     z: ReadOnly  # E: Expected a type argument for `ReadOnly`
@@ -250,16 +285,6 @@ class Coord[T](TypedDict):
 def foo(c: Coord[int]):
     x: int = c["x"]
     y: str = c["y"]  # E: `int` is not assignable to `str`
-    "#,
-);
-
-testcase!(
-    test_typed_dict_initialized_field,
-    r#"
-from typing import TypedDict
-class Coord(TypedDict):
-    x: int
-    y: int = 2  # E: TypedDict item `y` may not be initialized
     "#,
 );
 
@@ -753,7 +778,7 @@ testcase!(
 from typing import TypedDict, NotRequired
 class D(TypedDict):
      x: int
-     y: int = 5  # E: TypedDict item `y` may not be initialized
+     y: int = 5  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
      z: NotRequired[int]
 # Default values are completely ignored in constructor behavior, so requiredness in `__init__` should be
 # determined entirely by whether the field is required in the resulting dict.
@@ -1803,13 +1828,13 @@ testcase!(
     test_unpack_inherited_typeddict,
     r#"
 import typing_extensions as te
-    
+
 class InheritFromMe(te.TypedDict):
     foo: bool
-    
+
 class TestBadUnpackingError(InheritFromMe):
     bar: bool
-    
+
 unpack_this: InheritFromMe = {"foo": True}
 test1: TestBadUnpackingError = {"bar": True, **unpack_this}
 test2: TestBadUnpackingError = {"bar": True, "foo": True}
@@ -1903,4 +1928,40 @@ t1: ClosedTarget = {**open}  # E: open TypedDict with unknown extra items
 # not ok: `open` could contain extra items of the wrong type
 t2: ExtraItemsTarget = {**open}  # E: open TypedDict with unknown extra items
     "#,
+);
+
+testcase!(
+    test_union_as_key,
+    r#"
+from typing import TypedDict, Literal
+class Foo(TypedDict):
+    bar: int
+    baz: int
+def f(foo: Foo, k: Literal["bar", "baz"]):
+    print(foo[k])
+    foo[k] = 2
+    "#,
+);
+
+testcase!(
+    test_recursive_functional_typeddict,
+    r#"
+from typing import NamedTuple, TypedDict, Optional
+ListNode = TypedDict('ListNode', {
+    'value': int,
+    'next': Optional['ListNode'],
+})
+"#,
+);
+
+testcase!(
+    test_defines_init,
+    r#"
+from typing import TypedDict, Any
+def any() -> Any: ...
+class D(TypedDict):
+    x: int
+    __init__ = any()  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+D(x=5)
+"#,
 );

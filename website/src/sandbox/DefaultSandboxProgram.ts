@@ -32,7 +32,7 @@ from typing import *
 from utils import format_number
 
 def test(x: int):
-  return format_number(x)
+    return format_number(x)
 
 # reveal_type will produce a type error that tells you the type Pyrefly has
 # computed for the return (in this case, str)

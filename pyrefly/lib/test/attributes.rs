@@ -184,20 +184,37 @@ class B(A):
     "#,
 );
 
+// Verify that we correctly pick up parant class type as context when there's a
+// qualifier-only annotation.
+testcase!(
+    test_inherited_attribute_with_qualifier_only_annotation,
+    r#"
+from typing import ClassVar, assert_type
+class A: pass
+class B(A): pass
+class Foo:
+    x: ClassVar[list[A]] = []
+    y: ClassVar[list[A]] = []
+class Bar(Foo):
+    x: ClassVar = [B()]
+    y = [B()]
+assert_type(Bar.x, list[A])
+assert_type(Bar.y, list[A])
+    "#,
+);
+
 // Ref https://github.com/facebook/pyrefly/issues/370
 // Ref https://github.com/facebook/pyrefly/issues/522
 testcase!(
-    bug =
-        "Attributes initialized in `__new__` and `__init_subclass__` should not be instance-only.",
     test_cls_attribute_in_constructor,
     r#"
 from typing import ClassVar
 class A:
     def __new__(cls, x: int):
-        cls.x = x # E: Instance-only attribute `x` of class `A` is not visible on the class
+        cls.x = x
 class B:
     def __init_subclass__(cls, x: int):
-        cls.x = x # E: Instance-only attribute `x` of class `B` is not visible on the class
+        cls.x = x
 class C:
     x: ClassVar[int]
     def __new__(cls, x: int):
@@ -217,6 +234,28 @@ class MyTestCase:
         self.x = 5
     def run(self):
         assert self.x == 5
+    "#,
+);
+
+testcase!(
+    bug = "Attributes assigned in TestCase.setUpClass should be available on the class",
+    test_class_attribute_in_setup_class,
+    r#"
+from unittest import TestCase
+
+class Base(TestCase):
+    shared: int
+
+class Child(Base):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.shared = 1
+
+    def test_shared(self) -> None:
+        assert self.shared == 1
+
+Child.shared
     "#,
 );
 
@@ -497,13 +536,9 @@ assert_type(x, int)
     "#,
 );
 
-// We currently treat `Callable` as not having method binding behavior. This is
-// not compatible with Pyright and mypy, both of which assume in the face of
-// ambiguity that the callable is probably a function or lambda.
-//
+// To align with mypy & pyright, ClassVar[Callable] attributes should have method binding behavior
 // See https://discuss.python.org/t/when-should-we-assume-callable-types-are-method-descriptors/92938
 testcase!(
-    bug = "We probably need to treat `f` as a method here.",
     test_callable_as_class_var,
     r#"
 from typing import assert_type, Callable, ClassVar
@@ -511,8 +546,7 @@ def get_callback() -> Callable[[object, int], int]: ...
 class C:
     f: ClassVar[Callable[[object, int], int]] = get_callback()
 assert_type(C.f(None, 1), int)
-# We probably should to be treating f as a bound method here.
-assert_type(C().f(None, 1), int)
+assert_type(C().f(1), int)
 "#,
 );
 
@@ -957,7 +991,7 @@ testcase!(
     test_illegal_type_variable_with_name_shadowing,
     r#"
 class C[R]:
-    def __init__[R](self, field: R):
+    def __init__[R](self, field: R):  # E: Type parameter `R` shadows a type parameter of the same name from an enclosing scope
         self.field = field  # E: Attribute `field` cannot depend on type variable `R`, which is not in the scope of class `C`
 "#,
 );
@@ -1183,13 +1217,12 @@ def f[T: Foo | Bar](y: T, z: Foo | Bar) -> T:
 );
 
 testcase!(
-    bug = "type[None] should be types.NoneType",
     test_attribute_access_on_type_none,
     r#"
 # handy hack to get a type[X] for any X
 def ty[T](x: T) -> type[T]: ...
 
-ty(None).__bool__(None) # E: Expr::attr_infer_for_type attribute base undefined
+ty(None).__bool__(None)
 "#,
 );
 
@@ -1217,7 +1250,6 @@ def test(x: LiteralString):
 );
 
 testcase!(
-    bug = "type[<<callable>>] should be... types.FunctionType, probably. type[object] if that's unagreeable",
     test_attribute_access_on_type_callable,
     r#"
 from typing import Callable
@@ -1226,12 +1258,11 @@ from typing import Callable
 def ty[T](x: T) -> type[T]: ...
 
 def test_callable(x: Callable[[], None]):
-    ty(x).__call__(x) # E: Expr::attr_infer_for_type attribute base undefined
+    ty(x).__call__(x)
 "#,
 );
 
 testcase!(
-    bug = "type[<<function>>] should be types.FunctionType",
     test_attribute_access_on_type_function,
     r#"
 # handy hack to get a type[X] for any X
@@ -1239,12 +1270,11 @@ def ty[T](x: T) -> type[T]: ...
 
 def foo(): ...
 
-ty(foo).__call__(foo) # E: Expr::attr_infer_for_type attribute base undefined
+ty(foo).__call__(foo)
 "#,
 );
 
 testcase!(
-    bug = "type[<<boundmethod>>] should be types.FunctionType",
     test_attribute_access_on_type_boundmethod,
     r#"
 # handy hack to get a type[X] for any X
@@ -1253,12 +1283,11 @@ def ty[T](x: T) -> type[T]: ...
 class X:
     def m(self): ...
 
-ty(X().m).__call__(X().m) # E: Expr::attr_infer_for_type attribute base undefined
+ty(X().m).__call__(X().m)
 "#,
 );
 
 testcase!(
-    bug = "type[<<overload>>] should be types.FunctionType",
     test_attribute_access_on_type_overload,
     r#"
 from typing import overload
@@ -1272,7 +1301,7 @@ def bar(x: int) -> int: ...
 def bar(x: str) -> str: ...
 def bar(x: int | str) -> int | str: ...
 
-ty(bar).__call__(bar) # E: Expr::attr_infer_for_type attribute base undefined
+ty(bar).__call__(bar)
 "#,
 );
 
@@ -1747,5 +1776,41 @@ from typing import Never, assert_type, reveal_type
 def f() -> type[Never]: ...
 reveal_type(f().mro) # E: BoundMethod[type, (self: type) -> list[type]]
 assert_type(f().wut, Never)
+    "#,
+);
+
+// See https://github.com/facebook/pyrefly/issues/1448 for what this tests
+// and discussion of approaches to handling `@functools.wraps` with return
+// type inference.
+testcase!(
+    test_inferred_returns_from_functools_wraps,
+    r#"
+from typing import assert_type, Any
+from functools import wraps
+def decorator(func):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        return func(self, *args, **kwargs)
+    return wrapper
+class C:
+    @decorator
+    def f(self) -> int: ...
+assert_type(C().f(), Any)
+    "#,
+);
+
+testcase!(
+    test_class_toplevel_inherited_attr_name,
+    r#"
+# at the class top level, inherited attribute names should be considered in scope
+from typing import assert_type
+
+class Foo:
+    assert_type(__qualname__, str)
+    assert_type(__module__, str)
+    attr: int
+
+class Bar(Foo):
+    assert_type(attr, int)
     "#,
 );

@@ -156,6 +156,11 @@ impl ModuleName {
         Self::from_str("pydantic.main")
     }
 
+    #[allow(dead_code)]
+    pub fn pydantic_settings() -> Self {
+        Self::from_str("pydantic_settings.main")
+    }
+
     pub fn pydantic_root_model() -> Self {
         Self::from_str("pydantic.root_model")
     }
@@ -174,6 +179,10 @@ impl ModuleName {
 
     pub fn django_models_fields_related() -> Self {
         Self::from_str("django.db.models.fields.related")
+    }
+
+    pub fn django_models_fields_related_descriptors() -> Self {
+        Self::from_str("django.db.models.fields.related_descriptors")
     }
 
     pub fn django_utils_functional() -> Self {

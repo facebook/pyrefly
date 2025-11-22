@@ -98,11 +98,17 @@ impl SemanticTokensLegends {
         &self,
         tokens: &[SemanticTokenWithFullRange],
         module_info: Module,
+        limit_cell_idx: Option<usize>,
     ) -> Vec<SemanticToken> {
         let mut previous_line = 0;
         let mut previous_col = 0;
         let mut lsp_semantic_tokens = Vec::new();
         for token in tokens {
+            let cell_idx = module_info.to_cell_for_lsp(token.range.start());
+            // Skip tokens different cells if we're filtering for a particular cell
+            if cell_idx != limit_cell_idx {
+                continue;
+            }
             let source_range = module_info.display_range(token.range);
             let length = token.range.len().to_u32();
             if length == 0 {

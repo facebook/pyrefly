@@ -181,7 +181,7 @@ impl<'a> ArgsExpander<'a> {
                     element_expansions
                         .into_iter()
                         .multi_cartesian_product()
-                        .map(|new_elements| Type::Tuple(Tuple::Concrete(new_elements)))
+                        .map(Type::concrete_tuple)
                         .collect()
                 } else {
                     Vec::new()
@@ -319,21 +319,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         if matched {
             // If the selected overload is deprecated, we log a deprecation error.
-            if closest_overload.func.1.metadata.flags.is_deprecated {
-                self.error(
-                    errors,
-                    range,
-                    ErrorInfo::new(ErrorKind::Deprecated, context),
-                    format!(
-                        "Call to deprecated overload `{}`",
-                        closest_overload
-                            .func
-                            .1
-                            .metadata
-                            .kind
-                            .format(self.module().name())
-                    ),
-                );
+            if let Some(deprecation) = &closest_overload.func.1.metadata.flags.deprecation {
+                let msg = deprecation.as_error_message(format!(
+                    "Call to deprecated overload `{}`",
+                    closest_overload
+                        .func
+                        .1
+                        .metadata
+                        .kind
+                        .format(self.module().name())
+                ));
+                errors.add(range, ErrorInfo::new(ErrorKind::Deprecated, context), msg);
             }
             (closest_overload.res, closest_overload.func.1.signature)
         } else {

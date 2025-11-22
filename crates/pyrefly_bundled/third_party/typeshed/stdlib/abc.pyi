@@ -45,7 +45,15 @@ class abstractproperty(property):
 class ABC(metaclass=ABCMeta):
     __slots__ = ()
 
-def get_cache_token() -> object: ...
+def get_cache_token() -> object:
+    """
+    Returns the current ABC cache token.
+
+    The token is an opaque object (supporting equality testing) identifying the
+    current version of the ABC cache for virtual subclasses. The token changes
+    with every call to register() on any ABC.
+    """
+    ...
 
 if sys.version_info >= (3, 10):
     def update_abstractmethods(cls: type[_T]) -> type[_T]: ...

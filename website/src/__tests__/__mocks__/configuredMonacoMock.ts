@@ -72,7 +72,7 @@ function setAutoCompleteFunction(
  */
 function setGetDefFunction(
     _model: MockEditorModel,
-    _getDefFunction: (line: number, column: number) => any
+    _getDefFunction: (line: number, column: number) => any[] | null
 ): void {}
 
 /**

@@ -6,8 +6,10 @@
  */
 
 use clap::ValueEnum;
+use pyrefly_python::ignore::Tool;
 use serde::Deserialize;
 use serde::Serialize;
+use starlark_map::small_set::SmallSet;
 use toml::Table;
 
 use crate::error::ErrorDisplayConfig;
@@ -33,6 +35,10 @@ pub struct ConfigBase {
     /// Consider any ignore (including from other tools) to ignore an error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permissive_ignores: Option<bool>,
+
+    /// Respect ignore directives from only these tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_ignores: Option<SmallSet<Tool>>,
 
     /// Modules from which import errors should be ignored
     /// and the module should always be replaced with `typing.Any`
@@ -132,5 +138,9 @@ impl ConfigBase {
 
     pub fn get_infer_with_first_use(base: &Self) -> Option<bool> {
         base.infer_with_first_use
+    }
+
+    pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
+        base.enabled_ignores.as_ref()
     }
 }

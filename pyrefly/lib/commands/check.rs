@@ -31,6 +31,7 @@ use pyrefly_config::finder::ConfigError;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::args::clap_env;
 use pyrefly_util::display;
 use pyrefly_util::display::count;
 use pyrefly_util::display::number_thousands;
@@ -57,6 +58,7 @@ use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;
+use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
@@ -152,7 +154,7 @@ pub struct SnippetCheckArgs {
     /// When not set, Pyrefly will perform an upward-filesystem-walk approach to find the nearest
     /// pyrefly.toml or pyproject.toml with `tool.pyrefly` section'. If no config is found, Pyrefly exits with error.
     /// If both a pyrefly.toml and valid pyproject.toml are found, pyrefly.toml takes precedence.
-    #[arg(long, short, value_name = "FILE")]
+    #[arg(long, short, value_name = "FILE", env = clap_env("CONFIG"))]
     config: Option<PathBuf>,
 
     /// Output related configuration options
@@ -174,7 +176,6 @@ impl SnippetCheckArgs {
                 expectations: false,
                 remove_unused_ignores: false,
                 all: false,
-                same_line: false,
             },
         };
         match check_args.run_once_with_snippet(self.code, config_finder) {
@@ -233,6 +234,16 @@ struct OutputArgs {
     )]
     summarize_errors: Option<usize>,
 
+    /// Filter the error summary to show only a specific error kind (e.g., bad-assignment, missing-return, etc.).
+    /// Must be used in conjunction with --summarize-errors.
+    #[arg(
+        long,
+        value_enum,
+        value_name = "ERROR_KIND",
+        hide_possible_values = true
+    )]
+    only: Option<crate::config::error_kind::ErrorKind>,
+
     /// By default show the number of errors. Pass `--summary` to show information about lines checked and time/memory,
     /// or `--summary=none` to hide the summary line entirely.
     #[arg(
@@ -286,9 +297,6 @@ struct BehaviorArgs {
     /// If we are removing unused ignores, should we remove all unused ignores or only Pyrefly specific `pyrefly: ignore`s?
     #[arg(long, requires("remove_unused_ignores"))]
     all: bool,
-    /// If we are suppressing errors, should the suppression comment go at the end of the line instead of on the line above?
-    #[arg(long, requires("suppress_errors"))]
-    same_line: bool,
 }
 
 impl OutputFormat {
@@ -598,7 +606,7 @@ impl CheckArgs {
         // Add the snippet source to the transaction's memory
         transaction.as_mut().set_memory(vec![(
             PathBuf::from(module_path.as_path()),
-            Some(Arc::new(code)),
+            Some(Arc::new(FileContents::from_source(code))),
         )]);
 
         self.run_inner(
@@ -703,9 +711,12 @@ impl CheckArgs {
         let report_errors_start = Instant::now();
         let mut config_errors = transaction.get_config_errors();
         config_errors.append(&mut sourcedb_errors);
-        let config_errors_count = config_errors.len();
+        let mut config_errors_count = 0;
         for error in config_errors {
             error.print();
+            if error.severity() >= Severity::Error {
+                config_errors_count += 1;
+            }
         }
 
         let relative_to = self.output.relative_to.as_ref().map_or_else(
@@ -752,8 +763,8 @@ impl CheckArgs {
         if let Some(limit) = self.output.count_errors {
             print_error_counts(&errors.shown, limit);
         }
-        if let Some(path_index) = self.output.summarize_errors {
-            print_error_summary(&errors.shown, path_index);
+        if self.output.summarize_errors.is_some() {
+            print_error_summary(&errors.shown, self.output.only);
         }
         let mut shown_errors_count = config_errors_count;
         for error in &errors.shown {
@@ -826,7 +837,7 @@ impl CheckArgs {
             fs_anyhow::write(path, report::trace::trace(transaction))?;
         }
         if self.behavior.suppress_errors {
-            suppress::suppress_errors(errors.shown.clone(), self.behavior.same_line);
+            suppress::suppress_errors(errors.shown.clone());
         }
         if self.behavior.remove_unused_ignores {
             suppress::remove_unused_ignores(&loads, self.behavior.all);

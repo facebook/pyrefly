@@ -86,10 +86,7 @@
   ],
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [],
-  "dataclasses_final.py": [
-    "Line 35: Expected 1 errors",
-    "Line 37: Expected 1 errors"
-  ],
+  "dataclasses_final.py": [],
   "dataclasses_frozen.py": [],
   "dataclasses_hash.py": [],
   "dataclasses_inheritance.py": [],
@@ -184,11 +181,7 @@
   "generics_syntax_compatibility.py": [],
   "generics_syntax_declarations.py": [],
   "generics_syntax_infer_variance.py": [],
-  "generics_syntax_scoping.py": [
-    "Line 92: Expected 1 errors",
-    "Line 95: Expected 1 errors",
-    "Line 98: Expected 1 errors"
-  ],
+  "generics_syntax_scoping.py": [],
   "generics_type_erasure.py": [],
   "generics_typevartuple_args.py": [],
   "generics_typevartuple_basic.py": [
@@ -241,13 +234,10 @@
   "overloads_definitions.py": [],
   "overloads_evaluation.py": [],
   "protocols_class_objects.py": [
-    "Line 29: Expected 1 errors",
-    "Line 34: Expected 1 errors",
     "Line 104: Expected 1 errors",
     "Line 106: Expected 1 errors",
     "Line 107: Expected 1 errors",
-    "Line 108: Expected 1 errors",
-    "Line 26: Unexpected errors ['Cannot instantiate `Proto` because it is a protocol']"
+    "Line 108: Expected 1 errors"
   ],
   "protocols_definition.py": [
     "Line 116: Expected 1 errors",
@@ -255,7 +245,6 @@
     "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`\\n  Protocol `Template` requires attribute `temp`']"
   ],
   "protocols_explicit.py": [
-    "Line 27: Expected 1 errors",
     "Line 89: Expected 1 errors"
   ],
   "protocols_generic.py": [],
@@ -330,14 +319,10 @@
   "typeddicts_operations.py": [],
   "typeddicts_readonly.py": [],
   "typeddicts_readonly_consistency.py": [],
-  "typeddicts_readonly_inheritance.py": [
-    "Line 119: Expected 1 errors"
-  ],
+  "typeddicts_readonly_inheritance.py": [],
   "typeddicts_readonly_kwargs.py": [],
   "typeddicts_readonly_update.py": [],
-  "typeddicts_required.py": [
-    "Line 71: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMovie']`\"]"
-  ],
+  "typeddicts_required.py": [],
   "typeddicts_type_consistency.py": [],
   "typeddicts_usage.py": []
 }

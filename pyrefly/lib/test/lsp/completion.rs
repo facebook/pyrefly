@@ -42,6 +42,29 @@ struct ResultsFilter {
     include_builtins: bool,
 }
 
+#[test]
+fn completion_magic_methods_in_class() {
+    let code = r#"
+class Foo:
+    def __
+#       ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let trimmed = report.trim();
+    for expected in [
+        "- (Method) __eq__",
+        "- (Method) __len__",
+        "- (Method) __str__",
+        "- (Method) __hash__",
+    ] {
+        assert!(
+            trimmed.contains(expected),
+            "missing {expected} in completions:\n{trimmed}"
+        );
+    }
+}
+
 fn get_default_test_report() -> impl Fn(&State, &Handle, TextSize) -> String {
     get_test_report(ResultsFilter::default(), ImportFormat::Absolute)
 }
@@ -64,7 +87,7 @@ fn get_test_report(
             ..
         } in state
             .transaction()
-            .completion(handle, position, import_format)
+            .completion(handle, position, import_format, true)
         {
             let is_deprecated = if let Some(tags) = tags {
                 tags.contains(&lsp_types::CompletionItemTag::DEPRECATED)
@@ -244,9 +267,42 @@ foo.
 11 | foo.
          ^
 Completion Results:
+- (Field) x: int
 - (Field) [DEPRECATED] also_not_ok: int
 - (Method) [DEPRECATED] not_ok: def not_ok(self: Foo) -> None: ...
-- (Field) x: int
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_deprecated_top_level_function() {
+    let code = r#"
+from typing import *
+from warnings import deprecated
+
+@deprecated("this is deprecated")
+def test1() -> None:
+    ...
+
+def test2() -> None:
+    ...
+
+te
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+12 | te
+       ^
+Completion Results:
+- (Class) deprecated: type[deprecated]
+- (Function) test2: () -> None
+- (Function) [DEPRECATED] test1: () -> None
 "#
         .trim(),
         report.trim(),
@@ -615,7 +671,6 @@ Completion Results:
                         ^
 Completion Results:
 - (Variable) deprecated
-- (Variable) [DEPRECATED] func_not_ok
 - (Variable) func_ok
 - (Variable) __annotations__
 - (Variable) __builtins__
@@ -629,6 +684,7 @@ Completion Results:
 - (Variable) __package__
 - (Variable) __path__
 - (Variable) __spec__
+- (Variable) [DEPRECATED] func_not_ok
 
 
 # foo.py
@@ -1645,6 +1701,43 @@ Completion Results:
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn autoimport_completions_set_label_details() {
+    let code = r#"
+T = foooooo
+#       ^
+"#;
+    let files = [("main", code), ("bar", "foooooo = 1")];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+
+    // Label details supported
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+    let autoimport = completions
+        .into_iter()
+        .find(|item| item.label == "foooooo")
+        .expect("expected foooooo to be in completions");
+    let label_details = autoimport
+        .label_details
+        .expect("auto import completion should include label details");
+    assert_eq!(label_details.detail.as_deref(), Some(" (import bar)"));
+    assert_eq!(label_details.description.as_deref(), Some("bar"));
+
+    // Label details unsupported
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, false);
+    completions
+        .into_iter()
+        .find(|item| item.label == "foooooo (import bar)")
+        .expect("expected foooooo to be in completions");
 }
 
 #[test]

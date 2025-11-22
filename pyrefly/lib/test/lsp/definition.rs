@@ -65,6 +65,7 @@ x = 1 # go-to-definition is unsupported for literals
 #   ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    println!("REPORT=>{}<=", report);
     assert_eq!(
         r#"
 # main.py
@@ -135,7 +136,7 @@ Definition Result:
 4 | def f(x: list[int], y: str, z: Literal[42]):
                                     ^
 Definition Result:
-249 | Literal: _SpecialForm
+253 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | yyy = f([1, 2, 3], "test", 42)
@@ -590,7 +591,7 @@ Definition Result:
 6 | foo: Literal[1] = 1
              ^
 Definition Result:
-249 | Literal: _SpecialForm
+253 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | bar = f([1], "", 42)
@@ -939,7 +940,7 @@ Definition Result:
 10 | def f(x: A[B, Path]) -> None:
                    ^
 Definition Result:
-142 | class Path(PurePath):
+173 | class Path(PurePath):
             ^^^^
 "#
         .trim(),
@@ -1192,6 +1193,45 @@ Definition Result: None
 }
 
 #[test]
+fn import_module_test() {
+    let code_x_init = r#"# x/__init__.py
+def f():
+    pass
+"#;
+    let code_x_y = r#"# x/y.py
+def g():
+    pass
+"#;
+    let code = r#"
+import x.y
+def test():
+    x.f()
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("x", code_x_init), ("x.y", code_x_y)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+4 |     x.f()
+        ^
+Definition Result:
+1 | # x/__init__.py
+    ^
+
+
+# x.py
+
+# x.y.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn cross_module_property_test() {
     let code_class_provider = r#"
 class MyClass:
@@ -1281,6 +1321,55 @@ Definition Result:
 Definition Result:
 6 |     x: str = "abc"
         ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn union_method_access_test() {
+    let code = r#"
+class State:
+    def get_location(self) -> str: ...
+
+class NewYork:
+    def get_location(self) -> str:
+        return "10016"
+
+class Massachusetts:
+    def get_location(self) -> str:
+        return "02108"
+
+def find_location(x: Massachusetts | NewYork):
+    x.get_location()
+      # ^
+
+def find_location2(x: NewYork | Massachusetts):
+    x.get_location()
+      # ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+14 |     x.get_location()
+             ^
+Definition Result:
+10 |     def get_location(self) -> str:
+             ^^^^^^^^^^^^
+Definition Result:
+6 |     def get_location(self) -> str:
+            ^^^^^^^^^^^^
+
+18 |     x.get_location()
+             ^
+Definition Result:
+10 |     def get_location(self) -> str:
+             ^^^^^^^^^^^^
+Definition Result:
+6 |     def get_location(self) -> str:
+            ^^^^^^^^^^^^
 "#
         .trim(),
         report.trim(),

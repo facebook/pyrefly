@@ -45,7 +45,6 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
-use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -153,7 +152,20 @@ impl<'a> CallKeyword<'a> {
         errors: &ErrorCollector,
         owner: &'a Owner<Type>,
     ) -> (Self, bool) {
-        let (materialized, changed) = self.value.materialize(solver, errors, owner);
+        let transformation = |ty: &Type| {
+            if self.arg.is_none() && ty.is_any() {
+                // See test::overload::test_kwargs_materialization - we need to turn this
+                // into Mapping[str, Any] to correctly materialize the `**kwargs` type.
+                solver
+                    .stdlib
+                    .mapping(solver.stdlib.str().clone().to_type(), ty.clone())
+                    .to_type()
+                    .materialize()
+            } else {
+                ty.materialize()
+            }
+        };
+        let (materialized, changed) = self.value.transform(solver, errors, owner, transformation);
         (
             Self {
                 range: self.range,
@@ -208,11 +220,20 @@ impl<'a> CallArg<'a> {
     ) -> (Self, bool) {
         match self {
             Self::Arg(value) => {
-                let (materialized, changed) = value.materialize(solver, errors, owner);
+                let (materialized, changed) =
+                    value.transform(solver, errors, owner, |ty| ty.materialize());
                 (Self::Arg(materialized), changed)
             }
             Self::Star(value, range) => {
-                let (materialized, changed) = value.materialize(solver, errors, owner);
+                let (materialized, changed) = value.transform(solver, errors, owner, |ty| {
+                    if ty.is_any() {
+                        // See test::overload::test_varargs_materialization - we need to turn this
+                        // into Iterable[Any] to correctly materialize the `*args` type.
+                        solver.stdlib.iterable(ty.clone()).to_type().materialize()
+                    } else {
+                        ty.materialize()
+                    }
+                });
                 (Self::Star(materialized, *range), changed)
             }
         }
@@ -608,17 +629,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             let unpacked_args_ty = match middle.len() {
-                0 => Type::tuple(prefix),
-                1 => Type::Tuple(Tuple::unpacked(
+                0 => Type::concrete_tuple(prefix),
+                1 => Type::unpacked_tuple(
                     prefix,
-                    Type::Tuple(Tuple::unbounded(middle.pop().unwrap())),
+                    Type::unbounded_tuple(middle.pop().unwrap()),
                     suffix,
-                )),
-                _ => Type::Tuple(Tuple::unpacked(
-                    prefix,
-                    Type::Tuple(Tuple::Unbounded(Box::new(self.unions(middle)))),
-                    suffix,
-                )),
+                ),
+                _ => {
+                    Type::unpacked_tuple(prefix, Type::unbounded_tuple(self.unions(middle)), suffix)
+                }
             };
             self.check_type(
                 &unpacked_args_ty,
@@ -665,6 +684,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             missing_unnamed_posonly += 1;
                         }
                     }
+                }
+                Param::VarArg(_, Type::Unpack(box unpacked)) => {
+                    // If we have a TypeVarTuple *args with no matched arguments, resolve it to empty tuple
+                    self.is_subset_eq(unpacked, &Type::concrete_tuple(Vec::new()));
                 }
                 Param::VarArg(..) => {}
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {
@@ -1107,6 +1130,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
-        self.solver().expand_vars(callable.ret)
+        self.solver().finish_function_return(callable.ret)
     }
 }

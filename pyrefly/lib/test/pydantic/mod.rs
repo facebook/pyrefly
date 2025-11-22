@@ -7,6 +7,7 @@
 
 #![cfg(test)]
 mod aliases;
+mod base_settings;
 mod config;
 mod extra;
 mod field;

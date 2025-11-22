@@ -16,7 +16,7 @@ use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
-    match get_hover(&state.transaction(), handle, position) {
+    match get_hover(&state.transaction(), handle, position, true) {
         Some(Hover {
             contents: HoverContents::Markup(markup),
             ..
@@ -39,23 +39,17 @@ xyz = [foo.meth]
 #^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    assert_eq!(
-        r#"
-# main.py
-7 | foo.meth()
-        ^
-```python
-(attribute) meth: def meth(self: Foo) -> None: ...
-```
-
-9 | xyz = [foo.meth]
-     ^
-```python
-(variable) xyz: list[(self: Foo) -> None]
-```
-"#
-        .trim(),
-        report.trim(),
+    assert!(report.contains("(method) meth: def meth(self: Foo) -> None: ..."));
+    assert!(report.contains("(variable) xyz: list[(self: Foo) -> None]"));
+    assert!(
+        report.contains("Go to [list]"),
+        "Expected 'Go to [list]' link, got: {}",
+        report
+    );
+    assert!(
+        report.contains("builtins.pyi"),
+        "Expected link to builtins.pyi, got: {}",
+        report
     );
 }
 
@@ -88,6 +82,43 @@ from lib import foo_renamed
 # lib.py
 
 # lib2.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_shows_unpacked_kwargs_fields() {
+    let code = r#"
+from typing import TypedDict, Unpack
+
+class Payload(TypedDict):
+    foo: int
+    bar: str
+    baz: bool | None
+
+def takes(**kwargs: Unpack[Payload]) -> None:
+    ...
+
+takes(foo=1, bar="x", baz=None)
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+12 | takes(foo=1, bar="x", baz=None)
+      ^
+```python
+(function) takes: def takes(
+    *,
+    foo: int,
+    bar: str,
+    baz: bool | None,
+    **kwargs: Unpack[TypedDict[Payload]]
+) -> None: ...
+```
 "#
         .trim(),
         report.trim(),
@@ -174,6 +205,41 @@ x: int = 5  # pyrefly: ignore[bad-return]
 }
 
 #[test]
+fn hover_over_overloaded_binary_operator_shows_dunder_name() {
+    let code = r#"
+from typing import overload
+
+class Matrix:
+    @overload
+    def __matmul__(self, other: Matrix) -> Matrix: ...
+    @overload
+    def __matmul__(self, other: int) -> Matrix: ...
+    def __matmul__(self, other) -> Matrix: ...
+
+lhs = Matrix()
+rhs = Matrix()
+lhs @ rhs
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+13 | lhs @ rhs
+         ^
+```python
+(method) __matmul__: (
+    self: Matrix,
+    other: Matrix
+) -> Matrix
+```
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn hover_over_code_with_ignore_shows_type() {
     let code = r#"
 a: int = "test"  # pyrefly: ignore
@@ -189,5 +255,39 @@ a: int = "test"  # pyrefly: ignore
     assert!(
         !report.contains("Suppressed"),
         "Should not show suppressed error when hovering over code"
+    );
+}
+
+#[test]
+fn builtin_types_have_definition_links() {
+    let code = r#"
+x: str = "hello"
+#^
+y: int = 42
+#^
+z: list[int] = []
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Go to [str]"),
+        "Expected 'Go to [str]' link for str type, got: {}",
+        report
+    );
+    assert!(
+        report.contains("Go to [int]"),
+        "Expected 'Go to [int]' link for int type, got: {}",
+        report
+    );
+    assert!(
+        report.contains("Go to") && report.contains("[list]"),
+        "Expected 'Go to' link with [list] for list type, got: {}",
+        report
+    );
+
+    assert!(
+        report.contains("builtins.pyi"),
+        "Expected links to builtins.pyi, got: {}",
+        report
     );
 }

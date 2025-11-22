@@ -41,4 +41,5 @@ pub enum PydanticModelKind {
     #[default]
     BaseModel,
     RootModel,
+    BaseSettings,
 }

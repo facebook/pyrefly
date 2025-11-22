@@ -29,6 +29,7 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
+use crate::callable::Deprecation;
 use crate::callable::FuncMetadata;
 use crate::callable::Function;
 use crate::callable::FunctionKind;
@@ -49,6 +50,7 @@ use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
+use crate::type_output::TypeOutput;
 use crate::type_var::PreInferenceVariance;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
@@ -360,27 +362,30 @@ impl TypeAlias {
         *self.ty.clone()
     }
 
-    pub fn fmt_with_type<'a, D: Display + 'a>(
-        &'a self,
-        f: &mut fmt::Formatter<'_>,
-        wrap: &'a impl Fn(&'a Type) -> D,
+    pub fn fmt_with_type<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
         tparams: Option<&TParams>,
     ) -> fmt::Result {
+        use pyrefly_util::display::commas_iter;
         match (&self.style, tparams) {
-            (TypeAliasStyle::LegacyImplicit, _) => {
-                write!(f, "{}", wrap(&self.ty))
-            }
+            (TypeAliasStyle::LegacyImplicit, _) => write_type(&self.ty, output),
             (_, None) => {
-                write!(f, "TypeAlias[{}, {}]", self.name, wrap(&self.ty))
+                output.write_str("TypeAlias[")?;
+                output.write_str(self.name.as_str())?;
+                output.write_str(", ")?;
+                write_type(&self.ty, output)?;
+                output.write_str("]")
             }
             (_, Some(tparams)) => {
-                write!(
-                    f,
-                    "TypeAlias[{}[{}], {}]",
-                    self.name,
-                    commas_iter(|| tparams.iter()),
-                    wrap(&self.ty)
-                )
+                output.write_str("TypeAlias[")?;
+                output.write_str(self.name.as_str())?;
+                output.write_str("[")?;
+                output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                output.write_str("], ")?;
+                write_type(&self.ty, output)?;
+                output.write_str("]")
             }
         }
     }
@@ -621,8 +626,9 @@ pub enum Type {
     /// An overloaded function.
     Overload(Overload),
     Union(Vec<Type>),
-    #[allow(dead_code)] // Not currently used, but may be in the future
-    Intersect(Vec<Type>),
+    /// Our intersection support is partial, so we store a fallback type that we use for operations
+    /// that are not yet supported on intersections.
+    Intersect(Box<(Vec<Type>, Type)>),
     /// A class definition has type `Type::ClassDef(cls)`. This type
     /// has special value semantics, and can also be implicitly promoted
     /// to `Type::Type(box Type::ClassType(cls, default_targs))` by looking
@@ -876,12 +882,20 @@ impl Type {
         Type::Type(Box::new(inner))
     }
 
-    pub fn tuple(elts: Vec<Type>) -> Self {
-        Type::Tuple(Tuple::concrete(elts))
+    pub fn concrete_tuple(elts: Vec<Type>) -> Self {
+        Type::Tuple(Tuple::Concrete(elts))
+    }
+
+    pub fn unbounded_tuple(elt: Type) -> Self {
+        Type::Tuple(Tuple::Unbounded(Box::new(elt)))
+    }
+
+    pub fn unpacked_tuple(prefix: Vec<Type>, middle: Type, suffix: Vec<Type>) -> Self {
+        Type::Tuple(Tuple::unpacked(prefix, middle, suffix))
     }
 
     pub fn any_tuple() -> Self {
-        Type::Tuple(Tuple::Unbounded(Box::new(Type::Any(AnyStyle::Implicit))))
+        Self::unbounded_tuple(Type::Any(AnyStyle::Implicit))
     }
 
     pub fn is_any(&self) -> bool {
@@ -1066,6 +1080,10 @@ impl Type {
         }
     }
 
+    pub fn is_abstract_method(&self) -> bool {
+        self.check_toplevel_func_metadata(&|meta| meta.flags.is_abstract_method)
+    }
+
     pub fn is_override(&self) -> bool {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_override)
     }
@@ -1094,8 +1112,8 @@ impl Type {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_overload)
     }
 
-    pub fn is_deprecated_function(&self) -> bool {
-        self.check_toplevel_func_metadata(&|meta| meta.flags.is_deprecated)
+    pub fn function_deprecation(&self) -> Option<Deprecation> {
+        self.check_toplevel_func_metadata(&|meta| meta.flags.deprecation.clone())
     }
 
     pub fn has_final_decoration(&self) -> bool {
@@ -1104,6 +1122,13 @@ impl Type {
 
     pub fn dataclass_transform_metadata(&self) -> Option<DataclassTransformKeywords> {
         self.check_toplevel_func_metadata(&|meta| meta.flags.dataclass_transform_metadata.clone())
+    }
+
+    /// If a Protocol method lacks an implementation and does not come from a `.pyi` file, then it cannot be called
+    pub fn is_non_callable_protocol_method(&self) -> bool {
+        self.check_toplevel_func_metadata(&|meta| {
+            meta.flags.lacks_implementation && !meta.flags.defined_in_stub_file
+        })
     }
 
     /// Transforms this type's function metadata, if it is a function. Note that we do *not*
@@ -1162,7 +1187,45 @@ impl Type {
         }
     }
 
-    fn is_toplevel_callable(&self) -> bool {
+    /// Apply `f` to this type if it is a callable. Note that we do *not* recurse into the type to
+    /// find nested callable types.
+    pub fn visit_toplevel_callable_mut<'a>(&'a mut self, mut f: impl FnMut(&'a mut Callable)) {
+        match self {
+            Type::Callable(callable) => f(callable),
+            Type::Forall(box Forall {
+                body: Forallable::Callable(callable),
+                ..
+            }) => f(callable),
+            Type::Function(box func)
+            | Type::Forall(box Forall {
+                body: Forallable::Function(func),
+                ..
+            })
+            | Type::BoundMethod(box BoundMethod {
+                func: BoundMethodType::Function(func),
+                ..
+            })
+            | Type::BoundMethod(box BoundMethod {
+                func: BoundMethodType::Forall(Forall { body: func, .. }),
+                ..
+            }) => f(&mut func.signature),
+            Type::Overload(overload)
+            | Type::BoundMethod(box BoundMethod {
+                func: BoundMethodType::Overload(overload),
+                ..
+            }) => {
+                for x in overload.signatures.iter_mut() {
+                    match x {
+                        OverloadType::Function(function) => f(&mut function.signature),
+                        OverloadType::Forall(forall) => f(&mut forall.body.signature),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn is_toplevel_callable(&self) -> bool {
         let mut is_callable = false;
         self.visit_toplevel_callable(&mut |_| is_callable = true);
         is_callable
@@ -1504,14 +1567,6 @@ impl Type {
                 }
             })
         })
-    }
-
-    /// Is this an instance of `warnings.deprecated` or its backport `typing_extensions.deprecated`?
-    pub fn is_deprecation_marker(&self) -> bool {
-        let Type::ClassType(cls) = self else {
-            return false;
-        };
-        cls.has_qname("warnings", "deprecated") || cls.has_qname("typing_extensions", "deprecated")
     }
 }
 

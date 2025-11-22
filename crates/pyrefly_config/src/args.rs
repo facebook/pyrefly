@@ -10,11 +10,13 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use clap::Parser;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display;
+use tracing::warn;
 
 use crate::base::UntypedDefBehavior;
 use crate::config::ConfigFile;
@@ -36,6 +38,17 @@ fn absolute_path_parser(s: &str) -> Result<PathBuf, String> {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone, Default)]
 pub struct ConfigOverrideArgs {
+    /// Configures Pyrefly to replace `project-excludes` fully rather than
+    /// append whatever is in your configuration or passed by CLI to Pyrefly's
+    /// defaults.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1,
+    )]
+    disable_project_excludes_heuristics: Option<bool>,
+
     /// The list of directories where imports are imported from, including
     /// type checked files.
     #[arg(long, value_parser = absolute_path_parser)]
@@ -49,7 +62,7 @@ pub struct ConfigOverrideArgs {
         long,
         default_missing_value = "true",
         require_equals = true,
-        num_args = 0..=1
+        num_args = 0..=1,
     )]
     disable_search_path_heuristics: Option<bool>,
 
@@ -101,7 +114,7 @@ pub struct ConfigOverrideArgs {
     /// related import errors.
     #[arg(long)]
     ignore_missing_imports: Option<Vec<String>>,
-    /// Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
+    /// [DEPRECATED] Use `--ignore=missing-source` or `--error=missing-source` instead. Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
     #[arg(
         long,
         default_missing_value = "true",
@@ -139,7 +152,8 @@ pub struct ConfigOverrideArgs {
     /// Controls how Pyrefly analyzes function definitions that lack type annotations on parameters and return values.
     #[arg(long)]
     untyped_def_behavior: Option<UntypedDefBehavior>,
-    /// Whether Pyrefly will respect ignore statements for other tools, e.g. `# mypy: ignore`.
+    /// Whether Pyrefly will respect ignore statements for other tools, e.g. `# pyright: ignore`.
+    /// Equivalent to passing the names of all tools to `--enabled-ignores`.
     #[arg(
         long,
         default_missing_value = "true",
@@ -147,17 +161,21 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     permissive_ignores: Option<bool>,
-    /// Force this rule to emit an error. Can be used multiple times.
-    #[arg(long, hide_possible_values = true)]
+    /// Respect ignore directives from only these tools. Can be passed multiple times or as a comma-separated list.
+    /// Defaults to type,pyrefly. Passing the names of all tools is equivalent to `--permissive-ignores`.
+    #[arg(long, value_delimiter = ',')]
+    enabled_ignores: Option<Vec<Tool>>,
+    /// Force this rule to emit an error. Can be passed multiple times or as a comma-separated list.
+    #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     error: Vec<ErrorKind>,
-    /// Force this rule to emit a warning. Can be used multiple times.
-    #[arg(long, hide_possible_values = true)]
+    /// Force this rule to emit a warning. Can be passed multiple times or as a comma-separated list.
+    #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     warn: Vec<ErrorKind>,
-    /// Do not emit diagnostics for this rule. Can be used multiple times.
-    #[arg(long, hide_possible_values = true)]
+    /// Do not emit diagnostics for this rule. Can be passed multiple times or as a comma-separated list.
+    #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     ignore: Vec<ErrorKind>,
-    /// Force this rule to emit an info-level diagnostic. Can be used multiple times.
-    #[arg(long, hide_possible_values = true)]
+    /// Force this rule to emit an info-level diagnostic. Can be passed multiple times or as a comma-separated list.
+    #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     info: Vec<ErrorKind>,
 }
 
@@ -219,6 +237,20 @@ impl ConfigOverrideArgs {
                 display::commas_iter(|| ignore_info_conflicts.iter().map(|&&s| s))
             ));
         }
+        match self.ignore_missing_source {
+            Some(true) => warn!(
+                "`--ignore-missing-source` is deprecated and will be removed in a future version. Please use `--ignore=missing-source` instead."
+            ),
+            Some(false) => warn!(
+                "`--ignore-missing-source` is deprecated and will be removed in a future version. Please use `--error=missing-source` instead."
+            ),
+            None => {}
+        }
+        if self.permissive_ignores.is_some() && self.enabled_ignores.is_some() {
+            return Err(anyhow::anyhow!(
+                "Cannot use both `--permissive-ignores` and `--enabled-ignores`"
+            ));
+        }
         Ok(())
     }
 
@@ -234,6 +266,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.disable_search_path_heuristics {
             config.disable_search_path_heuristics = *x;
+        }
+        if let Some(x) = &self.disable_project_excludes_heuristics {
+            config.disable_project_excludes_heuristics = *x;
         }
         if let Some(x) = &self.site_package_path {
             config.python_environment.site_package_path = Some(x.clone());
@@ -274,8 +309,36 @@ impl ConfigOverrideArgs {
         if let Some(x) = &self.untyped_def_behavior {
             config.root.untyped_def_behavior = Some(*x);
         }
-        if let Some(x) = self.permissive_ignores {
-            config.root.permissive_ignores = Some(x);
+        match (self.permissive_ignores, &self.enabled_ignores) {
+            // Special case: if the underlying config sets enabled-ignores and --permissive-ignores
+            // is passed on the command-line, we overwrite enabled-ignores.
+            (Some(x), None)
+                if config.root.permissive_ignores.is_none()
+                    && config.root.enabled_ignores.is_some() =>
+            {
+                config.root.enabled_ignores = Some(if x {
+                    Tool::all()
+                } else {
+                    Tool::default_enabled()
+                });
+            }
+            // Special case: if the underlying config sets permissive-ignores and --enabled-ignores
+            // is passed on the command-line, we disable permissive-ignores and use the specified tools.
+            (None, Some(x))
+                if config.root.permissive_ignores.is_some()
+                    && config.root.enabled_ignores.is_none() =>
+            {
+                config.root.permissive_ignores = None;
+                config.root.enabled_ignores = Some(x.iter().cloned().collect());
+            }
+            _ => {
+                if let Some(x) = self.permissive_ignores {
+                    config.root.permissive_ignores = Some(x);
+                }
+                if let Some(x) = &self.enabled_ignores {
+                    config.root.enabled_ignores = Some(x.iter().cloned().collect());
+                }
+            }
         }
         if let Some(wildcards) = &self.replace_imports_with_any {
             config.root.replace_imports_with_any = Some(
@@ -347,5 +410,9 @@ impl ConfigOverrideArgs {
         }
         let errors = config.configure();
         (ArcId::new(config), errors)
+    }
+
+    pub fn disable_project_excludes_heuristics(&self) -> Option<bool> {
+        self.disable_project_excludes_heuristics
     }
 }

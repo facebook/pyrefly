@@ -5,10 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
+use lsp_types::request::RegisterCapability;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -32,14 +32,12 @@ fn setup_file_watcher_test() -> LspInteraction {
     interaction.client.expect_file_watcher_register();
 
     // Acknowledge the registration
-    interaction.server.send_message(Message::Response(Response {
-        id: RequestId::from(1),
-        result: None,
-        error: None,
-    }));
+    interaction
+        .client
+        .send_response::<RegisterCapability>(RequestId::from(1), json!(null));
 
     // Open a file to start the test
-    interaction.server.did_open("text_document.py");
+    interaction.client.did_open("text_document.py");
 
     interaction
 }
@@ -50,7 +48,7 @@ fn test_file_modification_no_reregister() {
     let interaction = setup_file_watcher_test();
 
     // Send a file change notification (modification only)
-    interaction.server.file_modified("text_document.py");
+    interaction.client.file_modified("text_document.py");
 
     // Give the server time to process - if it were going to re-register, it would do so quickly
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -67,7 +65,7 @@ fn test_file_creation_triggers_reregister() {
     let interaction = setup_file_watcher_test();
 
     // Send a file creation notification
-    interaction.server.file_created("new_file.py");
+    interaction.client.file_created("new_file.py");
 
     // Expect unregister then register
     interaction.client.expect_file_watcher_unregister();
@@ -82,7 +80,7 @@ fn test_file_deletion_triggers_reregister() {
     let interaction = setup_file_watcher_test();
 
     // Send a file deletion notification
-    interaction.server.file_deleted("text_document.py");
+    interaction.client.file_deleted("text_document.py");
 
     // Expect unregister then register
     interaction.client.expect_file_watcher_unregister();
@@ -97,7 +95,7 @@ fn test_config_file_change_triggers_reregister() {
     let interaction = setup_file_watcher_test();
 
     // Send a config file change notification
-    interaction.server.file_modified("pyrefly.toml");
+    interaction.client.file_modified("pyrefly.toml");
 
     // Expect unregister then register
     interaction.client.expect_file_watcher_unregister();
@@ -112,8 +110,8 @@ fn test_multiple_file_modifications_no_reregister() {
     let interaction = setup_file_watcher_test();
 
     // Send multiple file change notifications (modifications only)
-    interaction.server.file_modified("text_document.py");
-    interaction.server.file_modified("utf.py");
+    interaction.client.file_modified("text_document.py");
+    interaction.client.file_modified("utf.py");
 
     // Give the server time to process - if it were going to re-register, it would do so quickly
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -128,8 +126,8 @@ fn test_mixed_events_triggers_reregister() {
     let interaction = setup_file_watcher_test();
 
     // Send mixed file change notifications (modification + creation)
-    interaction.server.file_modified("text_document.py");
-    interaction.server.file_created("new_file.py");
+    interaction.client.file_modified("text_document.py");
+    interaction.client.file_created("new_file.py");
 
     // Expect unregister then register (because of creation)
     interaction.client.expect_file_watcher_unregister();

@@ -30,13 +30,16 @@ use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::SuperStyle;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -322,7 +325,7 @@ impl<'a> BindingsBuilder<'a> {
         match lookup_result {
             NameLookupResult::Found {
                 idx: value,
-                uninitialized: is_initialized,
+                initialized: is_initialized,
             } => {
                 // Uninitialized local errors are only reported when we are neither in a stub
                 // nor a static type context.
@@ -348,6 +351,11 @@ impl<'a> BindingsBuilder<'a> {
                             name
                         ),
                     );
+                    self.insert_binding(key, Binding::Type(Type::any_error()))
+                } else if self.scopes.in_class_body()
+                    && let Some((cls, _)) = self.scopes.current_class_and_metadata_keys()
+                {
+                    self.insert_binding(key, Binding::ClassBodyUnknownName(cls, name.clone()))
                 } else {
                     // Record a type error and fall back to `Any`.
                     self.error(
@@ -355,8 +363,8 @@ impl<'a> BindingsBuilder<'a> {
                         ErrorInfo::Kind(ErrorKind::UnknownName),
                         format!("Could not find name `{name}`"),
                     );
+                    self.insert_binding(key, Binding::Type(Type::any_error()))
                 }
-                self.insert_binding(key, Binding::Type(Type::any_error()))
             }
         }
     }
@@ -390,7 +398,7 @@ impl<'a> BindingsBuilder<'a> {
             for x in comp.ifs.iter_mut() {
                 self.ensure_expr(x, &mut Usage::narrowing_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(x));
-                self.bind_narrow_ops(&narrow_ops, comp.range, usage);
+                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(comp.range), usage);
             }
         }
     }
@@ -409,7 +417,7 @@ impl<'a> BindingsBuilder<'a> {
         // TODO: We should properly handle `yield` and `yield from`; lambdas can be generators.
         // One example of this is in the standard library, in `_collections_abc.pyi`:
         // https://github.com/python/cpython/blob/965662ee4a986605b60da470d9e7c1e9a6f922b3/Lib/_collections_abc.py#L92
-        let (yields_and_returns, _) = self.scopes.pop_function_scope();
+        let (yields_and_returns, _, _, _) = self.scopes.pop_function_scope();
         for (idx, y) in yields_and_returns.yields {
             self.insert_binding_idx(idx, BindingYield::Invalid(y));
         }
@@ -486,12 +494,16 @@ impl<'a> BindingsBuilder<'a> {
                 self.start_fork_and_branch(x.range);
                 self.ensure_expr(&mut x.test, &mut Usage::narrowing_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
-                self.bind_narrow_ops(&narrow_ops, x.body.range(), usage);
+                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(x.body.range()), usage);
                 self.ensure_expr(&mut x.body, usage);
                 // Negate the narrow ops for the `orelse`, then merge the Flows.
                 // TODO(stroxler): We eventually want to drop all narrows but merge values.
                 self.next_branch();
-                self.bind_narrow_ops(&narrow_ops.negate(), x.range, usage);
+                self.bind_narrow_ops(
+                    &narrow_ops.negate(),
+                    NarrowUseLocation::Span(x.range),
+                    usage,
+                );
                 self.ensure_expr(&mut x.orelse, usage);
                 self.finish_branch();
                 self.finish_exhaustive_fork();
@@ -523,7 +535,11 @@ impl<'a> BindingsBuilder<'a> {
                     self.start_fork_and_branch(*range);
                     let mut narrow_ops = get_narrow_ops(self, value, *op);
                     for value in values {
-                        self.bind_narrow_ops(&narrow_ops, value.range(), usage);
+                        self.bind_narrow_ops(
+                            &narrow_ops,
+                            NarrowUseLocation::Span(value.range()),
+                            usage,
+                        );
                         self.ensure_expr(value, &mut Usage::narrowing_from(usage));
                         let new_narrow_ops = get_narrow_ops(self, value, *op);
                         narrow_ops.and_all(new_narrow_ops);
@@ -532,7 +548,11 @@ impl<'a> BindingsBuilder<'a> {
                     // TODO(stroxler): We eventually want to drop all narrows but merge values.
                     // Once we have a way to do that, the negation will be unnecessary.
                     self.next_branch();
-                    self.bind_narrow_ops(&narrow_ops.negate(), *range, usage);
+                    self.bind_narrow_ops(
+                        &narrow_ops.negate(),
+                        NarrowUseLocation::End(*range),
+                        usage,
+                    );
                     self.finish_branch();
                     self.finish_bool_op_fork();
                 }
@@ -667,7 +687,7 @@ impl<'a> BindingsBuilder<'a> {
                 for kw in arguments.keywords.iter_mut() {
                     self.ensure_expr(&mut kw.value, usage);
                 }
-                self.bind_narrow_ops(&narrow_op, *range, usage);
+                self.bind_narrow_ops(&narrow_op, NarrowUseLocation::Span(*range), usage);
             }
             Expr::Named(x) => {
                 // For scopes defined in terms of Definitions, we should normally already have the name in Static, but
@@ -809,6 +829,8 @@ impl<'a> BindingsBuilder<'a> {
             // test::class_super::test_super_in_base_classes for an example of a SuperInstance
             // binding that we crash looking for if we don't do this.
             Expr::Call(_) => self.ensure_expr(x, static_type_usage),
+            // Bind walrus so we don't crash when looking up the assigned name later.
+            Expr::Named(_) => self.ensure_expr(x, static_type_usage),
             Expr::Attribute(ExprAttribute { value, attr, .. })
                 if let Expr::Name(value) = &**value
                 // We assume "args" and "kwargs" are ParamSpec attributes rather than imported TypeVars.
@@ -864,28 +886,16 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         decorators: Vec<Decorator>,
         usage: &mut Usage,
-    ) -> Vec<(Idx<Key>, TextRange)> {
+    ) -> Vec<Idx<KeyDecorator>> {
         let mut decorator_keys = Vec::with_capacity(decorators.len());
         for mut x in decorators {
             self.ensure_expr(&mut x.expression, usage);
-            let k = self.insert_binding(Key::Anon(x.range), Binding::Decorator(x.expression));
-            decorator_keys.push((k, x.range));
+            let k = self.insert_binding(
+                KeyDecorator(x.range),
+                BindingDecorator { expr: x.expression },
+            );
+            decorator_keys.push(k);
         }
         decorator_keys
-    }
-
-    pub fn ensure_and_bind_decorators_with_ranges(
-        &mut self,
-        decorators: Vec<Decorator>,
-        usage: &mut Usage,
-    ) -> Vec<(Idx<Key>, TextRange)> {
-        let mut decorator_keys_with_ranges = Vec::with_capacity(decorators.len());
-        for mut x in decorators {
-            self.ensure_expr(&mut x.expression, usage);
-            let range = x.range();
-            let k = self.insert_binding(Key::Anon(x.range), Binding::Decorator(x.expression));
-            decorator_keys_with_ranges.push((k, range));
-        }
-        decorator_keys_with_ranges
     }
 }
