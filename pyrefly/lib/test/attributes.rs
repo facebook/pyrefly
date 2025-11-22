@@ -1779,6 +1779,19 @@ assert_type(f().wut, Never)
     "#,
 );
 
+testcase!(
+    bug = "We should note when a classmethod creates an implicit attribute that captures a type parameter",
+    test_implicit_class_attribute_captures_method_tparam,
+    r#"
+from typing import reveal_type
+class A:
+    @classmethod
+    def f[T](cls, x: T):
+        cls.x = x
+reveal_type(A.x)  # E: revealed type: T
+    "#,
+);
+
 // See https://github.com/facebook/pyrefly/issues/1448 for what this tests
 // and discussion of approaches to handling `@functools.wraps` with return
 // type inference.
