@@ -219,7 +219,7 @@ def nested():
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
     let labels = dict_field_labels(&txn, handle, position);
-    assert_eq!(labels, vec!["name".to_string()]);
+    assert_eq!(labels, vec!["name".to_owned()]);
 }
 
 #[test]
