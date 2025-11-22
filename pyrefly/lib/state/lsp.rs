@@ -5,7 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
+
 use dupe::Dupe;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -49,7 +51,6 @@ use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Number;
-use std::cmp::Reverse;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -2397,8 +2398,8 @@ impl<'a> Transaction<'a> {
         let nodes = Ast::locate_node(module, position);
         let mut best: Option<(u8, TextSize, ExprSubscript, ExprStringLiteral)> = None;
         for node in nodes {
-            if let AnyNodeRef::ExprSubscript(sub) = node {
-                if let Expr::StringLiteral(lit) = sub.slice.as_ref() {
+            if let AnyNodeRef::ExprSubscript(sub) = node
+                && let Expr::StringLiteral(lit) = sub.slice.as_ref() {
                     let (priority, dist) = Self::string_literal_priority(position, lit.range());
                     let should_update = match &best {
                         Some((best_prio, best_dist, _, _)) => {
@@ -2413,7 +2414,6 @@ impl<'a> Transaction<'a> {
                         }
                     }
                 }
-            }
         }
         best.map(|(_, _, sub, lit)| (sub, lit))
     }
@@ -2552,13 +2552,14 @@ impl<'a> Transaction<'a> {
         }
 
         if let Some(base_type) = self.get_type_trace(handle, base_expr.range())
-          && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type) {
-              for (key, ty) in typed_keys {
-                  let entry = suggestions.entry(key).or_insert(None);
-                  if entry.is_none() {
-                      *entry = Some(ty);
-                  }
-              }
+            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
+        {
+            for (key, ty) in typed_keys {
+                let entry = suggestions.entry(key).or_insert(None);
+                if entry.is_none() {
+                    *entry = Some(ty);
+                }
+            }
         }
 
         if suggestions.is_empty() {
