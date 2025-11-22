@@ -15,9 +15,11 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::simplify::unions;
 use pyrefly_types::type_var::Restriction;
@@ -2572,6 +2574,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
+    /// Return the first inherited method signature (parameters and flags) for `name`.
+    pub(crate) fn inherited_method_signature(
+        &self,
+        cls: &Class,
+        name: &Name,
+    ) -> Option<(ParamList, FuncFlags)> {
+        let derived_instance = self.instantiate(cls);
+        for ancestor in self.get_mro_for_class(cls).ancestors(self.stdlib) {
+            let parent_cls = ancestor.class_object();
+            match parent_cls.module_path().details() {
+                ModulePathDetails::BundledTypeshed(_)
+                | ModulePathDetails::BundledTypeshedThirdParty(_) => {
+                    continue;
+                }
+                _ => {}
+            }
+            let Some(member) = self.get_class_member(parent_cls, name) else {
+                continue;
+            };
+            let instance = Instance::of_protocol(ancestor, derived_instance.clone());
+            let instantiated = member.instantiate_for(&instance);
+            if let Some(sig) = Self::callable_params_and_flags(instantiated.ty()) {
+                return Some(sig);
+            }
+        }
+        None
+    }
+
     pub fn get_metaclass_attribute(
         &self,
         cls: &ClassBase,
@@ -3282,5 +3312,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Type> {
         self.get_bounded_quantified_attribute(quantified, upper_bound, &dunder::CALL)
             .and_then(|attr| attr.as_instance_method())
+    }
+}
+
+impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn callable_params_and_flags(ty: Type) -> Option<(ParamList, FuncFlags)> {
+        match ty {
+            Type::Function(func) => match func.signature.params {
+                Params::List(list) => Some((list, func.metadata.flags.clone())),
+                _ => None,
+            },
+            Type::Forall(box Forall {
+                body: Forallable::Function(func),
+                ..
+            }) => match func.signature.params {
+                Params::List(list) => Some((list, func.metadata.flags.clone())),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 }
