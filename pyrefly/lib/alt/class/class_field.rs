@@ -1234,8 +1234,57 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .as_ref()
                 .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
         };
-        let initialization =
-            self.get_class_field_initialization(&metadata, initial_value, magically_initialized);
+        let initialization = match initial_value {
+            RawClassFieldInitialization::ClassBody(None) => {
+                ClassFieldInitialization::ClassBody(None)
+            }
+            RawClassFieldInitialization::ClassBody(Some(e)) => {
+                // If this field was created via a call to a dataclass field specifier, extract field flags from the call.
+                if let Some(dm) = metadata.dataclass_metadata()
+                    && let Expr::Call(ExprCall {
+                        node_index: _,
+                        range: _,
+                        func,
+                        arguments,
+                    }) = e
+                {
+                    // We already type-checked this expression as part of computing the type for the ClassField,
+                    // so we can ignore any errors encountered here.
+                    let ignore_errors = self.error_swallower();
+                    let func_ty = self.expr_infer(func, &ignore_errors);
+                    let func_kind = func_ty.callee_kind();
+                    if let Some(func_kind) = func_kind
+                        && dm.field_specifiers.contains(&func_kind)
+                    {
+                        let flags =
+                            self.dataclass_field_keywords(&func_ty, arguments, dm, &ignore_errors);
+                        ClassFieldInitialization::ClassBody(Some(flags))
+                    } else {
+                        ClassFieldInitialization::ClassBody(None)
+                    }
+                } else {
+                    ClassFieldInitialization::ClassBody(None)
+                }
+            }
+            RawClassFieldInitialization::Method(MethodThatSetsAttr {
+                instance_or_class: MethodSelfKind::Class,
+                ..
+            }) => ClassFieldInitialization::ClassBody(None),
+            RawClassFieldInitialization::Method(MethodThatSetsAttr {
+                instance_or_class: MethodSelfKind::Instance,
+                ..
+            })
+            | RawClassFieldInitialization::Uninitialized
+                if magically_initialized =>
+            {
+                ClassFieldInitialization::Magic
+            }
+            RawClassFieldInitialization::Method(MethodThatSetsAttr {
+                instance_or_class: MethodSelfKind::Instance,
+                ..
+            }) => ClassFieldInitialization::Method,
+            RawClassFieldInitialization::Uninitialized => ClassFieldInitialization::Uninitialized,
+        };
 
         if let Some(annotation) = direct_annotation.as_ref() {
             self.validate_direct_annotation(
@@ -1601,65 +1650,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
                 IsInherited::Maybe,
             ),
-        }
-    }
-
-    fn get_class_field_initialization(
-        &self,
-        metadata: &ClassMetadata,
-        initial_value: &RawClassFieldInitialization,
-        magically_initialized: bool,
-    ) -> ClassFieldInitialization {
-        match initial_value {
-            RawClassFieldInitialization::ClassBody(None) => {
-                ClassFieldInitialization::ClassBody(None)
-            }
-            RawClassFieldInitialization::ClassBody(Some(e)) => {
-                // If this field was created via a call to a dataclass field specifier, extract field flags from the call.
-                if let Some(dm) = metadata.dataclass_metadata()
-                    && let Expr::Call(ExprCall {
-                        node_index: _,
-                        range: _,
-                        func,
-                        arguments,
-                    }) = e
-                {
-                    // We already type-checked this expression as part of computing the type for the ClassField,
-                    // so we can ignore any errors encountered here.
-                    let ignore_errors = self.error_swallower();
-                    let func_ty = self.expr_infer(func, &ignore_errors);
-                    let func_kind = func_ty.callee_kind();
-                    if let Some(func_kind) = func_kind
-                        && dm.field_specifiers.contains(&func_kind)
-                    {
-                        let flags =
-                            self.dataclass_field_keywords(&func_ty, arguments, dm, &ignore_errors);
-                        ClassFieldInitialization::ClassBody(Some(flags))
-                    } else {
-                        ClassFieldInitialization::ClassBody(None)
-                    }
-                } else {
-                    ClassFieldInitialization::ClassBody(None)
-                }
-            }
-            RawClassFieldInitialization::Method(MethodThatSetsAttr {
-                instance_or_class: MethodSelfKind::Class,
-                ..
-            }) => ClassFieldInitialization::ClassBody(None),
-            RawClassFieldInitialization::Method(MethodThatSetsAttr {
-                instance_or_class: MethodSelfKind::Instance,
-                ..
-            })
-            | RawClassFieldInitialization::Uninitialized
-                if magically_initialized =>
-            {
-                ClassFieldInitialization::Magic
-            }
-            RawClassFieldInitialization::Method(MethodThatSetsAttr {
-                instance_or_class: MethodSelfKind::Instance,
-                ..
-            }) => ClassFieldInitialization::Method,
-            RawClassFieldInitialization::Uninitialized => ClassFieldInitialization::Uninitialized,
         }
     }
 
