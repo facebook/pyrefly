@@ -884,18 +884,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        // Unwrap the `Forall` body if the input function is generic.
-        // Passing the raw body (with type variables intact) preventing `call_infer` from
-        // replacing them with fresh inference variables, which would lose the generic context.
+        // Unwrap Forall if present.
         let (tparams_opt, decoratee_arg) = match &decoratee {
             Type::Forall(forall) => (Some(forall.tparams.clone()), forall.body.clone().as_type()),
             _ => (None, decoratee.clone()),
         };
 
-        // Preserve function metadata, so things like method binding still work.
         let call_target =
             self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
-
         let arg = CallArg::ty(&decoratee_arg, range);
 
         let inferred_ty =
@@ -912,7 +908,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     metadata: metadata.clone(),
                 })
                 .forall(tparams),
-                // Callback protocol. We convert it to a function so we can add function metadata.
+                // Callback protocol handling...
                 Type::ClassType(cls)
                     if self
                         .get_metadata_for_class(cls.class_object())
@@ -944,17 +940,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 returned_ty => returned_ty,
             };
 
-        // Re-apply the original type parameters if they were stripped during inference.
-        // This handles decorators like `@contextmanager` that transform a generic function
-        // into a generic callable (e.g. `Iterator[T]` -> `ContextManager[T]`).
+        // Re-wrap with *relevant* original Type Parameters.
         if let Some(tparams) = tparams_opt {
             if !matches!(inferred_ty, Type::Forall(_)) {
-                return match inferred_ty {
-                    Type::Function(f) => Forallable::Function(*f).forall(tparams),
-                    Type::Callable(c) => Forallable::Callable(*c).forall(tparams),
-                    // If the result isn't a callable (e.g. an instance), we cannot wrap it in Forall.
-                    _ => inferred_ty,
+                // FIX: Wrap this analysis in a block { ... }
+                // This ensures `used_quantifieds` (which borrows `inferred_ty`) is dropped
+                // BEFORE we try to move `inferred_ty` in the match statement below.
+                let relevant_tparams: Vec<TParam> = {
+                    let mut used_quantifieds = SmallSet::new();
+                    inferred_ty.collect_quantifieds(&mut used_quantifieds);
+
+                    tparams
+                        .iter()
+                        .filter(|p| used_quantifieds.contains(&p.quantified))
+                        .cloned()
+                        .collect()
                 };
+
+                if !relevant_tparams.is_empty() {
+                    let new_tparams = Arc::new(TParams::new(relevant_tparams));
+                    return match inferred_ty {
+                        Type::Function(f) => Forallable::Function(*f).forall(new_tparams),
+                        Type::Callable(c) => Forallable::Callable(*c).forall(new_tparams),
+                        _ => inferred_ty,
+                    };
+                }
             }
         }
 
