@@ -27,7 +27,7 @@ fn strip_ansi(input: &str) -> String {
     let mut chars = input.chars();
     while let Some(ch) = chars.next() {
         if ch == '\u{1b}' {
-            while let Some(next) = chars.next() {
+            for next in chars.by_ref() {
                 if next == 'm' {
                     break;
                 }
