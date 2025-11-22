@@ -14,7 +14,7 @@ Pyrefly’s language server powers a complete editing experience while **fully d
 
 ### [Go to definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition)
 
-Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
+Jump to where a symbol was originally defined with a click or <kbd>F12</kbd>. If there is both a `.pyi` and `.py` file, we will jump to the `.py`.
 <video
   src="/videos/go-to-definition.mp4"
   width="720"
@@ -27,9 +27,9 @@ Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
 
 ---
 
-<!-- ### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
+### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
 
-Navigate to the underlying type of any expression.
+Navigate to the underlying type of any expression. If the expression is a type, we will navigate to the `.pyi` file if both a `.py` and `.pyi` exist.
 <video
   src="/videos/go-to-type-definition.mp4"
   width="720"
@@ -41,7 +41,36 @@ Navigate to the underlying type of any expression.
 />
 
 ---
--->
+
+### [Go to declaration](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_declaration)
+
+Navigate to where the type was defined, but stop at imports.
+<video
+  src="/videos/go-to-declaration.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Go to implementation](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_implementation)
+
+On a method, navigate to all reimplementations.
+<video
+  src="/videos/go-to-implementation.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+
 
 ### [Find references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references)
 
@@ -280,6 +309,8 @@ The following configuration options are IDE-specific and exposed as VSCode setti
 - Use a specific interpreter
   - If the [`Python`](https://marketplace.visualstudio.com/items?itemName=ms-python.python) VSCode extension is installed, [selecting an interpreter](https://code.visualstudio.com/docs/python/environments) will override the interpreter and settings Pyrefly uses to type check your project, even if one is specified in your Pyrefly configuration.
   - `python.defaultInterpreterPath` will override the default interpreter selected by VSCode for your workspace.
+- Control hover tooltip links
+  - `python.analysis.showHoverGoToLinks` [boolean: true]: Controls whether hover tooltips include "Go to definition" and "Go to type definition" navigation links. Set to `false` for cleaner tooltips with only type information.
 
 ## Issues?
 If you experience issues with the Pyrefly extension, please create an [issue](https://github.com/facebook/pyrefly/issues) on github.
@@ -597,10 +628,6 @@ project-includes = [
 
 # manually set the `sys.platform` Pyrefly will assume when type checking
 python-platform = "linux"
-
-# return an import error when `<library>-stubs` can be imported, but no
-# non-stubs version of that library can be found
-ignore-missing-source = false
 
 # a table mapping error codes to an `is-enabled` boolean
 [errors]
@@ -994,8 +1021,9 @@ Configure the severity for each kind of error that Pyrefly emits: `error`, `warn
   [`disable_error_code`](https://mypy.readthedocs.io/en/stable/config_file.html#confval-disable_error_code)
   in mypy
 - Notes:
-    - Setting `<error-code> = true` is the same as having no error code configuration present, which means
-      the error will be shown. Setting `<error-code> = false` will disable the error for type checking.
+    - Setting `<error-code> = true` means the error will be shown at default
+      severity (or severity `ERROR` if the error is off by default). Setting
+      `<error-code> = false` will disable the error for type checking.
     - If you want to disable type errors in IDE mode, you can also set
       [`disable-type-errors-in-ide`](#disable-type-errors-in-ide), which will
       automatically disable *all* type errors and Pyrefly diagnostics in the IDE.
@@ -1064,23 +1092,6 @@ the substring '<span>&#64;</span>generated'.
 - Default: `false`
 - Flag equivalent: `--ignore-errors-in-generated-code`
 - Equivalent configs: none
-
-### `ignore-missing-source`
-
-Whether to skip the check for a non-stubs package when a `-stubs` package is found in
-[`site-package-path`](#site-package-path). When this is true, we immediately return
-a `-stubs` package when found.
-
-The check for a non-stubs package exists to ensure you have an importable package to use
-in your project. When this check returns an import error, it means we couldn't find a package,
-and that at runtime you may not actually be able to import the given package, even if its
-type stubs could be found. See
-[Stub Files vs Source Files](./import-resolution.mdx#stub-files-vs-source-files) for more information.
-
-- Type: bool
-- Default: `true`
-- Flag equivalent: `--ignore-missing-source`
-- Equivalent configs: `reportMissingModuleSource` in Pyright
 
 ### `infer-with-first-use`
 
@@ -1181,10 +1192,20 @@ allowlist or denylist). Regular
 
 Should Pyrefly ignore errors based on annotations from other tools, e.g. `# pyre-ignore` or `# mypy: ignore`?
 By default, respects `# pyrefly: ignore` and `# type: ignore`.
+Enabling this option is equivalent to passing the names of all tools to `enabled-ignores`.
 
 - Type: `bool`
 - Default: `false`
 - Flag equivalent: `--permissive-ignores`
+
+### `enabled-ignores`
+
+What set of tools should Pyrefly respect ignore directives from?
+Passing the names of all tools is equivalent to enabling `permissive-ignores`.
+
+- Type: list of tools
+- Default: `["type", "pyrefly"]`
+- Flag equivalent: `--enabled-ignores`
 
 ### `sub-config`
 
@@ -1393,27 +1414,22 @@ replace-imports-with-any = ["pytest.*"]
   - `replace-imports-with-any`: `["unittest.*"]`
   - `errors`: `{assert-type = true}`
   - `ignore-errors-in-generated-code`: `true`
-  - `ignore-missing-source`: `true`
 - `sub/project/tests/another_file.py`
   - `replace-imports-with-any`: `["pytest.*"]`
   - `errors`: `{assert-type = true}`
   - `ignore-errors-in-generated-code`: `true`
-  - `ignore-missing-source`: `true`
 - `sub/project/non_test_file.py`
   - `replace-imports-with-any`: `["sympy.*", "*.series"]`
   - `errors`: `{assert-type = true}`
   - `ignore-errors-in-generated-code`: `true`
-  - `ignore-missing-source`: `true`
 - `sub/sub_file.py`
   - `replace-imports-with-any`: `["sympy.*", "*.series"]`
   - `errors`: `{assert-type = false}`
   - `ignore-errors-in-generated-code`: `true`
-  - `ignore-missing-source`: `true`
 - `top_level_file.py`
   - `replace-imports-with-any`: `["sympy.*", "*.series"]`
   - `errors`: `{assert-type = true, bad-assignment = false, invalid-argument = false}`
   - `ignore-errors-in-generated-code`: `true`
-  - `ignore-missing-source`: `true`
 
 ### Conda and Venv Support
 
@@ -1486,8 +1502,6 @@ replace-imports-with-any = []
 ignore-missing-imports = []
 # should Pyrefly skip type checking if we find a generated file?
 ignore-errors-in-generated-code = false
-# should Pyrefly do a check to see if a `<library>-stubs` library also has `<library>` installed?
-ignore-missing-source = false
 # what should Pyrefly do when it encounters a function that is untyped?
 untyped-def-behavior = "check-and-infer-return-type"
 # can Pyrefly recognize ignore directives other than `# pyrefly: ignore` and `# type: ignore`
@@ -1516,7 +1530,6 @@ replace-imports-with-any = [
   "*.series",
 ]
 ignore-errors-in-generated-code = true
-ignore-missing-source = true
 
 # disable `bad-assignment` and `invalid-argument` for the whole project
 [errors]
@@ -1565,7 +1578,6 @@ replace-imports-with-any = [
 ]
 
 ignore-errors-in-generated-code = true
-ignore-missing-source = true
 
 [tool.pyrefly.errors]
 bad-assignment = false
@@ -1891,6 +1903,24 @@ that an error is related to. Every error has exactly one kind.
 
 The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
+
+## abstract-method-call
+
+This error is raised when code attempts to invoke a method decorated with
+`@abstractmethod`. Abstract methods have no implementation, so calling them is
+always invalid, even if the signature would otherwise match.
+
+```python
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "Base": ...
+
+Base.build()
+# Cannot call abstract method `Base.build` [abstract-method-call]
+```
 
 ## annotation-mismatch
 

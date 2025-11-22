@@ -14,7 +14,7 @@ Pyrefly’s language server powers a complete editing experience while **fully d
 
 ### [Go to definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition)
 
-Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
+Jump to where a symbol was originally defined with a click or <kbd>F12</kbd>. If there is both a `.pyi` and `.py` file, we will jump to the `.py`.
 <video
   src="/videos/go-to-definition.mp4"
   width="720"
@@ -27,9 +27,9 @@ Jump to where a symbol is declared with a click or <kbd>F12</kbd>.
 
 ---
 
-<!-- ### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
+### [Go to type definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_typeDefinition)
 
-Navigate to the underlying type of any expression.
+Navigate to the underlying type of any expression. If the expression is a type, we will navigate to the `.pyi` file if both a `.py` and `.pyi` exist.
 <video
   src="/videos/go-to-type-definition.mp4"
   width="720"
@@ -41,7 +41,36 @@ Navigate to the underlying type of any expression.
 />
 
 ---
--->
+
+### [Go to declaration](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_declaration)
+
+Navigate to where the type was defined, but stop at imports.
+<video
+  src="/videos/go-to-declaration.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
+### [Go to implementation](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_implementation)
+
+On a method, navigate to all reimplementations.
+<video
+  src="/videos/go-to-implementation.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+
 
 ### [Find references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references)
 
