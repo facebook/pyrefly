@@ -1129,7 +1129,8 @@ foo("
 4 | foo("
          ^
 Completion Results:
-- (Value) 'a\nb': Literal['a\nb']
+- (Value) 'a\nb': Literal['a\nb'] inserting `a
+b`
 - (Variable) x=: Literal['a\nb']"#
             .trim(),
         report.trim(),
@@ -1177,8 +1178,8 @@ foo('
 4 | foo('
          ^
 Completion Results:
-- (Value) 'bar': Literal['bar']
-- (Value) 'foo': Literal['foo']
+- (Value) 'bar': Literal['bar'] inserting `bar`
+- (Value) 'foo': Literal['foo'] inserting `foo`
 - (Variable) x=: Literal['bar', 'foo']
 "#
         .trim(),
