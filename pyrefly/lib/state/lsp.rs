@@ -2423,7 +2423,7 @@ fn add_literal_completions(
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
-            Self::add_literal_completions_from_type(param.as_type(), completions);
+            Self::add_literal_completions_from_type(param.as_type(), completions, in_string);
         }
     }
 
@@ -2452,9 +2452,9 @@ fn add_literal_completions(
                     ..Default::default()
                 });
             }
-            Type::Union(box Union { members, .. }) => {
-                for member in members {
-                    Self::add_literal_completions_from_type(member, completions);
+            Type::Union(types) => {
+                for union_type in types {
+                    Self::add_literal_completions_from_type(union_type, completions, in_string);
                 }
             }
             _ => {}

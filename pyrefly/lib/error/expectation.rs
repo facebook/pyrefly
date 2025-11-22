@@ -65,6 +65,6 @@ impl Expectation {
 
 fn normalize_message(s: &str) -> String {
     s.replace("\\'", "'") // unescape single quotes
-        // keep double-quote escapes as-is
+        .replace("\"", "\"") // keep double-quote escapes as-is
         .replace("''", "'") // collapse doubled single quotes
 }
