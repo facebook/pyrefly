@@ -227,12 +227,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ConstructorKind::TypeOfClass,
                 )))
             }
-            Type::Type(box Type::Tuple(tuple)) => {
-                CallTargetLookup::Ok(Box::new(CallTarget::Class(
+            Type::Type(box Type::Tuple(tuple)) => CallTargetLookup::Ok(Box::new(
+                CallTarget::Class(
                     TargetWithTParams(None, self.erase_tuple_type(tuple)),
                     ConstructorKind::TypeOfClass,
-                )))
-            }
+                ),
+            )),
             Type::Type(box Type::Quantified(quantified)) => {
                 CallTargetLookup::Ok(Box::new(CallTarget::Callable(TargetWithTParams(
                     None,
