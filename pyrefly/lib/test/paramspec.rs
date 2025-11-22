@@ -59,7 +59,6 @@ reveal_type(foo2)  # E: revealed type: (x: @_, y: @_) -> @_
 );
 
 testcase!(
-    bug = "Generic class constructors don't work with ParamSpec",
     test_param_spec_generic_constructor,
     r#"
 from typing import Callable, reveal_type
@@ -70,7 +69,7 @@ class C[T]:
   def __init__(self, x: T) -> None:
     self.x = x
 c2 = identity(C)
-reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
+reveal_type(c2)  # E: revealed type: (x: @_) -> C[@_]
 x: C[int] = c2(1)
 "#,
 );

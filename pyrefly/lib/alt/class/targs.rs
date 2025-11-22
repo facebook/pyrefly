@@ -244,6 +244,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .1
     }
 
+    /// Instantiates a class with fresh variables, returning both the handle and the type.
+    /// Used when the caller needs to finalize the quantified variables.
+    pub fn instantiate_fresh_class_with_handle(&self, cls: &Class) -> (QuantifiedHandle, Type) {
+        self.solver().fresh_quantified(
+            &self.get_class_tparams(cls),
+            self.instantiate(cls),
+            self.uniques,
+        )
+    }
+
     pub fn instantiate_fresh_tuple(&self) -> Type {
         let quantified = Quantified::type_var_tuple(Name::new_static("Ts"), self.uniques, None);
         let tparams = TParams::new(vec![TParam {

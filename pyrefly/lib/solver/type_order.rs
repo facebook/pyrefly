@@ -30,6 +30,7 @@ use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
+use crate::types::types::TParams;
 use crate::types::types::Type;
 
 /// `TypeOrder` provides a minimal API allowing `Subset` to request additional
@@ -167,5 +168,21 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Option<Type> {
         self.0.bind_boundmethod(m, is_subset)
+    }
+
+    pub fn get_class_tparams(self, cls: &Class) -> Arc<TParams> {
+        self.0.get_class_tparams(cls)
+    }
+
+    pub fn as_class_type_with_tparams(self, cls: &Class) -> ClassType {
+        self.0.as_class_type_unchecked(cls)
+    }
+
+    pub fn instantiate_fresh_class(self, cls: &Class) -> Type {
+        self.0.instantiate_fresh_class(cls)
+    }
+
+    pub fn instantiate_fresh_class_with_handle(self, cls: &Class) -> (QuantifiedHandle, Type) {
+        self.0.instantiate_fresh_class_with_handle(cls)
     }
 }
