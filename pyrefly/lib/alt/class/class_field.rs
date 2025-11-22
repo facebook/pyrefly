@@ -1264,23 +1264,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             RawClassFieldInitialization::Method(MethodThatSetsAttr {
                 instance_or_class: MethodSelfKind::Instance,
                 ..
-            })
-            | RawClassFieldInitialization::Uninitialized
+            }) => ClassFieldInitialization::Method,
+            RawClassFieldInitialization::Uninitialized => {
                 // We consider fields to be always-initialized if it's defined within stub files.
                 // See https://github.com/python/typeshed/pull/13875 for reasoning.
                 if class.module_path().is_interface()
                     // We consider fields to be always-initialized if it's annotated explicitly with `ClassVar`.
                     || direct_annotation
                         .as_ref()
-                        .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar)) =>
-            {
-                ClassFieldInitialization::Magic
+                        .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
+                {
+                    ClassFieldInitialization::Magic
+                } else {
+                    ClassFieldInitialization::Uninitialized
+                }
             }
-            RawClassFieldInitialization::Method(MethodThatSetsAttr {
-                instance_or_class: MethodSelfKind::Instance,
-                ..
-            }) => ClassFieldInitialization::Method,
-            RawClassFieldInitialization::Uninitialized => ClassFieldInitialization::Uninitialized,
         };
 
         if let Some(annotation) = direct_annotation.as_ref() {
