@@ -37,6 +37,9 @@ fn test_inlay_hints() {
             "textEdits": [{
                 "newText": " -> tuple[Literal[1], Literal[2]]",
                 "range": {"end": {"character": 21, "line": 0}, "start": {"character": 21, "line": 0}}
+            }, {
+                "newText": "import typing\n",
+                "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
             }]
         }]));
 
@@ -48,6 +51,9 @@ fn test_inlay_hints() {
             "textEdits": [{
                 "newText": ": tuple[Literal[1], Literal[2]]",
                 "range": {"end": {"character": 6, "line": 0}, "start": {"character": 6, "line": 0}}
+            }, {
+                "newText": "import typing\n",
+                "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
             }]
         }]));
 
@@ -59,6 +65,9 @@ fn test_inlay_hints() {
             "textEdits": [{
                 "newText": " -> Literal[0]",
                 "range": {"end": {"character": 15, "line": 0}, "start": {"character": 15, "line": 0}}
+            }, {
+                "newText": "import typing\n",
+                "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
             }]
         }]));
     interaction.shutdown();

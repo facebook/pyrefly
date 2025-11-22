@@ -33,6 +33,10 @@ fn test_inlay_hint_default_config() {
                 "textEdits":[{
                     "newText":" -> tuple[Literal[1], Literal[2]]",
                     "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
+                },
+                {
+                    "newText":"import typing\n",
+                    "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
                 }]
             },
             {
@@ -41,6 +45,10 @@ fn test_inlay_hint_default_config() {
                 "textEdits":[{
                     "newText":": tuple[Literal[1], Literal[2]]",
                     "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
+                },
+                {
+                    "newText":"import typing\n",
+                    "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
                 }]
             },
             {
@@ -49,6 +57,10 @@ fn test_inlay_hint_default_config() {
                 "textEdits":[{
                     "newText":" -> Literal[0]",
                     "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
+                },
+                {
+                    "newText":"import typing\n",
+                    "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
                 }]
             }
         ]));
@@ -142,6 +154,10 @@ fn test_inlay_hint_disable_variables() {
             "textEdits":[{
                 "newText":" -> tuple[Literal[1], Literal[2]]",
                 "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
+            },
+            {
+                "newText":"import typing\n",
+                "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
             }]
         },
         {
@@ -150,6 +166,10 @@ fn test_inlay_hint_disable_variables() {
             "textEdits":[{
                 "newText":" -> Literal[0]",
                 "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
+            },
+            {
+                "newText":"import typing\n",
+                "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
             }]
         }]));
 
@@ -183,6 +203,10 @@ fn test_inlay_hint_disable_returns() {
             "textEdits":[{
                 "newText":": tuple[Literal[1], Literal[2]]",
                 "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
+            },
+            {
+                "newText":"import typing\n",
+                "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
             }]
         }]));
 
