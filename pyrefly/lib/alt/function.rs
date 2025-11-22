@@ -958,54 +958,91 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        // Preserve function metadata, so things like method binding still work.
+        // Unwrap Forall if present.
+        let (tparams_opt, decoratee_arg) = match &decoratee {
+            Type::Forall(forall) => (Some(forall.tparams.clone()), forall.body.clone().as_type()),
+            _ => (None, decoratee.clone()),
+        };
+
         let call_target =
             self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
-        let arg = CallArg::ty(&decoratee, range);
-        match self.call_infer(call_target, &[arg], &[], range, errors, None, None, None) {
-            Type::Callable(c) => Type::Function(Box::new(Function {
-                signature: *c,
-                metadata: metadata.clone(),
-            })),
-            Type::Forall(box Forall {
-                tparams,
-                body: Forallable::Callable(c),
-            }) => Forallable::Function(Function {
-                signature: c,
-                metadata: metadata.clone(),
-            })
-            .forall(tparams),
-            // Callback protocol. We convert it to a function so we can add function metadata.
-            Type::ClassType(cls)
-                if self
-                    .get_metadata_for_class(cls.class_object())
-                    .is_protocol() =>
-            {
-                let call_attr = self.instance_as_dunder_call(&cls).and_then(|call_attr| {
-                    if let Type::BoundMethod(m) = call_attr {
-                        Some(
-                            self.bind_boundmethod(&m, &mut |a, b| self.is_subset_eq(a, b))
-                                .unwrap_or(m.func.as_type()),
-                        )
-                    } else {
-                        None
-                    }
-                });
-                if let Some(mut call_attr) = call_attr {
-                    call_attr.transform_toplevel_func_metadata(|m| {
-                        *m = FuncMetadata {
-                            kind: FunctionKind::CallbackProtocol(Box::new(cls.clone())),
-                            flags: metadata.flags.clone(),
-                        };
+        let arg = CallArg::ty(&decoratee_arg, range);
+
+        let inferred_ty =
+            match self.call_infer(call_target, &[arg], &[], range, errors, None, None, None) {
+                Type::Callable(c) => Type::Function(Box::new(Function {
+                    signature: *c,
+                    metadata: metadata.clone(),
+                })),
+                Type::Forall(box Forall {
+                    tparams,
+                    body: Forallable::Callable(c),
+                }) => Forallable::Function(Function {
+                    signature: c,
+                    metadata: metadata.clone(),
+                })
+                .forall(tparams),
+                // Callback protocol handling...
+                Type::ClassType(cls)
+                    if self
+                        .get_metadata_for_class(cls.class_object())
+                        .is_protocol() =>
+                {
+                    let call_attr = self.instance_as_dunder_call(&cls).and_then(|call_attr| {
+                        if let Type::BoundMethod(m) = call_attr {
+                            Some(
+                                self.bind_boundmethod(&m, &mut |a, b| self.is_subset_eq(a, b))
+                                    .unwrap_or(m.func.as_type()),
+                            )
+                        } else {
+                            None
+                        }
                     });
-                    call_attr
-                } else {
-                    cls.to_type()
+                    if let Some(mut call_attr) = call_attr {
+                        call_attr.transform_toplevel_func_metadata(|m| {
+                            *m = FuncMetadata {
+                                kind: FunctionKind::CallbackProtocol(Box::new(cls.clone())),
+                                flags: metadata.flags.clone(),
+                            };
+                        });
+                        call_attr
+                    } else {
+                        cls.to_type()
+                    }
+                }
+                Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => decoratee.clone(),
+                returned_ty => returned_ty,
+            };
+
+        // Re-wrap with *relevant* original Type Parameters.
+        if let Some(tparams) = tparams_opt {
+            if !matches!(inferred_ty, Type::Forall(_)) {
+                // FIX: Wrap this analysis in a block { ... }
+                // This ensures `used_quantifieds` (which borrows `inferred_ty`) is dropped
+                // BEFORE we try to move `inferred_ty` in the match statement below.
+                let relevant_tparams: Vec<TParam> = {
+                    let mut used_quantifieds = SmallSet::new();
+                    inferred_ty.collect_quantifieds(&mut used_quantifieds);
+
+                    tparams
+                        .iter()
+                        .filter(|p| used_quantifieds.contains(&p.quantified))
+                        .cloned()
+                        .collect()
+                };
+
+                if !relevant_tparams.is_empty() {
+                    let new_tparams = Arc::new(TParams::new(relevant_tparams));
+                    return match inferred_ty {
+                        Type::Function(f) => Forallable::Function(*f).forall(new_tparams),
+                        Type::Callable(c) => Forallable::Callable(*c).forall(new_tparams),
+                        _ => inferred_ty,
+                    };
                 }
             }
-            Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => decoratee,
-            returned_ty => returned_ty,
         }
+
+        inferred_ty
     }
 
     /// For a type guard function, validate whether it has at least one
