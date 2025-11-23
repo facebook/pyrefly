@@ -663,7 +663,7 @@ class UnsafeProtocol(Protocol):
 class No:
     def foo(self) -> str:
         return "not an int"
-isinstance(No(), UnsafeProtocol)
+isinstance(No(), UnsafeProtocol) # E: Runtime checkable protocol `UnsafeProtocol` has an unsafe overlap with type `No`
     "#,
 );
 
@@ -688,13 +688,12 @@ isinstance(No(), ChildUnsafeProtocol)
 );
 
 testcase!(
-    bug = "Sized is runtime_checkable, and should not allow unsafe overlaps",
     test_unsafe_overlap_with_abc,
     r#"
 from collections.abc import Sized
 class X:
     def __len__(self) -> str:
         return "42"
-isinstance(X(), Sized)
+isinstance(X(), Sized) # E: Runtime checkable protocol `Sized` has an unsafe overlap with type `X`
 "#,
 );

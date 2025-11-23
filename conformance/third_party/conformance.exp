@@ -9095,6 +9095,39 @@
       "severity": "error",
       "stop_column": 53,
       "stop_line": 61
+    },
+    {
+      "code": -2,
+      "column": 33,
+      "concise_description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`",
+      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: expected `BoundMethod[Proto3, (self: Proto3, a: int) -> int]`, got `BoundMethod[Concrete3A, (self: Concrete3A, a: str) -> None]`",
+      "line": 88,
+      "name": "invalid-argument",
+      "severity": "error",
+      "stop_column": 39,
+      "stop_line": 88
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3B`",
+      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3B`\n  Attribute `method1` has incompatible types: expected `BoundMethod[Proto3, (self: Proto3, a: int) -> int]`, got `int`",
+      "line": 92,
+      "name": "invalid-argument",
+      "severity": "error",
+      "stop_column": 48,
+      "stop_line": 92
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3B`",
+      "description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3B`\n  Attribute `method1` has incompatible types: expected `BoundMethod[NonDataProtocol, (self: NonDataProtocol) -> int]`, got `int`",
+      "line": 92,
+      "name": "invalid-argument",
+      "severity": "error",
+      "stop_column": 48,
+      "stop_line": 92
     }
   ],
   "protocols_self.py": [],

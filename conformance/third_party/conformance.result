@@ -254,8 +254,6 @@
   ],
   "protocols_recursive.py": [],
   "protocols_runtime_checkable.py": [
-    "Line 88: Expected 1 errors",
-    "Line 92: Expected 1 errors",
     "Line 96: Expected 1 errors"
   ],
   "protocols_self.py": [],

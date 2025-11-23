@@ -19,6 +19,7 @@ use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -279,9 +280,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_or_tuple: &Expr,
         errors: &ErrorCollector,
     ) -> Type {
-        // We call expr_infer in order to check for errors, but we don't need to do anything with
-        // the result, as the `obj` parameter has type `object`.
-        self.expr_infer(obj, errors);
         self.check_arg_is_class_object(obj, class_or_tuple, &FunctionKind::IsInstance, errors);
         self.stdlib.bool().clone().to_type()
     }
@@ -312,6 +310,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn check_type_is_class_object(
         &self,
         ty: Type,
+        object_type: Option<Type>,
         contains_subscript: bool,
         range: TextRange,
         func_kind: &FunctionKind,
@@ -371,6 +370,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::InvalidArgument),
                                 format!("Protocol `{}` has non-method members and cannot be used with issubclass()", cls.name()),
                             );
+                        }
+                        // Check for unsafe overlap:
+                        // https://typing.python.org/en/latest/spec/protocol.html#runtime-checkable-decorator-and-narrowing-types-by-isinstance
+                        // We need to check if there is any field with
+                        // unassignable types, since the `isinstance` check only
+                        // checks for the presence of the fields, not their
+                        // types.
+                        let protocol_metadata = metadata.protocol_metadata().unwrap();
+                        if let Some(object_type) = &object_type {
+                            for field_name in &protocol_metadata.members {
+                                if !self.has_attr(object_type, field_name) {
+                                    // It's okay if the field is missing, since
+                                    // we only care about unsafe overlaps
+                                    continue;
+                                }
+                                let field_ty = self.type_of_attr_get(
+                                    object_type,
+                                    field_name,
+                                    range,
+                                    &self.error_swallower(),
+                                    None,
+                                    "runtime_checkable_protocol_unsafe_overlap",
+                                );
+                                // Use the protocol class type to get the type for bound methods
+                                let protocol_instance_ty =
+                                    self.as_class_type_unchecked(cls).to_type();
+                                let protocol_field_ty = self.type_of_attr_get(
+                                    &protocol_instance_ty,
+                                    field_name,
+                                    range,
+                                    &self.error_swallower(),
+                                    None,
+                                    "runtime_checkable_protocol_unsafe_overlap",
+                                );
+                                if !self.is_subset_eq(&field_ty, &protocol_field_ty) {
+                                    errors.add(
+                                        range,
+                                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                        vec1![
+                                            format!(
+                                                "Runtime checkable protocol `{}` has an unsafe overlap with type `{}`",
+                                                cls.name(),
+                                                self.for_display(object_type.clone())
+                                            ),
+                                            format!(
+                                                "Attribute `{}` has incompatible types: expected `{}`, got `{}`",
+                                                field_name,
+                                                self.for_display(protocol_field_ty),
+                                                self.for_display(field_ty),
+                                            ),
+                                        ]);
+                                }
+                            }
                         }
                     }
                 }
@@ -456,8 +508,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         });
 
+        let object_type = if matches!(func_kind, FunctionKind::IsInstance) {
+            Some(self.expr_infer(object_or_class_expr, errors))
+        } else {
+            None
+        };
+
         self.check_type_is_class_object(
             classinfo_type,
+            object_type,
             contains_subscript,
             classinfo_expr.range(),
             func_kind,
