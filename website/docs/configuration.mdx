@@ -529,6 +529,14 @@ x.append("2")  # ok
 - Default: `true`
 - Flag equivalent: `--infer-with-first-use`
 
+### `allow-redefinition`
+
+Allow variables to be re-annotated with a different type without emitting a `redefinition` error. This keeps the later annotation as-is rather than treating conflicting annotations as an error. By default, conflicting annotations report `redefinition`.
+
+- Type: bool
+- Default: `false`
+- Flag equivalent: `--allow-redefinition`
+
 
 ### `untyped-def-behavior`
 

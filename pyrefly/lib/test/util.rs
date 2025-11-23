@@ -103,6 +103,7 @@ pub struct TestEnv {
     version: PythonVersion,
     untyped_def_behavior: UntypedDefBehavior,
     infer_with_first_use: bool,
+    allow_redefinition: bool,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
     implicit_any_error: bool,
@@ -120,6 +121,7 @@ impl TestEnv {
             version: PythonVersion::default(),
             untyped_def_behavior: UntypedDefBehavior::default(),
             infer_with_first_use: true,
+            allow_redefinition: false,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
             implicit_any_error: false,
@@ -150,6 +152,12 @@ impl TestEnv {
     pub fn new_with_infer_with_first_use(infer_with_first_use: bool) -> Self {
         let mut res = Self::new();
         res.infer_with_first_use = infer_with_first_use;
+        res
+    }
+
+    pub fn new_with_allow_redefinition(allow_redefinition: bool) -> Self {
+        let mut res = Self::new();
+        res.allow_redefinition = allow_redefinition;
         res
     }
 
@@ -244,6 +252,7 @@ impl TestEnv {
         config.python_environment.site_package_path = Some(self.site_package_path.clone());
         config.root.untyped_def_behavior = Some(self.untyped_def_behavior);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
+        config.root.allow_redefinition = Some(self.allow_redefinition);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };

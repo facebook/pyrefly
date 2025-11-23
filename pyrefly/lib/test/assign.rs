@@ -331,6 +331,16 @@ x: str = ""  # E: `x` cannot be annotated with `str`, it is already defined with
 );
 
 testcase!(
+    test_allow_redefinition_config,
+    TestEnv::new_with_allow_redefinition(true),
+    r#"
+def f():
+    x: int = 0
+    x: str = "ok"
+    "#,
+);
+
+testcase!(
     test_hoist_ann,
     r#"
 x = 0 # E: `Literal[0]` is not assignable to variable `x` with type `str`

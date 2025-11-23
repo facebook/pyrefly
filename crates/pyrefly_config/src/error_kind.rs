@@ -224,6 +224,8 @@ pub enum ErrorKind {
     ProtocolImplicitlyDefinedAttribute,
     /// The attribute exists but cannot be modified.
     ReadOnly,
+    /// Attempting to annotate or redefine a name with a type that conflicts with an existing annotation in scope.
+    Redefinition,
     /// Warning when casting a value to a type it is already compatible with.
     RedundantCast,
     /// Attempting to use value that is equivalent to True or always False in boolean context.

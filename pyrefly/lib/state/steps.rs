@@ -43,6 +43,7 @@ pub struct Context<'a, Lookup> {
     pub lookup: &'a Lookup,
     pub untyped_def_behavior: UntypedDefBehavior,
     pub infer_with_first_use: bool,
+    pub allow_redefinition: bool,
 }
 
 #[derive(Debug, Default, Dupe, Clone)]
@@ -186,7 +187,13 @@ impl Step {
             enable_trace,
             ctx.untyped_def_behavior,
         );
-        let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
+        let answers = Answers::new(
+            &bindings,
+            solver,
+            enable_index,
+            enable_trace,
+            ctx.allow_redefinition,
+        );
         Arc::new((bindings, Arc::new(answers)))
     }
 

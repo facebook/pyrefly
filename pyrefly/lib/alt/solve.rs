@@ -1643,6 +1643,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 existing,
                 name,
             } => {
+                if self.allow_redefinition() {
+                    return Arc::new(EmptyAnswer);
+                }
                 let ann_new = self.get_idx(*new);
                 let ann_existing = self.get_idx(*existing);
                 if let Some(t_new) = ann_new.ty(self.stdlib)
@@ -1655,7 +1658,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         self.bindings().idx_to_key(*new).range(),
-                        ErrorInfo::Kind(ErrorKind::AnnotationMismatch),
+                        ErrorInfo::Kind(ErrorKind::Redefinition),
                         format!(
                             "`{}` cannot be annotated with `{}`, it is already defined with type `{}`",
                             name,
