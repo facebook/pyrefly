@@ -282,7 +282,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // We call expr_infer in order to check for errors, but we don't need to do anything with
         // the result, as the `obj` parameter has type `object`.
         self.expr_infer(obj, errors);
-        self.check_arg_is_class_object(class_or_tuple, &FunctionKind::IsInstance, errors);
+        self.check_arg_is_class_object(obj, class_or_tuple, &FunctionKind::IsInstance, errors);
         self.stdlib.bool().clone().to_type()
     }
 
@@ -305,7 +305,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ))
             },
         );
-        self.check_arg_is_class_object(class_or_tuple, &FunctionKind::IsSubclass, errors);
+        self.check_arg_is_class_object(cls, class_or_tuple, &FunctionKind::IsSubclass, errors);
         self.stdlib.bool().clone().to_type()
     }
 
@@ -440,24 +440,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         false
     }
 
+    // isinstance(object, classinfo) / issubclass(class, classinfo)
     fn check_arg_is_class_object(
         &self,
-        arg_expr: &Expr,
+        object_or_class_expr: &Expr,
+        classinfo_expr: &Expr,
         func_kind: &FunctionKind,
         errors: &ErrorCollector,
     ) {
-        let arg_class_type = self.expr_infer(arg_expr, errors);
+        let classinfo_type = self.expr_infer(classinfo_expr, errors);
         let mut contains_subscript = false;
-        arg_expr.visit(&mut |e| {
+        classinfo_expr.visit(&mut |e| {
             if matches!(e, Expr::Subscript(_)) {
                 contains_subscript = true;
             }
         });
 
         self.check_type_is_class_object(
-            arg_class_type,
+            classinfo_type,
             contains_subscript,
-            arg_expr.range(),
+            classinfo_expr.range(),
             func_kind,
             errors,
         );
