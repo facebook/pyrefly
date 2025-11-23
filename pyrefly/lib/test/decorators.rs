@@ -587,3 +587,52 @@ def test(x: int, items: List[int]):
     assert_type(m, contextlib._GeneratorContextManager[List[int], None, None])
 "#,
 );
+
+// Decorator returns non-callable (The "Leak" Case)
+testcase!(
+    test_decorator_returns_non_callable_leaks_sanitized,
+    r#"
+from typing import TypeVar, Callable, List, assert_type, Any
+
+T = TypeVar("T")
+
+# A decorator that returns a list
+def list_decorator(f: Callable[[T], T]) -> List[T]: ...
+
+@list_decorator
+def my_func(x: T) -> T:
+    return x
+
+def test():
+    # The result is list[T], but since it's not a function, we can't wrap it in Forall[T].
+    # T becomes unbound. Fix should sanitize this to List[Any] (or List[Unknown])
+    # to prevent the compiler from crashing or using a ghost variable.
+    assert_type(my_func, List[Any]) 
+"#,
+);
+
+// Decorator adds new generics (The "Merge" Case)
+testcase!(
+    test_decorator_adds_new_generic,
+    r#"
+from typing import TypeVar, Callable, Tuple, assert_type
+
+T = TypeVar("T")
+S = TypeVar("S")
+
+# We use legacy syntax (no [T]) here to allow S to be used freely in the return type
+# without triggering Python's strict scoping rules for new-style generics.
+def add_generic(f: Callable[[T], T]) -> Callable[[T, S], Tuple[T, S]]: ...
+
+@add_generic
+def my_func(x: T) -> T:
+    return x
+
+def test(x: int, y: str):
+    # T comes from my_func (int)
+    # S comes from the decorator (str)
+    # Pyrefly must merge them so both can be inferred.
+    res = my_func(x, y)
+    assert_type(res, Tuple[int, str])
+"#,
+);

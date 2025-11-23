@@ -28,6 +28,7 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
@@ -885,13 +886,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         // Unwrap Forall if present.
+        // We pass the BODY of the generic function to the decorator.
+        // This prevents `call_infer` from replacing the type variables with fresh inference variables (placeholders).
         let (tparams_opt, decoratee_arg) = match &decoratee {
             Type::Forall(forall) => (Some(forall.tparams.clone()), forall.body.clone().as_type()),
             _ => (None, decoratee.clone()),
         };
 
+        // Preserve function metadata, so things like method binding still work.
         let call_target =
             self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
+
         let arg = CallArg::ty(&decoratee_arg, range);
 
         let inferred_ty =
@@ -940,31 +945,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 returned_ty => returned_ty,
             };
 
-        // Re-wrap with *relevant* original Type Parameters.
+        // Re-wrap with relevant type parameters
         if let Some(tparams) = tparams_opt {
-            if !matches!(inferred_ty, Type::Forall(_)) {
-                // FIX: Wrap this analysis in a block { ... }
-                // This ensures `used_quantifieds` (which borrows `inferred_ty`) is dropped
-                // BEFORE we try to move `inferred_ty` in the match statement below.
-                let relevant_tparams: Vec<TParam> = {
-                    let mut used_quantifieds = SmallSet::new();
-                    inferred_ty.collect_quantifieds(&mut used_quantifieds);
+            // Identify which original tparams are actually used in the result
+            // We scope this in a block to drop the borrow on inferred_ty immediately after scanning
+            let relevant_tparams_vec: Vec<TParam> = {
+                let mut used_quantifieds = SmallSet::new();
+                inferred_ty.collect_quantifieds(&mut used_quantifieds);
+                tparams
+                    .iter()
+                    .filter(|p| used_quantifieds.contains(&p.quantified))
+                    .cloned()
+                    .collect()
+            };
 
-                    tparams
-                        .iter()
-                        .filter(|p| used_quantifieds.contains(&p.quantified))
-                        .cloned()
-                        .collect()
+            if !relevant_tparams_vec.is_empty() {
+                let new_tparams = Arc::new(TParams::new(relevant_tparams_vec));
+
+                return match inferred_ty {
+                    // Case A: Result is already Forall (e.g. decorator adds params)
+                    // We must merge our preserved params with the new ones.
+                    Type::Forall(box forall) => {
+                        let mut merged_tparams = (*new_tparams).clone();
+                        merged_tparams.extend(&forall.tparams);
+                        // We re-wrap the inner body with the merged list
+                        forall.body.forall(Arc::new(merged_tparams))
+                    }
+
+                    // Case B: Result is Callable/Function (Standard case)
+                    // We wrap it in Forall.
+                    Type::Function(f) => Forallable::Function(*f).forall(new_tparams),
+                    Type::Callable(c) => Forallable::Callable(*c).forall(new_tparams),
+
+                    // Case C: Result is NOT callable (e.g. list[T])
+                    // We cannot wrap it in Forall. To prevent leaking unbound variables,
+                    // we must replace them with Any.
+                    ty => {
+                        let any = Type::any_implicit();
+                        let substitution_map: SmallMap<_, _> =
+                            new_tparams.iter().map(|p| (&p.quantified, &any)).collect();
+
+                        ty.subst(&substitution_map)
+                    }
                 };
-
-                if !relevant_tparams.is_empty() {
-                    let new_tparams = Arc::new(TParams::new(relevant_tparams));
-                    return match inferred_ty {
-                        Type::Function(f) => Forallable::Function(*f).forall(new_tparams),
-                        Type::Callable(c) => Forallable::Callable(*c).forall(new_tparams),
-                        _ => inferred_ty,
-                    };
-                }
             }
         }
 
