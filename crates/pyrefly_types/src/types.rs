@@ -662,6 +662,8 @@ pub enum Type {
     /// This is equivalent to Type::TypeVar/ParamSpec/TypeVarTuple as a value, but when used
     /// in a type annotation, it becomes Type::Quantified.
     QuantifiedValue(Box<Quantified>),
+    /// When we unpack a Type::Quantified TypeVarTuple, this is what we get
+    ElementOfTypeVarTuple(Box<Quantified>),
     TypeGuard(Box<Type>),
     TypeIs(Box<Type>),
     Unpack(Box<Type>),
@@ -739,6 +741,7 @@ impl Visit for Type {
             Type::Var(x) => x.visit(f),
             Type::Quantified(x) => x.visit(f),
             Type::QuantifiedValue(x) => x.visit(f),
+            Type::ElementOfTypeVarTuple(x) => x.visit(f),
             Type::TypeGuard(x) => x.visit(f),
             Type::TypeIs(x) => x.visit(f),
             Type::Unpack(x) => x.visit(f),
@@ -786,6 +789,7 @@ impl VisitMut for Type {
             Type::Var(x) => x.visit_mut(f),
             Type::Quantified(x) => x.visit_mut(f),
             Type::QuantifiedValue(x) => x.visit_mut(f),
+            Type::ElementOfTypeVarTuple(x) => x.visit_mut(f),
             Type::TypeGuard(x) => x.visit_mut(f),
             Type::TypeIs(x) => x.visit_mut(f),
             Type::Unpack(x) => x.visit_mut(f),
@@ -887,7 +891,11 @@ impl Type {
     }
 
     pub fn unbounded_tuple(elt: Type) -> Self {
-        Type::Tuple(Tuple::Unbounded(Box::new(elt)))
+        if let Type::ElementOfTypeVarTuple(x) = elt {
+            Self::unpacked_tuple(Vec::new(), Type::Quantified(x), Vec::new())
+        } else {
+            Type::Tuple(Tuple::Unbounded(Box::new(elt)))
+        }
     }
 
     pub fn unpacked_tuple(prefix: Vec<Type>, middle: Type, suffix: Vec<Type>) -> Self {

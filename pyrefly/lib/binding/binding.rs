@@ -1000,6 +1000,20 @@ pub enum SizeExpectation {
     Ge(usize),
 }
 
+impl SizeExpectation {
+    pub fn message(&self) -> String {
+        match self {
+            SizeExpectation::Eq(n) => match n {
+                1 => format!("{n} value"),
+                _ => format!("{n} values"),
+            },
+            SizeExpectation::Ge(n) => {
+                format!("{n}+ values")
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum RaisedException {
     WithoutCause(Expr),

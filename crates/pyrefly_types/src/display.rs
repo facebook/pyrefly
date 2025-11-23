@@ -602,6 +602,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Var(var) => output.write_str(&format!("{var}")),
             Type::Quantified(var) => output.write_str(&format!("{var}")),
             Type::QuantifiedValue(var) => output.write_str(&format!("{var}")),
+            Type::ElementOfTypeVarTuple(var) => output.write_str(&format!("ElementOf[{var}]")),
             Type::Args(q) => {
                 output.write_str("Args[")?;
                 output.write_str(&format!("{q}"))?;

@@ -189,7 +189,7 @@
   ],
   "generics_typevartuple_callable.py": [],
   "generics_typevartuple_concat.py": [
-    "Line 56: Unexpected errors ['Returned type `tuple[*tuple[object | T, ...], object | T]` is not assignable to declared return type `tuple[*Ts, T]`']"
+    "Line 56: Unexpected errors ['Returned type `tuple[*tuple[T | ElementOf[Ts], ...], T | ElementOf[Ts]]` is not assignable to declared return type `tuple[*Ts, T]`']"
   ],
   "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [

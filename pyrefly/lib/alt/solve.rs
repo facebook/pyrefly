@@ -213,6 +213,7 @@ impl TypeFormContext {
 pub enum Iterable {
     OfType(Type),
     FixedLen(Vec<Type>),
+    OfTypeVarTuple(Quantified),
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -720,6 +721,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 vec![Iterable::FixedLen(elts.clone())]
             }
             Type::Tuple(Tuple::Concrete(elts)) => vec![Iterable::FixedLen(elts.clone())],
+            Type::Tuple(Tuple::Unbounded(box elt)) => vec![Iterable::OfType(elt.clone())],
+            Type::Tuple(Tuple::Unpacked(box (prefix, Type::Quantified(box q), suffix)))
+                if prefix.is_empty() && suffix.is_empty() && q.is_type_var_tuple() =>
+            {
+                vec![Iterable::OfTypeVarTuple(q.clone())]
+            }
             Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
                 self.iterate(&self.solver().force_var(*v), range, errors, orig_context)
             }
@@ -789,6 +796,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match iterable {
                 Iterable::OfType(t) => produced_types.push(t),
                 Iterable::FixedLen(ts) => produced_types.extend(ts),
+                Iterable::OfTypeVarTuple(q) => {
+                    produced_types.push(Type::ElementOfTypeVarTuple(Box::new(q)))
+                }
             }
         }
         self.unions(produced_types)
@@ -1591,25 +1601,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for iterable in iterables {
                     match iterable {
                         Iterable::OfType(_) => {}
+                        Iterable::OfTypeVarTuple(_) => {
+                            self.error(
+                                errors,
+                                *range,
+                                ErrorInfo::Kind(ErrorKind::BadUnpacking),
+                                format!(
+                                    "Cannot unpack {} (of unknown size) into {}",
+                                    iterable_ty,
+                                    expect.message(),
+                                ),
+                            );
+                        }
                         Iterable::FixedLen(ts) => {
                             let error = match expect {
-                                SizeExpectation::Eq(n) => {
-                                    if ts.len() == *n {
-                                        None
-                                    } else {
-                                        match n {
-                                            1 => Some(format!("{n} value")),
-                                            _ => Some(format!("{n} values")),
-                                        }
-                                    }
-                                }
-                                SizeExpectation::Ge(n) => {
-                                    if ts.len() >= *n {
-                                        None
-                                    } else {
-                                        Some(format!("{n}+ values"))
-                                    }
-                                }
+                                SizeExpectation::Eq(n) if ts.len() != *n => Some(expect.message()),
+                                SizeExpectation::Ge(n) if ts.len() < *n => Some(expect.message()),
+                                _ => None,
                             };
                             match error {
                                 Some(expectation) => {
@@ -3257,6 +3265,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             UnpackedPosition::Index(_) | UnpackedPosition::ReverseIndex(_) => ty,
                             UnpackedPosition::Slice(_, _) => self.stdlib.list(ty).to_type(),
                         },
+                        Iterable::OfTypeVarTuple(_) => {
+                            // Type var tuples can resolve to anything so we fall back to object
+                            let object_type = self.stdlib.object().clone().to_type();
+                            match pos {
+                                UnpackedPosition::Index(_) | UnpackedPosition::ReverseIndex(_) => {
+                                    object_type
+                                }
+                                UnpackedPosition::Slice(_, _) => {
+                                    self.stdlib.list(object_type).to_type()
+                                }
+                            }
+                        }
                         Iterable::FixedLen(ts) => {
                             match pos {
                                 UnpackedPosition::Index(i) | UnpackedPosition::ReverseIndex(i) => {

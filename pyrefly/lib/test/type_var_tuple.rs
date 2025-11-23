@@ -153,11 +153,40 @@ class A:
 );
 
 testcase!(
+    test_type_var_tuple_unpack_quantified,
+    r#"
+from typing import Callable
+
+def test[*Ts, T](f: Callable[[*Ts], T], t: tuple[*Ts], *args: *Ts):
+    # we can unpack a quantified type var tuple if it matches the expected type exactly
+    x: tuple[*Ts] = (*args,)
+    f(*args)
+    x = t
+    x = (*t,)
+
+    # This error message could be improved
+    x = (*args, *args)  # E: `tuple[ElementOf[Ts] | Unknown, ...]` is not assignable to variable `x` with type `tuple[*Ts]`
+    x = (*args, 1)  # E: `tuple[*Ts, Literal[1]]` is not assignable to variable `x` with type `tuple[*Ts]`
+    x = (1, *args)  # E: `tuple[Literal[1], *Ts]` is not assignable to variable `x` with type `tuple[*Ts]`
+    x = (*t, *t)  # E: `tuple[ElementOf[Ts] | Unknown, ...]` is not assignable to variable `x` with type `tuple[*Ts]`
+    x = (*t, 1)  # E: `tuple[*Ts, Literal[1]]` is not assignable to variable `x` with type `tuple[*Ts]`
+    x = (1, *t)  # E: `tuple[Literal[1], *Ts]` is not assignable to variable `x` with type `tuple[*Ts]`
+    f(*args, *args)  # E: Expected at most one unpacked variadic argument
+    f(1, *args)  # E: Unpacked argument `tuple[Literal[1], *Ts]` is not assignable to varargs type `tuple[*Ts]`
+    f(*args, 1)  # E: Unpacked argument `tuple[*Ts, Literal[1]]` is not assignable to varargs type `tuple[*Ts]`
+    f(*t, *t)  # E: Expected at most one unpacked variadic argument
+    f(1, *t)  # E: Unpacked argument `tuple[Literal[1], *Ts]` is not assignable to varargs type `tuple[*Ts]`
+    f(*t, 1)  # E: Unpacked argument `tuple[*Ts, Literal[1]]` is not assignable to varargs type `tuple[*Ts]`
+"#,
+);
+
+testcase!(
     test_type_var_tuple_callable_resolves_to_empty,
     r#"
 from typing import Callable, assert_type
 
 def test[*Ts, T](f: Callable[[*Ts], T], *args: *Ts) -> tuple[*Ts]:
+    x: T = f(*args)
     return (*args,)
 
 assert_type(test(lambda: 1), tuple[()])

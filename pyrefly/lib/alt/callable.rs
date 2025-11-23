@@ -259,7 +259,7 @@ impl<'a> CallArg<'a> {
                 for x in iterables.iter() {
                     match x {
                         Iterable::FixedLen(xs) => fixed_lens.push(xs.len()),
-                        Iterable::OfType(_) => {}
+                        Iterable::OfType(_) | Iterable::OfTypeVarTuple(_) => {}
                     }
                 }
                 if !fixed_lens.is_empty()
@@ -636,6 +636,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     suffix,
                 ),
                 _ => {
+                    let unpacked_variadic_args_count = middle
+                        .iter()
+                        .filter(|x| matches!(x, Type::ElementOfTypeVarTuple(_)))
+                        .count();
+                    if unpacked_variadic_args_count > 1 {
+                        error(
+                            arg_errors,
+                            range,
+                            ErrorKind::BadArgumentType,
+                            "Expected at most one unpacked variadic argument".to_owned(),
+                        );
+                    }
                     Type::unpacked_tuple(prefix, Type::unbounded_tuple(self.unions(middle)), suffix)
                 }
             };
