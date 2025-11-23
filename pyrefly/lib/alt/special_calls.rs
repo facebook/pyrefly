@@ -351,23 +351,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 // Check if this is a protocol that needs @runtime_checkable
-                if metadata.is_protocol() && !metadata.is_runtime_checkable_protocol() {
-                    self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                    format!("Protocol `{}` is not decorated with @runtime_checkable and cannot be used with {}", cls.name(), func_display()),
-                );
-                } else if metadata.is_protocol() && metadata.is_runtime_checkable_protocol() {
-                    // Additional validation for runtime checkable protocols:
-                    // issubclass() can only be used with non-data protocols
-                    if *func_kind == FunctionKind::IsSubclass && self.is_data_protocol(cls, range) {
+                if metadata.is_protocol() {
+                    if !metadata.is_runtime_checkable_protocol() {
                         self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                        format!("Protocol `{}` has non-method members and cannot be used with issubclass()", cls.name()),
-                    );
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            format!("Protocol `{}` is not decorated with @runtime_checkable and cannot be used with {}", cls.name(), func_display()),
+                        );
+                    } else {
+                        // Additional validation for runtime checkable protocols:
+                        // issubclass() can only be used with non-data protocols
+                        if *func_kind == FunctionKind::IsSubclass
+                            && self.is_data_protocol(cls, range)
+                        {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                format!("Protocol `{}` has non-method members and cannot be used with issubclass()", cls.name()),
+                            );
+                        }
                     }
                 }
             } else if contains_subscript
