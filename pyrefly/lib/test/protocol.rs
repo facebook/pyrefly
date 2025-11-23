@@ -653,7 +653,6 @@ cls2: type[CanFly] = A      # OK
 );
 
 testcase!(
-    bug = "@runtime_checkable should not allow unsafe overlaps",
     test_runtime_checkable_unsafe_overlap,
     r#"
 from typing import Protocol, runtime_checkable
