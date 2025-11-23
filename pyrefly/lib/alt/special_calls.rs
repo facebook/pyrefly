@@ -290,19 +290,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_or_tuple: &Expr,
         errors: &ErrorCollector,
     ) -> Type {
-        // Verify that the `cls` argument has type `type`.
-        self.check_type(
-            &self.expr_infer(cls, errors),
-            &self.stdlib.builtins_type().clone().to_type(),
-            cls.range(),
-            errors,
-            &|| {
-                TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
-                    Some(Name::new_static("cls")),
-                    Some(FunctionKind::IsSubclass),
-                ))
-            },
-        );
         self.check_arg_is_class_object(cls, class_or_tuple, &FunctionKind::IsSubclass, errors);
         self.stdlib.bool().clone().to_type()
     }
@@ -510,8 +497,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let object_type = if matches!(func_kind, FunctionKind::IsInstance) {
             Some(self.expr_infer(object_or_class_expr, errors))
+        } else if matches!(func_kind, FunctionKind::IsSubclass) {
+            let ty = self.expr_infer(object_or_class_expr, errors);
+            // Verify that the `cls` argument has type `type`.
+            self.check_type(
+                &ty,
+                &self.stdlib.builtins_type().clone().to_type(),
+                object_or_class_expr.range(),
+                errors,
+                &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                        Some(Name::new_static("cls")),
+                        Some(FunctionKind::IsSubclass),
+                    ))
+                },
+            );
+            // Untype to get the class object type
+            self.untype_opt(ty, object_or_class_expr.range(), errors)
         } else {
-            None
+            unreachable!("unexpected function kind in check_arg_is_class_object")
         };
 
         self.check_type_is_class_object(

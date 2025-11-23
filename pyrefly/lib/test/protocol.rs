@@ -663,6 +663,7 @@ class No:
     def foo(self) -> str:
         return "not an int"
 isinstance(No(), UnsafeProtocol) # E: Runtime checkable protocol `UnsafeProtocol` has an unsafe overlap with type `No`
+issubclass(No, UnsafeProtocol) # E: Runtime checkable protocol `UnsafeProtocol` has an unsafe overlap with type `No`
     "#,
 );
 
@@ -683,6 +684,7 @@ class No:
     def bar(self) -> int:
         return 42
 isinstance(No(), ChildUnsafeProtocol)
+issubclass(No, ChildUnsafeProtocol)
     "#,
 );
 
@@ -694,5 +696,6 @@ class X:
     def __len__(self) -> str:
         return "42"
 isinstance(X(), Sized) # E: Runtime checkable protocol `Sized` has an unsafe overlap with type `X`
+issubclass(X, Sized) # E: Runtime checkable protocol `Sized` has an unsafe overlap with type `X`
 "#,
 );
