@@ -68,14 +68,27 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
 /// The second element of the vector is an optional location. For any part that do have
 /// a location this will be included. For separators like '|', '[', etc. this will be None.
 pub struct OutputWithLocations<'a> {
-    #[expect(dead_code)]
     parts: Vec<(String, Option<TextRangeWithModule>)>,
     #[expect(dead_code)]
     context: &'a TypeDisplayContext<'a>,
 }
 
+impl<'a> OutputWithLocations<'a> {
+    pub fn new(context: &'a TypeDisplayContext<'a>) -> Self {
+        Self {
+            parts: Vec::new(),
+            context,
+        }
+    }
+
+    pub fn parts(&self) -> &[(String, Option<TextRangeWithModule>)] {
+        &self.parts
+    }
+}
+
 impl TypeOutput for OutputWithLocations<'_> {
-    fn write_str(&mut self, _s: &str) -> fmt::Result {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.parts.push((s.to_owned(), None));
         Ok(())
     }
 
@@ -93,5 +106,32 @@ impl TypeOutput for OutputWithLocations<'_> {
 
     fn write_type(&mut self, _ty: &Type) -> fmt::Result {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_output_with_locations_write_str() {
+        let context = TypeDisplayContext::default();
+        let mut output = OutputWithLocations::new(&context);
+
+        assert_eq!(output.parts().len(), 0);
+
+        output.write_str("hello").unwrap();
+        assert_eq!(output.parts().len(), 1);
+        assert_eq!(output.parts()[0].0, "hello");
+        assert!(output.parts()[0].1.is_none());
+
+        output.write_str(" world").unwrap();
+        assert_eq!(output.parts().len(), 2);
+        assert_eq!(output.parts()[1].0, " world");
+        assert!(output.parts()[1].1.is_none());
+
+        let parts = output.parts();
+        assert_eq!(parts[0].0, "hello");
+        assert_eq!(parts[1].0, " world");
     }
 }
