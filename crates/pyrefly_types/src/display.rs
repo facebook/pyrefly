@@ -241,61 +241,10 @@ impl<'a> TypeDisplayContext<'a> {
             output.write_str(&format!("{}.{}", module, name))
         } else {
             output.write_str(name)
+            // write!(f, "{name}")
         }
     }
 
-    /// Helper function to format a sequence of types with a separator.
-    /// Used for unions, intersections, and other type sequences.
-    fn fmt_type_sequence<'b>(
-        &self,
-        types: impl IntoIterator<Item = &'b Type>,
-        separator: &str,
-        wrap_callables_and_intersect: bool,
-        output: &mut impl TypeOutput,
-    ) -> fmt::Result {
-        for (i, t) in types.into_iter().enumerate() {
-            if i > 0 {
-                output.write_str(separator)?;
-            }
-
-            let needs_parens = wrap_callables_and_intersect
-                && matches!(
-                    t,
-                    Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
-                );
-            if needs_parens {
-                output.write_str("(")?;
-            }
-            self.fmt_helper_generic(t, false, output)?;
-            if needs_parens {
-                output.write_str(")")?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Core formatting logic for types that works with any `TypeOutput` implementation.
-    ///
-    /// The method uses the `TypeOutput` trait abstraction to write output in various ways.
-    /// This allows it to work for various purposes. (e.g., `DisplayOutput` for plain text
-    /// or `OutputWithLocations` for tracking source locations).
-    ///
-    /// Note that the formatted type is not actually returned from this function. The type will
-    /// be collected in whatever `TypeOutput` is provided.
-    ///
-    /// # Arguments
-    ///
-    /// * `t` - The type to format
-    /// * `is_toplevel` - Whether this type is at the top level of the display.
-    ///   - When `true` and hover mode is enabled:
-    ///     - Callables, functions, and overloads are formatted with newlines for readability
-    ///     - Functions show `def func_name(...)` syntax instead of compact callable syntax
-    ///     - Overloads are displayed with `@overload` decorators
-    ///     - Type aliases are expanded to show their definition
-    ///   - When `false`, these types use compact inline formatting.
-    /// * `output` - The output writer implementing `TypeOutput`. This abstraction allows
-    ///   the same formatting logic to be used for different purposes (plain formatting,
-    ///   location tracking, etc.)
     pub fn fmt_helper_generic(
         &self,
         t: &Type,
