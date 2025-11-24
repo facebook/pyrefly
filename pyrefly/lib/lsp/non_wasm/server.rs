@@ -218,6 +218,7 @@ use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
 use crate::lsp::wasm::hover::get_hover;
+use crate::lsp::wasm::inlay_hints::InlayHintLabelSegments;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
@@ -2664,26 +2665,49 @@ impl Server {
                             })
                             .collect(),
                     );
-
                     Some(InlayHint {
-                        position,
-                        label,
-                        kind: None,
-                        text_edits: Some(vec![TextEdit {
-                            range: Range::new(position, position),
-                            new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
-                        }]),
-                        tooltip: None,
-                        padding_left: None,
-                        padding_right: None,
-                        data: None,
-                    })
+                    position,
+                    label,
+                    kind: None,
+                    text_edits: Some(vec![TextEdit {
+                        range: Range::new(position, position),
+                        new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
+                    }]),
+                    tooltip: None,
+                    padding_left: None,
+                    padding_right: None,
+                    data: None,
+                })
                 } else {
                     None
                 }
             })
             .collect();
         Some(res)
+    }
+
+    fn label_segments_to_lsp(
+        &self,
+        label: &InlayHintLabelSegments,
+        fallback_text: &str,
+    ) -> InlayHintLabel {
+        if label.is_plain() {
+            return InlayHintLabel::String(fallback_text.to_owned());
+        }
+        let parts = label
+            .parts()
+            .iter()
+            .map(|segment| InlayHintLabelPart {
+                value: segment.text.clone(),
+                tooltip: None,
+                location: segment
+                    .location
+                    .as_ref()
+                    .and_then(|location| self.to_lsp_location(location)),
+                command: None,
+            })
+            .collect();
+        InlayHintLabel::LabelParts(parts)
     }
 
     fn semantic_tokens_full(

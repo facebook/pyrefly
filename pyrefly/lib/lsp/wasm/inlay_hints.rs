@@ -11,8 +11,10 @@ use std::sync::Arc;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::LitEnum;
+use pyrefly_types::type_output::OutputWithLocations;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -34,6 +36,74 @@ use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::types::Type;
+
+#[derive(Clone, Debug, Default)]
+pub struct InlayHintLabelSegments {
+    parts: Vec<InlayHintLabelSegment>,
+}
+
+#[derive(Clone, Debug)]
+pub struct InlayHintLabelSegment {
+    pub text: String,
+    pub location: Option<TextRangeWithModule>,
+}
+
+impl InlayHintLabelSegment {
+    pub fn new(text: impl Into<String>, location: Option<TextRangeWithModule>) -> Self {
+        Self {
+            text: text.into(),
+            location,
+        }
+    }
+}
+
+impl InlayHintLabelSegments {
+    pub fn from_text(text: impl Into<String>) -> Self {
+        let mut label = Self::default();
+        label.push_plain_text(text);
+        label
+    }
+
+    pub fn push_plain_text(&mut self, text: impl Into<String>) {
+        self.parts.push(InlayHintLabelSegment::new(text, None));
+    }
+
+    pub fn extend_parts<I: IntoIterator<Item = InlayHintLabelSegment>>(&mut self, iter: I) {
+        self.parts.extend(iter);
+    }
+
+    pub fn from_type_with_prefix(prefix: &str, ty: Type) -> Self {
+        let mut label = Self::default();
+        label.push_plain_text(prefix);
+        label.extend_parts(label_segments_from_type(&ty));
+        label
+    }
+
+    pub fn text(&self) -> String {
+        self.parts.iter().map(|part| part.text.as_str()).collect()
+    }
+
+    pub fn parts(&self) -> &[InlayHintLabelSegment] {
+        &self.parts
+    }
+
+    pub fn is_plain(&self) -> bool {
+        self.parts.iter().all(|part| part.location.is_none())
+    }
+}
+
+fn label_segments_from_type(ty: &Type) -> Vec<InlayHintLabelSegment> {
+    let ctx = TypeDisplayContext::new(&[ty]);
+    let mut output = OutputWithLocations::new(&ctx);
+    if ctx.fmt_helper_generic(ty, true, &mut output).is_err() {
+        return vec![InlayHintLabelSegment::new(ty.to_string(), None)];
+    }
+    output
+        .parts()
+        .iter()
+        .map(|(text, location)| InlayHintLabelSegment::new(text.clone(), location.clone()))
+        .collect()
+}
 
 #[derive(Debug)]
 pub struct ParameterAnnotation {

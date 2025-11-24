@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::Url;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -266,6 +267,9 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
         configuration: Some(None),
         ..Default::default()
     });
+    let expected_uri = Url::from_file_path(root.path().join("type_def_inlay_hint_test.py"))
+        .unwrap()
+        .to_string();
 
     interaction.client.did_open("type_def_inlay_hint_test.py");
 
@@ -273,15 +277,28 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
     interaction
         .client
         .inlay_hint("type_def_inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response_with(|result| {
-            let hints = match result {
-                Some(hints) => hints,
-                None => return false,
-            };
-
-            // Should have hints for the function return type and variable type
-            if hints.len() != 2 {
-                return false;
+        .expect_response(json!([
+            {
+                "label": " -> MyClass",
+                "position": {"character": 22, "line": 11},
+                "textEdits": [{
+                    "newText": " -> MyClass",
+                    "range": {
+                        "end": {"character": 22, "line": 11},
+                        "start": {"character": 22, "line": 11}
+                    }
+                }]
+            },
+            {
+                "label": ": MyClass",
+                "position": {"character": 6, "line": 15},
+                "textEdits": [{
+                    "newText": ": MyClass",
+                    "range": {
+                        "end": {"character": 6, "line": 15},
+                        "start": {"character": 6, "line": 15}
+                    }
+                }]
             }
 
             // Check that the hints have label parts (not simple strings)

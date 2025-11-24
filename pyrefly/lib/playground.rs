@@ -622,7 +622,10 @@ impl Playground {
                     let position = Position::from_display_pos(info.display_pos(position));
                     // Concatenate all label parts into a single string for the playground
                     let label: String = label_parts.iter().map(|(text, _)| text.as_str()).collect();
-                    InlayHint { label, position }
+                    InlayHint {
+                        label: label.text(),
+                        position,
+                    }
                 })
             })
             .unwrap_or_default()
