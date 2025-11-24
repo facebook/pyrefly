@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::qname::QName;
 
 use crate::display::TypeDisplayContext;
@@ -58,4 +59,15 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
     fn write_type(&mut self, ty: &Type) -> fmt::Result {
         write!(self.formatter, "{}", self.context.display(ty))
     }
+}
+
+/// This struct is used to collect the type to be displayed as a vector. Each element
+/// in the vector will be tuple of (String, Option<TextRangeWithModule>).
+/// The String the actual part of the string that will be displayed. When displaying the type
+/// each of these will be concatenated to create the final type.
+/// The second element of the vector is an optional location. For any part that do have
+/// a location this will be included. For separators like '|', '[', etc. this will be None.
+pub struct OutputWithLocations<'a> {
+    parts: Vec<(String, Option<TextRangeWithModule>)>,
+    context: &'a TypeDisplayContext<'a>,
 }
