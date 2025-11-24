@@ -245,6 +245,36 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    /// Helper function to format a sequence of types with a separator.
+    /// Used for unions, intersections, and other type sequences.
+    fn fmt_type_sequence<'b>(
+        &self,
+        types: impl IntoIterator<Item = &'b Type>,
+        separator: &str,
+        wrap_callables_and_intersect: bool,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        for (i, t) in types.into_iter().enumerate() {
+            if i > 0 {
+                output.write_str(separator)?;
+            }
+
+            let needs_parens = wrap_callables_and_intersect
+                && matches!(
+                    t,
+                    Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                );
+            if needs_parens {
+                output.write_str("(")?;
+            }
+            self.fmt_helper_generic(t, false, output)?;
+            if needs_parens {
+                output.write_str(")")?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn fmt_helper_generic(
         &self,
         t: &Type,
@@ -417,21 +447,14 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Union(box Union { members: types, .. }) if types.is_empty() => {
                 self.maybe_fmt_with_module("typing", "Never", output)
             }
-            Type::Union(box Union {
-                display_name: Some(name),
-                ..
-            }) => output.write_str(name),
-            Type::Union(box Union {
-                members,
-                display_name: None,
-            }) => {
+            Type::Union(types) => {
                 let mut literal_idx = None;
                 let mut literals = Vec::new();
                 let mut union_members: Vec<&Type> = Vec::new();
                 // Track seen types to deduplicate (mainly to prettify types for functions with different names but the same signature)
                 let mut seen_types = SmallSet::new();
 
-                for t in members.iter() {
+                for t in types.iter() {
                     match t {
                         Type::Literal(lit) => {
                             if literal_idx.is_none() {
@@ -523,7 +546,35 @@ impl<'a> TypeDisplayContext<'a> {
                     self.fmt_type_sequence(union_members, " | ", true, output)
                 }
             }
-            Type::Intersect(x) => self.fmt_type_sequence(x.0.iter(), " & ", true, output),
+            Type::Intersect(x) => {
+                let display_types: Vec<String> =
+                    x.0.iter()
+                        .map(|t| {
+                            let mut temp = String::new();
+                            {
+                                use std::fmt::Write;
+                                match t {
+                                    Type::Callable(_) | Type::Function(_) => {
+                                        let temp_formatter = Fmt(|f| {
+                                            let mut temp_output = DisplayOutput::new(self, f);
+                                            self.fmt_helper_generic(t, false, &mut temp_output)
+                                        });
+                                        write!(&mut temp, "({})", temp_formatter).ok();
+                                    }
+                                    _ => {
+                                        let temp_formatter = Fmt(|f| {
+                                            let mut temp_output = DisplayOutput::new(self, f);
+                                            self.fmt_helper_generic(t, false, &mut temp_output)
+                                        });
+                                        write!(&mut temp, "{}", temp_formatter).ok();
+                                    }
+                                }
+                            }
+                            temp
+                        })
+                        .collect();
+                output.write_str(&display_types.join(" & "))
+            }
             Type::Tuple(t) => {
                 t.fmt_with_type(output, &|ty, o| self.fmt_helper_generic(ty, false, o))
             }
