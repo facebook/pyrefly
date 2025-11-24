@@ -2387,7 +2387,6 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
-
         if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(chosen_overload_index)
