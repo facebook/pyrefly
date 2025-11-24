@@ -157,6 +157,7 @@ mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::lit_int::LitInt;
     use crate::literal::LitEnum;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedKind;
@@ -496,9 +497,9 @@ mod tests {
         assert_eq!(parts_str, "tuple[int]");
 
         // Current behavior: The "tuple" part is NOT clickable
-        // Expected parts: [("tuple[", None), ("int", Some(location)), ("]", None)]
+        // Expected parts: [("tuple", None), ("[", None), ("int", Some(location)), ("]", None)]
         let parts = output.parts();
-        assert_eq!(parts.len(), 4, "Should have 3 parts");
+        assert_eq!(parts.len(), 4, "Should have 4 parts");
 
         // Verify each part
         assert_eq!(parts[0].0, "tuple");
@@ -512,6 +513,46 @@ mod tests {
 
         assert_eq!(parts[2].0, "int");
         assert!(parts[2].1.is_some(), "int should have location (clickable)");
+
+        assert_eq!(parts[3].0, "]");
+        assert!(parts[3].1.is_none(), "] should not have location");
+    }
+
+    #[test]
+    fn test_output_with_locations_literal_base_not_clickable() {
+        // TODO(jvansch): When implementing clickable support for the base type in special forms like Literal[1],
+        // update this test to verify that "Literal" has a location and is clickable.
+        // Expected future behavior: [("Literal", Some(location)), ("[", None), ("1", None), ("]", None)]
+
+        // Create Literal[1] type
+        let literal_type = Type::Literal(Lit::Int(LitInt::new(1)));
+
+        let ctx = TypeDisplayContext::new(&[&literal_type]);
+        let mut output = OutputWithLocations::new(&ctx);
+
+        ctx.fmt_helper_generic(&literal_type, false, &mut output)
+            .unwrap();
+
+        let parts_str: String = output.parts().iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(parts_str, "Literal[1]");
+
+        // Current behavior: The "Literal" part is NOT clickable
+        // Expected parts: [("Literal", None), ("[", None), ("1", None), ("]", None)]
+        let parts = output.parts();
+        assert_eq!(parts.len(), 4, "Should have 4 parts");
+
+        // Verify each part
+        assert_eq!(parts[0].0, "Literal");
+        assert!(
+            parts[0].1.is_none(),
+            "Literal should not have location (not clickable)"
+        );
+
+        assert_eq!(parts[1].0, "[");
+        assert!(parts[1].1.is_none(), "[ should not have location");
+
+        assert_eq!(parts[2].0, "1");
+        assert!(parts[2].1.is_none(), "1 should not have location");
 
         assert_eq!(parts[3].0, "]");
         assert!(parts[3].1.is_none(), "] should not have location");
