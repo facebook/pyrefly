@@ -804,6 +804,7 @@ struct ParameterUsage {
 struct ImportUsage {
     range: TextRange,
     used: bool,
+    is_star_import: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1304,7 +1305,7 @@ impl Scopes {
         imports
             .into_iter()
             .filter_map(|(name, usage)| {
-                if usage.used {
+                if usage.used || usage.is_star_import {
                     None
                 } else {
                     Some(UnusedImport {
@@ -1611,12 +1612,17 @@ impl Scopes {
     }
 
     pub fn register_import(&mut self, name: &Identifier) {
+        self.register_import_with_star(name, false);
+    }
+
+    pub fn register_import_with_star(&mut self, name: &Identifier, is_star_import: bool) {
         if matches!(self.current().kind, ScopeKind::Module) {
             self.current_mut().imports.insert(
                 name.id.clone(),
                 ImportUsage {
                     range: name.range,
                     used: false,
+                    is_star_import,
                 },
             );
         }
