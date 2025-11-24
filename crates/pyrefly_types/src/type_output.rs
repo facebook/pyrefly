@@ -392,4 +392,37 @@ mod tests {
         assert!(str_part.is_some());
         assert!(str_part.unwrap().1.is_some());
     }
+
+    #[test]
+    fn test_output_with_locations_union_type_does_not_split_properly() {
+        // Create int | str | None type
+        let int_class = fake_class("int", "builtins", 10);
+        let str_class = fake_class("str", "builtins", 20);
+
+        let int_type = Type::ClassType(ClassType::new(int_class, TArgs::default()));
+        let str_type = Type::ClassType(ClassType::new(str_class, TArgs::default()));
+        let union_type = Type::Union(vec![int_type, str_type, Type::None]);
+
+        let ctx = TypeDisplayContext::new(&[&union_type]);
+        let mut output = OutputWithLocations::new(&ctx);
+
+        // Format the type using fmt_helper_generic
+        ctx.fmt_helper_generic(&union_type, false, &mut output)
+            .unwrap();
+
+        // Check the concatenated result
+        let parts_str: String = output.parts().iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(parts_str, "int | str | None");
+
+        // Current behavior: The entire union is treated as one string
+        // This is technically incorrect - we want separate parts for each type
+        // Desired future behavior: [("int", Some(location)), (" | ", None), ("str", Some(location)), (" | ", None), ("None", None)]
+        let parts = output.parts();
+        assert_eq!(parts.len(), 1, "Current behavior: union as single part");
+        assert_eq!(parts[0].0, "int | str | None");
+        assert!(
+            parts[0].1.is_none(),
+            "Current behavior: entire union has no location"
+        );
+    }
 }
