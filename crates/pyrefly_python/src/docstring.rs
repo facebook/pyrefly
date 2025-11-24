@@ -450,4 +450,237 @@ Args:
         assert_eq!(docs.get("foo").unwrap(), "first line\nsecond line");
         assert_eq!(docs.get("bar").unwrap(), "final");
     }
+
+    #[test]
+    fn test_parse_sphinx_empty_param() {
+        let doc = r#"
+:param foo:
+:param bar: has description
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo"), None); // Empty params should not be included
+        assert_eq!(docs.get("bar").unwrap(), "has description");
+    }
+
+    #[test]
+    fn test_parse_sphinx_with_type_annotations() {
+        let doc = r#"
+:param int foo: an integer
+:param str bar: a string
+:param Optional[Dict[str, int]] baz: complex type
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "an integer");
+        assert_eq!(docs.get("bar").unwrap(), "a string");
+        assert_eq!(docs.get("baz").unwrap(), "complex type");
+    }
+
+    #[test]
+    fn test_parse_sphinx_multiple_continuation_lines() {
+        let doc = r#"
+:param foo: line one
+    line two
+    line three
+    line four
+:param bar: single line
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(
+            docs.get("foo").unwrap(),
+            "line one\nline two\nline three\nline four"
+        );
+        assert_eq!(docs.get("bar").unwrap(), "single line");
+    }
+
+    #[test]
+    fn test_parse_sphinx_with_other_directives() {
+        let doc = r#"
+:param foo: the foo parameter
+:param bar: the bar parameter
+:return: the return value
+:raises ValueError: when invalid
+:type foo: int
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "the foo parameter");
+        assert_eq!(docs.get("bar").unwrap(), "the bar parameter");
+        // Other directives should not be included as parameters
+        assert_eq!(docs.get("return"), None);
+        assert_eq!(docs.get("raises"), None);
+    }
+
+    #[test]
+    fn test_parse_sphinx_with_varargs() {
+        let doc = r#"
+:param *args: positional arguments
+:param **kwargs: keyword arguments
+:param regular: regular param
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("args").unwrap(), "positional arguments");
+        assert_eq!(docs.get("kwargs").unwrap(), "keyword arguments");
+        assert_eq!(docs.get("regular").unwrap(), "regular param");
+    }
+
+    #[test]
+    fn test_parse_sphinx_indented_in_docstring() {
+        let doc = r#"""
+    Summary of function.
+
+    :param foo: first param
+        with continuation
+    :param bar: second param
+    """#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "first param\nwith continuation");
+        assert_eq!(docs.get("bar").unwrap(), "second param");
+    }
+
+    #[test]
+    fn test_parse_google_different_headers() {
+        let doc = r#"
+Arguments:
+    foo: using Arguments header
+    bar: second arg
+
+def another_func():
+    """
+    Keyword Arguments:
+        baz: keyword arg
+    """
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "using Arguments header");
+        assert_eq!(docs.get("bar").unwrap(), "second arg");
+    }
+
+    #[test]
+    fn test_parse_google_parameters_header() {
+        let doc = r#"
+Parameters:
+    foo (int): first param
+    bar (str): second param
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "first param");
+        assert_eq!(docs.get("bar").unwrap(), "second param");
+    }
+
+    #[test]
+    fn test_parse_google_keyword_args_header() {
+        let doc = r#"
+Keyword Args:
+    foo: keyword arg one
+    bar: keyword arg two
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "keyword arg one");
+        assert_eq!(docs.get("bar").unwrap(), "keyword arg two");
+    }
+
+    #[test]
+    fn test_parse_google_deeply_indented_continuation() {
+        let doc = r#"
+Args:
+    foo: first line
+        second line
+            third line deeply indented
+        fourth line
+    bar: simple
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(
+            docs.get("foo").unwrap(),
+            "first line\nsecond line\nthird line deeply indented\nfourth line"
+        );
+        assert_eq!(docs.get("bar").unwrap(), "simple");
+    }
+
+    #[test]
+    fn test_parse_google_no_type_annotation() {
+        let doc = r#"
+Args:
+    foo: no type annotation
+    bar (int): with type annotation
+    baz: also no type
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "no type annotation");
+        assert_eq!(docs.get("bar").unwrap(), "with type annotation");
+        assert_eq!(docs.get("baz").unwrap(), "also no type");
+    }
+
+    #[test]
+    fn test_parse_google_complex_type_annotations() {
+        let doc = r#"
+Args:
+    foo (Optional[List[Dict[str, int]]]): complex type
+    bar (Callable[[int, str], bool]): callable type
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "complex type");
+        assert_eq!(docs.get("bar").unwrap(), "callable type");
+    }
+
+    #[test]
+    fn test_parse_google_section_ends_with_other_section() {
+        let doc = r#"
+Args:
+    foo: the foo param
+    bar: the bar param
+
+Returns:
+    int: the return value
+
+Raises:
+    ValueError: when things go wrong
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "the foo param");
+        assert_eq!(docs.get("bar").unwrap(), "the bar param");
+        // Returns and Raises should not be parsed as params
+        assert_eq!(docs.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_google_empty_parameter_description() {
+        let doc = r#"
+Args:
+    foo:
+    bar: has description
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo"), None); // Empty description should not be included
+        assert_eq!(docs.get("bar").unwrap(), "has description");
+    }
+
+    #[test]
+    fn test_parse_mixed_sphinx_and_google() {
+        let doc = r#"
+:param sphinx_param: using Sphinx style
+    with continuation
+
+Args:
+    google_param: using Google style
+    another_google: second Google param
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(
+            docs.get("sphinx_param").unwrap(),
+            "using Sphinx style\nwith continuation"
+        );
+        assert_eq!(docs.get("google_param").unwrap(), "using Google style");
+        assert_eq!(docs.get("another_google").unwrap(), "second Google param");
+    }
+
+    #[test]
+    fn test_parse_sphinx_param_with_comma_in_type() {
+        let doc = r#"
+:param Dict[str, int] foo: dict param
+:param Tuple[int, str, bool] bar: tuple param
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("foo").unwrap(), "dict param");
+        assert_eq!(docs.get("bar").unwrap(), "tuple param");
+    }
 }
