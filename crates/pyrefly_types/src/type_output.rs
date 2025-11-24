@@ -394,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn test_output_with_locations_union_type_does_not_split_properly() {
+    fn test_output_with_locations_union_type_splits_properly() {
         // Create int | str | None type
         let int_class = fake_class("int", "builtins", 10);
         let str_class = fake_class("str", "builtins", 20);
@@ -406,24 +406,32 @@ mod tests {
         let ctx = TypeDisplayContext::new(&[&union_type]);
         let mut output = OutputWithLocations::new(&ctx);
 
-        // Format the type using fmt_helper_generic
         ctx.fmt_helper_generic(&union_type, false, &mut output)
             .unwrap();
 
-        // Check the concatenated result
         let parts_str: String = output.parts().iter().map(|(s, _)| s.as_str()).collect();
         assert_eq!(parts_str, "int | str | None");
 
-        // Current behavior: The entire union is treated as one string
-        // This is technically incorrect - we want separate parts for each type
-        // Desired future behavior: [("int", Some(location)), (" | ", None), ("str", Some(location)), (" | ", None), ("None", None)]
+        // New behavior: Union types are split into separate parts
+        // Expected: [("int", Some(location)), (" | ", None), ("str", Some(location)), (" | ", None), ("None", None)]
         let parts = output.parts();
-        assert_eq!(parts.len(), 1, "Current behavior: union as single part");
-        assert_eq!(parts[0].0, "int | str | None");
-        assert!(
-            parts[0].1.is_none(),
-            "Current behavior: entire union has no location"
-        );
+        assert_eq!(parts.len(), 5, "Union should be split into 5 parts");
+
+        // Verify each part
+        assert_eq!(parts[0].0, "int");
+        assert!(parts[0].1.is_some(), "int should have location");
+
+        assert_eq!(parts[1].0, " | ");
+        assert!(parts[1].1.is_none(), "separator should not have location");
+
+        assert_eq!(parts[2].0, "str");
+        assert!(parts[2].1.is_some(), "str should have location");
+
+        assert_eq!(parts[3].0, " | ");
+        assert!(parts[3].1.is_none(), "separator should not have location");
+
+        assert_eq!(parts[4].0, "None");
+        assert!(parts[4].1.is_none(), "None should not have location");
     }
 
     #[test]

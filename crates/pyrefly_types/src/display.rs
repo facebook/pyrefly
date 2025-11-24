@@ -245,7 +245,6 @@ impl<'a> TypeDisplayContext<'a> {
 
     /// Helper function to format a sequence of types with a separator.
     /// Used for unions, intersections, and other type sequences.
-    #[expect(dead_code)]
     fn fmt_type_sequence<'b>(
         &self,
         types: impl IntoIterator<Item = &'b Type>,
@@ -447,19 +446,30 @@ impl<'a> TypeDisplayContext<'a> {
                 self.maybe_fmt_with_module("typing", "Never", output)
             }
             Type::Union(types) => {
-                // All Literals will be collected into a single Literal at the index of the first Literal.
                 let mut literal_idx = None;
                 let mut literals = Vec::new();
-                let mut display_types = Vec::new();
-                for (i, t) in types.iter().enumerate() {
+                let mut union_members: Vec<&Type> = Vec::new();
+                // Track seen types to deduplicate (mainly to prettify types for functions with different names but the same signature)
+                let mut seen_types = SmallSet::new();
+
+                for t in types.iter() {
                     match t {
                         Type::Literal(lit) => {
                             if literal_idx.is_none() {
-                                literal_idx = Some(i);
+                                // First literal encountered: save this position in union_members.
+                                // All Literal types in the union will be combined into a single
+                                // "Literal[a, b, c]" output at this position for readability.
+                                // Example: int | Literal[1] | str | Literal[2] → int | Literal[1, 2] | str
+                                literal_idx = Some(union_members.len());
+                                // Insert a placeholder since we don't know all literals yet.
+                                // When outputting (line 505), we check `if i == idx` to detect this
+                                // placeholder position and output the combined literal instead.
+                                union_members.push(&Type::None);
                             }
-                            literals.push(format!("{}", Fmt(|f| self.fmt_lit(lit, f))))
+                            literals.push(lit)
                         }
                         Type::Callable(_) | Type::Function(_) | Type::Intersect(_) => {
+                            // These types need parentheses in union context
                             let mut temp = String::new();
                             {
                                 use std::fmt::Write;
@@ -469,9 +479,13 @@ impl<'a> TypeDisplayContext<'a> {
                                 });
                                 write!(&mut temp, "({})", temp_formatter).ok();
                             }
-                            display_types.push(temp)
+                            // Only add if we haven't seen this type string before
+                            if seen_types.insert(temp) {
+                                union_members.push(t);
+                            }
                         }
                         _ => {
+                            // Format the type to a string for deduplication
                             let mut temp = String::new();
                             {
                                 use std::fmt::Write;
@@ -481,25 +495,54 @@ impl<'a> TypeDisplayContext<'a> {
                                 });
                                 write!(&mut temp, "{}", temp_formatter).ok();
                             }
-                            display_types.push(temp)
+                            // Only add if we haven't seen this type string before
+                            if seen_types.insert(temp) {
+                                union_members.push(t);
+                            }
                         }
                     }
                 }
-                if let Some(i) = literal_idx {
-                    if self.always_display_module_name {
-                        display_types
-                            .insert(i, format!("typing.Literal[{}]", commas_iter(|| &literals)));
-                    } else {
-                        display_types.insert(i, format!("Literal[{}]", commas_iter(|| &literals)));
+
+                // If we found literals, create a combined Literal type and replace the placeholder
+                if let Some(idx) = literal_idx {
+                    // We need to format the combined Literal manually since it's not a real Type
+                    // but a special formatting construct
+                    for (i, t) in union_members.iter().enumerate() {
+                        if i > 0 {
+                            output.write_str(" | ")?;
+                        }
+
+                        if i == idx {
+                            // This is where the combined Literal goes
+                            self.maybe_fmt_with_module("typing", "Literal", output)?;
+                            output.write_str("[")?;
+                            for (j, lit) in literals.iter().enumerate() {
+                                if j > 0 {
+                                    output.write_str(", ")?;
+                                }
+                                output.write_lit(lit)?;
+                            }
+                            output.write_str("]")?;
+                        } else {
+                            // Regular union member - use helper for just this one
+                            let needs_parens = matches!(
+                                t,
+                                Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                            );
+                            if needs_parens {
+                                output.write_str("(")?;
+                            }
+                            self.fmt_helper_generic(t, false, output)?;
+                            if needs_parens {
+                                output.write_str(")")?;
+                            }
+                        }
                     }
+                    Ok(())
+                } else {
+                    // No literals, just use the helper directly
+                    self.fmt_type_sequence(union_members, " | ", true, output)
                 }
-                // This is mainly to prettify types for functions with different names but the same signature
-                let display_types_deduped = display_types
-                    .into_iter()
-                    .collect::<SmallSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                output.write_str(&display_types_deduped.join(" | "))
             }
             Type::Intersect(x) => {
                 let display_types: Vec<String> =
