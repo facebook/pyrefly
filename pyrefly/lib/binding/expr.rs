@@ -831,6 +831,13 @@ impl<'a> BindingsBuilder<'a> {
             Expr::Call(_) => self.ensure_expr(x, static_type_usage),
             // Bind walrus so we don't crash when looking up the assigned name later.
             Expr::Named(_) => self.ensure_expr(x, static_type_usage),
+            // Bind yield and yield from so we don't crash when checking return type later.
+            Expr::Yield(_) => {
+                self.ensure_expr(x, static_type_usage);
+            }
+            Expr::YieldFrom(_) => {
+                self.ensure_expr(x, static_type_usage);
+            }
             Expr::Attribute(ExprAttribute { value, attr, .. })
                 if let Expr::Name(value) = &**value
                 // We assume "args" and "kwargs" are ParamSpec attributes rather than imported TypeVars.
