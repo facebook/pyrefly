@@ -165,6 +165,21 @@ def test() -> Generator[float, float, None]:
     assert_eq!(report, "No unused variables");
 }
 
+// TODO: x = 7 should be highlighted as unused
+#[test]
+fn test_reassignment_false_negative() {
+    let code = r#"
+def f():
+    x = 5
+    print(x)
+    x = 7
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
 #[test]
 fn test_loop_with_reassignment() {
     let code = r#"
