@@ -2357,36 +2357,12 @@ impl<'a> Transaction<'a> {
         ))
     }
 
-    fn add_literal_completions(
+fn add_literal_completions(
         &self,
         handle: &Handle,
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        let mut in_string = false;
-        if let Some(module_info) = self.get_module_info(handle) {
-            let source = module_info.contents();
-            match parse_module(source) {
-                Ok(parsed) => {
-                    for token in parsed.tokens() {
-                        let range = token.range();
-                        if range.contains(position) || (range.end() == position && token.kind() == TokenKind::String) {
-                            if token.kind() == TokenKind::String {
-                                in_string = true;
-                            }
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    if let ParseErrorType::Lexical(LexicalErrorType::UnclosedStringError) = e.error {
-                         if e.location.start() < position {
-                             in_string = true;
-                         }
-                    }
-                }
-            }
-        }
         if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(chosen_overload_index)
@@ -2395,7 +2371,7 @@ impl<'a> Transaction<'a> {
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
-            Self::add_literal_completions_from_type(param.as_type(), completions, in_string);
+            Self::add_literal_completions_from_type(param.as_type(), completions);
         }
     }
 
