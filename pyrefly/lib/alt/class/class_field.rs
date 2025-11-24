@@ -15,7 +15,6 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
-use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
@@ -2655,13 +2654,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let derived_instance = self.instantiate(cls);
         for ancestor in self.get_mro_for_class(cls).ancestors(self.stdlib) {
             let parent_cls = ancestor.class_object();
-            match parent_cls.module_path().details() {
-                ModulePathDetails::BundledTypeshed(_)
-                | ModulePathDetails::BundledTypeshedThirdParty(_) => {
-                    continue;
-                }
-                _ => {}
-            }
             let Some(member) = self.get_class_member(parent_cls, name) else {
                 continue;
             };
@@ -3388,20 +3380,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn callable_params_and_flags(ty: Type) -> Option<(ParamList, FuncFlags)> {
-        match ty {
-            Type::Function(func) => match func.signature.params {
-                Params::List(list) => Some((list, func.metadata.flags.clone())),
+    fn callable_params_and_flags(mut ty: Type) -> Option<(ParamList, FuncFlags)> {
+        let mut flags = None;
+        ty.transform_toplevel_func_metadata(|meta| {
+            if flags.is_none() {
+                flags = Some(meta.flags.clone());
+            }
+        });
+        let flags = flags?;
+        let params = ty
+            .callable_signatures()
+            .into_iter()
+            .find_map(|sig| match &sig.params {
+                Params::List(list) => Some(list.clone()),
                 _ => None,
-            },
-            Type::Forall(box Forall {
-                body: Forallable::Function(func),
-                ..
-            }) => match func.signature.params {
-                Params::List(list) => Some((list, func.metadata.flags.clone())),
-                _ => None,
-            },
-            _ => None,
-        }
+            })?;
+        Some((params, flags))
     }
 }

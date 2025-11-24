@@ -173,6 +173,63 @@ class C(G[int]):
 );
 
 testcase!(
+    test_override_requires_decorator,
+    r#"
+from typing import reveal_type
+
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    def foo(self, x):
+        reveal_type(x)  # E: revealed type: Unknown
+    "#,
+);
+
+testcase!(
+    test_override_static_and_class_methods,
+    r#"
+from typing import override, reveal_type
+
+class Base:
+    @staticmethod
+    def sm(x: int) -> None: ...
+
+    @classmethod
+    def cm(cls, y: str) -> None: ...
+
+class Derived(Base):
+    @override
+    @staticmethod
+    def sm(x):
+        reveal_type(x)  # E: revealed type: int
+
+    @override
+    @classmethod
+    def cm(cls, y):
+        reveal_type(y)  # E: revealed type: str
+    "#,
+);
+
+testcase!(
+    test_override_parameter_kinds,
+    r#"
+from typing import override, reveal_type
+
+class Base:
+    def g(self, /, x: int, *args: str, y: bool, **kwargs: float) -> None: ...
+
+class Derived(Base):
+    @override
+    def g(self, /, x, *args, y, **kwargs):
+        reveal_type(x)  # E: revealed type: int
+        reveal_type(args)  # E: revealed type: tuple[str, ...]
+        reveal_type(y)  # E: revealed type: bool
+        reveal_type(kwargs)  # E: revealed type: dict[str, float]
+    "#,
+);
+
+testcase!(
     test_no_base_override,
     r#"
 from typing import override
