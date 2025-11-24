@@ -2415,6 +2415,31 @@ fn add_literal_completions(
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
+        let mut in_string = false;
+        if let Some(module_info) = self.get_module_info(handle) {
+            let source = module_info.contents();
+            match parse_module(source) {
+                Ok(parsed) => {
+                    for token in parsed.tokens() {
+                        let range = token.range();
+                        if range.contains(position) || (range.end() == position && token.kind() == TokenKind::String) {
+                            if token.kind() == TokenKind::String {
+                                in_string = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    if let ParseErrorType::Lexical(LexicalErrorType::UnclosedStringError) = e.error {
+                         if e.location.start() < position {
+                             in_string = true;
+                         }
+                    }
+                }
+            }
+        }
+
         if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
             && let Some(callable) = callables.get(chosen_overload_index)
