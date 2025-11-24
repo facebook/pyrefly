@@ -1363,12 +1363,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn scoped_type_params(&self, x: Option<&TypeParams>) -> Vec<TParam> {
         match x {
             Some(x) => {
-                fn get_quantified(t: &Type) -> Quantified {
-                    match t {
-                        Type::QuantifiedValue(q) => (**q).clone(),
-                        _ => unreachable!(),
-                    }
-                }
+                let get_quantified = |t: &Type| match t {
+                    Type::QuantifiedValue(q) => (**q).clone(),
+                    _ => unreachable!(
+                        "{}:{:?}: Expected a QuantifiedValue, got {}",
+                        self.module().path().as_path().display(),
+                        x.range(),
+                        t
+                    ),
+                };
                 let mut params = Vec::new();
                 for raw_param in x.type_params.iter() {
                     let name = raw_param.name();
