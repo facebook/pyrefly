@@ -243,6 +243,37 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    /// Helper function to format a sequence of types with a separator.
+    /// Used for unions, intersections, and other type sequences.
+    #[expect(dead_code)]
+    fn fmt_type_sequence<'b>(
+        &self,
+        types: impl IntoIterator<Item = &'b Type>,
+        separator: &str,
+        wrap_callables_and_intersect: bool,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        for (i, t) in types.into_iter().enumerate() {
+            if i > 0 {
+                output.write_str(separator)?;
+            }
+
+            let needs_parens = wrap_callables_and_intersect
+                && matches!(
+                    t,
+                    Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                );
+            if needs_parens {
+                output.write_str("(")?;
+            }
+            self.fmt_helper_generic(t, false, output)?;
+            if needs_parens {
+                output.write_str(")")?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn fmt_helper_generic(
         &self,
         t: &Type,
