@@ -116,7 +116,20 @@ impl TypeOutput for OutputWithLocations<'_> {
         Ok(())
     }
 
-    fn write_targs(&mut self, _targs: &TArgs) -> fmt::Result {
+    fn write_targs(&mut self, targs: &TArgs) -> fmt::Result {
+        // Write each type argument separately with its own location
+        // This ensures that each type in a union (e.g., int | str) gets its own
+        // clickable part with a link to its definition
+        if !targs.is_empty() {
+            self.write_str("[")?;
+            for (i, ty) in targs.as_slice().iter().enumerate() {
+                if i > 0 {
+                    self.write_str(", ")?;
+                }
+                self.write_type(ty)?;
+            }
+            self.write_str("]")?;
+        }
         Ok(())
     }
 
@@ -145,7 +158,13 @@ mod tests {
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
     use crate::literal::LitEnum;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedKind;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::Restriction;
     use crate::types::TArgs;
+    use crate::types::TParam;
+    use crate::types::TParams;
 
     fn fake_class(name: &str, module: &str, range: u32) -> Class {
         let mi = Module::new(
@@ -258,5 +277,63 @@ mod tests {
         let loc = location.as_ref().unwrap();
         assert_eq!(loc.range, TextRange::empty(TextSize::new(10)));
         assert_eq!(loc.module.name(), ModuleName::from_str("colors"));
+    }
+
+    #[test]
+    fn test_output_with_locations_write_targs_multiple() {
+        let context = TypeDisplayContext::default();
+        let mut output = OutputWithLocations::new(&context);
+
+        // Create TArgs with multiple type arguments
+        let tparam1 = TParam {
+            quantified: Quantified::new(
+                pyrefly_util::uniques::UniqueFactory::new().fresh(),
+                Name::new("T"),
+                QuantifiedKind::TypeVar,
+                None,
+                Restriction::Unrestricted,
+            ),
+            variance: PreInferenceVariance::PInvariant,
+        };
+        let tparam2 = TParam {
+            quantified: Quantified::new(
+                pyrefly_util::uniques::UniqueFactory::new().fresh(),
+                Name::new("U"),
+                QuantifiedKind::TypeVar,
+                None,
+                Restriction::Unrestricted,
+            ),
+            variance: PreInferenceVariance::PInvariant,
+        };
+        let tparam3 = TParam {
+            quantified: Quantified::new(
+                pyrefly_util::uniques::UniqueFactory::new().fresh(),
+                Name::new("V"),
+                QuantifiedKind::TypeVar,
+                None,
+                Restriction::Unrestricted,
+            ),
+            variance: PreInferenceVariance::PInvariant,
+        };
+
+        let tparams = Arc::new(TParams::new(vec![tparam1, tparam2, tparam3]));
+        let targs = TArgs::new(
+            tparams,
+            vec![Type::None, Type::LiteralString, Type::any_explicit()],
+        );
+
+        output.write_targs(&targs).unwrap();
+
+        // Should have "[", ", ", ", ", and "]"
+        // write_type is stubbed, so types themselves don't appear
+        assert_eq!(output.parts().len(), 4);
+        assert_eq!(output.parts()[0].0, "[");
+        assert!(output.parts()[0].1.is_none());
+        assert_eq!(output.parts()[1].0, ", ");
+        assert!(output.parts()[1].1.is_none());
+        assert_eq!(output.parts()[2].0, ", ");
+        assert!(output.parts()[2].1.is_none());
+        assert_eq!(output.parts()[3].0, "]");
+        assert!(output.parts()[3].1.is_none());
     }
 }
