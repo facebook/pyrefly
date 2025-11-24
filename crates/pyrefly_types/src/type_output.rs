@@ -68,6 +68,30 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
 /// The second element of the vector is an optional location. For any part that do have
 /// a location this will be included. For separators like '|', '[', etc. this will be None.
 pub struct OutputWithLocations<'a> {
+    #[expect(dead_code)]
     parts: Vec<(String, Option<TextRangeWithModule>)>,
+    #[expect(dead_code)]
     context: &'a TypeDisplayContext<'a>,
+}
+
+impl TypeOutput for OutputWithLocations<'_> {
+    fn write_str(&mut self, _s: &str) -> fmt::Result {
+        Ok(())
+    }
+
+    fn write_qname(&mut self, _qname: &QName) -> fmt::Result {
+        Ok(())
+    }
+
+    fn write_lit(&mut self, _lit: &Lit) -> fmt::Result {
+        Ok(())
+    }
+
+    fn write_targs(&mut self, _targs: &TArgs) -> fmt::Result {
+        Ok(())
+    }
+
+    fn write_type(&mut self, _ty: &Type) -> fmt::Result {
+        Ok(())
+    }
 }
