@@ -1639,11 +1639,19 @@ impl Scopes {
             self.current().kind,
             ScopeKind::Module | ScopeKind::Function(_) | ScopeKind::Method(_)
         ) {
+            // Preserve the `used` flag if the variable was already marked as used
+            // This handles cases like `foo = foo + 1` in loops where the variable
+            // is read before being reassigned
+            let was_used = self
+                .current()
+                .variables
+                .get(&name.id)
+                .is_some_and(|usage| usage.used);
             self.current_mut().variables.insert(
                 name.id.clone(),
                 VariableUsage {
                     range: name.range,
-                    used: false,
+                    used: was_used,
                 },
             );
         }
