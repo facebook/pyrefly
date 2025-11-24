@@ -237,6 +237,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
+        if let Some(hint_ref) = hint
+            && let Type::Union(options) = hint_ref.ty()
+        {
+            let mut branches: Vec<&Type> = options.iter().collect();
+            branches.sort_by_key(|option| self.type_contains_var(option));
+            for option in branches {
+                let branch_hint = HintRef::new(option, hint_ref.errors());
+                let ty = self.expr_infer_with_hint(x, Some(branch_hint), errors);
+                if self.is_subset_eq(&ty, option) {
+                    return ty;
+                }
+            }
+        }
         self.expr_infer_type_info_with_hint(x, hint, errors)
             .into_ty()
     }

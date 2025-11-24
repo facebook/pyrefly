@@ -553,6 +553,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // We ignore positional-only parameters because they can't be passed in by name.
                             seen_names.insert(name, ty);
                         }
+                        let ty = if let Some(reordered) = self.prefer_union_branch_without_vars(ty)
+                        {
+                            type_owner.push(reordered)
+                        } else {
+                            ty
+                        };
                         arg_pre.post_check(
                             self,
                             callable_name,
@@ -580,17 +586,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ty,
                         name,
                         kind: PosParamKind::Variadic,
-                    }) => arg_pre.post_check(
-                        self,
-                        callable_name,
-                        ty,
-                        name,
-                        true,
-                        arg.range(),
-                        arg_errors,
-                        call_errors,
-                        context,
-                    ),
+                    }) => {
+                        let ty = if let Some(reordered) = self.prefer_union_branch_without_vars(ty)
+                        {
+                            type_owner.push(reordered)
+                        } else {
+                            ty
+                        };
+                        arg_pre.post_check(
+                            self,
+                            callable_name,
+                            ty,
+                            name,
+                            true,
+                            arg.range(),
+                            arg_errors,
+                            call_errors,
+                            context,
+                        )
+                    }
                     None => {
                         arg_pre.post_infer(self, arg_errors);
                         if !arg_pre.is_star() {
