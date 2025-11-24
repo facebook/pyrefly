@@ -435,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn test_output_with_locations_intersection_type_does_not_split_properly() {
+    fn test_output_with_locations_intersection_type_splits_properly() {
         // Create int & str type (doesn't make sense semantically, but tests the formatting)
         let int_type = Type::ClassType(ClassType::new(
             fake_class("int", "builtins", 10),
@@ -459,19 +459,19 @@ mod tests {
         let parts_str: String = output.parts().iter().map(|(s, _)| s.as_str()).collect();
         assert_eq!(parts_str, "int & str");
 
-        // Current behavior: The entire intersection is treated as one string
-        // This is technically incorrect - we want separate parts for each type
-        // Desired future behavior: [("int", Some(location)), (" & ", None), ("str", Some(location))]
+        // New behavior: Intersection types are split into separate parts
+        // Expected: [("int", Some(location)), (" & ", None), ("str", Some(location))]
         let parts = output.parts();
-        assert_eq!(
-            parts.len(),
-            1,
-            "Current behavior: intersection as single part"
-        );
-        assert_eq!(parts[0].0, "int & str");
-        assert!(
-            parts[0].1.is_none(),
-            "Current behavior: entire intersection has no location"
-        );
+        assert_eq!(parts.len(), 3, "Intersection should be split into 3 parts");
+
+        // Verify each part
+        assert_eq!(parts[0].0, "int");
+        assert!(parts[0].1.is_some(), "int should have location");
+
+        assert_eq!(parts[1].0, " & ");
+        assert!(parts[1].1.is_none(), "separator should not have location");
+
+        assert_eq!(parts[2].0, "str");
+        assert!(parts[2].1.is_some(), "str should have location");
     }
 }

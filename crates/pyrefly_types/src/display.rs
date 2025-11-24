@@ -544,35 +544,7 @@ impl<'a> TypeDisplayContext<'a> {
                     self.fmt_type_sequence(union_members, " | ", true, output)
                 }
             }
-            Type::Intersect(x) => {
-                let display_types: Vec<String> =
-                    x.0.iter()
-                        .map(|t| {
-                            let mut temp = String::new();
-                            {
-                                use std::fmt::Write;
-                                match t {
-                                    Type::Callable(_) | Type::Function(_) => {
-                                        let temp_formatter = Fmt(|f| {
-                                            let mut temp_output = DisplayOutput::new(self, f);
-                                            self.fmt_helper_generic(t, false, &mut temp_output)
-                                        });
-                                        write!(&mut temp, "({})", temp_formatter).ok();
-                                    }
-                                    _ => {
-                                        let temp_formatter = Fmt(|f| {
-                                            let mut temp_output = DisplayOutput::new(self, f);
-                                            self.fmt_helper_generic(t, false, &mut temp_output)
-                                        });
-                                        write!(&mut temp, "{}", temp_formatter).ok();
-                                    }
-                                }
-                            }
-                            temp
-                        })
-                        .collect();
-                output.write_str(&display_types.join(" & "))
-            }
+            Type::Intersect(x) => self.fmt_type_sequence(x.0.iter(), " & ", true, output),
             Type::Tuple(t) => {
                 t.fmt_with_type(output, &|ty, o| self.fmt_helper_generic(ty, false, o))
             }
