@@ -92,7 +92,9 @@ impl TypeOutput for OutputWithLocations<'_> {
         Ok(())
     }
 
-    fn write_qname(&mut self, _qname: &QName) -> fmt::Result {
+    fn write_qname(&mut self, qname: &QName) -> fmt::Result {
+        let location = TextRangeWithModule::new(qname.module().clone(), qname.range());
+        self.parts.push((qname.id().to_string(), Some(location)));
         Ok(())
     }
 
@@ -111,6 +113,19 @@ impl TypeOutput for OutputWithLocations<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::nesting_context::NestingContext;
+    use pyrefly_python::qname::QName;
+    use ruff_python_ast::Identifier;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+
     use super::*;
 
     #[test]
@@ -133,5 +148,37 @@ mod tests {
         let parts = output.parts();
         assert_eq!(parts[0].0, "hello");
         assert_eq!(parts[1].0, " world");
+    }
+
+    #[test]
+    fn test_output_with_locations_write_qname() {
+        let context = TypeDisplayContext::default();
+        let mut output = OutputWithLocations::new(&context);
+
+        let module = Module::new(
+            ModuleName::from_str("test_module"),
+            ModulePath::filesystem(PathBuf::from("test_module.py")),
+            Arc::new("def foo(): pass".to_owned()),
+        );
+
+        let identifier = Identifier::new(
+            Name::new("MyClass"),
+            TextRange::new(TextSize::new(4), TextSize::new(11)),
+        );
+
+        let qname = QName::new(identifier, NestingContext::toplevel(), module.clone());
+        output.write_qname(&qname).unwrap();
+
+        assert_eq!(output.parts().len(), 1);
+        let (name_str, location) = &output.parts()[0];
+        assert_eq!(name_str, "MyClass");
+
+        assert!(location.is_some());
+        let loc = location.as_ref().unwrap();
+        assert_eq!(
+            loc.range,
+            TextRange::new(TextSize::new(4), TextSize::new(11))
+        );
+        assert_eq!(loc.module.name(), ModuleName::from_str("test_module"));
     }
 }
