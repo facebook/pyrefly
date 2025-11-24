@@ -66,6 +66,8 @@ use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
+use crate::state::import_tracker::ImportTracker;
+use crate::state::import_tracker::format_type_for_annotation;
 use crate::state::lsp_attributes::AttributeContext;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
@@ -303,6 +305,18 @@ pub enum AnnotationKind {
     Parameter,
     Return,
     Variable,
+}
+
+#[derive(Clone, Debug)]
+pub struct InlayHintWithEdits {
+    pub position: TextSize,
+    pub label: String,
+    pub import_edits: Vec<(TextSize, String)>,
+}
+
+struct RenderedTypeHint {
+    text: String,
+    import_edits: Vec<(TextSize, String)>,
 }
 
 impl IdentifierWithContext {
@@ -2652,6 +2666,202 @@ impl<'a> Transaction<'a> {
         });
         res.sort_by_key(|(score, _, _, _)| Reverse(*score));
         res.into_map(|(_, handle, name, export)| (handle, name, export))
+    }
+
+    pub fn inlay_hints(
+        &self,
+        handle: &Handle,
+        inlay_hint_config: InlayHintConfig,
+    ) -> Option<Vec<InlayHintWithEdits>> {
+        let is_interesting = |e: &Expr, ty: &Type, class_name: Option<&Name>| {
+            !ty.is_any()
+                && match e {
+                    Expr::Tuple(tuple) => {
+                        !tuple.elts.is_empty() && tuple.elts.iter().all(|x| !Ast::is_literal(x))
+                    }
+                    Expr::Call(ExprCall { func, .. }) => {
+                        if let Expr::Name(name) = &**func
+                            && let Some(class_name) = class_name
+                        {
+                            *name.id() != *class_name
+                        } else if let Expr::Attribute(attr) = &**func
+                            && let Some(class_name) = class_name
+                        {
+                            *attr.attr.id() != *class_name
+                        } else {
+                            true
+                        }
+                    }
+                    _ => !Ast::is_literal(e),
+                }
+        };
+        let bindings = self.get_bindings(handle)?;
+        let ast = self.get_ast(handle);
+        let import_tracker = ast.as_deref().map(ImportTracker::from_ast);
+        let mut res: Vec<InlayHintWithEdits> = Vec::new();
+        for idx in bindings.keys::<Key>() {
+            match bindings.idx_to_key(idx) {
+                key @ Key::ReturnType(id) => {
+                    if inlay_hint_config.function_return_types {
+                        match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
+                            Binding::Function(x, _pred, _class_meta) => {
+                                if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
+                                    && let Some(mut ty) = self.get_type(handle, key)
+                                    && !ty.is_any()
+                                {
+                                    let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                                    if fun.def.is_async
+                                        && let Some(Some((_, _, return_ty))) = self
+                                            .ad_hoc_solve(handle, |solver| {
+                                                solver.unwrap_coroutine(&ty)
+                                            })
+                                    {
+                                        ty = return_ty;
+                                    }
+                                    let rendered = self.render_type_hint(
+                                        &ty,
+                                        handle,
+                                        import_tracker.as_ref(),
+                                        ast.as_deref(),
+                                    );
+                                    res.push(InlayHintWithEdits {
+                                        position: fun.def.parameters.range.end(),
+                                        label: format!(" -> {}", rendered.text),
+                                        import_edits: rendered.import_edits,
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                key @ Key::Definition(_)
+                    if inlay_hint_config.variable_types
+                        && let Some(ty) = self.get_type(handle, key) =>
+                {
+                    let e = match bindings.get(idx) {
+                        Binding::NameAssign(_, None, e, _) => Some(&**e),
+                        Binding::Expr(None, e) => Some(e),
+                        _ => None,
+                    };
+                    // If the inferred type is a class type w/ no type arguments and the
+                    // RHS is a call to a function that's the same name as the inferred class,
+                    // we assume it's a constructor and do not display an inlay hint
+                    let class_name = if let Type::ClassType(cls) = &ty
+                        && cls.targs().is_empty()
+                    {
+                        Some(cls.name())
+                    } else {
+                        None
+                    };
+                    if let Some(e) = e
+                        && is_interesting(e, &ty, class_name)
+                    {
+                        let rendered = self.render_type_hint(
+                            &ty,
+                            handle,
+                            import_tracker.as_ref(),
+                            ast.as_deref(),
+                        );
+                        res.push(InlayHintWithEdits {
+                            position: key.range().end(),
+                            label: format!(": {}", rendered.text),
+                            import_edits: rendered.import_edits,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if inlay_hint_config.call_argument_names != AllOffPartial::Off {
+            res.extend(self.add_inlay_hints_for_positional_function_args(handle));
+        }
+
+        Some(res)
+    }
+
+    fn add_inlay_hints_for_positional_function_args(
+        &self,
+        handle: &Handle,
+    ) -> Vec<InlayHintWithEdits> {
+        let mut param_hints: Vec<InlayHintWithEdits> = Vec::new();
+
+        if let Some(mod_module) = self.get_ast(handle) {
+            let function_calls = Self::collect_function_calls_from_ast(mod_module);
+
+            for call in function_calls {
+                if let Some(answers) = self.get_answers(handle) {
+                    let callee_type = if let Some((overloads, chosen_idx)) =
+                        answers.get_all_overload_trace(call.arguments.range)
+                    {
+                        // If we have overload information, use the chosen overload
+                        overloads
+                            .get(chosen_idx.unwrap_or_default())
+                            .map(|c| Type::Callable(Box::new(c.clone())))
+                    } else {
+                        // Otherwise, try to get the type of the callee directly
+                        answers.get_type_trace(call.func.range())
+                    };
+
+                    if let Some(params) =
+                        callee_type.and_then(Self::normalize_singleton_function_type_into_params)
+                    {
+                        for (arg_idx, arg) in call.arguments.args.iter().enumerate() {
+                            // Skip keyword arguments - they already show their parameter name
+                            let is_keyword_arg = call
+                                .arguments
+                                .keywords
+                                .iter()
+                                .any(|kw| kw.value.range() == arg.range());
+
+                            if !is_keyword_arg
+                                && let Some(
+                                    Param::Pos(name, _, _)
+                                    | Param::PosOnly(Some(name), _, _)
+                                    | Param::KwOnly(name, _, _),
+                                ) = params.get(arg_idx)
+                                && name.as_str() != "self"
+                                && name.as_str() != "cls"
+                            {
+                                param_hints.push(InlayHintWithEdits {
+                                    position: arg.range().start(),
+                                    label: format!("{}= ", name.as_str()),
+                                    import_edits: Vec::new(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        param_hints.sort_by_key(|hint| hint.position);
+        param_hints
+    }
+
+    fn render_type_hint(
+        &self,
+        ty: &Type,
+        handle: &Handle,
+        tracker: Option<&ImportTracker>,
+        ast: Option<&ModModule>,
+    ) -> RenderedTypeHint {
+        let (mut text, modules) = format_type_for_annotation(ty);
+        let mut import_edits = Vec::new();
+        if let (Some(tracker), Some(ast)) = (tracker, ast) {
+            text = tracker.apply_aliases(&text);
+            for module in tracker
+                .missing_modules(&modules, handle.module())
+                .into_iter()
+            {
+                if let Some(handle_to_import) = self.import_handle(handle, module, None).finding() {
+                    let (position, insert_text) = import_regular_import_edit(ast, handle_to_import);
+                    import_edits.push((position, insert_text));
+                }
+            }
+        }
+        RenderedTypeHint { text, import_edits }
     }
 }
 
