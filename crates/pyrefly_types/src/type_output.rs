@@ -474,4 +474,46 @@ mod tests {
         assert_eq!(parts[2].0, "str");
         assert!(parts[2].1.is_some(), "str should have location");
     }
+
+    #[test]
+    fn test_output_with_locations_tuple_base_not_clickable() {
+        // TODO(jvansch): When implementing clickable support for the base type in generics like tuple[int],
+        // update this test to verify that "tuple" has a location and is clickable.
+        // Expected future behavior: [("tuple", Some(location)), ("[", None), ("int", Some(location)), ("]", None)]
+
+        // Create tuple[int] type
+        let int_class = fake_class("int", "builtins", 10);
+        let int_type = Type::ClassType(ClassType::new(int_class, TArgs::default()));
+        let tuple_type = Type::Tuple(Tuple::Concrete(vec![int_type]));
+
+        let ctx = TypeDisplayContext::new(&[&tuple_type]);
+        let mut output = OutputWithLocations::new(&ctx);
+
+        ctx.fmt_helper_generic(&tuple_type, false, &mut output)
+            .unwrap();
+
+        let parts_str: String = output.parts().iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(parts_str, "tuple[int]");
+
+        // Current behavior: The "tuple" part is NOT clickable
+        // Expected parts: [("tuple[", None), ("int", Some(location)), ("]", None)]
+        let parts = output.parts();
+        assert_eq!(parts.len(), 4, "Should have 3 parts");
+
+        // Verify each part
+        assert_eq!(parts[0].0, "tuple");
+        assert!(
+            parts[0].1.is_none(),
+            "tuple[ should not have location (not clickable)"
+        );
+
+        assert_eq!(parts[1].0, "[");
+        assert!(parts[1].1.is_none(), "[ should not have location");
+
+        assert_eq!(parts[2].0, "int");
+        assert!(parts[2].1.is_some(), "int should have location (clickable)");
+
+        assert_eq!(parts[3].0, "]");
+        assert!(parts[3].1.is_none(), "] should not have location");
+    }
 }
