@@ -69,7 +69,6 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
 /// a location this will be included. For separators like '|', '[', etc. this will be None.
 pub struct OutputWithLocations<'a> {
     parts: Vec<(String, Option<TextRangeWithModule>)>,
-    #[expect(dead_code)]
     context: &'a TypeDisplayContext<'a>,
 }
 
@@ -133,8 +132,9 @@ impl TypeOutput for OutputWithLocations<'_> {
         Ok(())
     }
 
-    fn write_type(&mut self, _ty: &Type) -> fmt::Result {
-        Ok(())
+    fn write_type(&mut self, ty: &Type) -> fmt::Result {
+        // Format the type and extract location if it has a qname
+        self.context.fmt_helper_generic(ty, false, self)
     }
 }
 
@@ -160,6 +160,7 @@ mod tests {
     use crate::literal::LitEnum;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedKind;
+    use crate::tuple::Tuple;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::types::TArgs;
@@ -324,16 +325,71 @@ mod tests {
 
         output.write_targs(&targs).unwrap();
 
-        // Should have "[", ", ", ", ", and "]"
-        // write_type is stubbed, so types themselves don't appear
-        assert_eq!(output.parts().len(), 4);
+        // Now that write_type is implemented, it actually writes the types
+        // Should have: "[", "None", ", ", "LiteralString", ", ", "Any", "]"
+        assert_eq!(output.parts().len(), 7);
         assert_eq!(output.parts()[0].0, "[");
         assert!(output.parts()[0].1.is_none());
-        assert_eq!(output.parts()[1].0, ", ");
+
+        assert_eq!(output.parts()[1].0, "None");
         assert!(output.parts()[1].1.is_none());
+
         assert_eq!(output.parts()[2].0, ", ");
         assert!(output.parts()[2].1.is_none());
-        assert_eq!(output.parts()[3].0, "]");
+
+        assert_eq!(output.parts()[3].0, "LiteralString");
         assert!(output.parts()[3].1.is_none());
+
+        assert_eq!(output.parts()[4].0, ", ");
+        assert!(output.parts()[4].1.is_none());
+
+        assert_eq!(output.parts()[5].0, "Any");
+        assert!(output.parts()[5].1.is_none());
+
+        assert_eq!(output.parts()[6].0, "]");
+        assert!(output.parts()[6].1.is_none());
+    }
+
+    #[test]
+    fn test_output_with_locations_write_type_simple() {
+        let context = TypeDisplayContext::default();
+        let mut output = OutputWithLocations::new(&context);
+
+        // Test simple types that don't have locations
+        output.write_type(&Type::None).unwrap();
+        assert_eq!(output.parts().len(), 1);
+        assert_eq!(output.parts()[0].0, "None");
+        assert!(output.parts()[0].1.is_none());
+
+        output.write_type(&Type::LiteralString).unwrap();
+        assert_eq!(output.parts().len(), 2);
+        assert_eq!(output.parts()[1].0, "LiteralString");
+        assert!(output.parts()[1].1.is_none());
+    }
+
+    #[test]
+    fn test_output_with_locations_write_type_tuple() {
+        // Test tuple[int, str]
+        let int_class = fake_class("int", "builtins", 30);
+        let str_class = fake_class("str", "builtins", 40);
+
+        let int_type = Type::ClassType(ClassType::new(int_class, TArgs::default()));
+        let str_type = Type::ClassType(ClassType::new(str_class, TArgs::default()));
+        let tuple_type = Type::Tuple(Tuple::Concrete(vec![int_type.clone(), str_type.clone()]));
+
+        let context = TypeDisplayContext::new(&[&tuple_type, &int_type, &str_type]);
+        let mut output = OutputWithLocations::new(&context);
+
+        output.write_type(&tuple_type).unwrap();
+        assert!(!output.parts().is_empty());
+
+        // Find the int and str parts and verify they have locations
+        let int_part = output.parts().iter().find(|p| p.0 == "int");
+        assert!(int_part.is_some());
+        assert!(int_part.unwrap().1.is_some());
+
+        let str_part = output.parts().iter().find(|p| p.0 == "str");
+        assert!(str_part.is_some());
+        assert!(str_part.unwrap().1.is_some());
     }
 }

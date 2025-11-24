@@ -243,7 +243,7 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
-    fn fmt_helper_generic(
+    pub fn fmt_helper_generic(
         &self,
         t: &Type,
         is_toplevel: bool,
