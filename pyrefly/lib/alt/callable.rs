@@ -54,6 +54,7 @@ use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
 use crate::types::types::Type;
+use crate::types::types::Union;
 use crate::types::types::Var;
 
 /// Structure to turn TypeOrExprs into Types.
@@ -473,6 +474,28 @@ impl<'a> PosParam<'a> {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn prefer_union_branch_without_vars(&self, ty: &Type) -> Option<Type> {
+        let Type::Union(box Union {
+            members,
+            display_name,
+        }) = ty
+        else {
+            return None;
+        };
+        if members.len() < 2 {
+            return None;
+        }
+        let mut reordered = members.clone();
+        reordered.sort_by_key(|member| member.may_contain_quantified_var());
+        if reordered.iter().eq(members.iter()) {
+            return None;
+        }
+        Some(Type::Union(Box::new(Union {
+            members: reordered,
+            display_name: display_name.clone(),
+        })))
+    }
+
     fn is_param_spec_args(&self, x: &CallArg, q: &Quantified, errors: &ErrorCollector) -> bool {
         match x {
             CallArg::Star(x, _) => {
@@ -619,6 +642,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         num_positional_params += 1;
                         rparams.pop();
+                        let ty = if let Some(reordered) = self.prefer_union_branch_without_vars(ty)
+                        {
+                            type_owner.push(reordered)
+                        } else {
+                            ty
+                        };
                         if let Some(name) = name
                             && kind == PosParamKind::Positional
                         {
@@ -659,6 +688,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name,
                         kind: PosParamKind::Variadic,
                     }) => {
+                        let ty = if let Some(reordered) = self.prefer_union_branch_without_vars(ty)
+                        {
+                            type_owner.push(reordered)
+                        } else {
+                            ty
+                        };
                         let arg_ty = arg_pre.post_check(
                             self,
                             callable_name,
