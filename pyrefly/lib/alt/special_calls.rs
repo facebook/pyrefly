@@ -380,9 +380,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     None,
                                     "runtime_checkable_protocol_unsafe_overlap",
                                 );
-                                // Use the protocol class type to get the type for bound methods
-                                let protocol_instance_ty =
-                                    self.as_class_type_unchecked(cls).to_type();
+                                // Use the protocol class type to get the type
+                                // for bound methods.
+                                // We use `promote_silently` here, because the protocol
+                                // might have type vars, but they won't be
+                                // available in a runtime check.
+                                let protocol_instance_ty = self.promote_silently(cls);
                                 let protocol_field_ty = self.type_of_attr_get(
                                     &protocol_instance_ty,
                                     field_name,

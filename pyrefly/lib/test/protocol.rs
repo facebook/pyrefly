@@ -699,3 +699,38 @@ isinstance(X(), Sized) # E: Runtime checkable protocol `Sized` has an unsafe ove
 issubclass(X, Sized) # E: Runtime checkable protocol `Sized` has an unsafe overlap with type `X`
 "#,
 );
+
+testcase!(
+    test_runtime_checkable_generics_no_error,
+    r#"
+from typing import Protocol, runtime_checkable, TypeVar
+T = TypeVar('T')
+@runtime_checkable
+class GenericProtocol(Protocol[T]):
+    def get(self, x: T) -> T: ...
+
+class IntImpl:
+    def get(self, x: int) -> int:
+        return 42
+isinstance(IntImpl(), GenericProtocol)
+issubclass(IntImpl, GenericProtocol)
+"#,
+);
+
+testcase!(
+    bug = "We probably should not allow this.",
+    test_runtime_checkable_generics_unsafe_overlap,
+    r#"
+from typing import Protocol, runtime_checkable, TypeVar
+T = TypeVar('T')
+@runtime_checkable
+class GenericProtocol(Protocol[T]):
+    def get(self, x: T) -> T: ...
+
+class IntImpl:
+    def get(self, x: str) -> int:
+        return 42
+isinstance(IntImpl(), GenericProtocol)
+issubclass(IntImpl, GenericProtocol)
+"#,
+);
