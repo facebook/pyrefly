@@ -98,7 +98,21 @@ impl TypeOutput for OutputWithLocations<'_> {
         Ok(())
     }
 
-    fn write_lit(&mut self, _lit: &Lit) -> fmt::Result {
+    fn write_lit(&mut self, lit: &Lit) -> fmt::Result {
+        // Format the literal and extract location if it's an Enum literal
+        let formatted = lit.to_string();
+        let location = match lit {
+            Lit::Enum(lit_enum) => {
+                // Enum literals have a class with a qname that has location info
+                let qname = lit_enum.class.qname();
+                Some(TextRangeWithModule::new(
+                    qname.module().clone(),
+                    qname.range(),
+                ))
+            }
+            _ => None,
+        };
+        self.parts.push((formatted, location));
         Ok(())
     }
 
@@ -127,6 +141,28 @@ mod tests {
     use ruff_text_size::TextSize;
 
     use super::*;
+    use crate::class::Class;
+    use crate::class::ClassDefIndex;
+    use crate::class::ClassType;
+    use crate::literal::LitEnum;
+    use crate::types::TArgs;
+
+    fn fake_class(name: &str, module: &str, range: u32) -> Class {
+        let mi = Module::new(
+            ModuleName::from_str(module),
+            ModulePath::filesystem(PathBuf::from(module)),
+            Arc::new("1234567890".to_owned()),
+        );
+
+        Class::new(
+            ClassDefIndex(0),
+            Identifier::new(Name::new(name), TextRange::empty(TextSize::new(range))),
+            NestingContext::toplevel(),
+            mi,
+            None,
+            starlark_map::small_map::SmallMap::new(),
+        )
+    }
 
     #[test]
     fn test_output_with_locations_write_str() {
@@ -180,5 +216,47 @@ mod tests {
             TextRange::new(TextSize::new(4), TextSize::new(11))
         );
         assert_eq!(loc.module.name(), ModuleName::from_str("test_module"));
+    }
+
+    #[test]
+    fn test_output_with_locations_write_lit_non_enum() {
+        let context = TypeDisplayContext::default();
+        let mut output = OutputWithLocations::new(&context);
+
+        // Test with a string literal - should have no location
+        let str_lit = Lit::Str("hello".into());
+        output.write_lit(&str_lit).unwrap();
+
+        assert_eq!(output.parts().len(), 1);
+        assert_eq!(output.parts()[0].0, "'hello'");
+        assert!(output.parts()[0].1.is_none());
+    }
+
+    #[test]
+    fn test_output_with_locations_write_lit_enum() {
+        let context = TypeDisplayContext::default();
+        let mut output = OutputWithLocations::new(&context);
+
+        // Create an Enum literal with location information
+        let enum_class = ClassType::new(fake_class("Color", "colors", 10), TArgs::default());
+
+        let enum_lit = Lit::Enum(Box::new(LitEnum {
+            class: enum_class,
+            member: Name::new("RED"),
+            ty: Type::any_implicit(),
+        }));
+
+        output.write_lit(&enum_lit).unwrap();
+
+        assert_eq!(output.parts().len(), 1);
+        let (formatted, location) = &output.parts()[0];
+
+        assert_eq!(formatted, "Color.RED");
+
+        // Verify the location was captured from the enum's class qname
+        assert!(location.is_some());
+        let loc = location.as_ref().unwrap();
+        assert_eq!(loc.range, TextRange::empty(TextSize::new(10)));
+        assert_eq!(loc.module.name(), ModuleName::from_str("colors"));
     }
 }
