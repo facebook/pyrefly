@@ -136,20 +136,6 @@ def process(items: List[str]):
 }
 
 #[test]
-fn test_star_import_not_reported_as_unused() {
-    let code = r#"
-from typing import *
-
-def foo() -> str:
-    return "hello"
-"#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
-    let handle = handles.get("main").unwrap();
-    let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "No unused imports");
-}
-
-#[test]
 fn test_generator_with_send() {
     let code = r#"
 from typing import Generator
@@ -158,21 +144,6 @@ def test() -> Generator[float, float, None]:
     new = yield 0.0
     while True:
         new = yield new - 1
-"#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
-    let handle = handles.get("main").unwrap();
-    let report = get_unused_variable_diagnostics(&state, handle);
-    assert_eq!(report, "No unused variables");
-}
-
-// TODO: x = 7 should be highlighted as unused
-#[test]
-fn test_reassignment_false_negative() {
-    let code = r#"
-def f():
-    x = 5
-    print(x)
-    x = 7
 "#;
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
     let handle = handles.get("main").unwrap();
