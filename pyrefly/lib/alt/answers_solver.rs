@@ -857,4 +857,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn error_swallower(&self) -> ErrorCollector {
         ErrorCollector::new(self.module().dupe(), ErrorStyle::Never)
     }
+
+    pub fn prefer_union_branch_without_vars(&self, ty: &Type) -> Option<Type> {
+        if let Type::Union(options) = ty {
+            let mut reordered = options.clone();
+            reordered.sort_by_key(|option| self.type_contains_var(option));
+            if reordered == *options {
+                None
+            } else {
+                Some(Type::Union(reordered))
+            }
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn type_contains_var(&self, ty: &Type) -> bool {
+        let mut has_var = false;
+        ty.universe(&mut |t| {
+            if matches!(t, Type::Var(_)) {
+                has_var = true;
+            }
+        });
+        has_var
+    }
 }
