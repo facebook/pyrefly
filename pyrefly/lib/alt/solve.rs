@@ -3611,8 +3611,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let iterable_hint = infer_hint
                 .as_ref()
                 .map(|ty| self.hint_from_type(ty.clone(), None));
-            let iterable =
-                self.expr_infer_with_hint(e, iterable_hint.as_ref().map(|hint| hint.as_ref()), errors);
+            let iterable = self.expr_infer_with_hint(
+                e,
+                iterable_hint.as_ref().map(|hint| hint.as_ref()),
+                errors,
+            );
             self.async_iterate(&iterable, e.range(), errors)
         } else {
             let infer_hint = ann.clone().and_then(|x| {
@@ -3622,8 +3625,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let iterable_hint = infer_hint
                 .as_ref()
                 .map(|ty| self.hint_from_type(ty.clone(), None));
-            let iterable =
-                self.expr_infer_with_hint(e, iterable_hint.as_ref().map(|hint| hint.as_ref()), errors);
+            let iterable = self.expr_infer_with_hint(
+                e,
+                iterable_hint.as_ref().map(|hint| hint.as_ref()),
+                errors,
+            );
             self.iterate(&iterable, e.range(), errors, None)
         };
         let value = self.get_produced_type(iterables);

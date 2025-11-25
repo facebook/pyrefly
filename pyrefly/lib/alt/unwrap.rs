@@ -100,6 +100,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver().fresh_unwrap(self.uniques)
     }
 
+    pub fn prefer_union_branch_without_vars(&self, ty: &Type) -> Option<Type> {
+        let Type::Union(box Union {
+            members,
+            display_name,
+        }) = ty
+        else {
+            return None;
+        };
+        if members.len() < 2 {
+            return None;
+        }
+        let mut reordered = members.clone();
+        reordered.sort_by_key(|branch| self.type_contains_var(branch));
+        if reordered.iter().eq(members.iter()) {
+            return None;
+        }
+        Some(Type::Union(Box::new(Union {
+            members: reordered,
+            display_name: display_name.clone(),
+        })))
+    }
+
     /// Resolve a var to a type, but only if it was pinned by the subtype
     /// check we just ran. If it was not, return `None`.
     fn resolve_var_opt(&self, ty: &Type, var: Var) -> Option<Type> {
@@ -181,6 +203,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         branches
     }
 
+    pub fn type_contains_var(&self, ty: &Type) -> bool {
+        ty.contains_type_variable()
+    }
+
     pub fn hint_from_type(&self, ty: Type, errors: Option<&'a ErrorCollector>) -> Hint<'a> {
         let mut branches = match &ty {
             Type::Union(box Union { members, .. }) => members.clone(),
@@ -237,7 +263,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut f: impl FnMut(&Type) -> Option<Type>,
     ) -> Option<Hint<'a>> {
         let source_branches = hint.source_branches();
-        let mapped: Vec<Type> = hint.branches().iter().filter_map(|branch| f(branch)).collect();
+        let mapped: Vec<Type> = hint
+            .branches()
+            .iter()
+            .filter_map(|branch| f(branch))
+            .collect();
         self.hint_from_branches_vec(mapped, hint.errors())
             .map(|hint| hint.with_source_branches(source_branches))
     }

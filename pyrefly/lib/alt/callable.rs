@@ -55,7 +55,6 @@ use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
 use crate::types::types::Type;
-use crate::types::types::Union;
 use crate::types::types::Var;
 
 /// Structure to turn TypeOrExprs into Types.
@@ -482,28 +481,6 @@ impl<'a> PosParam<'a> {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn prefer_union_branch_without_vars(&self, ty: &Type) -> Option<Type> {
-        let Type::Union(box Union {
-            members,
-            display_name,
-        }) = ty
-        else {
-            return None;
-        };
-        if members.len() < 2 {
-            return None;
-        }
-        let mut reordered = members.clone();
-        reordered.sort_by_key(|member| member.may_contain_quantified_var());
-        if reordered.iter().eq(members.iter()) {
-            return None;
-        }
-        Some(Type::Union(Box::new(Union {
-            members: reordered,
-            display_name: display_name.clone(),
-        })))
-    }
-
     fn is_param_spec_args(&self, x: &CallArg, q: &Quantified, errors: &ErrorCollector) -> bool {
         match x {
             CallArg::Star(x, _) => {
@@ -741,10 +718,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // We ignore positional-only parameters because they can't be passed in by name.
                             seen_names.insert(name, ty);
                         }
-<<<<<<< HEAD
                         expected_types.insert(arg.range(), ty.clone());
-||||||| parent of 51d8f054d (impl?)
-=======
                         let expanded = self.solver().expand_vars((*ty).clone());
                         let (hint_ty, mut use_hint) = if expanded == *ty {
                             (ty, false)
@@ -756,6 +730,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 use_hint = true;
                             } else if let Type::Union(options) = hint_ty {
                                 if options
+                                    .members
                                     .iter()
                                     .any(|option| !self.type_contains_var(option))
                                 {
@@ -763,7 +738,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                             }
                         }
->>>>>>> 51d8f054d (impl?)
                         let arg_ty = arg_pre.post_check(
                             self,
                             callable_name,
@@ -805,10 +779,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         } else {
                             ty
                         };
-<<<<<<< HEAD
                         expected_types.insert(arg.range(), ty.clone());
-||||||| parent of 51d8f054d (impl?)
-=======
                         let expanded = self.solver().expand_vars((*ty).clone());
                         let (hint_ty, mut use_hint) = if expanded == *ty {
                             (ty, false)
@@ -820,6 +791,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 use_hint = true;
                             } else if let Type::Union(options) = hint_ty {
                                 if options
+                                    .members
                                     .iter()
                                     .any(|option| !self.type_contains_var(option))
                                 {
@@ -827,7 +799,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                             }
                         }
->>>>>>> 51d8f054d (impl?)
                         let arg_ty = arg_pre.post_check(
                             self,
                             callable_name,
