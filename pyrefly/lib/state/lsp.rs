@@ -62,6 +62,7 @@ use serde::Deserialize;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
 
+use crate::ModuleInfo;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
@@ -2610,6 +2611,14 @@ impl<'a> Transaction<'a> {
         import_format: ImportFormat,
         supports_completion_item_details: bool,
     ) -> (Vec<CompletionItem>, bool) {
+        // Check if position is in a disabled range (comments)
+        if let Some(module) = self.get_module_info(handle) {
+            let disabled_ranges = Self::completion_disabled_ranges_for_module(&module);
+            if disabled_ranges.iter().any(|range| range.contains(position)) {
+                return (Vec::new(), false);
+            }
+        }
+
         let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
             handle,
             position,
@@ -2625,6 +2634,22 @@ impl<'a> Transaction<'a> {
         });
         results.dedup_by(|item1, item2| item1.label == item2.label && item1.detail == item2.detail);
         (results, is_incomplete)
+    }
+    fn completion_disabled_ranges_for_module(module: &ModuleInfo) -> Vec<TextRange> {
+        let mut ranges = Vec::new();
+        let source = module.lined_buffer().contents();
+        let mut offset = TextSize::from(0);
+
+        for line in source.lines() {
+            if let Some(comment_pos) = pyrefly_python::ignore::find_comment_start_in_line(line) {
+                let comment_start = offset + TextSize::from(comment_pos as u32);
+                let comment_end = offset + TextSize::from(line.len() as u32);
+                ranges.push(TextRange::new(comment_start, comment_end));
+            }
+            offset += TextSize::from((line.len() + 1) as u32);
+        }
+
+        ranges
     }
 
     fn completion_sorted_opt_with_incomplete(
