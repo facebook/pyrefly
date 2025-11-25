@@ -15,6 +15,7 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::literal::Literal;
+use pyrefly_types::type_output::TypeSymbolReference;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -31,6 +32,7 @@ use ruff_text_size::TextSize;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::UnpackedPosition;
+use crate::export::exports::ExportLocation;
 use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::InlayHintConfig;
 use crate::state::state::CancellableTransaction;
@@ -87,6 +89,38 @@ pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<
 }
 
 impl<'a> Transaction<'a> {
+    fn resolve_type_symbol_reference(
+        &self,
+        handle: &Handle,
+        symbol: &TypeSymbolReference,
+    ) -> Option<TextRangeWithModule> {
+        const MAX_LOOKUP_DEPTH: usize = 8;
+        let mut current_handle = handle.clone();
+        let mut current_module = symbol.module;
+        let mut current_name = ruff_python_ast::name::Name::new(symbol.name.clone());
+        for _ in 0..MAX_LOOKUP_DEPTH {
+            let module_handle = self
+                .import_handle(&current_handle, current_module, None)
+                .finding()?;
+            let module_info = self.get_module_info(&module_handle)?;
+            let exports = self.get_exports(&module_handle);
+            match exports.get(&current_name) {
+                Some(ExportLocation::ThisModule(export)) => {
+                    return Some(TextRangeWithModule::new(module_info, export.location));
+                }
+                Some(ExportLocation::OtherModule(next_module, alias)) => {
+                    current_handle = module_handle;
+                    current_module = *next_module;
+                    if let Some(alias_name) = alias {
+                        current_name = alias_name.clone();
+                    }
+                }
+                None => return None,
+            }
+        }
+        None
+    }
+
     pub fn inlay_hints(
         &self,
         handle: &Handle,
@@ -158,11 +192,16 @@ impl<'a> Transaction<'a> {
                                     // Use get_types_with_locations to get type parts with location info
                                     let type_parts = ty.get_types_with_locations(Some(&stdlib));
                                     let label_parts = once((" -> ".to_owned(), None))
-                                        .chain(
-                                            type_parts
-                                                .iter()
-                                                .map(|(text, loc)| (text.clone(), loc.clone())),
-                                        )
+                                        .chain(type_parts.iter().map(|part| {
+                                            let location = part.location.clone().or_else(|| {
+                                                part.symbol.as_ref().and_then(|symbol| {
+                                                    self.resolve_type_symbol_reference(
+                                                        handle, symbol,
+                                                    )
+                                                })
+                                            });
+                                            (part.text.clone(), location)
+                                        }))
                                         .collect();
                                     res.push(InlayHintData {
                                         position: fun.def.parameters.range.end(),
@@ -219,11 +258,14 @@ impl<'a> Transaction<'a> {
                         // Use get_types_with_locations to get type parts with location info
                         let type_parts = ty.get_types_with_locations(Some(&stdlib));
                         let label_parts = once((": ".to_owned(), None))
-                            .chain(
-                                type_parts
-                                    .iter()
-                                    .map(|(text, loc)| (text.clone(), loc.clone())),
-                            )
+                            .chain(type_parts.iter().map(|part| {
+                                let location = part.location.clone().or_else(|| {
+                                    part.symbol.as_ref().and_then(|symbol| {
+                                        self.resolve_type_symbol_reference(handle, symbol)
+                                    })
+                                });
+                                (part.text.clone(), location)
+                            }))
                             .collect();
                         res.push(InlayHintData {
                             position: key.range().end(),

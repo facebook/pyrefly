@@ -714,3 +714,40 @@ fn test_inlay_hint_literal_string_has_location() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_inlay_hint_typing_literals_have_locations() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    });
+
+    interaction.client.did_open("inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+
+            hints.iter().any(|hint| match &hint.label {
+                lsp_types::InlayHintLabel::LabelParts(parts) => parts.iter().any(|part| {
+                    part.value == "Literal"
+                        && part
+                            .location
+                            .as_ref()
+                            .map(|loc| loc.uri.path().contains("typing.pyi"))
+                            .unwrap_or(false)
+                }),
+                _ => false,
+            })
+        });
+
+    interaction.shutdown();
+}
