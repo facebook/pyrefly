@@ -348,6 +348,12 @@ pub struct Solver {
     pub spec_compliant_overloads: bool,
 }
 
+#[derive(Clone)]
+pub enum UnwrapVarState {
+    Unwrap,
+    Answer(Type),
+}
+
 impl Display for Solver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (x, y) in self.variables.lock().iter() {
@@ -385,6 +391,7 @@ impl Solver {
         self.variables.lock().recurse(var, recurser)
     }
 
+<<<<<<< HEAD
     /// Look up a cached protocol conformance result.
     pub fn check_protocol_cache(&self, got: &Type, want: &Type) -> Option<Result<(), SubsetError>> {
         self.protocol_cache
@@ -396,6 +403,27 @@ impl Solver {
     /// Store a protocol conformance result.
     pub fn store_protocol_cache(&self, got: Type, want: Type, result: Result<(), SubsetError>) {
         self.protocol_cache.lock().insert((got, want), result);
+||||||| parent of 51d8f054d (impl?)
+=======
+    pub fn snapshot_unwrap_var(&self, var: Var) -> UnwrapVarState {
+        let variables = self.variables.lock();
+        match &*variables.get(var) {
+            Variable::Unwrap => UnwrapVarState::Unwrap,
+            Variable::Answer(ty) => UnwrapVarState::Answer(ty.clone()),
+            other => panic!(
+                "Expected lambda parameter var to be Unwrap or Answer, got {other:?}"
+            ),
+        }
+    }
+
+    pub fn restore_unwrap_var(&self, var: Var, state: UnwrapVarState) {
+        let variables = self.variables.lock();
+        let mut entry = variables.get_mut(var);
+        *entry = match state {
+            UnwrapVarState::Unwrap => Variable::Unwrap,
+            UnwrapVarState::Answer(ty) => Variable::Answer(ty),
+        };
+>>>>>>> 51d8f054d (impl?)
     }
 
     /// Force all non-recursive Vars in `vars`.
