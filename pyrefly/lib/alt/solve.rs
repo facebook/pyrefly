@@ -63,7 +63,6 @@ use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
-use crate::alt::unwrap::HintRef;
 use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::AnnotationTarget;
@@ -3563,16 +3562,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .mk_class_type(self.stdlib.async_iterable(ty.clone()))
                 })
             });
+            let iterable_hint = infer_hint
+                .as_ref()
+                .map(|ty| self.hint_from_type(ty.clone(), None));
             let iterable =
-                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRef::soft), errors);
+                self.expr_infer_with_hint(e, iterable_hint.as_ref().map(|hint| hint.as_ref()), errors);
             self.async_iterate(&iterable, e.range(), errors)
         } else {
             let infer_hint = ann.clone().and_then(|x| {
                 x.ty(self.heap, self.stdlib)
                     .map(|ty| self.heap.mk_class_type(self.stdlib.iterable(ty.clone())))
             });
+            let iterable_hint = infer_hint
+                .as_ref()
+                .map(|ty| self.hint_from_type(ty.clone(), None));
             let iterable =
-                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRef::soft), errors);
+                self.expr_infer_with_hint(e, iterable_hint.as_ref().map(|hint| hint.as_ref()), errors);
             self.iterate(&iterable, e.range(), errors, None)
         };
         let value = self.get_produced_type(iterables);
