@@ -17,6 +17,7 @@ use tracing::warn;
 use crate::module::bundled::BundledStub;
 use crate::module::typeshed::typeshed;
 use crate::module::typeshed_third_party::typeshed_third_party;
+use crate::types::stdlib::Stdlib;
 
 /// Convert to a path we can show to the user. The contents may not match the disk, but it has
 /// to be basically right.
@@ -50,9 +51,38 @@ pub fn to_real_path(path: &ModulePath) -> Option<PathBuf> {
     }
 }
 
+#[allow(dead_code)]
 pub fn collect_symbol_def_paths(t: &Type) -> Vec<(QName, PathBuf)> {
+    collect_symbol_def_paths_with_tuple_qname(t, None)
+}
+
+pub fn collect_symbol_def_paths_with_stdlib(t: &Type, stdlib: &Stdlib) -> Vec<(QName, PathBuf)> {
+    collect_symbol_def_paths_with_tuple_qname(t, Some(stdlib.tuple_object().qname().clone()))
+}
+
+fn collect_symbol_def_paths_with_tuple_qname(
+    t: &Type,
+    tuple_qname: Option<QName>,
+) -> Vec<(QName, PathBuf)> {
     let mut tracked_def_locs = SmallSet::new();
-    t.universe(&mut |t| tracked_def_locs.extend(t.qname()));
+    t.universe(&mut |t| {
+        if let Some(qname) = t.qname() {
+            tracked_def_locs.insert(qname.clone());
+        }
+    });
+
+    if let Some(tuple_qname) = tuple_qname {
+        let mut has_tuple = false;
+        t.universe(&mut |ty| {
+            if matches!(ty, Type::Tuple(_)) {
+                has_tuple = true;
+            }
+        });
+        if has_tuple {
+            tracked_def_locs.insert(tuple_qname);
+        }
+    }
+
     tracked_def_locs
         .into_iter()
         .map(|qname| {
@@ -64,7 +94,7 @@ pub fn collect_symbol_def_paths(t: &Type) -> Vec<(QName, PathBuf)> {
                 }
                 _ => module_path.as_path().to_path_buf(),
             };
-            (qname.clone(), file_path)
+            (qname, file_path)
         })
         .collect()
 }

@@ -69,7 +69,7 @@ use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
-use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::module_helpers::collect_symbol_def_paths_with_stdlib;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -1566,7 +1566,8 @@ impl<'a> Transaction<'a> {
         let type_ = self.get_type_at(handle, position);
 
         if let Some(t) = type_ {
-            let symbol_def_paths = collect_symbol_def_paths(&t);
+            let stdlib = self.get_stdlib(handle);
+            let symbol_def_paths = collect_symbol_def_paths_with_stdlib(&t, stdlib.as_ref());
 
             if !symbol_def_paths.is_empty() {
                 return symbol_def_paths.map(|(qname, _)| {
