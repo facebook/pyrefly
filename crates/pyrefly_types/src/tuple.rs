@@ -64,7 +64,7 @@ impl Tuple {
         output: &mut O,
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
-        output.write_str("tuple")?;
+        output.write_tuple_keyword()?;
         output.write_str("[")?;
         match self {
             Self::Concrete(elts) => {

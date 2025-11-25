@@ -26,6 +26,9 @@ pub trait TypeOutput {
     fn write_lit(&mut self, lit: &Lit) -> fmt::Result;
     fn write_targs(&mut self, targs: &TArgs) -> fmt::Result;
     fn write_type(&mut self, ty: &Type) -> fmt::Result;
+    fn write_tuple_keyword(&mut self) -> fmt::Result {
+        self.write_str("tuple")
+    }
 }
 
 /// Implementation of `TypeOutput` that writes formatted types to plain text.
@@ -139,6 +142,16 @@ impl TypeOutput for OutputWithLocations<'_> {
     fn write_type(&mut self, ty: &Type) -> fmt::Result {
         // Format the type and extract location if it has a qname
         self.context.fmt_helper_generic(ty, false, self)
+    }
+
+    fn write_tuple_keyword(&mut self) -> fmt::Result {
+        if let Some(qname) = self.context.tuple_qname() {
+            let location = TextRangeWithModule::new(qname.module().clone(), qname.range());
+            self.parts.push((qname.id().to_string(), Some(location)));
+            Ok(())
+        } else {
+            self.write_str("tuple")
+        }
     }
 }
 
@@ -482,9 +495,8 @@ mod tests {
 
     #[test]
     fn test_output_with_locations_tuple_base_not_clickable() {
-        // TODO(jvansch): When implementing clickable support for the base type in generics like tuple[int],
-        // update this test to verify that "tuple" has a location and is clickable.
-        // Expected future behavior: [("tuple", Some(location)), ("[", None), ("int", Some(location)), ("]", None)]
+        // Without stdlib context we don't attach a location to the `tuple` keyword.
+        // (See `test_output_with_locations_tuple_base_clickable_when_qname_available`.)
 
         // Create tuple[int] type
         let int_class = fake_class("int", "builtins", 10);
@@ -520,6 +532,32 @@ mod tests {
 
         assert_eq!(parts[3].0, "]");
         assert!(parts[3].1.is_none(), "] should not have location");
+    }
+
+    #[test]
+    fn test_output_with_locations_tuple_base_clickable_when_qname_available() {
+        let tuple_cls = fake_class("tuple", "builtins", 5);
+        let int_class = fake_class("int", "builtins", 10);
+        let int_type = Type::ClassType(ClassType::new(int_class, TArgs::default()));
+        let tuple_type = Type::Tuple(Tuple::Concrete(vec![int_type]));
+
+        let ctx = TypeDisplayContext::new_with_tuple(&[&tuple_type], Some(tuple_cls.qname()));
+        let mut output = OutputWithLocations::new(&ctx);
+
+        ctx.fmt_helper_generic(&tuple_type, false, &mut output)
+            .unwrap();
+
+        let tuple_part = output
+            .parts()
+            .iter()
+            .find(|(text, _)| text == "tuple")
+            .expect("tuple keyword should be present");
+        let location = tuple_part
+            .1
+            .as_ref()
+            .expect("tuple should now have a location");
+        assert_eq!(location.module.name(), ModuleName::from_str("builtins"));
+        assert_eq!(location.range.start(), TextSize::new(5));
     }
 
     #[test]
