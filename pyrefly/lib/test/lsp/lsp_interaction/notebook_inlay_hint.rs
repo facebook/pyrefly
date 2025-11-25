@@ -32,7 +32,21 @@ fn test_inlay_hints() {
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0)
         .expect_response(json!([{
-            "label": " -> tuple[Literal[1], Literal[2]]",
+            "label": [
+                {"value": " -> "},
+                {"value": "tuple"},
+                {"value": "["},
+                {"value": "Literal"},
+                {"value": "["},
+                {"value": "1"},
+                {"value": "]"},
+                {"value": ", "},
+                {"value": "Literal"},
+                {"value": "["},
+                {"value": "2"},
+                {"value": "]"},
+                {"value": "]"}
+            ],
             "position": {"character": 21, "line": 0},
             "textEdits": [{
                 "newText": " -> tuple[Literal[1], Literal[2]]",
@@ -43,7 +57,21 @@ fn test_inlay_hints() {
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0)
         .expect_response(json!([{
-            "label": ": tuple[Literal[1], Literal[2]]",
+            "label": [
+                {"value": ": "},
+                {"value": "tuple"},
+                {"value": "["},
+                {"value": "Literal"},
+                {"value": "["},
+                {"value": "1"},
+                {"value": "]"},
+                {"value": ", "},
+                {"value": "Literal"},
+                {"value": "["},
+                {"value": "2"},
+                {"value": "]"},
+                {"value": "]"}
+            ],
             "position": {"character": 6, "line": 0},
             "textEdits": [{
                 "newText": ": tuple[Literal[1], Literal[2]]",
@@ -54,7 +82,13 @@ fn test_inlay_hints() {
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0)
         .expect_response(json!([{
-            "label": " -> Literal[0]",
+            "label": [
+                {"value": " -> "},
+                {"value": "Literal"},
+                {"value": "["},
+                {"value": "0"},
+                {"value": "]"}
+            ],
             "position": {"character": 15, "line": 0},
             "textEdits": [{
                 "newText": " -> Literal[0]",

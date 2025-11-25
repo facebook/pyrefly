@@ -285,7 +285,7 @@ assert_type(x, Literal[1, 2])
 testcase!(
     test_exception_handler,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Exception1(Exception): pass
 class Exception2(Exception): pass
@@ -296,21 +296,21 @@ x2 = (Exception1, Exception2)
 try:
     pass
 except int as e1:  # E: Invalid exception class: `int` does not inherit from `BaseException`
-    reveal_type(e1)  # E: revealed type: int
+    assert_type(e1, int)
 except int:  # E: Invalid exception class
     pass
 except Exception as e2:
-    reveal_type(e2)  # E: revealed type: Exception
+    assert_type(e2, Exception)
 except ExceptionGroup as e3:
-    reveal_type(e3)  # E: revealed type: ExceptionGroup[Exception]
+    assert_type(e3, ExceptionGroup[Exception])
 except (Exception1, Exception2) as e4:
-    reveal_type(e4)  # E: revealed type: Exception1 | Exception2
+    assert_type(e4, Exception1 | Exception2)
 except Exception1 as e5:
-    reveal_type(e5)  # E: revealed type: Exception1
+    assert_type(e5, Exception1)
 except x1 as e6:
-    reveal_type(e6)  # E: revealed type: Exception
+    assert_type(e6, Exception)
 except x2 as e7:
-    reveal_type(e7)  # E: revealed type: Exception1 | Exception2
+    assert_type(e7, Exception1 | Exception2)
 "#,
 );
 
@@ -1163,7 +1163,7 @@ f(C())
 testcase!(
     test_boolean_op_narrowing_example,
     r#"
-from typing import Sequence, reveal_type
+from typing import Sequence, assert_type
 class A:
     def foo(self) -> bool:
         raise NotImplementedError()
@@ -1175,7 +1175,7 @@ class B:
 def f(a: A) -> tuple[int, bool]:
     return a.i(), (
         (isinstance(a, B) and a.bar()) or
-        reveal_type(a).foo()  # E: revealed type: A
+        assert_type(a, A).foo()
     )
 "#,
 );

@@ -18,6 +18,8 @@ use pyrefly_types::callable::Function;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
+use pyrefly_types::keywords::DataclassFieldKeywords;
+use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::Lit;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -363,5 +365,102 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .find(|(name, _)| name == key)
             .and_then(|(_, ann)| ann.get_type().as_bool())
+    }
+
+    pub fn check_pydantic_range_constraints(
+        &self,
+        field_name: &Name,
+        field_ty: &Type,
+        keywords: &DataclassFieldKeywords,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        // Note: the subset check here is too conservative when it comes to modeling runtime behavior
+        // we want to check if the bound_val is coercible to the annotation type at runtime.
+        // statically, this could be a challenge, which is why we go with this more conservative approach for now.
+        for (bound_val, label) in [
+            (&keywords.gt, "gt"),
+            (&keywords.lt, "lt"),
+            (&keywords.ge, "ge"),
+            (&keywords.le, "le"),
+        ] {
+            let Some(val) = bound_val else { continue };
+            if !self.is_subset_eq(val, field_ty) {
+                self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                        format!(
+                            "Pydantic `{label}` value is of type `{}` but the field is annotated with `{}`",
+                            self.for_display(val.clone()),
+                            self.for_display(field_ty.clone())
+                        ),
+                    );
+            }
+        }
+        self.check_pydantic_range_default(field_name, keywords, range, errors);
+    }
+
+    fn check_pydantic_range_default(
+        &self,
+        field_name: &Name,
+        keywords: &DataclassFieldKeywords,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        fn int_literal_from_type(ty: &Type) -> Option<&LitInt> {
+            // We only currently enforce range constraints for literal defaults, so carve out
+            // the `Literal[int]` case and ignore everything else.
+            match ty {
+                Type::Literal(Lit::Int(lit)) => Some(lit),
+                _ => None,
+            }
+        }
+        let Some(default_ty) = &keywords.default else {
+            return;
+        };
+        let Some(value_lit) = int_literal_from_type(default_ty) else {
+            return;
+        };
+        let emit_violation = |label: &str, constraint_ty: &Type| {
+            let Some(constraint_lit) = int_literal_from_type(constraint_ty) else {
+                return;
+            };
+            let comparison = value_lit.cmp(constraint_lit);
+            let violates = match label {
+                "gt" => !matches!(comparison, std::cmp::Ordering::Greater),
+                "ge" => matches!(comparison, std::cmp::Ordering::Less),
+                "lt" => !matches!(comparison, std::cmp::Ordering::Less),
+                "le" => matches!(comparison, std::cmp::Ordering::Greater),
+                _ => false,
+            };
+            if violates {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    format!(
+                        "Default value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
+                        self.for_display(default_ty.clone()),
+                        label,
+                        self.for_display(constraint_ty.clone()),
+                        field_name
+                    ),
+                );
+            }
+        };
+
+        if let Some(gt) = &keywords.gt {
+            emit_violation("gt", gt);
+        }
+        if let Some(ge) = &keywords.ge {
+            emit_violation("ge", ge);
+        }
+        if let Some(lt) = &keywords.lt {
+            emit_violation("lt", lt);
+        }
+        if let Some(le) = &keywords.le {
+            emit_violation("le", le);
+        }
     }
 }

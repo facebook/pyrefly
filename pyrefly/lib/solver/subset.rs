@@ -574,7 +574,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     fn is_paramlist_subset_of_paramspec(
         &mut self,
         got: &ParamList,
-        want_ts: &[Type],
+        want_ts: &[(Type, Required)],
         want_pspec: &Type,
     ) -> Result<(), SubsetError> {
         if got.len() < want_ts.len() {
@@ -591,7 +591,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     fn is_paramspec_subset_of_paramlist(
         &mut self,
-        got_ts: &[Type],
+        got_ts: &[(Type, Required)],
         got_pspec: &Type,
         want: &ParamList,
     ) -> Result<(), SubsetError> {
@@ -609,16 +609,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     fn is_paramspec_subset_of_paramspec(
         &mut self,
-        got_ts: &[Type],
+        got_ts: &[(Type, Required)],
         got_pspec: &Type,
-        want_ts: &[Type],
+        want_ts: &[(Type, Required)],
         want_pspec: &Type,
     ) -> Result<(), SubsetError> {
+        // TODO: consider required-ness in prepended params
         match got_ts.len().cmp(&want_ts.len()) {
             Ordering::Greater => {
                 let (got_ts_pre, got_ts_post) = got_ts.split_at(want_ts.len());
                 for (l, u) in got_ts_pre.iter().zip(want_ts.iter()) {
-                    self.is_subset_eq(u, l)?;
+                    self.is_subset_eq(&u.0, &l.0)?;
                 }
                 let got_ts_post = got_ts_post.to_vec().into_boxed_slice();
                 self.is_subset_eq(
@@ -629,7 +630,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             Ordering::Less => {
                 let (want_ts_pre, want_ts_post) = want_ts.split_at(got_ts.len());
                 for (l, u) in got_ts.iter().zip(want_ts_pre.iter()) {
-                    self.is_subset_eq(u, l)?;
+                    self.is_subset_eq(&u.0, &l.0)?;
                 }
                 let want_ts_post = want_ts_post.to_vec().into_boxed_slice();
                 self.is_subset_eq(
@@ -639,7 +640,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             Ordering::Equal => {
                 for (l, u) in got_ts.iter().zip(want_ts.iter()) {
-                    self.is_subset_eq(u, l)?;
+                    self.is_subset_eq(&u.0, &l.0)?;
                 }
                 self.is_subset_eq(want_pspec, got_pspec)
             }

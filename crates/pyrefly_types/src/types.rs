@@ -36,6 +36,7 @@ use crate::callable::FunctionKind;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
+use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
@@ -671,7 +672,7 @@ pub enum Type {
     ParamSpec(ParamSpec),
     TypeVarTuple(TypeVarTuple),
     SpecialForm(SpecialForm),
-    Concatenate(Box<[Type]>, Box<Type>),
+    Concatenate(Box<[(Type, Required)]>, Box<Type>),
     ParamSpecValue(ParamList),
     /// The type of a value which is annotated with `P.args`.
     Args(Box<Quantified>),
@@ -878,7 +879,11 @@ impl Type {
         matches!(self, Type::Unpack(_))
     }
 
-    pub fn callable_concatenate(args: Box<[Type]>, param_spec: Type, ret: Type) -> Self {
+    pub fn callable_concatenate(
+        args: Box<[(Type, Required)]>,
+        param_spec: Type,
+        ret: Type,
+    ) -> Self {
         Type::Callable(Box::new(Callable::concatenate(args, param_spec, ret)))
     }
 
@@ -1149,10 +1154,19 @@ impl Type {
                 body: Forallable::Function(func),
             })
             | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Function(func),
+                func:
+                    BoundMethodType::Function(func)
+                    | BoundMethodType::Forall(Forall {
+                        tparams: _,
+                        body: func,
+                    }),
                 ..
             }) => f(&mut func.metadata),
-            Type::Overload(overload) => f(&mut overload.metadata),
+            Type::Overload(overload)
+            | Type::BoundMethod(box BoundMethod {
+                func: BoundMethodType::Overload(overload),
+                ..
+            }) => f(&mut overload.metadata),
             _ => {}
         }
     }

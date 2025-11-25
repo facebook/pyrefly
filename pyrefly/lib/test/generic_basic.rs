@@ -193,7 +193,7 @@ b: B[tuple[tuple[Any, ...], Any, Any]] = B()  # Here's one valid way to pin them
 testcase!(
     test_paramspec_with_default_after_typevartuple,
     r#"
-from typing import Any, reveal_type, assert_type
+from typing import Any, assert_type
 class A[*Ts, **P1, **P2 = P1]:
     pass
 class B[*Ts, T, **P = [int, str]]:

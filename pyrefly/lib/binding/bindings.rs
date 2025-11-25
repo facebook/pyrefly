@@ -778,7 +778,7 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::Forward(inner_idx) => {
                     idx = *inner_idx;
                 }
-                Binding::NameAssign(_, _, value, _) => {
+                Binding::NameAssign { expr: value, .. } => {
                     return self.as_special_export_inner(value, visited_names, visited_keys);
                 }
                 _ => return None,

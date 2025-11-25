@@ -224,7 +224,7 @@ enum RawClassFieldInitialization {
 pub enum ClassFieldInitialization {
     /// If this is a dataclass field, DataclassFieldKeywords stores the field's
     /// dataclass flags (which are options that control how fields behave).
-    ClassBody(Option<DataclassFieldKeywords>),
+    ClassBody(Option<Box<DataclassFieldKeywords>>),
     /// This field is initialized in a method. Note that this applies only if the field is not
     /// declared anywhere else.
     Method,
@@ -749,10 +749,10 @@ impl ClassField {
     fn dataclass_flags_of(&self) -> DataclassFieldKeywords {
         match &self.0 {
             ClassFieldInner::Simple { initialization, .. } => match initialization {
-                ClassFieldInitialization::ClassBody(Some(field_flags)) => field_flags.clone(),
+                ClassFieldInitialization::ClassBody(Some(field_flags)) => (**field_flags).clone(),
                 ClassFieldInitialization::ClassBody(None) => {
                     let mut kws = DataclassFieldKeywords::new();
-                    kws.default = true;
+                    kws.default = Some(Type::any_implicit());
                     kws
                 }
                 ClassFieldInitialization::Method
@@ -1235,7 +1235,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Expr::Call(call) = e
                 {
                     let flags = self.compute_dataclass_field_initialization(call, dm);
-                    ClassFieldInitialization::ClassBody(flags)
+                    ClassFieldInitialization::ClassBody(flags.map(Box::new))
                 } else {
                     ClassFieldInitialization::ClassBody(None)
                 }
@@ -1667,34 +1667,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        // Note: the subset check here is too conservative when it comes to modeling runtime behavior
-        // we want to check if the bound_val is coercible to the annotation type at runtime.
-        // statically, this could be a challenge, which is why we go with this more conservative approach for now.
         if metadata.is_pydantic_base_model()
-            && let ClassFieldInitialization::ClassBody(Some(DataclassFieldKeywords {
-                gt,
-                lt,
-                ge,
-                ..
-            })) = initialization
+            && let ClassFieldInitialization::ClassBody(Some(kws)) = initialization
         {
             let field_ty = annotation.get_type();
-
-            for (bound_val, label) in [(gt, "gt"), (lt, "lt"), (ge, "ge")] {
-                let Some(val) = bound_val else { continue };
-                if !self.is_subset_eq(val, field_ty) {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::BadArgumentType),
-                        format!(
-                            "Pydantic `{label}` value is of type `{}` but the field is annotated with `{}`",
-                            self.for_display(val.clone()),
-                            self.for_display(field_ty.clone())
-                        ),
-                    );
-                }
-            }
+            self.check_pydantic_range_constraints(name, field_ty, kws, range, errors);
         }
 
         // Check for qualifiers that are used in improper contexts.

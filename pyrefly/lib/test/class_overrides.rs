@@ -585,7 +585,7 @@ class B(A):
 testcase!(
     test_unannotated_none_attribute_override,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Foo:
     x = None
@@ -593,10 +593,10 @@ class Foo:
 class Bar(Foo):
     x = 1
 
-reveal_type(Bar.x)  # E: revealed type: int
-reveal_type(Foo.x)  # E: revealed type: None
+assert_type(Bar.x, int)
+assert_type(Foo.x, None)
 def test(x: type[Foo]):
-    reveal_type(x.x)  # E: revealed type: None
+    assert_type(x.x, None)
     "#,
 );
 

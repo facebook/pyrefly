@@ -806,3 +806,21 @@ x1: Spam1[int, str] = int
 x2: Spam2[int, str] = int
     "#,
 );
+
+testcase!(
+    test_variable_in_function_is_not_type_alias,
+    r#"
+from typing import TypeVar, Generic
+class C:
+    @classmethod
+    def make(cls) -> C:
+        raise NotImplementedError()
+T = TypeVar("T", bound=C)
+class UseC(Generic[T]):
+    _class: type[T] | None
+    def use(self) -> None:
+        current = self._class # this is not a type alias
+        if current is not None:
+            current.make()
+    "#,
+);

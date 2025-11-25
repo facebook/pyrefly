@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::iter::once;
 use std::sync::Arc;
 
 use pyrefly_build::handle::Handle;
@@ -79,7 +80,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         inlay_hint_config: InlayHintConfig,
-    ) -> Option<Vec<(TextSize, String, Option<Vec<TextRangeWithModule>>)>> {
+    ) -> Option<Vec<(TextSize, Vec<(String, Option<TextRangeWithModule>)>)>> {
         let is_interesting = |e: &Expr, ty: &Type, class_name: Option<&Name>| {
             !ty.is_any()
                 && match e {
@@ -138,11 +139,16 @@ impl<'a> Transaction<'a> {
                                     {
                                         ty = return_ty;
                                     }
-                                    res.push((
-                                        fun.def.parameters.range.end(),
-                                        format!(" -> {ty}"),
-                                        None, // Location info will be added in a later diff
-                                    ));
+                                    // Use get_types_with_locations to get type parts with location info
+                                    let type_parts = ty.get_types_with_locations();
+                                    let label_parts = once((" -> ".to_owned(), None))
+                                        .chain(
+                                            type_parts
+                                                .iter()
+                                                .map(|(text, loc)| (text.clone(), loc.clone())),
+                                        )
+                                        .collect();
+                                    res.push((fun.def.parameters.range.end(), label_parts));
                                 }
                             }
                             _ => {}
@@ -154,7 +160,11 @@ impl<'a> Transaction<'a> {
                         && let Some(ty) = self.get_type(handle, key) =>
                 {
                     let e = match bindings.get(idx) {
-                        Binding::NameAssign(_, None, e, _) => Some(&**e),
+                        Binding::NameAssign {
+                            annotation: None,
+                            expr: e,
+                            ..
+                        } => Some(&**e),
                         Binding::Expr(None, e) => Some(e),
                         _ => None,
                     };
@@ -171,8 +181,16 @@ impl<'a> Transaction<'a> {
                     if let Some(e) = e
                         && is_interesting(e, &ty, class_name)
                     {
-                        let ty = format!(": {ty}");
-                        res.push((key.range().end(), ty, None)); // Location info will be added in a later diff
+                        // Use get_types_with_locations to get type parts with location info
+                        let type_parts = ty.get_types_with_locations();
+                        let label_parts = once((": ".to_owned(), None))
+                            .chain(
+                                type_parts
+                                    .iter()
+                                    .map(|(text, loc)| (text.clone(), loc.clone())),
+                            )
+                            .collect();
+                        res.push((key.range().end(), label_parts));
                     }
                 }
                 _ => {}
@@ -183,7 +201,7 @@ impl<'a> Transaction<'a> {
             res.extend(
                 self.add_inlay_hints_for_positional_function_args(handle)
                     .into_iter()
-                    .map(|(pos, text)| (pos, text, None)),
+                    .map(|(pos, text)| (pos, vec![(text, None)])),
             );
         }
 
@@ -499,7 +517,11 @@ impl<'a> Transaction<'a> {
                 key @ Key::Definition(_) if containers => {
                     if let Some(ty) = self.get_type(handle, key) {
                         let e = match bindings.get(idx) {
-                            Binding::NameAssign(_, None, e, _) => match &**e {
+                            Binding::NameAssign {
+                                annotation: None,
+                                expr: e,
+                                ..
+                            } => match &**e {
                                 Expr::List(ExprList { elts, .. }) => {
                                     if elts.is_empty() {
                                         Some(&**e)

@@ -32,6 +32,7 @@ use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
+use crate::binding::pydantic::LE;
 use crate::binding::pydantic::LT;
 use crate::binding::pydantic::STRICT;
 use crate::config::error_kind::ErrorKind;
@@ -261,17 +262,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         let mut init = map.get_bool(&DataclassFieldKeywords::INIT);
-        let mut default = [
-            &DataclassFieldKeywords::DEFAULT,
-            &DataclassFieldKeywords::DEFAULT_FACTORY,
-            &DataclassFieldKeywords::FACTORY,
-        ]
-        .iter()
-        .any(|k| map.0.contains_key(*k));
+        let mut default = self.get_default(&map);
 
-        if !default && dataclass_metadata.default_can_be_positional {
+        if default.is_none()
+            && dataclass_metadata.default_can_be_positional
+            && let Some(default_expr) = args.args.first()
+            && !matches!(default_expr, EllipsisLiteral(_))
+        {
             // Check whether a default was passed positionally. This is needed for `pydantic.Field`.
-            default = !matches!(args.args.first(), Some(EllipsisLiteral(_)) | None);
+            default = Some(self.expr_infer(default_expr, errors));
         }
 
         let mut kw_only = map.get_bool(&DataclassFieldKeywords::KW_ONLY);
@@ -287,6 +286,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let gt = map.0.get(&GT).cloned();
         let lt = map.0.get(&LT).cloned();
         let ge = map.0.get(&GE).cloned();
+        let le = map.0.get(&LE).cloned();
 
         let strict: Option<bool> = map.0.get(&STRICT).and_then(|v| v.as_bool());
 
@@ -321,6 +321,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             lt,
             gt,
             ge,
+            le,
             strict,
             converter_param,
         }
@@ -423,27 +424,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn constructor_to_callable_distributed(&self, ty: &Type) -> Option<Type> {
+        if let Type::ClassDef(cls) = ty
+            && let Type::ClassType(instance) = self.promote_silently(cls)
+        {
+            let callable = self.constructor_to_callable(&instance);
+            Some(self.distribute_over_union(&callable, |ty| {
+                if let Type::BoundMethod(m) = ty {
+                    self.bind_boundmethod(m, &mut |a, b| self.is_subset_eq(a, b))
+                        .unwrap_or_else(|| ty.clone())
+                } else {
+                    ty.clone()
+                }
+            }))
+        } else {
+            None
+        }
+    }
+
     fn get_converter_param(&self, converter: &Type) -> Type {
-        let converter = {
-            if let Type::ClassDef(cls) = converter
-                && let Type::ClassType(instance) = self.promote_silently(cls)
-            {
-                let callable = self.constructor_to_callable(&instance);
-                &self.distribute_over_union(&callable, |ty| {
-                    if let Type::BoundMethod(m) = ty {
-                        self.bind_boundmethod(m, &mut |a, b| self.is_subset_eq(a, b))
-                            .unwrap_or_else(|| ty.clone())
-                    } else {
-                        ty.clone()
-                    }
-                })
-            } else {
-                converter
-            }
-        };
+        let constructor_callable = self.constructor_to_callable_distributed(converter);
+        let converter = constructor_callable.as_ref().unwrap_or(converter);
         self.distribute_over_union(converter, |ty| {
             ty.callable_first_param().unwrap_or_else(Type::any_implicit)
         })
+    }
+
+    fn get_default(&self, map: &TypeMap) -> Option<Type> {
+        if let Some(default) = map.0.get(&DataclassFieldKeywords::DEFAULT) {
+            return Some(default.clone());
+        }
+        let factory = map
+            .0
+            .get(&DataclassFieldKeywords::DEFAULT_FACTORY)
+            .or_else(|| map.0.get(&DataclassFieldKeywords::FACTORY))?;
+        let constructor_callable = self.constructor_to_callable_distributed(factory);
+        Some(
+            constructor_callable
+                .as_ref()
+                .unwrap_or(factory)
+                .callable_return_type()
+                .unwrap_or_else(Type::any_implicit),
+        )
     }
 
     fn iter_fields(
@@ -506,7 +528,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let strict = field_flags.strict.unwrap_or(strict_default);
             if field_flags.init {
                 let has_default = force_optional
-                    || field_flags.default
+                    || field_flags.default.is_some()
                     || (field_flags.init_by_name && field_flags.init_by_alias.is_some());
                 let is_kw_only = field_flags.is_kw_only();
                 if !is_kw_only {

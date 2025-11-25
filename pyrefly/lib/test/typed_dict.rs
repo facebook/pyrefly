@@ -28,7 +28,7 @@ testcase!(
     bug = "Our handling of ClassVar and methods is fishy, and our error messages are not clear",
     test_typed_dict_with_illegal_members,
     r#"
-from typing import TypedDict, ClassVar, reveal_type
+from typing import Any, TypedDict, ClassVar, assert_type
 # Although classmethods, classvars, and static methods do actually
 # work at runtime, type checkers seem to agree that these are not
 # permissible in typed dicts.
@@ -45,17 +45,17 @@ class D(TypedDict):
     def h(self) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
         ...
 def foo(d: D):
-    reveal_type(d["cv"])  # E: revealed type: int
-    reveal_type(d["x"])  # E: revealed type: str
-    reveal_type(d["z"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have key `z`
-    reveal_type(d["f"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
-    reveal_type(d["g"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
-    reveal_type(d["h"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
-    reveal_type(d["w"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
-    reveal_type(d["u"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
-    reveal_type(D.cv)  # E: revealed type: int
-    reveal_type(D.g)  # E: revealed type: Unknown
-    reveal_type(D.h)  # E: revealed type: Unknown
+    assert_type(d["cv"], int)
+    assert_type(d["x"], str)
+    assert_type(d["z"], Any)  # E: TypedDict `D` does not have key `z`
+    assert_type(d["f"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["g"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["h"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["w"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["u"], Any)  # E: TypedDict `D` does not have
+    assert_type(D.cv, int)
+    assert_type(D.g, Any)
+    assert_type(D.h, Any)
     "#,
 );
 

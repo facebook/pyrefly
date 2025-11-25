@@ -1133,6 +1133,11 @@ impl Scopes {
         }
     }
 
+    pub fn in_function_scope(&self) -> bool {
+        self.iter_rev()
+            .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
+    }
+
     /// Are we currently in a class body. If so, return the keys for the class and its metadata.
     pub fn current_class_and_metadata_keys(
         &self,

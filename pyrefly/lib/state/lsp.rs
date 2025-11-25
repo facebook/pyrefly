@@ -6,6 +6,7 @@
  */
 
 use std::cmp::Reverse;
+use std::collections::BTreeMap;
 
 use dupe::Dupe;
 use fuzzy_matcher::FuzzyMatcher;
@@ -30,6 +31,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::facet::FacetKind;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -46,9 +48,13 @@ use ruff_python_parser::TokenKind;
 use ruff_python_parser::ParseErrorType;
 use ruff_python_parser::LexicalErrorType;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprNumberLiteral;
+use ruff_python_ast::ExprStringLiteral;
+use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Number;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -2409,6 +2415,193 @@ fn add_literal_completions(
         }
     }
 
+    fn subscript_string_literal_at(
+        module: &ModModule,
+        position: TextSize,
+    ) -> Option<(ExprSubscript, ExprStringLiteral)> {
+        let nodes = Ast::locate_node(module, position);
+        let mut best: Option<(u8, TextSize, ExprSubscript, ExprStringLiteral)> = None;
+        for node in nodes {
+            if let AnyNodeRef::ExprSubscript(sub) = node
+                && let Expr::StringLiteral(lit) = sub.slice.as_ref()
+            {
+                let (priority, dist) = Self::string_literal_priority(position, lit.range());
+                let should_update = match &best {
+                    Some((best_prio, best_dist, _, _)) => {
+                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                    }
+                    None => true,
+                };
+                if should_update {
+                    best = Some((priority, dist, sub.clone(), lit.clone()));
+                    if priority == 0 && dist == TextSize::from(0) {
+                        break;
+                    }
+                }
+            }
+        }
+        best.map(|(_, _, sub, lit)| (sub, lit))
+    }
+
+    fn string_literal_priority(position: TextSize, range: TextRange) -> (u8, TextSize) {
+        if range.contains(position) {
+            (0, TextSize::from(0))
+        } else if position < range.start() {
+            (1, range.start() - position)
+        } else {
+            (2, position - range.end())
+        }
+    }
+
+    fn expression_facets(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
+        let mut facets = Vec::new();
+        let mut current = expr;
+        loop {
+            match current {
+                Expr::Subscript(sub) => {
+                    match sub.slice.as_ref() {
+                        Expr::NumberLiteral(ExprNumberLiteral {
+                            value: Number::Int(idx),
+                            ..
+                        }) if idx.as_usize().is_some() => {
+                            facets.push(FacetKind::Index(idx.as_usize().unwrap()))
+                        }
+                        Expr::StringLiteral(lit) => {
+                            facets.push(FacetKind::Key(lit.value.to_string()))
+                        }
+                        _ => return None,
+                    }
+                    current = sub.value.as_ref();
+                }
+                Expr::Attribute(attr) => {
+                    facets.push(FacetKind::Attribute(attr.attr.id.clone()));
+                    current = attr.value.as_ref();
+                }
+                Expr::Name(name) => {
+                    facets.reverse();
+                    return Some((Ast::expr_name_identifier(name.clone()), facets));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn collect_typed_dict_keys(
+        &self,
+        handle: &Handle,
+        base_type: Type,
+    ) -> Option<BTreeMap<String, Type>> {
+        self.ad_hoc_solve(handle, |solver| {
+            let mut map = BTreeMap::new();
+            let mut stack = vec![base_type];
+            while let Some(ty) = stack.pop() {
+                match ty {
+                    Type::TypedDict(td) | Type::PartialTypedDict(td) => {
+                        for (name, field) in solver.type_order().typed_dict_fields(&td) {
+                            map.entry(name.to_string())
+                                .or_insert_with(|| field.ty.clone());
+                        }
+                    }
+                    Type::Union(types) => {
+                        stack.extend(types.into_iter());
+                    }
+                    _ => {}
+                }
+            }
+            map
+        })
+    }
+
+    fn add_dict_key_completions(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        position: TextSize,
+        completions: &mut Vec<CompletionItem>,
+    ) {
+        let Some((subscript, string_lit)) = Self::subscript_string_literal_at(module, position)
+        else {
+            return;
+        };
+        let literal_range = string_lit.range();
+        // Allow the cursor to sit a few characters before the literal (e.g. between nested
+        // subscripts) so completion requests fired just before the quotes still succeed.
+        let allowance = TextSize::from(4);
+        let lower_bound = literal_range
+            .start()
+            .checked_sub(allowance)
+            .unwrap_or_else(|| TextSize::new(0));
+        if position < lower_bound || position > literal_range.end() {
+            return;
+        }
+        let base_expr = subscript.value.as_ref();
+        let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
+
+        if let Some(bindings) = self.get_bindings(handle) {
+            let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
+                Some((identifier, facets))
+            } else if let Expr::Name(name) = base_expr {
+                Some((Ast::expr_name_identifier(name.clone()), Vec::new()))
+            } else {
+                None
+            };
+
+            if let Some((identifier, facets)) = base_info {
+                let short_id = ShortIdentifier::new(&identifier);
+                let idx_opt = {
+                    let bound_key = Key::BoundName(short_id);
+                    if bindings.is_valid_key(&bound_key) {
+                        Some(bindings.key_to_idx(&bound_key))
+                    } else {
+                        let def_key = Key::Definition(short_id);
+                        if bindings.is_valid_key(&def_key) {
+                            Some(bindings.key_to_idx(&def_key))
+                        } else {
+                            None
+                        }
+                    }
+                };
+
+                if let Some(idx) = idx_opt {
+                    let facets_clone = facets.clone();
+                    if let Some(keys) = self.ad_hoc_solve(handle, |solver| {
+                        let info = solver.get_idx(idx);
+                        info.key_facets_at(&facets_clone)
+                    }) {
+                        for (key, ty_opt) in keys {
+                            suggestions.entry(key).or_insert(ty_opt);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(base_type) = self.get_type_trace(handle, base_expr.range())
+            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
+        {
+            for (key, ty) in typed_keys {
+                let entry = suggestions.entry(key).or_insert(None);
+                if entry.is_none() {
+                    *entry = Some(ty);
+                }
+            }
+        }
+
+        if suggestions.is_empty() {
+            return;
+        }
+
+        for (label, ty_opt) in suggestions {
+            let detail = ty_opt.as_ref().map(|ty| ty.to_string());
+            completions.push(CompletionItem {
+                label,
+                detail,
+                kind: Some(CompletionItemKind::FIELD),
+                ..Default::default()
+            });
+        }
+    }
+
     // Kept for backwards compatibility - used by external callers (lsp/server.rs, playground.rs)
     // who don't need the is_incomplete flag
     pub fn completion(
@@ -2599,6 +2792,12 @@ fn add_literal_completions(
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
                     self.add_literal_completions(handle, position, &mut result);
+                    self.add_dict_key_completions(
+                        handle,
+                        mod_module.as_ref(),
+                        position,
+                        &mut result,
+                    );
                     // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
                     // in foo(<>), the first containing node is AnyNodeRef::ExprCall
                     if let Some(first) = nodes.first()

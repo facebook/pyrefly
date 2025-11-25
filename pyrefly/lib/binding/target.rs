@@ -468,7 +468,13 @@ impl<'a> BindingsBuilder<'a> {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
             None => canonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
         };
-        let binding = Binding::NameAssign(name.id.clone(), ann, value, tparams);
+        let binding = Binding::NameAssign {
+            name: name.id.clone(),
+            annotation: ann,
+            expr: value,
+            legacy_tparams: tparams,
+            is_in_function_scope: self.scopes.in_function_scope(),
+        };
         // Record the raw assignment
         let (first_used_by, def_idx) = user.decompose();
         let def_idx = self.insert_binding_idx(def_idx, binding);

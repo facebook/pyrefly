@@ -228,3 +228,75 @@ class B:
         n.start_soon(self.bound)
 "#,
 );
+
+testcase!(
+    test_type_var_tuple_subscript,
+    r#"
+from typing import assert_type
+
+def test[*Ts](prefix_only: tuple[int, str, *Ts], prefix_and_suffix: tuple[int, str, *Ts, bool, str], suffix_only: tuple[*Ts, bool, str, int]):
+    # Positive indexing in prefix
+    assert_type(prefix_only[0], int)
+    assert_type(prefix_only[1], str)
+    assert_type(prefix_and_suffix[0], int)
+    assert_type(prefix_and_suffix[1], str)
+
+    # Negative indexing in suffix
+    assert_type(suffix_only[-1], int)
+    assert_type(suffix_only[-2], str)
+    assert_type(suffix_only[-3], bool)
+    assert_type(prefix_and_suffix[-1], str)
+    assert_type(prefix_and_suffix[-2], bool)
+
+    # Slice within prefix
+    assert_type(prefix_only[0:1], tuple[int])
+    assert_type(prefix_only[0:2], tuple[int, str])
+    assert_type(prefix_only[1:2], tuple[str])
+    assert_type(prefix_and_suffix[0:1], tuple[int])
+    assert_type(prefix_and_suffix[0:2], tuple[int, str])
+    assert_type(prefix_and_suffix[1:2], tuple[str])
+
+    # Slice ending in prefix
+    assert_type(prefix_only[:1], tuple[int])
+    assert_type(prefix_only[:2], tuple[int, str])
+    assert_type(prefix_and_suffix[:1], tuple[int])
+    assert_type(prefix_and_suffix[:2], tuple[int, str])
+
+    # Slice starting in prefix
+    assert_type(prefix_only[1:], tuple[str, *Ts])
+    assert_type(prefix_and_suffix[1:], tuple[str, *Ts, bool, str])
+    assert_type(prefix_only[2:], tuple[*Ts])
+    assert_type(prefix_and_suffix[2:], tuple[*Ts, bool, str])
+
+    # Slice ending in suffix
+    assert_type(prefix_and_suffix[:-1], tuple[int, str, *Ts, bool])
+    assert_type(prefix_and_suffix[:-2], tuple[int, str, *Ts])
+    assert_type(prefix_and_suffix[1:-1], tuple[str, *Ts, bool])
+
+    # Unhandled cases (these should fall back and not crash)
+    prefix_only[5:]
+    prefix_and_suffix[5:6]
+    prefix_and_suffix[5:6:2]
+    suffix_only[10:20]
+    prefix_and_suffix[-10:-5]
+    prefix_only[::2]
+    suffix_only[::-1]
+    prefix_only[:-10]
+    prefix_only[:10]
+    prefix_and_suffix[1:10:3]
+    prefix_and_suffix[-1:]
+    prefix_only[-5]
+    prefix_and_suffix[-5]
+    prefix_and_suffix[10]
+
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_swap,
+    r#"
+def test[T, *Ts](t1: tuple[T, *Ts], t2: tuple[*Ts, T]):
+    t1 = (t2[-1], *t2[:-1])
+    t2 = (*t1[1:], t1[0])
+"#,
+);
