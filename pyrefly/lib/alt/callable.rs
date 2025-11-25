@@ -314,6 +314,7 @@ impl CallArgPreEval<'_> {
         solver: &AnswersSolver<Ans>,
         callable_name: Option<&FunctionKind>,
         hint: &Type,
+        use_hint: bool,
         param_name: Option<&Name>,
         vararg: bool,
         range: TextRange,
@@ -336,11 +337,16 @@ impl CallArgPreEval<'_> {
             }
             Self::Expr(x, done) => {
                 *done = true;
-                solver.expr_with_separate_check_errors(
-                    x,
-                    Some((hint, call_errors, tcc)),
-                    arg_errors,
-                );
+                if use_hint && !hint.is_any() {
+                    solver.expr_with_separate_check_errors(
+                        x,
+                        Some((hint, call_errors, tcc)),
+                        arg_errors,
+                    );
+                } else {
+                    let ty = solver.expr_infer(x, arg_errors);
+                    solver.check_type(&ty, hint, range, call_errors, tcc);
+                }
             }
             Self::Star(ty, done) => {
                 *done = vararg;
@@ -559,17 +565,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         } else {
                             ty
                         };
+                        let expanded = self.solver().expand_vars((*ty).clone());
+                        let (hint_ty, mut use_hint) = if expanded == *ty {
+                            (ty, false)
+                        } else {
+                            (type_owner.push(expanded), true)
+                        };
+                        if !use_hint {
+                            if !self.type_contains_var(hint_ty) {
+                                use_hint = true;
+                            } else if let Type::Union(options) = hint_ty {
+                                if options
+                                    .iter()
+                                    .any(|option| !self.type_contains_var(option))
+                                {
+                                    use_hint = true;
+                                }
+                            }
+                        }
                         arg_pre.post_check(
                             self,
                             callable_name,
-                            ty,
+                            hint_ty,
+                            use_hint,
                             name,
                             false,
                             arg.range(),
                             arg_errors,
                             call_errors,
                             context,
-                        )
+                        );
                     }
                     Some(PosParam {
                         ty,
@@ -593,10 +618,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         } else {
                             ty
                         };
+                        let expanded = self.solver().expand_vars((*ty).clone());
+                        let (hint_ty, mut use_hint) = if expanded == *ty {
+                            (ty, false)
+                        } else {
+                            (type_owner.push(expanded), true)
+                        };
+                        if !use_hint {
+                            if !self.type_contains_var(hint_ty) {
+                                use_hint = true;
+                            } else if let Type::Union(options) = hint_ty {
+                                if options
+                                    .iter()
+                                    .any(|option| !self.type_contains_var(option))
+                                {
+                                    use_hint = true;
+                                }
+                            }
+                        }
                         arg_pre.post_check(
                             self,
                             callable_name,
-                            ty,
+                            hint_ty,
+                            use_hint,
                             name,
                             true,
                             arg.range(),

@@ -246,7 +246,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             lhs = self.expr_infer(&x.left, errors);
             rhs = self.expr_infer(&x.right, errors);
         }
-
         // Optimisation: If we have `Union[a, b] | Union[c, d]`, instead of unioning
         // (a | c) | (a | d) | (b | c) | (b | d), we can just do one union.
         if x.op == Operator::BitOr

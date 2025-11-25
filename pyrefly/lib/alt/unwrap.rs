@@ -6,6 +6,7 @@
  */
 
 use ruff_python_ast::name::Name;
+use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -18,56 +19,79 @@ use crate::types::types::Type;
 use crate::types::types::Union;
 use crate::types::types::Var;
 
-// The error collector is None for a "soft" type hint, where we try to
-// match an expression against a hint, but fall back to the inferred type
-// without any errors if the hint is incompatible.
-// Soft type hints are used for `e1 or e1` expressions.
-pub struct Hint<'a>(Type, Option<&'a ErrorCollector>);
+#[derive(Clone, Debug)]
+pub struct Hint<'a> {
+    union: Type,
+    branches: Vec1<Type>,
+    errors: Option<&'a ErrorCollector>,
+    source_branches: usize,
+}
 
 #[derive(Clone, Copy, Debug)]
-pub struct HintRef<'a, 'b>(&'b Type, Option<&'a ErrorCollector>);
+pub struct HintRef<'a, 'b> {
+    union: &'b Type,
+    branches: &'b [Type],
+    errors: Option<&'a ErrorCollector>,
+    source_branches: usize,
+}
 
 impl<'a> Hint<'a> {
-    pub fn as_ref<'b>(&'a self) -> HintRef<'a, 'b>
-    where
-        'a: 'b,
-    {
-        HintRef(&self.0, self.1)
+    pub fn new(union: Type, branches: Vec1<Type>, errors: Option<&'a ErrorCollector>) -> Self {
+        let source_branches = branches.len();
+        Self {
+            union,
+            branches,
+            errors,
+            source_branches,
+        }
     }
 
-    pub fn ty(&self) -> &Type {
-        &self.0
+    pub fn as_ref(&self) -> HintRef<'a, '_> {
+        HintRef {
+            union: &self.union,
+            branches: self.branches.as_slice(),
+            errors: self.errors,
+            source_branches: self.source_branches,
+        }
     }
 
-    pub fn to_type(self) -> Type {
-        self.0
+    pub fn errors(&self) -> Option<&'a ErrorCollector> {
+        self.errors
+    }
+
+    pub fn to_type(&self) -> Type {
+        self.union.clone()
+    }
+
+    pub fn union(&self) -> &Type {
+        &self.union
+    }
+
+    pub fn source_branches(&self) -> usize {
+        self.source_branches
+    }
+
+    pub fn with_source_branches(mut self, count: usize) -> Self {
+        self.source_branches = count.max(1);
+        self
     }
 }
 
 impl<'a, 'b> HintRef<'a, 'b> {
-    pub fn new(hint: &'b Type, errors: Option<&'a ErrorCollector>) -> Self {
-        Self(hint, errors)
-    }
-
-    /// Construct a "soft" type hint that doesn't report an error when the hint is incompatible.
-    pub fn soft(hint: &'b Type) -> Self {
-        Self(hint, None)
-    }
-
     pub fn ty(&self) -> &Type {
-        self.0
+        self.union
     }
 
-    pub fn errors(&self) -> Option<&ErrorCollector> {
-        self.1
+    pub fn errors(&self) -> Option<&'a ErrorCollector> {
+        self.errors
     }
 
-    pub fn map_ty(&self, f: impl FnOnce(&Type) -> Type) -> Hint<'a> {
-        Hint(f(self.0), self.1)
+    pub fn branches(&self) -> &'b [Type] {
+        self.branches
     }
 
-    pub fn map_ty_opt(&self, f: impl FnOnce(&Type) -> Option<Type>) -> Option<Hint<'a>> {
-        f(self.0).map(|ty| Hint(ty, self.1))
+    pub fn source_branches(&self) -> usize {
+        self.source_branches.max(1)
     }
 }
 
@@ -152,6 +176,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
+        branches.sort_by_key(|branch| self.type_contains_var(branch));
+        branches
     }
 
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
@@ -285,90 +311,104 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn decompose_dict<'b>(
         &self,
-        hint: HintRef<'b, '_>,
-    ) -> (Option<Hint<'b>>, Option<Hint<'b>>) {
+        hint: HintRef<'a, 'b>,
+    ) -> (Option<Hint<'a>>, Option<Hint<'a>>) {
         let mut key_types = Vec::new();
         let mut value_types = Vec::new();
-        let mut matched = false;
-
-        // Helper to process a single target type and accumulate results.
-        let mut consider = |ty: &Type| {
+        let source_branches = hint.source_branches();
+        for branch in hint.branches() {
             let key = self.fresh_var();
             let value = self.fresh_var();
             let dict_type = self.stdlib.dict(key.to_type(), value.to_type()).to_type();
-            if self.is_subset_eq(&dict_type, ty) {
-                matched = true;
-                if let Some(key_ty) = self.resolve_var_opt(ty, key) {
+            if self.is_subset_eq(&dict_type, branch) {
+                if let (Some(key_ty), Some(value_ty)) = (
+                    self.resolve_var_opt(branch, key),
+                    self.resolve_var_opt(branch, value),
+                ) {
                     key_types.push(key_ty);
-                }
-                if let Some(value_ty) = self.resolve_var_opt(ty, value) {
                     value_types.push(value_ty);
                 }
             }
-        };
-
-        match hint.ty() {
-            Type::Union(branches) => {
-                for branch in branches {
-                    consider(branch);
-                }
-            }
-            ty => consider(ty),
         }
-
-        if !matched {
-            return (None, None);
-        }
-
-        let key = self.hint_from_types(key_types, &hint);
-        let value = self.hint_from_types(value_types, &hint);
+        let key = self
+            .hint_from_branches_vec(key_types, hint.errors())
+            .map(|hint| hint.with_source_branches(source_branches));
+        let value = self
+            .hint_from_branches_vec(value_types, hint.errors())
+            .map(|hint| hint.with_source_branches(source_branches));
         (key, value)
     }
 
-    pub fn decompose_set<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
-        let make = |var: Var| self.stdlib.set(var.to_type()).to_type();
-        match self.collect_var_from_hint(hint.ty(), &make) {
-            Some(tys) => self.hint_from_types(tys, &hint),
-            None => None,
-        }
+    pub fn decompose_set<'b>(&self, hint: HintRef<'a, 'b>) -> Option<Hint<'a>> {
+        self.hint_filter_map(hint, move |branch| {
+            let elem = self.fresh_var();
+            let set_type = self.stdlib.set(elem.to_type()).to_type();
+            if self.is_subset_eq(&set_type, branch) {
+                self.resolve_var_opt(branch, elem)
+            } else {
+                None
+            }
+        })
     }
 
-    pub fn decompose_list<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
-        let make = |var: Var| self.stdlib.list(var.to_type()).to_type();
-        match self.collect_var_from_hint(hint.ty(), &make) {
-            Some(tys) => self.hint_from_types(tys, &hint),
-            None => None,
-        }
+    pub fn decompose_iterable<'b>(&self, hint: HintRef<'a, 'b>) -> Option<Hint<'a>> {
+        self.hint_filter_map(hint, move |branch| {
+            let elem = self.fresh_var();
+            let iterable_type = self.stdlib.iterable(elem.to_type()).to_type();
+            if self.is_subset_eq(&iterable_type, branch) {
+                self.resolve_var_opt(branch, elem)
+            } else {
+                None
+            }
+        })
     }
 
-    pub fn decompose_tuple<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
-        let make = |var: Var| self.stdlib.tuple(var.to_type()).to_type();
-        match self.collect_var_from_hint(hint.ty(), &make) {
-            Some(tys) => self.hint_from_types(tys, &hint),
-            None => None,
-        }
+    pub fn decompose_list<'b>(&self, hint: HintRef<'a, 'b>) -> Option<Hint<'a>> {
+        self.hint_filter_map(hint, move |branch| {
+            let elem = self.fresh_var();
+            let list_type = self.stdlib.list(elem.to_type()).to_type();
+            if self.is_subset_eq(&list_type, branch) {
+                self.resolve_var_opt(branch, elem)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn decompose_tuple<'b>(&self, hint: HintRef<'a, 'b>) -> Option<Hint<'a>> {
+        self.hint_filter_map(hint, move |branch| {
+            let elem = self.fresh_var();
+            let tuple_type = self.stdlib.tuple(elem.to_type()).to_type();
+            if self.is_subset_eq(&tuple_type, branch) {
+                self.resolve_var_opt(branch, elem)
+            } else {
+                None
+            }
+        })
     }
 
     pub fn decompose_lambda<'b>(
         &self,
-        hint: HintRef<'b, '_>,
-        param_vars: &[(&Name, Var)],
-    ) -> Option<Hint<'b>> {
+        hint: HintRef<'a, 'b>,
+        param_vars: &[(Name, Var)],
+    ) -> Option<Hint<'a>> {
         let return_ty = self.fresh_var();
         let params = param_vars
             .iter()
-            .map(|(name, var)| Param::Pos((*name).clone(), var.to_type(), Required::Required))
+            .map(|(name, var)| Param::Pos(name.clone(), var.to_type(), Required::Required))
             .collect::<Vec<_>>();
         let callable_ty = Type::callable(params, return_ty.to_type());
 
-        if self.is_subset_eq(&callable_ty, hint.ty()) {
-            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, return_ty))
-        } else {
-            None
-        }
+        self.hint_filter_map(hint, move |branch| {
+            if self.is_subset_eq(&callable_ty, branch) {
+                self.resolve_var_opt(branch, return_ty)
+            } else {
+                None
+            }
+        })
     }
 
-    pub fn decompose_generator_yield<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
+    pub fn decompose_generator_yield<'b>(&self, hint: HintRef<'a, 'b>) -> Option<Hint<'a>> {
         let yield_ty = self.fresh_var();
         let generator_ty = self
             .stdlib
@@ -378,11 +418,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.fresh_var().to_type(),
             )
             .to_type();
-        if self.is_subset_eq(&generator_ty, hint.ty()) {
-            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, yield_ty))
-        } else {
-            None
-        }
+        self.hint_filter_map(hint, move |branch| {
+            if self.is_subset_eq(&generator_ty, branch) {
+                self.resolve_var_opt(branch, yield_ty)
+            } else {
+                None
+            }
+        })
     }
 
     pub fn decompose_generator(&self, ty: &Type) -> Option<(Type, Type, Type)> {

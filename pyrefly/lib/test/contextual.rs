@@ -307,6 +307,37 @@ f: Callable[[], list[A]] = lambda: [B()]
 "#,
 );
 
+testcase!(
+    test_context_lambda_callable_union,
+    r#"
+from typing import Callable
+f: Callable[[int], int] | Callable[[str], str] = lambda x: x + "1"
+"#,
+);
+
+testcase!(
+    test_context_dict_set_union,
+    r#"
+from typing import assert_type
+xs: dict[int, int] | dict[str, str] = {}
+assert_type(xs, dict[int, int] | dict[str, str])
+ys: set[int] | set[str] = {1}
+assert_type(ys, set[int] | set[str])
+"#,
+);
+
+testcase!(
+    test_context_typed_dict_union_list,
+    r#"
+from typing import TypedDict
+class A(TypedDict):
+    x: int
+class B(TypedDict):
+    x: str
+xs: list[A] | list[B] = [{"x": "foo"}]
+"#,
+);
+
 // We want to contextually type lambda params even when there is an arity mismatch.
 testcase!(
     test_context_lambda_arity,
@@ -387,7 +418,6 @@ f(g(0)) # OK
 );
 
 testcase!(
-    bug = "Propagating the hint should still allow for a narrower inferred type",
     test_context_return_narrow,
     r#"
 from typing import assert_type
@@ -397,7 +427,7 @@ def f[T](x: T) -> T:
 
 def test(x: int | str):
     x = f(0)
-    assert_type(x, int) # E: assert_type(int | str, int) failed
+    assert_type(x, int)
 "#,
 );
 

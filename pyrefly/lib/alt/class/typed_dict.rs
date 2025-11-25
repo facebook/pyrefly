@@ -30,7 +30,6 @@ use crate::alt::class::class_field::ClassField;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
-use crate::alt::unwrap::HintRef;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -158,11 +157,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // This is an unpacked item (`**some_dict`).
                 has_expansion = true;
                 let partial_td_ty = Type::PartialTypedDict(typed_dict.clone());
-                let item_ty = self.expr_infer_with_hint(
-                    &x.value,
-                    Some(HintRef::soft(&partial_td_ty)),
-                    item_errors,
-                );
+                let partial_hint = self.hint_from_type(partial_td_ty.clone(), None);
+                let item_ty =
+                    self.expr_infer_with_hint(&x.value, Some(partial_hint.as_ref()), item_errors);
                 let subset_result = self.is_subset_eq_with_reason(&item_ty, &partial_td_ty);
                 if let Some(subset_error) = subset_result.err() {
                     let tcc: &dyn Fn() -> TypeCheckContext =
