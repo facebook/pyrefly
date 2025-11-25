@@ -173,7 +173,7 @@ pub(crate) fn generate_code_actions(
         } else {
             let ty = Type::optional(ty);
             let parts = ty.get_types_with_locations(Some(&stdlib));
-            Some(parts.into_iter().map(|(part, _)| part).collect::<String>())
+            Some(parts.into_iter().map(|part| part.text).collect::<String>())
         }
     }) {
         Some(Some(annotation)) => format!("{statement_indent}{name}: {annotation} = None\n"),
