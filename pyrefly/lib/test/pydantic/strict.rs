@@ -102,3 +102,24 @@ Model2(x=0)
 Model2(x='0')  # E: `Literal['0']` is not assignable to parameter `x`
     "#,
 );
+
+pydantic_testcase!(
+    bug = "Revealed type should be more informative",
+    test_lax_mode_coercion,
+    r#"
+from pydantic import BaseModel
+from typing import reveal_type
+
+class Model(BaseModel):
+    x: int = 0
+
+reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, x: Any = ..., **Unknown) -> None
+
+# int field accepts: int, bool, float, str, bytes  
+Model(x=1)
+Model(x=True)
+Model(x=1.0)
+Model(x='123')
+Model(x=b'123')
+    "#,
+);

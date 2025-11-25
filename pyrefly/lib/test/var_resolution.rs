@@ -10,12 +10,12 @@ use crate::testcase;
 testcase!(
     test_await_any,
     r#"
-from typing import Any, reveal_type
+from typing import Any, assert_type
 async def async_return_any() -> Any: ...
 def return_any() -> Any: ...
 async def test() -> None:
     z = await async_return_any()
-    reveal_type(z)  # E: revealed type: Any
+    assert_type(z, Any)
     z = await return_any()
 "#,
 );
@@ -23,14 +23,14 @@ async def test() -> None:
 testcase!(
     test_await_bottom,
     r#"
-from typing import Never, NoReturn, reveal_type
+from typing import Never, NoReturn, assert_type
 def returns_never() -> Never: ...
 def returns_noreturn() -> NoReturn: ...
 async def test() -> None:
     z = await returns_never()
-    reveal_type(z)  # E: revealed type: Never
+    assert_type(z, Never)
     z = await returns_noreturn()
-    reveal_type(z)  # E: revealed type: Never
+    assert_type(z, Never)
 "#,
 );
 

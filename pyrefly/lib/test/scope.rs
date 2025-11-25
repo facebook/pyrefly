@@ -166,7 +166,7 @@ def outer():
 testcase!(
     test_nonlocal_finds_global,
     r#"
-from typing import reveal_type
+from typing import Any, assert_type
 x: str = ""
 def f() -> None:
     nonlocal x  # E: Found `x`, but it is coming from the global scope
@@ -174,10 +174,10 @@ def outer():
     x: int = 5
     def middle():
         global x
-        reveal_type(x)  # E: revealed type: str
+        assert_type(x, str)
         def inner():
             nonlocal x  # E: Found `x`, but it is coming from the global scope
-            reveal_type(x)  # E: revealed type: Unknown
+            assert_type(x, Any)
 "#,
 );
 
@@ -443,7 +443,7 @@ def f() -> None:
 testcase!(
     test_comprehension_shadows_variable,
     r#"
-from typing import assert_type, reveal_type
+from typing import assert_type
 x: list[int] = [1, 2, 3]
 y = [x for x in x]
 assert_type(y, list[int])
@@ -592,22 +592,22 @@ __all__ += []  # E: `__all__` is uninitialized
 testcase!(
     test_aug_assign_lookup_inconsistencies,
     r#"
-from typing import reveal_type
+from typing import assert_type, Any
 def f():
-    reveal_type(x)  # E: revealed type: Unknown  # E: `x` is uninitialized
+    assert_type(x, Any)  # E: `x` is uninitialized
     x += 5  # E: `x` is uninitialized
-    reveal_type(x)  # E: revealed type: Unknown
+    assert_type(x, Any)
 "#,
 );
 
 testcase!(
     test_del_defines_a_local,
     r#"
-from typing import reveal_type
+from typing import Any, assert_type
 x = 5
 def f():
-    reveal_type(y)  # E: revealed type: Unknown  # E: `y` is uninitialized
-    reveal_type(x)  # E: revealed type: Unknown  # E: `x` is uninitialized
+    assert_type(y, Any)  # E: `y` is uninitialized
+    assert_type(x, Any)  # E: `x` is uninitialized
     del y  # E: `y` is uninitialized
     del x  # E: `x` is uninitialized
 f()
@@ -670,19 +670,18 @@ class C:
 // body. This applies not only to methods but also other scopes like lambda, inner
 // class bodies, and comprehensions. See https://github.com/facebook/pyrefly/issues/264
 testcase!(
-    bug = "All these should show `Literal['string']`. The issue with comprehension persists, see also the next test case.",
     test_class_scope_lookups_when_skip,
     r#"
-from typing import reveal_type
+from typing import assert_type, Literal
 x = 'string'
 class A:
     x = 42
     def f():
-        reveal_type(x) # E: revealed type: Literal['string']
-    lambda_f = lambda: reveal_type(x) # E: revealed type: Literal['string']
+        assert_type(x, Literal['string'])
+    lambda_f = lambda: assert_type(x, Literal['string'])
     class B:
-        reveal_type(x) # E: revealed type: Literal['string']
-    [reveal_type(x) for _ in range(1)] # E: revealed type: Literal['string']
+        assert_type(x, Literal['string'])
+    [assert_type(x, Literal['string']) for _ in range(1)]
 "#,
 );
 

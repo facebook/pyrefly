@@ -1321,26 +1321,26 @@ def f2(x: bool) -> Literal[False, True, 42]:
 testcase!(
     test_bool_nested,
     r#"
-from typing import Literal, reveal_type
+from typing import Literal, assert_type
 
 def f(b: bool, x: int | Literal[True], y: int | Literal[False]):
-    reveal_type(x if b else y) # E: revealed type: bool | int
+    assert_type(x if b else y, bool | int)
 "#,
 );
 
 testcase!(
     test_literal_union,
     r#"
-from typing import Literal, LiteralString, reveal_type
+from typing import Literal, LiteralString, assert_type
 
-reveal_type(Literal[True, False])  # E: revealed type: type[bool]
-reveal_type(Literal[4] | int)  # E: revealed type: type[int]
-reveal_type(LiteralString | Literal["test"]) # E: revealed type: type[LiteralString]
-reveal_type(LiteralString | str) # E: revealed type: type[str]
-reveal_type(Literal[True] | bool) # E: revealed type: type[bool]
+assert_type(Literal[True, False], type[bool])
+assert_type(Literal[4] | int, type[int])
+assert_type(LiteralString | Literal["test"], type[LiteralString])
+assert_type(LiteralString | str, type[str])
+assert_type(Literal[True] | bool, type[bool])
 
 def f(cond: bool, x: LiteralString, y: str):
-    reveal_type(x if cond else y)  # E: revealed type: str
+    assert_type(x if cond else y, str)
 "#,
 );
 
@@ -1699,7 +1699,7 @@ testcase!(
     test_self_field_gets_lost,
     r#"
 # From https://github.com/facebook/pyrefly/issues/621
-from typing import reveal_type
+from typing import assert_type
 
 class NameTable:
     def __init__(self):
@@ -1708,7 +1708,7 @@ class NameTable:
     def getName(self):
         last = ""
         for name in self.names:
-            reveal_type(name) # E: revealed type: str
+            assert_type(name, str)
             last = name
         return last
 "#,
@@ -1916,8 +1916,23 @@ def f(x: int, y: int):
 testcase!(
     test_assign_expression_in_annotation,
     r#"
-from typing import reveal_type
 x: (y := 1)  # E: Expected a type form
 z: int = y
+    "#,
+);
+
+testcase!(
+    test_yield_in_annotation,
+    r#"
+def test():
+    x: (yield 1)  # E:
+    "#,
+);
+
+testcase!(
+    test_yield_from_in_annotation,
+    r#"
+def test():
+    x: (yield from [1])  # E:
     "#,
 );

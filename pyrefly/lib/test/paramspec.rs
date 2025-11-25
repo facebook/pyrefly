@@ -378,7 +378,7 @@ P2 = ParamSpec("P2")
 def g(x: Callable[Concatenate[int, P2], int], *args: P2.args, **kwargs: P2.kwargs):
     f(x, 1)
     f(x)  # E: Expected 1 more positional argument in function `f`
-    f(x, 1, 2)  # Not OK, we aren't sure the 2nd param is an int 
+    f(x, 1, 2)  # Not OK, we aren't sure the 2nd param is an int
 "#,
 );
 
@@ -468,5 +468,41 @@ from typing import Callable
 def test[**P](v: Callable[P, None]):
     a: Callable[..., None] = v
     b: Callable[P, None] = a
+"#,
+);
+
+testcase!(
+    test_param_spec_empty,
+    r#"
+def foo[**P](x: int = 0, *args: P.args, **kwargs: P.kwargs):
+    pass
+foo()
+"#,
+);
+
+testcase!(
+    test_param_spec_optional_prefix_arg,
+    r#"
+from typing import Concatenate, ParamSpec, TypeVar, Callable
+
+class T:
+    def c1(self) -> None:
+        pass
+
+Res = TypeVar("Res", covariant=True)
+P = ParamSpec("P")
+
+def caller(
+    vals: list[T],
+    action: Callable[Concatenate[T, P], Res],
+    extra_arg: bool=True,
+    *args: P.args,
+    **kwargs: P.kwargs
+) -> None:
+    for val in vals:
+        if extra_arg:
+            _ = action(val, *args, **kwargs)
+
+caller([], T.c1)
 "#,
 );

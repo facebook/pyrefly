@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
+
 use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::MarkupContent;
@@ -12,6 +14,7 @@ use lsp_types::MarkupKind;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
@@ -24,13 +27,16 @@ use pyrefly_types::callable::Required;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::alt::answers_solver::AnswersSolver;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::IdentifierContext;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
 
@@ -104,6 +110,7 @@ pub struct HoverValue {
     pub name: Option<String>,
     pub type_: Type,
     pub docstring: Option<Docstring>,
+    pub parameter_doc: Option<(String, String)>,
     pub display: Option<String>,
     pub show_go_to_links: bool,
 }
@@ -160,6 +167,18 @@ impl HoverValue {
                 || "".to_owned(),
                 |content| format!("\n---\n{}", content.trim()),
             );
+        let parameter_doc_formatted =
+            self.parameter_doc
+                .as_ref()
+                .map_or("".to_owned(), |(name, doc)| {
+                    let prefix = if self.docstring.is_some() {
+                        "\n\n---\n"
+                    } else {
+                        "\n---\n"
+                    };
+                    let cleaned = doc.trim().replace('\n', "  \n");
+                    format!("{prefix}**Parameter `{}`**\n{}", name, cleaned)
+                });
         let kind_formatted = self.kind.map_or("".to_owned(), |kind| {
             format!("{} ", kind.display_for_hover())
         });
@@ -181,11 +200,12 @@ impl HoverValue {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: format!(
-                    "```python\n{}{}{}\n```{}{}",
+                    "```python\n{}{}{}\n```{}{}{}",
                     kind_formatted,
                     name_formatted,
                     type_display,
                     docstring_formatted,
+                    parameter_doc_formatted,
                     symbol_def_formatted
                 ),
             }),
@@ -322,15 +342,112 @@ pub fn get_hover(
         None
     };
 
+    let mut parameter_doc = keyword_argument_documentation(transaction, handle, position)
+        .and_then(|(name, doc)| (!doc.trim().is_empty()).then_some((name, doc)));
+
+    if parameter_doc.is_none()
+        && let Some(FindDefinitionItemWithDocstring {
+            metadata: DefinitionMetadata::Variable(Some(SymbolKind::Parameter)),
+            definition_range,
+            module,
+            ..
+        }) = transaction
+            .find_definition(handle, position, FindPreference::default())
+            .into_iter()
+            .next()
+    {
+        let name_str = module.code_at(definition_range);
+        let name = Name::new(name_str);
+        if let Some(doc) =
+            parameter_definition_documentation(transaction, handle, definition_range, &name)
+        {
+            parameter_doc = Some(doc);
+        }
+    }
+
     Some(
         HoverValue {
             kind,
             name,
             type_,
             docstring,
+            parameter_doc,
             display: type_display,
             show_go_to_links,
         }
         .format(),
     )
+}
+
+fn keyword_argument_documentation(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<(String, String)> {
+    let identifier = transaction.identifier_at(handle, position)?;
+    if !matches!(identifier.context, IdentifierContext::KeywordArgument(_)) {
+        return None;
+    }
+    let (_, _, _, callee_range) = transaction.get_callables_from_call(handle, position)?;
+    let docs = parameter_documentation_for_callee(transaction, handle, callee_range)?;
+    let name = identifier.identifier.id.to_string();
+    docs.get(name.as_str()).cloned().map(|doc| (name, doc))
+}
+
+fn parameter_definition_documentation(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    definition_range: TextRange,
+    name: &Name,
+) -> Option<(String, String)> {
+    let ast = transaction.get_ast(handle)?;
+    let module = transaction.get_module_info(handle)?;
+
+    let func = ast
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            ruff_python_ast::Stmt::FunctionDef(func) => Some(func),
+            _ => None,
+        })
+        .find(|func| func.range.contains_inclusive(definition_range.start()))?;
+
+    let doc_range = Docstring::range_from_stmts(func.body.as_slice())?;
+    let docs = parse_parameter_documentation(module.code_at(doc_range));
+    let key = name.as_str();
+    docs.get(key).cloned().map(|doc| (key.to_owned(), doc))
+}
+
+fn parameter_documentation_for_callee(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    callee_range: TextRange,
+) -> Option<HashMap<String, String>> {
+    let position = callee_range.start();
+    let docstring = transaction
+        .find_definition(
+            handle,
+            position,
+            FindPreference {
+                prefer_pyi: false,
+                ..Default::default()
+            },
+        )
+        .into_iter()
+        .find_map(|item| {
+            item.docstring_range
+                .map(|range| (range, item.module.clone()))
+        })
+        .or_else(|| {
+            transaction
+                .find_definition(handle, position, FindPreference::default())
+                .into_iter()
+                .find_map(|item| {
+                    item.docstring_range
+                        .map(|range| (range, item.module.clone()))
+                })
+        })?;
+    let (range, module) = docstring;
+    let docs = parse_parameter_documentation(module.code_at(range));
+    if docs.is_empty() { None } else { Some(docs) }
 }

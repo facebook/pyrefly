@@ -395,11 +395,10 @@ impl Playground {
 
     pub fn get_errors(&self) -> Vec<Diagnostic> {
         let mut all_diagnostics = Vec::new();
+        let transaction = self.state.transaction();
 
         for (filename, handle) in &self.handles {
-            let file_errors = self
-                .state
-                .transaction()
+            let file_errors = transaction
                 .get_errors([handle])
                 .collect_errors()
                 .shown
@@ -424,11 +423,109 @@ impl Playground {
                     }
                 });
             all_diagnostics.extend(file_errors);
+
+            // Add unused diagnostics
+            Self::append_unused_import_diagnostics(
+                &transaction,
+                handle,
+                filename,
+                &mut all_diagnostics,
+            );
+            Self::append_unused_variable_diagnostics(
+                &transaction,
+                handle,
+                filename,
+                &mut all_diagnostics,
+            );
+            Self::append_unused_parameter_diagnostics(
+                &transaction,
+                handle,
+                filename,
+                &mut all_diagnostics,
+            );
         }
 
         // Include any diagnostics gathered while loading config
         all_diagnostics.extend(self.config_diagnostics.iter().cloned());
         all_diagnostics
+    }
+
+    fn append_unused_import_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        filename: &str,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_imports() {
+                let range = module_info.display_range(unused.range);
+                items.push(Diagnostic {
+                    start_line: range.start.line_within_file().get() as i32,
+                    start_col: range.start.column().get() as i32,
+                    end_line: range.end.line_within_file().get() as i32,
+                    end_col: range.end.column().get() as i32,
+                    message_header: format!("Import `{}` is unused", unused.name.as_str()),
+                    message_details: String::new(),
+                    kind: "unused-import".to_owned(),
+                    // MarkerSeverity.Hint (1)
+                    severity: 1,
+                    filename: filename.to_owned(),
+                });
+            }
+        }
+    }
+
+    fn append_unused_variable_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        filename: &str,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_variables() {
+                let range = module_info.display_range(unused.range);
+                items.push(Diagnostic {
+                    start_line: range.start.line_within_file().get() as i32,
+                    start_col: range.start.column().get() as i32,
+                    end_line: range.end.line_within_file().get() as i32,
+                    end_col: range.end.column().get() as i32,
+                    message_header: format!("Variable `{}` is unused", unused.name.as_str()),
+                    message_details: String::new(),
+                    kind: "unused-variable".to_owned(),
+                    // MarkerSeverity.Hint (1)
+                    severity: 1,
+                    filename: filename.to_owned(),
+                });
+            }
+        }
+    }
+
+    fn append_unused_parameter_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        filename: &str,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_parameters() {
+                let range = module_info.display_range(unused.range);
+                items.push(Diagnostic {
+                    start_line: range.start.line_within_file().get() as i32,
+                    start_col: range.start.column().get() as i32,
+                    end_line: range.end.line_within_file().get() as i32,
+                    end_col: range.end.column().get() as i32,
+                    message_header: format!("Parameter `{}` is unused", unused.name.as_str()),
+                    message_details: String::new(),
+                    kind: "unused-parameter".to_owned(),
+                    // MarkerSeverity.Hint (1)
+                    severity: 1,
+                    filename: filename.to_owned(),
+                });
+            }
+        }
     }
 
     fn to_text_size(&self, transaction: &Transaction, pos: Position) -> Option<TextSize> {
@@ -521,8 +618,10 @@ impl Playground {
             .get_module_info(handle)
             .zip(transaction.inlay_hints(handle, Default::default()))
             .map(|(info, hints)| {
-                hints.into_map(|(position, label, _locations)| {
+                hints.into_map(|(position, label_parts)| {
                     let position = Position::from_display_pos(info.display_pos(position));
+                    // Concatenate all label parts into a single string for the playground
+                    let label: String = label_parts.iter().map(|(text, _)| text.as_str()).collect();
                     InlayHint { label, position }
                 })
             })
@@ -541,7 +640,11 @@ mod tests {
         let expected_errors: Vec<String> = Vec::new();
 
         let mut files = SmallMap::new();
-        files.insert("main.py".to_owned(), "from typing import *".to_owned());
+        // Use the List import to avoid unused import diagnostic
+        files.insert(
+            "main.py".to_owned(),
+            "from typing import List\nx: List[int] = []".to_owned(),
+        );
         state.update_sandbox_files(files, true);
         state.set_active_file("main.py");
 
@@ -817,5 +920,78 @@ mod tests {
             state.handles.contains_key("foo/bar.py"),
             "Nested file should be in handles"
         );
+    }
+
+    #[test]
+    fn test_unused_import_diagnostics() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "from typing import List, Dict\nx: List[int] = []".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+        let unused_imports: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == "unused-import")
+            .collect();
+
+        assert_eq!(unused_imports.len(), 1, "Should detect 1 unused import");
+        assert_eq!(unused_imports[0].message_header, "Import `Dict` is unused");
+        assert_eq!(unused_imports[0].severity, 1); // MarkerSeverity.Hint
+    }
+
+    #[test]
+    fn test_unused_variable_diagnostics() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "def foo():\n    x = 42\n    y = 10\n    return y".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+        let unused_variables: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == "unused-variable")
+            .collect();
+
+        assert_eq!(unused_variables.len(), 1, "Should detect 1 unused variable");
+        assert_eq!(unused_variables[0].message_header, "Variable `x` is unused");
+        assert_eq!(unused_variables[0].severity, 1); // MarkerSeverity.Hint
+    }
+
+    #[test]
+    fn test_unused_parameter_diagnostics() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "def greet(name: str, age: int) -> str:\n    return f\"Hello {name}\"".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+        let unused_parameters: Vec<_> = errors
+            .iter()
+            .filter(|e| e.kind == "unused-parameter")
+            .collect();
+
+        assert_eq!(
+            unused_parameters.len(),
+            1,
+            "Should detect 1 unused parameter"
+        );
+        assert_eq!(
+            unused_parameters[0].message_header,
+            "Parameter `age` is unused"
+        );
+        assert_eq!(unused_parameters[0].severity, 1); // MarkerSeverity.Hint
     }
 }

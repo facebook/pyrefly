@@ -188,9 +188,7 @@
     "Line 85: Unexpected errors ['Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`']"
   ],
   "generics_typevartuple_callable.py": [],
-  "generics_typevartuple_concat.py": [
-    "Line 56: Unexpected errors ['Returned type `tuple[*tuple[object | T, ...], object | T]` is not assignable to declared return type `tuple[*Ts, T]`']"
-  ],
+  "generics_typevartuple_concat.py": [],
   "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [
     "Line 51: Unexpected errors ['assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed']",

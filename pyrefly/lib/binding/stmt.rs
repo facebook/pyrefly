@@ -1022,11 +1022,14 @@ impl<'a> BindingsBuilder<'a> {
                     };
                     let key = self.insert_binding(key, val);
                     // Register the imported name from wildcard imports
-                    self.scopes.register_import(&Identifier {
-                        node_index: AtomicNodeIndex::dummy(),
-                        id: name.into_key().clone(),
-                        range: x.range,
-                    });
+                    self.scopes.register_import_with_star(
+                        &Identifier {
+                            node_index: AtomicNodeIndex::dummy(),
+                            id: name.into_key().clone(),
+                            range: x.range,
+                        },
+                        true,
+                    );
                     self.bind_name(
                         name.key(),
                         key,

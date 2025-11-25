@@ -336,7 +336,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     let args = arguments[0..arguments.len() - 1]
                         .iter()
-                        .map(|x| self.expr_untype(x, TypeFormContext::TupleOrCallableParam, errors))
+                        .map(|x| {
+                            (
+                                self.expr_untype(x, TypeFormContext::TupleOrCallableParam, errors),
+                                Required::Required,
+                            )
+                        })
                         .collect();
                     let pspec = self.expr_untype(
                         arguments.last().unwrap(),

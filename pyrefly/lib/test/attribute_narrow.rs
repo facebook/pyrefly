@@ -194,7 +194,7 @@ def f(c: C):
 testcase!(
     test_isinstance_getitem,
     r#"
-from typing import Any, Optional, reveal_type
+from typing import Any, Optional, assert_type
 
 Arg = Optional[tuple["Arg", ...]]
 
@@ -212,7 +212,7 @@ class N:
 def f(n: N):
     assert isinstance(n.args[0], N)
     t1 = n.args[0].type
-    reveal_type(t1)  # E: revealed type: DataType | None
+    assert_type(t1, DataType | None)
 "#,
 );
 
@@ -293,12 +293,12 @@ def test(y: A | None) -> None:
 testcase!(
     test_join_empty_facets_in_or,
     r#"
-from typing import reveal_type
+from typing import assert_type
 class A:
     kind: str
 def test(y: A | None) -> None:
     if not y or y.kind:
-        reveal_type(y)  # E: revealed type: A | None
+        assert_type(y, A | None)
 "#,
 );
 
@@ -493,7 +493,7 @@ def f(foo: Foo):
 testcase!(
     test_hasattr_narrowing,
     r#"
-from typing import reveal_type, assert_type, Any
+from typing import assert_type, Any
 class C:
     x: int
 

@@ -32,7 +32,7 @@ def test(f: type[A | B]) -> A | B:
 testcase!(
     test_generic_class,
     r#"
-from typing import assert_type, reveal_type
+from typing import assert_type
 class Box[T]:
     def __init__(self, x: T): pass
 

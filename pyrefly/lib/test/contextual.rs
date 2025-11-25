@@ -589,7 +589,7 @@ def f[T]() -> Callable[[T], T]:
 testcase!(
     test_assign_lambda_to_protocol,
     r#"
-from typing import Protocol, reveal_type
+from typing import Protocol
 class Identity(Protocol):
     def __call__[T](self, x: T) -> T:
         return x

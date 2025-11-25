@@ -1000,6 +1000,20 @@ pub enum SizeExpectation {
     Ge(usize),
 }
 
+impl SizeExpectation {
+    pub fn message(&self) -> String {
+        match self {
+            SizeExpectation::Eq(n) => match n {
+                1 => format!("{n} value"),
+                _ => format!("{n} values"),
+            },
+            SizeExpectation::Ge(n) => {
+                format!("{n}+ values")
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum RaisedException {
     WithoutCause(Expr),
@@ -1342,12 +1356,13 @@ pub enum Binding {
     /// therefore the use of legacy type parameters is invalid.
     PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, Option<TextRange>),
     /// An assignment to a name.
-    NameAssign(
-        Name,
-        Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
-        Box<Expr>,
-        Option<Box<[Idx<KeyLegacyTypeParam>]>>,
-    ),
+    NameAssign {
+        name: Name,
+        annotation: Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
+        expr: Box<Expr>,
+        legacy_tparams: Option<Box<[Idx<KeyLegacyTypeParam>]>>,
+        is_in_function_scope: bool,
+    },
     /// A type alias declared with the `type` soft keyword
     ScopedTypeAlias(Name, Option<TypeParams>, Box<Expr>),
     /// A type alias declared with the `TypeAliasType` constructor
@@ -1561,10 +1576,20 @@ impl DisplayWith<Bindings> for Binding {
                     op.display_with(ctx.module())
                 )
             }
-            Self::NameAssign(name, None, expr, _) => {
+            Self::NameAssign {
+                name,
+                annotation: None,
+                expr,
+                ..
+            } => {
                 write!(f, "NameAssign({name}, None, {})", m.display(expr))
             }
-            Self::NameAssign(name, Some((style, annot)), expr, _) => {
+            Self::NameAssign {
+                name,
+                annotation: Some((style, annot)),
+                expr,
+                ..
+            } => {
                 write!(
                     f,
                     "NameAssign({name}, {style:?}, {}, {})",
@@ -1724,10 +1749,10 @@ impl Binding {
             Binding::ScopedTypeAlias(_, _, _) | Binding::TypeAliasType(_, _, _) => {
                 Some(SymbolKind::TypeAlias)
             }
-            Binding::NameAssign(name, _, _, _) if name.as_str() == name.to_uppercase() => {
+            Binding::NameAssign { name, .. } if name.as_str() == name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }
-            Binding::NameAssign(name, _, _, _) => {
+            Binding::NameAssign { name, .. } => {
                 if name.as_str().chars().all(|c| c.is_uppercase() || c == '_') {
                     Some(SymbolKind::Constant)
                 } else {

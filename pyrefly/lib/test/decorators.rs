@@ -576,3 +576,82 @@ class A:
 assert_type(A.f(), type[A])  # E: assert_type(A, type[A])  # E: `type[A]` is not assignable to parameter `cls` with type `A`
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/793 - we don't
+// want the `contextmanager` decorator to lose the "forall-ness" of the decorated
+// function.
+testcase!(
+    test_contextmanager_preserves_tparams_and_forall,
+    r#"
+import contextlib
+from contextlib import contextmanager
+from typing import Iterator, List, assert_type
+
+@contextmanager
+def generic_ctx[T](val: T) -> Iterator[T]:
+    yield val
+
+def test(x: int, items: List[int]):
+    with generic_ctx(x) as val:
+        assert_type(val, int)
+    m = generic_ctx(items)
+    assert_type(m, contextlib._GeneratorContextManager[List[int], None, None])
+"#,
+);
+
+// When we preserve "forall-ness" of decorated callables, we need to make sure
+// that we don't accidentally leak `Type::Quantified` when a decorator returns
+// a generic non-callable type.
+testcase!(
+    test_decorator_returns_non_callable_produces_gradual_type,
+    r#"
+from typing import TypeVar, Callable, List, assert_type, Any
+
+def list_decorator[T](f: Callable[[T], T]) -> List[T]: ...
+
+@list_decorator
+def my_func[T](x: T) -> T:
+    return x
+
+def test():
+    assert_type(my_func, List[Any]) 
+"#,
+);
+
+// If a decorator returns a callable that has additional tparams that weren't
+// in the original function, we need to make sure the decorated function type is
+// generic over all tparams.
+testcase!(
+    test_decorator_adds_new_tparams_to_forall,
+    r#"
+from typing import TypeVar, Callable, Tuple, assert_type
+
+def add_generic[T, S](f: Callable[[T], T]) -> Callable[[T, S], Tuple[T, S]]:
+    return lambda x, y: (f(x), y)
+
+@add_generic
+def my_func[T](x: T) -> T:
+    return x
+
+def test(x: int, y: str):
+    res = my_func(x, y)
+    assert_type(res, Tuple[int, str])
+"#,
+);
+
+// If a decorator converts a generic callable into a non-generic, we should drop the callable's tparams
+testcase!(
+    test_decorator_strips_tparams_and_forall,
+    r#"
+from typing import TypeVar, Callable, Tuple, reveal_type
+
+def add_generic[T](f: Callable[[T], T]) -> Callable[[object], None]:
+    ...
+
+@add_generic
+def my_func[T](x: T) -> T:
+    return x
+
+reveal_type(my_func)  # E: revealed type: (object) -> None
+"#,
+);

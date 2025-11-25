@@ -5,12 +5,15 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
+
 use itertools::Itertools;
 use lsp_types::ParameterInformation;
 use lsp_types::ParameterLabel;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureInformation;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -20,6 +23,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use crate::state::lsp::FindPreference;
 use crate::state::lsp::visit_keyword_arguments_until_match;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
@@ -115,7 +119,7 @@ impl Transaction<'_> {
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Option<(Vec<Type>, usize, ActiveArgument)> {
+    ) -> Option<(Vec<Type>, usize, ActiveArgument, TextRange)> {
         let mod_module = self.get_ast(handle)?;
         let mut res = None;
         mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
@@ -138,24 +142,32 @@ impl Transaction<'_> {
                 callables,
                 chosen_overload_index.unwrap_or_default(),
                 active_argument,
+                callee_range,
             ))
         } else {
             answers
                 .get_type_trace(callee_range)
-                .map(|t| (vec![t], 0, active_argument))
+                .map(|t| (vec![t], 0, active_argument, callee_range))
         }
     }
 
-    pub fn get_signature_help_at(
+    pub(crate) fn get_signature_help_at(
         &self,
         handle: &Handle,
         position: TextSize,
     ) -> Option<SignatureHelp> {
         self.get_callables_from_call(handle, position).map(
-            |(callables, chosen_overload_index, active_argument)| {
+            |(callables, chosen_overload_index, active_argument, callee_range)| {
+                let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
                 let signatures = callables
                     .into_iter()
-                    .map(|t| Self::create_signature_information(t, &active_argument))
+                    .map(|t| {
+                        Self::create_signature_information(
+                            t,
+                            &active_argument,
+                            parameter_docs.as_ref(),
+                        )
+                    })
                     .collect_vec();
                 let active_parameter = signatures
                     .get(chosen_overload_index)
@@ -169,9 +181,43 @@ impl Transaction<'_> {
         )
     }
 
-    fn create_signature_information(
+    pub(crate) fn parameter_documentation_for_callee(
+        &self,
+        handle: &Handle,
+        callee_range: TextRange,
+    ) -> Option<HashMap<String, String>> {
+        let position = callee_range.start();
+        let docstring = self
+            .find_definition(
+                handle,
+                position,
+                FindPreference {
+                    prefer_pyi: false,
+                    ..Default::default()
+                },
+            )
+            .into_iter()
+            .find_map(|item| {
+                item.docstring_range
+                    .map(|range| (range, item.module.clone()))
+            })
+            .or_else(|| {
+                self.find_definition(handle, position, FindPreference::default())
+                    .into_iter()
+                    .find_map(|item| {
+                        item.docstring_range
+                            .map(|range| (range, item.module.clone()))
+                    })
+            })?;
+        let (range, module) = docstring;
+        let docs = parse_parameter_documentation(module.code_at(range));
+        if docs.is_empty() { None } else { Some(docs) }
+    }
+
+    pub(crate) fn create_signature_information(
         type_: Type,
         active_argument: &ActiveArgument,
+        parameter_docs: Option<&HashMap<String, String>>,
     ) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
         let label = type_.as_hover_string();
@@ -185,7 +231,19 @@ impl Transaction<'_> {
                             .into_iter()
                             .map(|param| ParameterInformation {
                                 label: ParameterLabel::Simple(format!("{param}")),
-                                documentation: None,
+                                documentation: param
+                                    .name()
+                                    .and_then(|name| {
+                                        parameter_docs.and_then(|docs| docs.get(name.as_str()))
+                                    })
+                                    .map(|text| {
+                                        lsp_types::Documentation::MarkupContent(
+                                            lsp_types::MarkupContent {
+                                                kind: lsp_types::MarkupKind::Markdown,
+                                                value: text.clone(),
+                                            },
+                                        )
+                                    }),
                             })
                             .collect(),
                     ),
@@ -216,7 +274,7 @@ impl Transaction<'_> {
         }
     }
 
-    fn count_argument_separators_before(
+    pub(crate) fn count_argument_separators_before(
         &self,
         handle: &Handle,
         arguments_range: TextRange,
@@ -236,7 +294,6 @@ impl Transaction<'_> {
 
     pub(crate) fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<Param>> {
         let callable = type_.to_callable()?;
-        // We will drop the self parameter for signature help
         if let Params::List(params_list) = callable.params {
             if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
                 params_list.items().first()

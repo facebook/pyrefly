@@ -804,6 +804,7 @@ struct ParameterUsage {
 struct ImportUsage {
     range: TextRange,
     used: bool,
+    is_star_import: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1132,6 +1133,11 @@ impl Scopes {
         }
     }
 
+    pub fn in_function_scope(&self) -> bool {
+        self.iter_rev()
+            .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
+    }
+
     /// Are we currently in a class body. If so, return the keys for the class and its metadata.
     pub fn current_class_and_metadata_keys(
         &self,
@@ -1304,7 +1310,7 @@ impl Scopes {
         imports
             .into_iter()
             .filter_map(|(name, usage)| {
-                if usage.used {
+                if usage.used || usage.is_star_import {
                     None
                 } else {
                     Some(UnusedImport {
@@ -1611,12 +1617,17 @@ impl Scopes {
     }
 
     pub fn register_import(&mut self, name: &Identifier) {
+        self.register_import_with_star(name, false);
+    }
+
+    pub fn register_import_with_star(&mut self, name: &Identifier, is_star_import: bool) {
         if matches!(self.current().kind, ScopeKind::Module) {
             self.current_mut().imports.insert(
                 name.id.clone(),
                 ImportUsage {
                     range: name.range,
                     used: false,
+                    is_star_import,
                 },
             );
         }
@@ -1639,11 +1650,19 @@ impl Scopes {
             self.current().kind,
             ScopeKind::Module | ScopeKind::Function(_) | ScopeKind::Method(_)
         ) {
+            // Preserve the `used` flag if the variable was already marked as used
+            // This handles cases like `foo = foo + 1` in loops where the variable
+            // is read before being reassigned
+            let was_used = self
+                .current()
+                .variables
+                .get(&name.id)
+                .is_some_and(|usage| usage.used);
             self.current_mut().variables.insert(
                 name.id.clone(),
                 VariableUsage {
                     range: name.range,
-                    used: false,
+                    used: was_used,
                 },
             );
         }

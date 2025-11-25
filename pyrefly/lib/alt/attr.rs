@@ -1861,6 +1861,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.as_attribute_base1(x.1, &mut acc_fallback);
                 acc.push(AttributeBase1::Intersect(acc_intersect, acc_fallback));
             }
+            Type::ElementOfTypeVarTuple(_) => {
+                acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
+            }
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
             | Type::Type(_)

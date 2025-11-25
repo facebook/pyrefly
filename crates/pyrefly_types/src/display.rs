@@ -10,6 +10,7 @@
 use std::fmt;
 use std::fmt::Display;
 
+use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
 use pyrefly_util::display::Fmt;
@@ -27,6 +28,7 @@ use crate::class::Class;
 use crate::literal::Lit;
 use crate::tuple::Tuple;
 use crate::type_output::DisplayOutput;
+use crate::type_output::OutputWithLocations;
 use crate::type_output::TypeOutput;
 use crate::types::AnyStyle;
 use crate::types::BoundMethod;
@@ -235,15 +237,43 @@ impl<'a> TypeDisplayContext<'a> {
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
         if self.always_display_module_name {
-            // write!(f, "{module}.{name}")
             output.write_str(&format!("{}.{}", module, name))
         } else {
             output.write_str(name)
-            // write!(f, "{name}")
         }
     }
 
-    fn fmt_helper_generic(
+    /// Helper function to format a sequence of types with a separator.
+    /// Used for unions, intersections, and other type sequences.
+    fn fmt_type_sequence<'b>(
+        &self,
+        types: impl IntoIterator<Item = &'b Type>,
+        separator: &str,
+        wrap_callables_and_intersect: bool,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        for (i, t) in types.into_iter().enumerate() {
+            if i > 0 {
+                output.write_str(separator)?;
+            }
+
+            let needs_parens = wrap_callables_and_intersect
+                && matches!(
+                    t,
+                    Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                );
+            if needs_parens {
+                output.write_str("(")?;
+            }
+            self.fmt_helper_generic(t, false, output)?;
+            if needs_parens {
+                output.write_str(")")?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn fmt_helper_generic(
         &self,
         t: &Type,
         is_toplevel: bool,
@@ -416,19 +446,30 @@ impl<'a> TypeDisplayContext<'a> {
                 self.maybe_fmt_with_module("typing", "Never", output)
             }
             Type::Union(types) => {
-                // All Literals will be collected into a single Literal at the index of the first Literal.
                 let mut literal_idx = None;
                 let mut literals = Vec::new();
-                let mut display_types = Vec::new();
-                for (i, t) in types.iter().enumerate() {
+                let mut union_members: Vec<&Type> = Vec::new();
+                // Track seen types to deduplicate (mainly to prettify types for functions with different names but the same signature)
+                let mut seen_types = SmallSet::new();
+
+                for t in types.iter() {
                     match t {
                         Type::Literal(lit) => {
                             if literal_idx.is_none() {
-                                literal_idx = Some(i);
+                                // First literal encountered: save this position in union_members.
+                                // All Literal types in the union will be combined into a single
+                                // "Literal[a, b, c]" output at this position for readability.
+                                // Example: int | Literal[1] | str | Literal[2] → int | Literal[1, 2] | str
+                                literal_idx = Some(union_members.len());
+                                // Insert a placeholder since we don't know all literals yet.
+                                // When outputting (line 505), we check `if i == idx` to detect this
+                                // placeholder position and output the combined literal instead.
+                                union_members.push(&Type::None);
                             }
-                            literals.push(format!("{}", Fmt(|f| self.fmt_lit(lit, f))))
+                            literals.push(lit)
                         }
                         Type::Callable(_) | Type::Function(_) | Type::Intersect(_) => {
+                            // These types need parentheses in union context
                             let mut temp = String::new();
                             {
                                 use std::fmt::Write;
@@ -438,9 +479,13 @@ impl<'a> TypeDisplayContext<'a> {
                                 });
                                 write!(&mut temp, "({})", temp_formatter).ok();
                             }
-                            display_types.push(temp)
+                            // Only add if we haven't seen this type string before
+                            if seen_types.insert(temp) {
+                                union_members.push(t);
+                            }
                         }
                         _ => {
+                            // Format the type to a string for deduplication
                             let mut temp = String::new();
                             {
                                 use std::fmt::Write;
@@ -450,55 +495,56 @@ impl<'a> TypeDisplayContext<'a> {
                                 });
                                 write!(&mut temp, "{}", temp_formatter).ok();
                             }
-                            display_types.push(temp)
+                            // Only add if we haven't seen this type string before
+                            if seen_types.insert(temp) {
+                                union_members.push(t);
+                            }
                         }
                     }
                 }
-                if let Some(i) = literal_idx {
-                    if self.always_display_module_name {
-                        display_types
-                            .insert(i, format!("typing.Literal[{}]", commas_iter(|| &literals)));
-                    } else {
-                        display_types.insert(i, format!("Literal[{}]", commas_iter(|| &literals)));
-                    }
-                }
-                // This is mainly to prettify types for functions with different names but the same signature
-                let display_types_deduped = display_types
-                    .into_iter()
-                    .collect::<SmallSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                output.write_str(&display_types_deduped.join(" | "))
-            }
-            Type::Intersect(x) => {
-                let display_types: Vec<String> =
-                    x.0.iter()
-                        .map(|t| {
-                            let mut temp = String::new();
-                            {
-                                use std::fmt::Write;
-                                match t {
-                                    Type::Callable(_) | Type::Function(_) => {
-                                        let temp_formatter = Fmt(|f| {
-                                            let mut temp_output = DisplayOutput::new(self, f);
-                                            self.fmt_helper_generic(t, false, &mut temp_output)
-                                        });
-                                        write!(&mut temp, "({})", temp_formatter).ok();
-                                    }
-                                    _ => {
-                                        let temp_formatter = Fmt(|f| {
-                                            let mut temp_output = DisplayOutput::new(self, f);
-                                            self.fmt_helper_generic(t, false, &mut temp_output)
-                                        });
-                                        write!(&mut temp, "{}", temp_formatter).ok();
-                                    }
+
+                // If we found literals, create a combined Literal type and replace the placeholder
+                if let Some(idx) = literal_idx {
+                    // We need to format the combined Literal manually since it's not a real Type
+                    // but a special formatting construct
+                    for (i, t) in union_members.iter().enumerate() {
+                        if i > 0 {
+                            output.write_str(" | ")?;
+                        }
+
+                        if i == idx {
+                            // This is where the combined Literal goes
+                            self.maybe_fmt_with_module("typing", "Literal", output)?;
+                            output.write_str("[")?;
+                            for (j, lit) in literals.iter().enumerate() {
+                                if j > 0 {
+                                    output.write_str(", ")?;
                                 }
+                                output.write_lit(lit)?;
                             }
-                            temp
-                        })
-                        .collect();
-                output.write_str(&display_types.join(" & "))
+                            output.write_str("]")?;
+                        } else {
+                            // Regular union member - use helper for just this one
+                            let needs_parens = matches!(
+                                t,
+                                Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                            );
+                            if needs_parens {
+                                output.write_str("(")?;
+                            }
+                            self.fmt_helper_generic(t, false, output)?;
+                            if needs_parens {
+                                output.write_str(")")?;
+                            }
+                        }
+                    }
+                    Ok(())
+                } else {
+                    // No literals, just use the helper directly
+                    self.fmt_type_sequence(union_members, " | ", true, output)
+                }
             }
+            Type::Intersect(x) => self.fmt_type_sequence(x.0.iter(), " & ", true, output),
             Type::Tuple(t) => {
                 t.fmt_with_type(output, &|ty, o| self.fmt_helper_generic(ty, false, o))
             }
@@ -591,7 +637,10 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Concatenate(args, pspec) => {
                 self.maybe_fmt_with_module("typing", "Concatenate", output)?;
                 output.write_str("[")?;
-                output.write_str(&format!("{}", commas_iter(|| append(args.iter(), [pspec]))))?;
+                output.write_str(&format!(
+                    "{}",
+                    commas_iter(|| append(args.iter().map(|x| x.0.clone()), [pspec]))
+                ))?;
                 output.write_str("]")
             }
             Type::Module(m) => {
@@ -602,6 +651,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Var(var) => output.write_str(&format!("{var}")),
             Type::Quantified(var) => output.write_str(&format!("{var}")),
             Type::QuantifiedValue(var) => output.write_str(&format!("{var}")),
+            Type::ElementOfTypeVarTuple(var) => output.write_str(&format!("ElementOf[{var}]")),
             Type::Args(q) => {
                 output.write_str("Args[")?;
                 output.write_str(&format!("{q}"))?;
@@ -665,6 +715,17 @@ impl<'a> TypeDisplayContext<'a> {
         let output = &mut DisplayOutput::new(self, f);
         self.fmt_helper_generic(t, is_toplevel, output)
     }
+
+    pub fn get_types_with_location<'b>(
+        &self,
+        t: &'b Type,
+        is_toplevel: bool,
+    ) -> OutputWithLocations {
+        let mut output = OutputWithLocations::new(self);
+        self.fmt_helper_generic(t, is_toplevel, &mut output)
+            .unwrap();
+        output
+    }
 }
 
 impl Display for Type {
@@ -678,6 +739,13 @@ impl Type {
         let mut c = TypeDisplayContext::new(&[self]);
         c.set_display_mode_to_hover();
         c.display(self).to_string()
+    }
+
+    pub fn get_types_with_locations(&self) -> Vec<(String, Option<TextRangeWithModule>)> {
+        let ctx = TypeDisplayContext::new(&[self]);
+        let mut output = OutputWithLocations::new(&ctx);
+        ctx.fmt_helper_generic(self, false, &mut output).unwrap();
+        output.parts().to_vec()
     }
 }
 
@@ -1532,5 +1600,318 @@ def overloaded_func[T](
         )));
         let ctx = TypeDisplayContext::new(&[&x]);
         assert_eq!(ctx.display(&x).to_string(), "((...) -> None) & Any");
+    }
+
+    // Helper functions for testing get_types_with_location
+    fn get_parts(t: &Type) -> Vec<(String, Option<TextRangeWithModule>)> {
+        let ctx = TypeDisplayContext::new(&[t]);
+        let output = ctx.get_types_with_location(t, false);
+        output.parts().to_vec()
+    }
+
+    fn parts_to_string(parts: &[(String, Option<TextRangeWithModule>)]) -> String {
+        parts.iter().map(|(s, _)| s.as_str()).collect::<String>()
+    }
+
+    fn assert_part_has_location(
+        parts: &[(String, Option<TextRangeWithModule>)],
+        name: &str,
+        module: &str,
+        position: u32,
+    ) {
+        let part = parts.iter().find(|(s, _)| s == name);
+        assert!(part.is_some(), "Should have {} in parts", name);
+        let (_, location) = part.unwrap();
+        assert!(location.is_some(), "{} should have location", name);
+        let loc = location.as_ref().unwrap();
+        assert_eq!(loc.module.name().as_str(), module);
+        assert_eq!(loc.range.start().to_u32(), position);
+    }
+
+    fn assert_output_contains(parts: &[(String, Option<TextRangeWithModule>)], needle: &str) {
+        let full_str = parts_to_string(parts);
+        assert!(
+            full_str.contains(needle),
+            "Output should contain '{}'",
+            needle
+        );
+    }
+
+    #[test]
+    fn test_get_types_with_location_simple_class() {
+        let foo = fake_class("Foo", "test.module", 10);
+        let t = Type::ClassType(ClassType::new(foo, TArgs::default()));
+        let parts = get_parts(&t);
+
+        assert_part_has_location(&parts, "Foo", "test.module", 10);
+    }
+
+    #[test]
+    fn test_get_types_with_location_class_with_targs() {
+        let uniques = UniqueFactory::new();
+        let foo = fake_class("Foo", "test.module", 10);
+        let bar = fake_class("Bar", "test.module", 20);
+        let tparams = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+
+        let inner_type = Type::ClassType(ClassType::new(bar, TArgs::default()));
+        let t = Type::ClassType(ClassType::new(foo, TArgs::new(tparams, vec![inner_type])));
+        let parts = get_parts(&t);
+
+        assert_eq!(parts[0].0, "Foo");
+        assert_part_has_location(&parts, "Foo", "test.module", 10);
+        assert!(parts.iter().any(|(s, _)| s == "Bar"), "Should have Bar");
+    }
+
+    #[test]
+    fn test_get_types_with_location_typevar() {
+        let tvar = fake_tyvar("T", "test.module", 15);
+        let t = tvar.to_type();
+        let parts = get_parts(&t);
+
+        assert_eq!(parts[0].0, "TypeVar[");
+        assert!(parts[0].1.is_none(), "TypeVar[ should not have location");
+        assert_part_has_location(&parts, "T", "test.module", 15);
+    }
+
+    #[test]
+    fn test_get_types_with_location_disambiguated() {
+        let foo1 = fake_class("Foo", "mod.ule", 5);
+        let foo2 = fake_class("Foo", "mod.ule", 8);
+        let t1 = Type::ClassType(ClassType::new(foo1, TArgs::default()));
+        let t2 = Type::ClassType(ClassType::new(foo2, TArgs::default()));
+        let union = Type::Union(vec![t1.clone(), t2.clone()]);
+        let ctx = TypeDisplayContext::new(&[&union]);
+
+        let parts1 = ctx.get_types_with_location(&t1, false).parts().to_vec();
+        let parts2 = ctx.get_types_with_location(&t2, false).parts().to_vec();
+
+        let loc1 = parts1.iter().find_map(|(_, loc)| loc.as_ref()).unwrap();
+        let loc2 = parts2.iter().find_map(|(_, loc)| loc.as_ref()).unwrap();
+        assert_ne!(
+            loc1.range.start().to_u32(),
+            loc2.range.start().to_u32(),
+            "Different Foos should have different locations"
+        );
+    }
+
+    #[test]
+    fn test_get_types_with_location_literal() {
+        let t = Type::Literal(Lit::Bool(true));
+        let parts = get_parts(&t);
+
+        assert_output_contains(&parts, "Literal");
+        assert_output_contains(&parts, "True");
+    }
+
+    #[test]
+    fn test_get_types_with_location_nested_types() {
+        let uniques = UniqueFactory::new();
+        let outer = fake_class("Outer", "test", 10);
+        let inner = fake_class("Inner", "test", 20);
+        let tparams = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+
+        let inner_type = Type::ClassType(ClassType::new(inner, TArgs::default()));
+        let outer_type =
+            Type::ClassType(ClassType::new(outer, TArgs::new(tparams, vec![inner_type])));
+        let parts = get_parts(&outer_type);
+
+        assert_part_has_location(&parts, "Outer", "test", 10);
+        assert_output_contains(&parts, "Inner");
+    }
+
+    #[test]
+    fn test_get_types_with_location_type_without_location() {
+        let t = Type::None;
+        let parts = get_parts(&t);
+
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].0, "None");
+        assert!(parts[0].1.is_none(), "None should not have location");
+    }
+
+    #[test]
+    fn test_get_types_with_location_tparams() {
+        let uniques = UniqueFactory::new();
+        let t_param = fake_tparam(&uniques, "T", QuantifiedKind::TypeVar);
+        let u_param = fake_tparam(&uniques, "U", QuantifiedKind::TypeVar);
+        let ts_param = fake_tparam(&uniques, "Ts", QuantifiedKind::TypeVarTuple);
+        let tparams = fake_tparams(vec![t_param, u_param, ts_param]);
+
+        let param1 = Param::Pos(
+            Name::new_static("x"),
+            Type::any_explicit(),
+            Required::Required,
+        );
+        let callable = Callable::list(ParamList::new(vec![param1]), Type::None);
+        let generic_callable = Type::Forall(Box::new(Forall {
+            tparams,
+            body: Forallable::Callable(callable),
+        }));
+        let parts = get_parts(&generic_callable);
+
+        for param in &["T", "U", "Ts"] {
+            assert_output_contains(&parts, param);
+        }
+        assert!(parts.iter().any(|(s, loc)| s == "[" && loc.is_none()));
+        assert!(parts_to_string(&parts).starts_with('['));
+        assert_output_contains(&parts, "](");
+    }
+
+    #[test]
+    fn test_get_types_with_location_typed_dict() {
+        let cls = fake_class("MyTypedDict", "mymodule", 25);
+        let td = TypedDict::new(cls, TArgs::default());
+        let t = Type::TypedDict(td);
+        let parts = get_parts(&t);
+
+        assert_output_contains(&parts, "TypedDict");
+        assert_part_has_location(&parts, "MyTypedDict", "mymodule", 25);
+    }
+
+    #[test]
+    fn test_get_types_with_location_enum_literal() {
+        let enum_class = fake_class("Color", "colors", 30);
+        let class_type = ClassType::new(enum_class, TArgs::default());
+        let enum_lit = Lit::Enum(Box::new(LitEnum {
+            class: class_type,
+            member: Name::new_static("RED"),
+            ty: Type::any_implicit(),
+        }));
+        let t = Type::Literal(enum_lit);
+        let parts = get_parts(&t);
+
+        for expected in &["Literal", "Color", "RED"] {
+            assert_output_contains(&parts, expected);
+        }
+        assert!(parts.iter().any(|(_, loc)| loc.is_some()));
+    }
+
+    #[test]
+    fn test_get_types_with_location_self_type() {
+        let cls = fake_class("MyClass", "mymodule", 40);
+        let cls_type = ClassType::new(cls, TArgs::default());
+        let t = Type::SelfType(cls_type);
+        let parts = get_parts(&t);
+
+        assert_output_contains(&parts, "Self");
+        assert_part_has_location(&parts, "MyClass", "mymodule", 40);
+    }
+
+    #[test]
+    fn test_get_types_with_location_class_def() {
+        let cls = fake_class("MyClass", "mymodule", 45);
+        let t = Type::ClassDef(cls);
+        let parts = get_parts(&t);
+
+        assert_output_contains(&parts, "type");
+        assert_part_has_location(&parts, "MyClass", "mymodule", 45);
+    }
+
+    #[test]
+    fn test_get_types_with_location_tuple() {
+        let foo = fake_class("Foo", "test", 50);
+        let bar = fake_class("Bar", "test", 55);
+        let foo_type = Type::ClassType(ClassType::new(foo, TArgs::default()));
+        let bar_type = Type::ClassType(ClassType::new(bar, TArgs::default()));
+
+        // Test concrete tuple: tuple[Foo, Bar]
+        let concrete_tuple = Type::Tuple(Tuple::Concrete(vec![foo_type.clone(), bar_type.clone()]));
+        let parts = get_parts(&concrete_tuple);
+        for expected in &["tuple", "Foo", "Bar"] {
+            assert_output_contains(&parts, expected);
+        }
+
+        // Test unbounded tuple: tuple[Foo, ...]
+        let unbounded_tuple = Type::Tuple(Tuple::Unbounded(Box::new(foo_type)));
+        let parts2 = get_parts(&unbounded_tuple);
+        for expected in &["tuple", "Foo", "..."] {
+            assert_output_contains(&parts2, expected);
+        }
+    }
+
+    #[test]
+    fn test_get_types_with_location_callable() {
+        let foo = fake_class("Foo", "test", 60);
+        let bar = fake_class("Bar", "test", 65);
+        let foo_type = Type::ClassType(ClassType::new(foo, TArgs::default()));
+        let bar_type = Type::ClassType(ClassType::new(bar, TArgs::default()));
+
+        let param = Param::Pos(Name::new_static("foo"), foo_type, Required::Required);
+        let callable = Callable::list(ParamList::new(vec![param]), bar_type);
+        let t = Type::Callable(Box::new(callable));
+        let parts = get_parts(&t);
+
+        for expected in &["foo", "Foo", "Bar", "->"] {
+            assert_output_contains(&parts, expected);
+        }
+    }
+
+    #[test]
+    fn test_get_types_with_location_type_var_tuple() {
+        let mi = Module::new(
+            ModuleName::from_str("test.module"),
+            ModulePath::filesystem(PathBuf::from("test.module")),
+            Arc::new("1234567890".to_owned()),
+        );
+        let tv_tuple = crate::type_var_tuple::TypeVarTuple::new(
+            Identifier::new(Name::new("Ts"), TextRange::empty(TextSize::new(70))),
+            mi,
+            None,
+        );
+        let t = Type::TypeVarTuple(tv_tuple);
+        let parts = get_parts(&t);
+
+        assert_output_contains(&parts, "TypeVarTuple");
+        assert_part_has_location(&parts, "Ts", "test.module", 70);
+    }
+
+    #[test]
+    fn test_get_types_with_location_param_spec() {
+        let mi = Module::new(
+            ModuleName::from_str("test.module"),
+            ModulePath::filesystem(PathBuf::from("test.module")),
+            Arc::new("1234567890".to_owned()),
+        );
+        let param_spec = crate::param_spec::ParamSpec::new(
+            Identifier::new(Name::new("P"), TextRange::empty(TextSize::new(75))),
+            mi,
+            None,
+        );
+        let t = Type::ParamSpec(param_spec);
+        let parts = get_parts(&t);
+
+        assert_output_contains(&parts, "ParamSpec");
+        assert_part_has_location(&parts, "P", "test.module", 75);
+    }
+
+    #[test]
+    fn test_get_types_with_location_super_instance() {
+        let base_class = fake_class("Base", "test", 80);
+        let base_type = ClassType::new(base_class, TArgs::default());
+        let derived_class = fake_class("Derived", "test", 85);
+        let derived_type = ClassType::new(derived_class, TArgs::default());
+
+        let t = Type::SuperInstance(Box::new((
+            base_type,
+            crate::types::SuperObj::Instance(derived_type),
+        )));
+        let parts = get_parts(&t);
+
+        for expected in &["super", "Base", "Derived"] {
+            assert_output_contains(&parts, expected);
+        }
+        assert_part_has_location(&parts, "Base", "test", 80);
+        assert_part_has_location(&parts, "Derived", "test", 85);
+    }
+
+    #[test]
+    fn test_get_types_with_location_partial_typed_dict() {
+        let cls = fake_class("MyTypedDict", "mymodule", 90);
+        let td = TypedDict::new(cls, TArgs::default());
+        let t = Type::PartialTypedDict(td);
+        let parts = get_parts(&t);
+
+        assert_output_contains(&parts, "Partial");
+        assert_part_has_location(&parts, "MyTypedDict", "mymodule", 90);
     }
 }

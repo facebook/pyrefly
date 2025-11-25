@@ -6828,19 +6828,7 @@
       "stop_line": 26
     }
   ],
-  "generics_typevartuple_concat.py": [
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "Returned type `tuple[*tuple[object | T, ...], object | T]` is not assignable to declared return type `tuple[*Ts, T]`",
-      "description": "Returned type `tuple[*tuple[object | T, ...], object | T]` is not assignable to declared return type `tuple[*Ts, T]`",
-      "line": 56,
-      "name": "bad-return",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 56
-    }
-  ],
+  "generics_typevartuple_concat.py": [],
   "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [
     {
@@ -7341,46 +7329,46 @@
   "literals_interactions.py": [
     {
       "code": -2,
-      "column": 5,
+      "column": 7,
       "concise_description": "Index 5 out of range for tuple with 3 elements",
       "description": "Index 5 out of range for tuple with 3 elements",
       "line": 15,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 9,
+      "stop_column": 8,
       "stop_line": 15
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 7,
       "concise_description": "Index -5 out of range for tuple with 3 elements",
       "description": "Index -5 out of range for tuple with 3 elements",
       "line": 16,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 9,
+      "stop_column": 8,
       "stop_line": 16
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 7,
       "concise_description": "Index 4 out of range for tuple with 3 elements",
       "description": "Index 4 out of range for tuple with 3 elements",
       "line": 17,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 9,
+      "stop_column": 8,
       "stop_line": 17
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 7,
       "concise_description": "Index -4 out of range for tuple with 3 elements",
       "description": "Index -4 out of range for tuple with 3 elements",
       "line": 18,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 10,
+      "stop_column": 9,
       "stop_line": 18
     },
     {
@@ -7745,24 +7733,24 @@
   "namedtuples_define_class.py": [
     {
       "code": -2,
-      "column": 7,
+      "column": 10,
       "concise_description": "Index 3 out of range for tuple with 3 elements",
       "description": "Index 3 out of range for tuple with 3 elements",
       "line": 32,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 12,
+      "stop_column": 11,
       "stop_line": 32
     },
     {
       "code": -2,
-      "column": 7,
+      "column": 10,
       "concise_description": "Index -4 out of range for tuple with 3 elements",
       "description": "Index -4 out of range for tuple with 3 elements",
       "line": 33,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 13,
+      "stop_column": 12,
       "stop_line": 33
     },
     {
@@ -8059,24 +8047,24 @@
   "namedtuples_usage.py": [
     {
       "code": -2,
-      "column": 7,
+      "column": 9,
       "concise_description": "Index 3 out of range for tuple with 3 elements",
       "description": "Index 3 out of range for tuple with 3 elements",
       "line": 34,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 11,
+      "stop_column": 10,
       "stop_line": 34
     },
     {
       "code": -2,
-      "column": 7,
+      "column": 9,
       "concise_description": "Index -4 out of range for tuple with 3 elements",
       "description": "Index -4 out of range for tuple with 3 elements",
       "line": 35,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 12,
+      "stop_column": 11,
       "stop_line": 35
     },
     {

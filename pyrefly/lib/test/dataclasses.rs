@@ -1280,3 +1280,14 @@ C.x = 1  # E: Cannot set field `x`
 C.y = 1  # E: Cannot set field `y`
 "#,
 );
+
+testcase!(
+    test_field_has_unknown_default,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = field(default_factory=42) # E:
+C()
+    "#,
+);

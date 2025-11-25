@@ -72,6 +72,7 @@ use lsp_types::ImplementationProviderCapability;
 use lsp_types::InitializeParams;
 use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
+use lsp_types::InlayHintLabelPart;
 use lsp_types::InlayHintParams;
 use lsp_types::Location;
 use lsp_types::NotebookCellSelector;
@@ -465,7 +466,7 @@ pub fn capabilities(
             ..Default::default()
         })),
         completion_provider: Some(CompletionOptions {
-            trigger_characters: Some(vec![".".to_owned()]),
+            trigger_characters: Some(vec![".".to_owned(), "'".to_owned(), "\"".to_owned()]),
             ..Default::default()
         }),
         document_highlight_provider: Some(OneOf::Left(true)),
@@ -2638,7 +2639,7 @@ impl Server {
         )?;
         let res = t
             .into_iter()
-            .filter_map(|(text_size, label_text, _locations)| {
+            .filter_map(|(text_size, label_parts)| {
                 // If the url is a notebook cell, filter out inlay hints for other cells
                 if info.to_cell_for_lsp(text_size) != maybe_cell_idx {
                     return None;
@@ -2646,13 +2647,31 @@ impl Server {
                 let position = info.to_lsp_position(text_size);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
+                    let label = InlayHintLabel::LabelParts(
+                        label_parts
+                            .iter()
+                            .map(|(text, location_opt)| {
+                                let location = location_opt
+                                    .as_ref()
+                                    .and_then(|loc| self.to_lsp_location(loc));
+
+                                InlayHintLabelPart {
+                                    value: text.clone(),
+                                    tooltip: None,
+                                    location,
+                                    command: None,
+                                }
+                            })
+                            .collect(),
+                    );
+
                     Some(InlayHint {
                         position,
-                        label: InlayHintLabel::String(label_text.clone()),
+                        label,
                         kind: None,
                         text_edits: Some(vec![TextEdit {
                             range: Range::new(position, position),
-                            new_text: label_text,
+                            new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
                         }]),
                         tooltip: None,
                         padding_left: None,

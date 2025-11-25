@@ -31,6 +31,7 @@ use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
@@ -213,6 +214,7 @@ impl TypeFormContext {
 pub enum Iterable {
     OfType(Type),
     FixedLen(Vec<Type>),
+    OfTypeVarTuple(Quantified),
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -720,6 +722,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 vec![Iterable::FixedLen(elts.clone())]
             }
             Type::Tuple(Tuple::Concrete(elts)) => vec![Iterable::FixedLen(elts.clone())],
+            Type::Tuple(Tuple::Unbounded(box elt)) => vec![Iterable::OfType(elt.clone())],
+            Type::Tuple(Tuple::Unpacked(box (prefix, Type::Quantified(box q), suffix)))
+                if prefix.is_empty() && suffix.is_empty() && q.is_type_var_tuple() =>
+            {
+                vec![Iterable::OfTypeVarTuple(q.clone())]
+            }
             Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
                 self.iterate(&self.solver().force_var(*v), range, errors, orig_context)
             }
@@ -789,6 +797,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match iterable {
                 Iterable::OfType(t) => produced_types.push(t),
                 Iterable::FixedLen(ts) => produced_types.extend(ts),
+                Iterable::OfTypeVarTuple(q) => {
+                    produced_types.push(Type::ElementOfTypeVarTuple(Box::new(q)))
+                }
             }
         }
         self.unions(produced_types)
@@ -977,7 +988,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Concatenate(prefix, pspec) => {
                 for t in prefix {
                     self.tvars_to_tparams_for_type_alias(
-                        t,
+                        &mut t.0,
                         seen_type_vars,
                         seen_type_var_tuples,
                         seen_param_specs,
@@ -1353,12 +1364,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn scoped_type_params(&self, x: Option<&TypeParams>) -> Vec<TParam> {
         match x {
             Some(x) => {
-                fn get_quantified(t: &Type) -> Quantified {
-                    match t {
-                        Type::QuantifiedValue(q) => (**q).clone(),
-                        _ => unreachable!(),
-                    }
-                }
+                let get_quantified = |t: &Type| match t {
+                    Type::QuantifiedValue(q) => (**q).clone(),
+                    _ => unreachable!(
+                        "{}:{:?}: Expected a QuantifiedValue, got {}",
+                        self.module().path().as_path().display(),
+                        x.range(),
+                        t
+                    ),
+                };
                 let mut params = Vec::new();
                 for raw_param in x.type_params.iter() {
                     let name = raw_param.name();
@@ -1484,7 +1498,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         type_info.visit_mut(&mut |ty| {
             if !matches!(
                 binding,
-                Binding::NameAssign(..) | Binding::PartialTypeWithUpstreamsCompleted(..)
+                Binding::NameAssign { .. } | Binding::PartialTypeWithUpstreamsCompleted(..)
             ) {
                 self.pin_all_placeholder_types(ty);
             }
@@ -1591,25 +1605,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for iterable in iterables {
                     match iterable {
                         Iterable::OfType(_) => {}
+                        Iterable::OfTypeVarTuple(_) => {
+                            self.error(
+                                errors,
+                                *range,
+                                ErrorInfo::Kind(ErrorKind::BadUnpacking),
+                                format!(
+                                    "Cannot unpack {} (of unknown size) into {}",
+                                    iterable_ty,
+                                    expect.message(),
+                                ),
+                            );
+                        }
                         Iterable::FixedLen(ts) => {
                             let error = match expect {
-                                SizeExpectation::Eq(n) => {
-                                    if ts.len() == *n {
-                                        None
-                                    } else {
-                                        match n {
-                                            1 => Some(format!("{n} value")),
-                                            _ => Some(format!("{n} values")),
-                                        }
-                                    }
-                                }
-                                SizeExpectation::Ge(n) => {
-                                    if ts.len() >= *n {
-                                        None
-                                    } else {
-                                        Some(format!("{n}+ values"))
-                                    }
-                                }
+                                SizeExpectation::Eq(n) if ts.len() != *n => Some(expect.message()),
+                                SizeExpectation::Ge(n) if ts.len() < *n => Some(expect.message()),
+                                _ => None,
                             };
                             match error {
                                 Some(expectation) => {
@@ -2159,6 +2171,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             }
+            Binding::NameAssign {
+                name: _,
+                annotation: _,
+                expr,
+                legacy_tparams: _,
+                is_in_function_scope: _,
+            } => {
+                let ty = self.binding_to_type(binding, errors);
+                let mut type_info = TypeInfo::of_ty(ty);
+                let mut prefix = Vec::new();
+                self.populate_dict_literal_facets(&mut type_info, &mut prefix, expr.as_ref());
+                type_info
+            }
             Binding::AssignToAttribute(attr, got) => {
                 // NOTE: Deterministic pinning of placeholder types based on first use relies on an
                 // invariant: if `got` is used in the binding for a class field, we must always solve
@@ -2274,6 +2299,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // propagate any attribute narrows.
                 TypeInfo::of_ty(self.binding_to_type(binding, errors))
             }
+        }
+    }
+
+    fn populate_dict_literal_facets(
+        &self,
+        info: &mut TypeInfo,
+        prefix: &mut Vec<FacetKind>,
+        expr: &Expr,
+    ) {
+        let Expr::Dict(dict) = expr else {
+            return;
+        };
+        for item in &dict.items {
+            let Some(key_expr) = &item.key else {
+                continue;
+            };
+            let Expr::StringLiteral(lit) = key_expr else {
+                continue;
+            };
+            prefix.push(FacetKind::Key(lit.value.to_string()));
+            if let Ok(chain) = Vec1::try_from_vec(prefix.clone()) {
+                let swallower = self.error_swallower();
+                let value_ty = self.expr_infer(&item.value, &swallower);
+                info.record_key_completion(&chain, Some(value_ty.clone()));
+                self.populate_dict_literal_facets(info, prefix, &item.value);
+            }
+            prefix.pop();
         }
     }
 
@@ -2776,7 +2828,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.attr_infer(&binding, &attr.id, attr.range, errors, None)
                     .into_ty()
             }
-            Binding::NameAssign(name, annot_key, expr, legacy_tparams) => {
+            Binding::NameAssign {
+                name,
+                annotation: annot_key,
+                expr,
+                legacy_tparams,
+                is_in_function_scope,
+            } => {
                 let (has_type_alias_qualifier, ty) = match annot_key.as_ref() {
                     // First infer the type as a normal value
                     Some((style, k)) => {
@@ -2789,7 +2847,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                             })
                         };
-                        if annot.annotation.is_final() && *style == AnnotationStyle::Forwarded {
+                        if annot.annotation.is_final() && style == &AnnotationStyle::Forwarded {
                             self.error(
                                 errors,
                                 expr.range(),
@@ -2800,7 +2858,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let annot_ty = annot.ty(self.stdlib);
                         let hint = annot_ty.as_ref().map(|t| (t, tcc));
                         let expr_ty = self.expr(expr, hint, errors);
-                        let ty = if *style == AnnotationStyle::Direct {
+                        let ty = if style == &AnnotationStyle::Direct {
                             // For direct assignments, user-provided annotation takes
                             // precedence over inferred expr type.
                             annot_ty.unwrap_or(expr_ty)
@@ -2838,6 +2896,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                         ),
                         None if Self::may_be_implicit_type_alias(&ty)
+                            && !is_in_function_scope
                             && self.has_valid_annotation_syntax(expr, &self.error_swallower()) =>
                         {
                             self.as_type_alias(
@@ -3257,6 +3316,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             UnpackedPosition::Index(_) | UnpackedPosition::ReverseIndex(_) => ty,
                             UnpackedPosition::Slice(_, _) => self.stdlib.list(ty).to_type(),
                         },
+                        Iterable::OfTypeVarTuple(_) => {
+                            // Type var tuples can resolve to anything so we fall back to object
+                            let object_type = self.stdlib.object().clone().to_type();
+                            match pos {
+                                UnpackedPosition::Index(_) | UnpackedPosition::ReverseIndex(_) => {
+                                    object_type
+                                }
+                                UnpackedPosition::Slice(_, _) => {
+                                    self.stdlib.list(object_type).to_type()
+                                }
+                            }
+                        }
                         Iterable::FixedLen(ts) => {
                             match pos {
                                 UnpackedPosition::Index(i) | UnpackedPosition::ReverseIndex(i) => {
