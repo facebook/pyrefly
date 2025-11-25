@@ -2640,7 +2640,7 @@ impl Server {
         )?;
         let res = t
             .into_iter()
-            .filter_map(|(text_size, label_parts)| {
+            .filter_map(|(text_size, label)| {
                 // If the url is a notebook cell, filter out inlay hints for other cells
                 if info.to_cell_for_lsp(text_size) != maybe_cell_idx {
                     return None;
@@ -2648,36 +2648,20 @@ impl Server {
                 let position = info.to_lsp_position(text_size);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
-                    let label = InlayHintLabel::LabelParts(
-                        label_parts
-                            .iter()
-                            .map(|(text, location_opt)| {
-                                let location = location_opt
-                                    .as_ref()
-                                    .and_then(|loc| self.to_lsp_location(loc));
-
-                                InlayHintLabelPart {
-                                    value: text.clone(),
-                                    tooltip: None,
-                                    location,
-                                    command: None,
-                                }
-                            })
-                            .collect(),
-                    );
+                    let label_text = label.text();
                     Some(InlayHint {
-                    position,
-                    label,
-                    kind: None,
-                    text_edits: Some(vec![TextEdit {
-                        range: Range::new(position, position),
-                        new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
-                    }]),
-                    tooltip: None,
-                    padding_left: None,
-                    padding_right: None,
-                    data: None,
-                })
+                        position,
+                        label: self.label_segments_to_lsp(&label, &label_text),
+                        kind: None,
+                        text_edits: Some(vec![TextEdit {
+                            range: Range::new(position, position),
+                            new_text: label_text,
+                        }]),
+                        tooltip: None,
+                        padding_left: None,
+                        padding_right: None,
+                        data: None,
+                    })
                 } else {
                     None
                 }

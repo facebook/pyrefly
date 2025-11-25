@@ -22,15 +22,13 @@ fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> Strin
         report.push_str(name);
         report.push_str(".py\n");
         let handle = handles.get(name).unwrap();
-        for (pos, label_parts) in state
+        for (pos, label) in state
             .transaction()
             .inlay_hints(handle, hint_config)
             .unwrap()
         {
             report.push_str(&code_frame_of_source_at_position(code, pos));
             report.push_str(" inlay-hint: `");
-            // Concatenate label parts into a single string
-            let hint: String = label_parts.iter().map(|(text, _)| text.as_str()).collect();
             report.push_str(&label.text());
             report.push_str("`\n\n");
         }

@@ -618,14 +618,10 @@ impl Playground {
             .get_module_info(handle)
             .zip(transaction.inlay_hints(handle, Default::default()))
             .map(|(info, hints)| {
-                hints.into_map(|(position, label_parts)| {
+                hints.into_map(|(position, label)| {
                     let position = Position::from_display_pos(info.display_pos(position));
-                    // Concatenate all label parts into a single string for the playground
-                    let label: String = label_parts.iter().map(|(text, _)| text.as_str()).collect();
-                    InlayHint {
-                        label: label.text(),
-                        position,
-                    }
+                    let label = label.text();
+                    InlayHint { label, position }
                 })
             })
             .unwrap_or_default()

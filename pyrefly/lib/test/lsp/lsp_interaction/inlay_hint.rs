@@ -5,12 +5,48 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::InlayHint;
+use lsp_types::InlayHintLabel;
+use lsp_types::Position as LspPosition;
+use lsp_types::Range;
 use lsp_types::Url;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+
+fn expect_inlay_labels(response: Option<Vec<InlayHint>>, expected: &[(&str, u32, u32)]) -> bool {
+    match response {
+        Some(hints) => {
+            if hints.len() != expected.len() {
+                return false;
+            }
+            hints
+                .iter()
+                .zip(expected.iter())
+                .all(|(hint, (label, line, character))| {
+                    if hint.position.line != *line || hint.position.character != *character {
+                        return false;
+                    }
+                    let rendered: String = match &hint.label {
+                        InlayHintLabel::String(text) => text.clone(),
+                        InlayHintLabel::LabelParts(parts) => {
+                            parts.iter().map(|part| part.value.as_str()).collect()
+                        }
+                    };
+                    if rendered != *label {
+                        return false;
+                    }
+                    match &hint.text_edits {
+                        Some(edits) => edits.iter().any(|edit| edit.new_text.as_str() == *label),
+                        None => false,
+                    }
+                })
+        }
+        None => expected.is_empty(),
+    }
+}
 
 #[test]
 fn test_inlay_hint_default_config() {
@@ -27,66 +63,16 @@ fn test_inlay_hint_default_config() {
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([
-            {
-                "label":[
-                    {"value":" -> "},
-                    {"value":"tuple"},
-                    {"value":"["},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"1"},
-                    {"value":"]"},
-                    {"value":", "},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"2"},
-                    {"value":"]"},
-                    {"value":"]"}
+        .expect_response_with(|response| {
+            expect_inlay_labels(
+                response,
+                &[
+                    (" -> tuple[Literal[1], Literal[2]]", 6, 21),
+                    (": tuple[Literal[1], Literal[2]]", 11, 6),
+                    (" -> Literal[0]", 14, 15),
                 ],
-                "position":{"character":21,"line":6},
-                "textEdits":[{
-                    "newText":" -> tuple[Literal[1], Literal[2]]",
-                    "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
-                }]
-            },
-            {
-                "label":[
-                    {"value":": "},
-                    {"value":"tuple"},
-                    {"value":"["},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"1"},
-                    {"value":"]"},
-                    {"value":", "},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"2"},
-                    {"value":"]"},
-                    {"value":"]"}
-                ],
-                "position":{"character":6,"line":11},
-                "textEdits":[{
-                    "newText":": tuple[Literal[1], Literal[2]]",
-                    "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
-                }]
-            },
-            {
-                "label":[
-                    {"value":" -> "},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"0"},
-                    {"value":"]"}
-                ],
-                "position":{"character":15,"line":14},
-                "textEdits":[{
-                    "newText":" -> Literal[0]",
-                    "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
-                }]
-            }
-        ]));
+            )
+        });
 
     interaction.shutdown();
 }
@@ -116,7 +102,7 @@ fn test_inlay_hint_default_and_pyrefly_analysis() {
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([]));
+        .expect_response_with(|response| expect_inlay_labels(response, &[]));
 
     interaction.shutdown();
 }
@@ -145,7 +131,7 @@ fn test_inlay_hint_disable_all() {
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([]));
+        .expect_response_with(|response| expect_inlay_labels(response, &[]));
 
     interaction.shutdown();
 }
@@ -171,42 +157,15 @@ fn test_inlay_hint_disable_variables() {
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([{
-            "label":[
-                {"value":" -> "},
-                {"value":"tuple"},
-                {"value":"["},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"1"},
-                {"value":"]"},
-                {"value":", "},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"2"},
-                {"value":"]"},
-                {"value":"]"}
-            ],
-            "position":{"character":21,"line":6},
-            "textEdits":[{
-                "newText":" -> tuple[Literal[1], Literal[2]]",
-                "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
-            }]
-        },
-        {
-            "label":[
-                {"value":" -> "},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"0"},
-                {"value":"]"}
-            ],
-            "position":{"character":15,"line":14},
-            "textEdits":[{
-                "newText":" -> Literal[0]",
-                "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
-            }]
-        }]));
+        .expect_response_with(|response| {
+            expect_inlay_labels(
+                response,
+                &[
+                    (" -> tuple[Literal[1], Literal[2]]", 6, 21),
+                    (" -> Literal[0]", 14, 15),
+                ],
+            )
+        });
 
     interaction.shutdown();
 }
@@ -232,28 +191,9 @@ fn test_inlay_hint_disable_returns() {
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([{
-            "label":[
-                {"value":": "},
-                {"value":"tuple"},
-                {"value":"["},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"1"},
-                {"value":"]"},
-                {"value":", "},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"2"},
-                {"value":"]"},
-                {"value":"]"}
-            ],
-            "position":{"character":6,"line":11},
-            "textEdits":[{
-                "newText":": tuple[Literal[1], Literal[2]]",
-                "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
-            }]
-        }]));
+        .expect_response_with(|response| {
+            expect_inlay_labels(response, &[(": tuple[Literal[1], Literal[2]]", 11, 6)])
+        });
 
     interaction.shutdown();
 }
@@ -267,9 +207,8 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
         configuration: Some(None),
         ..Default::default()
     });
-    let expected_uri = Url::from_file_path(root.path().join("type_def_inlay_hint_test.py"))
-        .unwrap()
-        .to_string();
+    let expected_uri =
+        Url::from_file_path(root.path().join("type_def_inlay_hint_test.py")).unwrap();
 
     interaction.client.did_open("type_def_inlay_hint_test.py");
 
@@ -277,49 +216,36 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
     interaction
         .client
         .inlay_hint("type_def_inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([
-            {
-                "label": " -> MyClass",
-                "position": {"character": 22, "line": 11},
-                "textEdits": [{
-                    "newText": " -> MyClass",
-                    "range": {
-                        "end": {"character": 22, "line": 11},
-                        "start": {"character": 22, "line": 11}
-                    }
-                }]
-            },
-            {
-                "label": ": MyClass",
-                "position": {"character": 6, "line": 15},
-                "textEdits": [{
-                    "newText": ": MyClass",
-                    "range": {
-                        "end": {"character": 6, "line": 15},
-                        "start": {"character": 6, "line": 15}
-                    }
-                }]
+        .expect_response_with(|maybe_hints| {
+            let Some(hints) = maybe_hints else {
+                return false;
+            };
+            if hints.len() != 2 {
+                return false;
             }
 
-            // Check that the hints have label parts (not simple strings)
-            for hint in hints {
-                match &hint.label {
-                    lsp_types::InlayHintLabel::LabelParts(parts) => {
-                        if parts.is_empty() {
-                            return false;
-                        }
+            let expected_range = Range::new(LspPosition::new(6, 6), LspPosition::new(6, 13));
 
-                        // Check that at least one label part has a location
-                        // (The first part is typically the prefix like " -> " with no location,
-                        // while the type name part has the location)
-                        if !parts.iter().any(|part| part.location.is_some()) {
-                            return false;
-                        }
+            let check_hint = |hint: &lsp_types::InlayHint, prefix: &str| match &hint.label {
+                InlayHintLabel::LabelParts(parts) => {
+                    if parts.is_empty() {
+                        return false;
                     }
-                    _ => return false,
+                    if parts.first().unwrap().value != prefix {
+                        return false;
+                    }
+                    parts.iter().any(|part| {
+                        if let Some(location) = &part.location {
+                            location.uri == expected_uri && location.range == expected_range
+                        } else {
+                            false
+                        }
+                    })
                 }
-            }
-            true
+                _ => false,
+            };
+
+            check_hint(&hints[0], " -> ") && check_hint(&hints[1], ": ")
         });
 
     interaction.shutdown();
