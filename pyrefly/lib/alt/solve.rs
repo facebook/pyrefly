@@ -1643,9 +1643,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 existing,
                 name,
             } => {
-                if self.allow_redefinition() {
-                    return Arc::new(EmptyAnswer);
-                }
                 let ann_new = self.get_idx(*new);
                 let ann_existing = self.get_idx(*existing);
                 if let Some(t_new) = ann_new.ty(self.stdlib)

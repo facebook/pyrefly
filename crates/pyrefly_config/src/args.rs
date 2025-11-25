@@ -141,14 +141,6 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     infer_with_first_use: Option<bool>,
-    /// Allow re-annotating a variable with a new, conflicting type without emitting a redefinition error.
-    #[arg(
-        long,
-        default_missing_value = "true",
-        require_equals = true,
-        num_args = 0..=1
-    )]
-    allow_redefinition: Option<bool>,
     /// Whether to respect ignore files (.gitignore, .ignore, .git/exclude).
     #[arg(
         long,
@@ -369,9 +361,6 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.infer_with_first_use {
             config.root.infer_with_first_use = Some(*x);
-        }
-        if let Some(x) = &self.allow_redefinition {
-            config.root.allow_redefinition = Some(*x);
         }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             let mut missing_source_severity = None;

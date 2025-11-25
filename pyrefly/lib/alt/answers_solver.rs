@@ -452,10 +452,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.base_errors
     }
 
-    pub fn allow_redefinition(&self) -> bool {
-        self.current.allow_redefinition()
-    }
-
     pub fn module(&self) -> &ModuleInfo {
         self.bindings.module()
     }

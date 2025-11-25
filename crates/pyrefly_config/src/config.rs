@@ -802,14 +802,6 @@ impl ConfigFile {
                  self.root.infer_with_first_use.unwrap())
     }
 
-    pub fn allow_redefinition(&self, path: &Path) -> bool {
-        self.get_from_sub_configs(ConfigBase::get_allow_redefinition, path)
-            .unwrap_or_else(||
-                // we can use unwrap here, because the value in the root config must
-                // be set in `ConfigFile::configure()`.
-                self.root.allow_redefinition.unwrap())
-    }
-
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
         self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
             .unwrap_or_else(||
@@ -961,10 +953,6 @@ impl ConfigFile {
 
         if self.root.infer_with_first_use.is_none() {
             self.root.infer_with_first_use = Some(true);
-        }
-
-        if self.root.allow_redefinition.is_none() {
-            self.root.allow_redefinition = Some(false);
         }
 
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
@@ -1296,7 +1284,6 @@ mod tests {
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     permissive_ignores: None,
                     enabled_ignores: None,
-                    allow_redefinition: None,
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
@@ -1315,7 +1302,6 @@ mod tests {
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         permissive_ignores: None,
                         enabled_ignores: None,
-                        allow_redefinition: None,
                     }
                 }],
                 ignore_missing_source: true,
@@ -1688,7 +1674,6 @@ mod tests {
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
-                allow_redefinition: None,
             },
             sub_configs: vec![
                 SubConfig {
@@ -1698,7 +1683,6 @@ mod tests {
                             ModuleWildcard::new("highest").unwrap(),
                         ]),
                         ignore_errors_in_generated_code: None,
-                        allow_redefinition: None,
                         ..Default::default()
                     },
                 },
@@ -1709,7 +1693,6 @@ mod tests {
                             ModuleWildcard::new("second").unwrap(),
                         ]),
                         ignore_errors_in_generated_code: Some(true),
-                        allow_redefinition: None,
                         ..Default::default()
                     },
                 },
@@ -1998,7 +1981,6 @@ mod tests {
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
-                allow_redefinition: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -2031,7 +2013,6 @@ mod tests {
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
-                allow_redefinition: None,
             },
             sub_configs: vec![],
             ..Default::default()

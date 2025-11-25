@@ -109,7 +109,6 @@ pub struct Traces {
 #[derive(Debug)]
 pub struct Answers {
     solver: Solver,
-    allow_redefinition: bool,
     table: AnswerTable,
     index: Option<Arc<Mutex<Index>>>,
     trace: Option<Mutex<Traces>>,
@@ -357,7 +356,6 @@ impl Answers {
         solver: Solver,
         enable_index: bool,
         enable_trace: bool,
-        allow_redefinition: bool,
     ) -> Self {
         fn presize<K: Keyed>(items: &mut AnswerEntry<K>, bindings: &Bindings)
         where
@@ -384,7 +382,6 @@ impl Answers {
 
         Self {
             solver,
-            allow_redefinition,
             table,
             index,
             trace,
@@ -563,10 +560,6 @@ impl Answers {
 
     pub fn solver(&self) -> &Solver {
         &self.solver
-    }
-
-    pub fn allow_redefinition(&self) -> bool {
-        self.allow_redefinition
     }
 
     pub fn get_type_at(&self, idx: Idx<Key>) -> Option<Type> {

@@ -757,7 +757,6 @@ impl<'a> Transaction<'a> {
                     .untyped_def_behavior(module_data.handle.path().as_path()),
                 infer_with_first_use: config
                     .infer_with_first_use(module_data.handle.path().as_path()),
-                allow_redefinition: config.allow_redefinition(module_data.handle.path().as_path()),
             });
             {
                 let mut changed = false;
@@ -1468,7 +1467,6 @@ impl<'a> Transaction<'a> {
                 lookup: &self.lookup(m.dupe()),
                 untyped_def_behavior: config.untyped_def_behavior(m.handle.path().as_path()),
                 infer_with_first_use: config.infer_with_first_use(m.handle.path().as_path()),
-                allow_redefinition: config.allow_redefinition(m.handle.path().as_path()),
             };
             let mut step = Step::Load; // Start at AST (Load.next)
             alt.load = lock.steps.load.dupe();

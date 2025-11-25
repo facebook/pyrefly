@@ -86,10 +86,6 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_with_first_use: Option<bool>,
 
-    /// Whether to allow re-annotating a variable with a new, conflicting type without erroring.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allow_redefinition: Option<bool>,
-
     /// Any unknown config items
     #[serde(default, flatten)]
     pub(crate) extras: ExtraConfigs,
@@ -142,10 +138,6 @@ impl ConfigBase {
 
     pub fn get_infer_with_first_use(base: &Self) -> Option<bool> {
         base.infer_with_first_use
-    }
-
-    pub fn get_allow_redefinition(base: &Self) -> Option<bool> {
-        base.allow_redefinition
     }
 
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
