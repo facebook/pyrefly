@@ -248,6 +248,93 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
     interaction.shutdown();
 }
 
+// Only run this test on unix since windows has no way to mock a .exe without compiling something
+// (we call python with python.exe)
+#[cfg(unix)]
+#[test]
+fn test_interpreter_cache_cleared_on_switch() {
+    let test_files_root = get_test_files_root();
+    let custom_interpreter_path = test_files_root.path().join("custom_interpreter");
+    let broken_interpreter_root = test_files_root.path().join("broken_interpreter");
+
+    // Create a broken interpreter that returns empty site-packages
+    let broken_python_script = r#"#!/bin/bash
+if [[ "$1" == "-c" && "$2" == *"import json, sys"* ]]; then
+    cat << 'EOF'
+{"python_platform": "linux", "python_version": "3.12.0", "site_package_path": []}
+EOF
+else
+    echo "Mock python interpreter - args: $@" >&2
+    exit 1
+fi
+"#;
+
+    fs::create_dir_all(broken_interpreter_root.join("bin")).unwrap();
+    let broken_interpreter_path = broken_interpreter_root.join("bin/python");
+    write(&broken_interpreter_path, broken_python_script).unwrap();
+    let mut perms = fs::metadata(&broken_interpreter_path)
+        .unwrap()
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&broken_interpreter_path, perms).unwrap();
+
+    // Good interpreter with site-packages containing custom_module
+    let good_interpreter_path = setup_dummy_interpreter(&custom_interpreter_path);
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction.initialize(InitializeSettings {
+        configuration: Some(Some(
+            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+        )),
+        ..Default::default()
+    });
+
+    interaction.client.did_open("custom_interpreter/src/foo.py");
+    // Without any interpreter configured, there should be 1 import error
+    interaction.client.expect_publish_diagnostics_error_count(
+        test_files_root.path().join("custom_interpreter/src/foo.py"),
+        1,
+    );
+
+    // Configure broken interpreter with empty site-packages - should still have 1 import error
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .send_configuration_response(json!([
+            {
+                "pythonPath": broken_interpreter_path.to_str().unwrap()
+            }
+        ]));
+    interaction.client.expect_publish_diagnostics_error_count(
+        test_files_root.path().join("custom_interpreter/src/foo.py"),
+        1,
+    );
+
+    // Switch to good interpreter with site-packages
+    // This tests the interpreter cache bug: without clearing INTERPRETER_ENV_REGISTRY,
+    // the cached empty site-packages from the broken interpreter persists
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .send_configuration_response(json!([
+            {
+                "pythonPath": good_interpreter_path.to_str().unwrap()
+            }
+        ]));
+
+    // BUG (for diff 1): Expecting 1 error demonstrates the cache not being cleared.
+    // After switching to good interpreter, the error should be resolved to 0.
+    interaction.client.expect_publish_diagnostics_error_count(
+        test_files_root.path().join("custom_interpreter/src/foo.py"),
+        1,
+    );
+
+    interaction.shutdown();
+}
+
 #[test]
 fn test_disable_language_services() {
     let test_files_root = get_test_files_root();
