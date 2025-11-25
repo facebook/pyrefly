@@ -1201,7 +1201,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 kws = x.arguments.keywords.map(CallKeyword::new);
             }
 
-        self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
+            self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                     .call_assert_type(
                         &x.arguments.args,
@@ -1294,7 +1294,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
         })
-    }
+        }
     }
 
     fn has_exactly_two_posargs(&self, arguments: &Arguments) -> bool {
