@@ -183,6 +183,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         branches
     }
 
+    fn type_contains_var(&self, ty: &Type) -> bool {
+        ty.may_contain_quantified_var()
+    }
+
     pub fn hint_from_type(&self, ty: Type, errors: Option<&'a ErrorCollector>) -> Hint<'a> {
         let mut branches = match &ty {
             Type::Union(box Union { members, .. }) => members.clone(),
