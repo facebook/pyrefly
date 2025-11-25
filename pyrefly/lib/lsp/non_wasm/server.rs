@@ -1440,10 +1440,134 @@ impl Server {
             .unwrap_or(false)
     }
 
+    /// Helper to append all additional diagnostics (unreachable, unused parameters/imports/variables)
+    fn append_ide_specific_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        Self::append_unreachable_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_parameter_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_import_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_variable_diagnostics(transaction, handle, diagnostics);
+    }
+
+    /// Helper function to publish diagnostics for handles without workspace context
+    /// This is used in contexts where we don't have access to self (e.g., async closures)
+    fn publish_diagnostics_for_files(
+        state: &State,
+        connection: &ServerConnection,
+        files: &Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
+        notebook_cells: &Arc<RwLock<HashMap<Url, PathBuf>>>,
+        transaction: &Transaction,
+        handles: &[Handle],
+    ) {
+        let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
+        let open_files_guard = files.read();
+        let open_notebook_cells_guard = notebook_cells.read();
+        let mut notebook_cell_urls = SmallMap::new();
+
+        for x in open_notebook_cells_guard.keys() {
+            diags.insert(PathBuf::from(x.to_string()), Vec::new());
+            notebook_cell_urls.insert(PathBuf::from(x.to_string()), x.clone());
+        }
+        for (x, file) in open_files_guard.iter() {
+            if !file.is_notebook() {
+                diags.insert(x.as_path().to_owned(), Vec::new());
+            }
+        }
+
+        for e in transaction.get_errors(handles).collect_errors().shown {
+            if let Some(path) = to_real_path(e.path()) {
+                let config = state
+                    .config_finder()
+                    .python_file(ModuleName::unknown(), e.path());
+                let type_error_status = match &config.source {
+                    ConfigSource::Synthetic => TypeErrorDisplayStatus::DisabledDueToMissingConfigFile,
+                    ConfigSource::Marker(_) => TypeErrorDisplayStatus::DisabledDueToMissingConfigFile,
+                    ConfigSource::File(_) => TypeErrorDisplayStatus::EnabledInConfigFile,
+                };
+                let should_show_stdlib_error =
+                    should_show_stdlib_error(&config, type_error_status, &path);
+                if is_python_stdlib_file(&path) && !should_show_stdlib_error {
+                    continue;
+                }
+                if let Some(lsp_file) = open_files_guard.get(&path)
+                    && config.project_includes.covers(&path)
+                    && !config.project_excludes.covers(&path)
+                    && type_error_status.is_enabled()
+                {
+                    match &**lsp_file {
+                        LspFile::Notebook(notebook) => {
+                            if let Some(error_cell) = e.get_notebook_cell()
+                                && let Some(error_cell_uri) = notebook.get_cell_url(error_cell)
+                            {
+                                diags.entry(PathBuf::from(error_cell_uri.to_string())).or_default().push(e.to_diagnostic());
+                            }
+                        }
+                        LspFile::Source(_) => {
+                            diags.entry(path.to_path_buf()).or_default().push(e.to_diagnostic());
+                        }
+                    }
+                }
+            }
+        }
+
+        for (path, diagnostics) in diags.iter_mut() {
+            if !notebook_cell_urls.contains_key(path) {
+                let handle = make_open_handle(state, path);
+                Self::append_ide_specific_diagnostics(transaction, &handle, diagnostics);
+            }
+        }
+
+        connection.publish_diagnostics(diags, notebook_cell_urls);
+    }
+
     /// Validate open files and send errors to the LSP. In the case of an ongoing recheck
     /// (i.e., another transaction is already being committed or the state is locked for writing),
     /// we still update diagnostics using a non-committable transaction, which may have slightly stale
     /// data compared to the main state
+    fn publish_diagnostics_for_handles(&self, transaction: &Transaction, handles: &[Handle]) {
+        let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
+        let open_files = self.open_files.read();
+        let open_notebook_cells = self.open_notebook_cells.read();
+        let mut notebook_cell_urls = SmallMap::new();
+        for x in open_notebook_cells.keys() {
+            diags.insert(PathBuf::from(x.to_string()), Vec::new());
+            notebook_cell_urls.insert(PathBuf::from(x.to_string()), x.clone());
+        }
+        for (x, file) in open_files.iter() {
+            if !file.is_notebook() {
+                diags.insert(x.as_path().to_owned(), Vec::new());
+            }
+        }
+        for e in transaction.get_errors(handles).collect_errors().shown {
+            if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
+                diags.entry(path.to_owned()).or_default().push(diag);
+            }
+        }
+        for (path, diagnostics) in diags.iter_mut() {
+            if notebook_cell_urls.contains_key(path) {
+                continue;
+            }
+            let handle = make_open_handle(&self.state, path);
+            Self::append_ide_specific_diagnostics(transaction, &handle, diagnostics);
+        }
+        self.connection
+            .publish_diagnostics(diags, notebook_cell_urls);
+        if self
+            .initialize_params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.semantic_tokens.as_ref())
+            .and_then(|st| st.refresh_support)
+            .unwrap_or(false)
+        {
+            self.send_request::<SemanticTokensRefresh>(());
+        }
+    }
+
     fn validate_in_memory_for_possibly_committable_transaction<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
@@ -1456,57 +1580,13 @@ impl Server {
         let handles =
             Self::validate_in_memory_for_transaction(&self.state, &self.open_files, transaction);
 
-        let publish = |transaction: &Transaction| {
-            let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
-            let open_files = self.open_files.read();
-            let open_notebook_cells = self.open_notebook_cells.read();
-            let mut notebook_cell_urls = SmallMap::new();
-            for x in open_notebook_cells.keys() {
-                diags.insert(PathBuf::from(x.to_string()), Vec::new());
-                notebook_cell_urls.insert(PathBuf::from(x.to_string()), x.clone());
-            }
-            for (x, file) in open_files.iter() {
-                if !file.is_notebook() {
-                    diags.insert(x.as_path().to_owned(), Vec::new());
-                }
-            }
-            for e in transaction.get_errors(&handles).collect_errors().shown {
-                if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
-                    diags.entry(path.to_owned()).or_default().push(diag);
-                }
-            }
-            for (path, diagnostics) in diags.iter_mut() {
-                if notebook_cell_urls.contains_key(path) {
-                    continue;
-                }
-                let handle = make_open_handle(&self.state, path);
-                Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
-                Self::append_unused_parameter_diagnostics(transaction, &handle, diagnostics);
-                Self::append_unused_import_diagnostics(transaction, &handle, diagnostics);
-                Self::append_unused_variable_diagnostics(transaction, &handle, diagnostics);
-            }
-            self.connection
-                .publish_diagnostics(diags, notebook_cell_urls);
-            if self
-                .initialize_params
-                .capabilities
-                .workspace
-                .as_ref()
-                .and_then(|w| w.semantic_tokens.as_ref())
-                .and_then(|st| st.refresh_support)
-                .unwrap_or(false)
-            {
-                self.send_request::<SemanticTokensRefresh>(());
-            }
-        };
-
         match possibly_committable_transaction {
             Ok(transaction) => {
                 self.state.commit_transaction(transaction);
                 // In the case where we can commit transactions, `State` already has latest updates.
                 // Therefore, we can compute errors from transactions freshly created from `State``.
                 let transaction = self.state.transaction();
-                publish(&transaction);
+                self.publish_diagnostics_for_handles(&transaction, &handles);
                 info!("Validated open files and committed transaction.");
             }
             Err(transaction) => {
@@ -1515,7 +1595,7 @@ impl Server {
                 // from the transactions that won't be committed. It will still contain all the
                 // up-to-date in-memory content, but can have stale main `State` content.
                 // Note: if this changes, update this function's docstring.
-                publish(&transaction);
+                self.publish_diagnostics_for_handles(&transaction, &handles);
                 ide_transaction_manager.save(transaction);
                 info!("Validated open files and saved non-committable transaction.");
             }
@@ -2979,10 +3059,7 @@ impl Server {
                 items.push(diag);
             }
         }
-        Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
-        Self::append_unused_parameter_diagnostics(transaction, &handle, &mut items);
-        Self::append_unused_import_diagnostics(transaction, &handle, &mut items);
-        Self::append_unused_variable_diagnostics(transaction, &handle, &mut items);
+        Self::append_ide_specific_diagnostics(transaction, &handle, &mut items);
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,
@@ -3129,12 +3206,16 @@ impl Server {
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let cancellation_handles = self.cancellation_handles.dupe();
+        let connection = self.connection.dupe();
         let open_files = self.open_files.dupe();
+        let open_notebook_cells = self.open_notebook_cells.dupe();
+
         self.recheck_queue.queue_task(Box::new(move || {
             let mut transaction = state.new_committable_transaction(Require::indexing(), None);
             transaction.as_mut().invalidate_config();
 
-            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+            let handles =
+                Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
 
             // Commit will be blocked until there are no ongoing reads.
             // If we have some long running read jobs that can be cancelled, we should cancel them
@@ -3144,6 +3225,21 @@ impl Server {
             }
             // we have to run, not just commit to process updates
             state.run_with_committing_transaction(transaction, &[], Require::Everything);
+
+            // Publish diagnostics immediately after committing, using a fresh transaction
+            // This ensures diagnostics reflect the newly committed state with updated configs
+            {
+                let transaction = state.transaction();
+                Self::publish_diagnostics_for_files(
+                    &state,
+                    &connection,
+                    &open_files,
+                    &open_notebook_cells,
+                    &transaction,
+                    &handles,
+                );
+            }
+
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.

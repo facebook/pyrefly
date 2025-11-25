@@ -325,11 +325,10 @@ fi
             }
         ]));
 
-    // BUG (for diff 1): Expecting 1 error demonstrates the cache not being cleared.
-    // After switching to good interpreter, the error should be resolved to 0.
+    // After switching to good interpreter with site-packages, the import error should be resolved
     interaction.client.expect_publish_diagnostics_error_count(
         test_files_root.path().join("custom_interpreter/src/foo.py"),
-        1,
+        0,
     );
 
     interaction.shutdown();
