@@ -2757,6 +2757,7 @@ fn add_literal_completions(
                     self.add_magic_method_completions(&identifier, &mut result);
                 }
                 self.add_kwargs_completions(handle, position, &mut result);
+                self.add_literal_completions(handle, position, &mut result);
                 self.add_keyword_completions(handle, &mut result);
                 let has_local_completions = self.add_local_variable_completions(
                     handle,

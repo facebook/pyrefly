@@ -9,7 +9,6 @@
 
 mod code_actions;
 mod completion;
-
 mod declaration;
 mod definition;
 mod diagnostic;
