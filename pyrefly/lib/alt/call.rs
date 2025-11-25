@@ -1293,7 +1293,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None,
                     )
                 }
-            })
+        })
         }
     }
 

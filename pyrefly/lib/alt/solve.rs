@@ -49,7 +49,6 @@ use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
-use crate::alt::unwrap::HintRef;
 use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::AnnotationTarget;
@@ -3265,9 +3264,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         x.ty(self.stdlib)
                             .map(|ty| self.stdlib.async_iterable(ty.clone()).to_type())
                     });
+                    let infer_hint = infer_hint.map(|ty| self.hint_from_type(ty, None));
                     let iterable = self.expr_infer_with_hint(
                         e,
-                        infer_hint.as_ref().map(HintRef::soft),
+                        infer_hint.as_ref().map(|hint| hint.as_ref()),
                         errors,
                     );
                     self.async_iterate(&iterable, e.range(), errors)
@@ -3276,9 +3276,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         x.ty(self.stdlib)
                             .map(|ty| self.stdlib.iterable(ty.clone()).to_type())
                     });
+                    let infer_hint = infer_hint.map(|ty| self.hint_from_type(ty, None));
                     let iterable = self.expr_infer_with_hint(
                         e,
-                        infer_hint.as_ref().map(HintRef::soft),
+                        infer_hint.as_ref().map(|hint| hint.as_ref()),
                         errors,
                     );
                     self.iterate(&iterable, e.range(), errors, None)
