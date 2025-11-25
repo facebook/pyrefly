@@ -449,11 +449,8 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Union(box Union {
                 display_name: Some(name),
                 ..
-            }) => output.write_str(name),
-            Type::Union(box Union {
-                members,
-                display_name: None,
-            }) => {
+            }) if !is_toplevel => output.write_str(name),
+            Type::Union(box Union { members, .. }) => {
                 let mut literal_idx = None;
                 let mut literals = Vec::new();
                 let mut union_members: Vec<&Type> = Vec::new();
@@ -1175,8 +1172,12 @@ pub mod tests {
             "None | Literal[True, 'test'] | LiteralString"
         );
         assert_eq!(
-            Type::union(vec![nonlit1, nonlit2]).to_string(),
-            "None | LiteralString"
+            Type::type_form(Type::Union(Box::new(Union {
+                members: vec![nonlit1, nonlit2],
+                display_name: Some("MyUnion".to_owned())
+            })))
+            .to_string(),
+            "type[MyUnion]"
         );
     }
 

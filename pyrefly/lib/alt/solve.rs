@@ -3800,7 +3800,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::None => Some(Type::None), // Both a value and a type
             Type::Ellipsis => Some(Type::Ellipsis), // A bit weird because of tuples, so just promote it
             Type::Any(style) => Some(style.propagate()),
-            Type::TypeAlias(ta) => self.untype_opt(ta.as_type(), range, errors),
+            Type::TypeAlias(ta) => {
+                let mut aliased_type = self.untype_opt(ta.as_type(), range, errors)?;
+                if let Type::Union(box Union { display_name, .. }) = &mut aliased_type {
+                    *display_name = Some(ta.name.to_string());
+                }
+                Some(aliased_type)
+            }
             t @ Type::Unpack(
                 box Type::Tuple(_) | box Type::TypeVarTuple(_) | box Type::Quantified(_),
             ) => Some(t),

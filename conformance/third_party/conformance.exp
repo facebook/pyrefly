@@ -15,8 +15,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "`TypeAlias[GoodTypeAlias3, type[list[int | None]]]` is not subscriptable",
-      "description": "`TypeAlias[GoodTypeAlias3, type[list[int | None]]]` is not subscriptable",
+      "concise_description": "`TypeAlias[GoodTypeAlias3, type[list[GoodTypeAlias2]]]` is not subscriptable",
+      "description": "`TypeAlias[GoodTypeAlias3, type[list[GoodTypeAlias2]]]` is not subscriptable",
       "line": 68,
       "name": "unsupported-operation",
       "severity": "error",
@@ -270,8 +270,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "`type[list[int | None]]` is not subscriptable",
-      "description": "`type[list[int | None]]` is not subscriptable",
+      "concise_description": "`type[list[GoodTypeAlias2]]` is not subscriptable",
+      "description": "`type[list[GoodTypeAlias2]]` is not subscriptable",
       "line": 77,
       "name": "unsupported-operation",
       "severity": "error",
