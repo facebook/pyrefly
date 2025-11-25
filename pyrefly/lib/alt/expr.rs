@@ -18,6 +18,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::typed_dict::ExtraItems;
+use pyrefly_types::types::Union;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -778,7 +779,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn split_tuple_hint<'b>(&self, hint: &'b Type) -> (Vec<&'b Tuple>, Vec<&'b Type>) {
         match hint {
             Type::Tuple(tuple) => (vec![tuple], Vec::new()),
-            Type::Union(ts) => ts.iter().partition_map(|t| match t {
+            Type::Union(box Union { members, .. }) => members.iter().partition_map(|t| match t {
                 Type::Tuple(tuple) => Either::Left(tuple),
                 _ => Either::Right(t),
             }),
@@ -823,7 +824,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let flattened_items = Ast::flatten_dict_items(items);
         let hints = hint.as_ref().map_or(Vec::new(), |hint| match hint.ty() {
-            Type::Union(ts) => ts
+            Type::Union(box Union { members: ts, .. }) => ts
                 .iter()
                 .map(|ty| HintRef::new(ty, hint.errors()))
                 .collect(),
@@ -1829,7 +1830,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassType(cls) | Type::SelfType(cls) => {
                 self.has_superclass(cls.class_object(), self.stdlib.enum_class().class_object())
             }
-            Type::Union(variants) => variants
+            Type::Union(box Union {
+                members: variants, ..
+            }) => variants
                 .iter()
                 .all(|variant| self.is_enum_class_type(variant)),
             _ => false,

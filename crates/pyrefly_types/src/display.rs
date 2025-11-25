@@ -40,6 +40,7 @@ use crate::types::SuperObj;
 use crate::types::TArgs;
 use crate::types::TParam;
 use crate::types::Type;
+use crate::types::Union;
 
 /// Information about the qnames we have seen.
 /// Set to None to indicate we have seen different values, or Some if they are all the same.
@@ -442,17 +443,24 @@ impl<'a> TypeDisplayContext<'a> {
                 self.maybe_fmt_with_module("typing", "NoReturn", output)
             }
             Type::Never(NeverStyle::Never) => self.maybe_fmt_with_module("typing", "Never", output),
-            Type::Union(types) if types.is_empty() => {
+            Type::Union(box Union { members: types, .. }) if types.is_empty() => {
                 self.maybe_fmt_with_module("typing", "Never", output)
             }
-            Type::Union(types) => {
+            Type::Union(box Union {
+                display_name: Some(name),
+                ..
+            }) => output.write_str(name),
+            Type::Union(box Union {
+                members,
+                display_name: None,
+            }) => {
                 let mut literal_idx = None;
                 let mut literals = Vec::new();
                 let mut union_members: Vec<&Type> = Vec::new();
                 // Track seen types to deduplicate (mainly to prettify types for functions with different names but the same signature)
                 let mut seen_types = SmallSet::new();
 
-                for t in types.iter() {
+                for t in members.iter() {
                     match t {
                         Type::Literal(lit) => {
                             if literal_idx.is_none() {
@@ -1099,7 +1107,7 @@ pub mod tests {
             assert_eq!(ctx.display(&int_type).to_string(), "int");
         }
 
-        let union_foo_int = Type::Union(vec![foo_type, int_type]);
+        let union_foo_int = Type::union(vec![foo_type, int_type]);
 
         {
             let mut ctx = TypeDisplayContext::new(&[&union_foo_int]);
@@ -1115,11 +1123,11 @@ pub mod tests {
         let t3 = fake_tyvar("qux", "bar", 2);
 
         assert_eq!(
-            Type::Union(vec![t1.to_type(), t2.to_type()]).to_string(),
+            Type::union(vec![t1.to_type(), t2.to_type()]).to_string(),
             "TypeVar[bar.foo@1:2] | TypeVar[bar.foo@1:3]"
         );
         assert_eq!(
-            Type::Union(vec![t1.to_type(), t3.to_type()]).to_string(),
+            Type::union(vec![t1.to_type(), t3.to_type()]).to_string(),
             "TypeVar[foo] | TypeVar[qux]"
         );
     }
@@ -1159,12 +1167,16 @@ pub mod tests {
         let nonlit2 = Type::LiteralString;
 
         assert_eq!(
-            Type::Union(vec![nonlit1.clone(), nonlit2.clone()]).to_string(),
+            Type::union(vec![nonlit1.clone(), nonlit2.clone()]).to_string(),
             "None | LiteralString"
         );
         assert_eq!(
-            Type::Union(vec![nonlit1, lit1, nonlit2, lit2]).to_string(),
+            Type::union(vec![nonlit1.clone(), lit1, nonlit2.clone(), lit2]).to_string(),
             "None | Literal[True, 'test'] | LiteralString"
+        );
+        assert_eq!(
+            Type::union(vec![nonlit1, nonlit2]).to_string(),
+            "None | LiteralString"
         );
     }
 
@@ -1575,7 +1587,7 @@ def overloaded_func[T](
 
     #[test]
     fn test_union_of_intersection() {
-        let x = Type::Union(vec![
+        let x = Type::union(vec![
             Type::Intersect(Box::new((
                 vec![Type::any_explicit(), Type::LiteralString],
                 Type::any_implicit(),
@@ -1679,7 +1691,7 @@ def overloaded_func[T](
         let foo2 = fake_class("Foo", "mod.ule", 8);
         let t1 = Type::ClassType(ClassType::new(foo1, TArgs::default()));
         let t2 = Type::ClassType(ClassType::new(foo2, TArgs::default()));
-        let union = Type::Union(vec![t1.clone(), t2.clone()]);
+        let union = Type::union(vec![t1.clone(), t2.clone()]);
         let ctx = TypeDisplayContext::new(&[&union]);
 
         let parts1 = ctx.get_types_with_location(&t1, false).parts().to_vec();

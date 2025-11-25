@@ -15,6 +15,7 @@ use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
+use pyrefly_types::types::Union;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::name::Name;
@@ -67,7 +68,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassDef(cls) => {
                 self.get_django_field_type_from_class(cls, class, field_name, initial_value_expr)
             }
-            Type::Union(union) => {
+            Type::Union(box Union { members: union, .. }) => {
                 let transformed: Vec<_> = union
                     .iter()
                     .map(|variant| {
@@ -365,7 +366,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Get the related model type from the field
         let ty = class_field.ty();
         let (related_cls, is_foreign_key_nullable) = match ty {
-            Type::Union(union) => {
+            Type::Union(box Union { members: union, .. }) => {
                 // Nullable foreign key: extract the class type from the union
                 let cls = union.iter().find_map(|variant| match variant {
                     Type::ClassType(cls) => Some(cls.clone()),

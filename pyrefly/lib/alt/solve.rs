@@ -17,6 +17,7 @@ use pyrefly_types::facet::FacetKind;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::types::Union;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
@@ -731,7 +732,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
                 self.iterate(&self.solver().force_var(*v), range, errors, orig_context)
             }
-            Type::Union(ts) => ts
+            Type::Union(box Union { members: ts, .. }) => ts
                 .iter()
                 .flat_map(|t| self.iterate(t, range, errors, orig_context))
                 .collect(),
@@ -822,7 +823,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             expected_types.push(Type::None);
             expected = "`BaseException` or `None`"
         }
-        if !self.is_subset_eq(&actual_type, &Type::Union(expected_types)) {
+        if !self.is_subset_eq(&actual_type, &Type::union(expected_types)) {
             self.error(
                 errors,
                 range,
@@ -947,7 +948,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tparams: &mut Vec<TParam>,
     ) {
         match ty {
-            Type::Union(ts) => {
+            Type::Union(box Union { members: ts, .. }) => {
                 for t in ts.iter_mut() {
                     self.tvars_to_tparams_for_type_alias(
                         t,
@@ -2534,7 +2535,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     true
                 }
                 Type::None if allow_none => true,
-                Type::Union(members) => {
+                Type::Union(box Union { members, .. }) => {
                     for member in members {
                         // `None` can be part of an implicit type alias if it's
                         // part of a union. In other words, we treat
@@ -3779,7 +3780,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ty = self.promote_forall(*forall, range);
         };
         match self.canonicalize_all_class_types(ty, range, errors) {
-            Type::Union(xs) if !xs.is_empty() => {
+            Type::Union(box Union { members: xs, .. }) if !xs.is_empty() => {
                 let mut ts = Vec::new();
                 for x in xs {
                     let t = self.untype_opt(x, range, errors)?;
@@ -3833,7 +3834,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypedDict(_) | Type::PartialTypedDict(_) => {
                 Type::ClassDef(self.stdlib.dict_object().clone())
             }
-            Type::Union(xs) if !xs.is_empty() => {
+            Type::Union(box Union { members: xs, .. }) if !xs.is_empty() => {
                 let mut ts = Vec::new();
                 for x in xs {
                     let t = self.type_of(x);

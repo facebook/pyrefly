@@ -442,7 +442,7 @@ impl<'a> Transaction<'a> {
                             arg.ty = Some(ty[0].clone());
                         } else {
                             let ty = ty.into_iter().filter(|x| !x.is_any()).collect();
-                            arg.ty = Some(Type::Union(ty));
+                            arg.ty = Some(Type::union(ty));
                         }
                         arg
                     })

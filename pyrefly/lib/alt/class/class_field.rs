@@ -22,6 +22,7 @@ use pyrefly_types::callable::Params;
 use pyrefly_types::simplify::unions;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TParams;
+use pyrefly_types::types::Union;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::ResultExt;
 use pyrefly_util::visit::Visit;
@@ -944,7 +945,9 @@ fn make_bound_method_helper(
         Type::Overload(overload) if should_bind2(&overload.metadata) => {
             BoundMethodType::Overload(overload)
         }
-        Type::Union(ref ts) => {
+        Type::Union(box Union {
+            members: ref ts, ..
+        }) => {
             let mut bound_methods = Vec::with_capacity(ts.len());
             for t in ts {
                 match make_bound_method_helper(obj.clone(), t.clone(), should_bind) {

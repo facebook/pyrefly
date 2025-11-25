@@ -19,6 +19,7 @@ use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
+use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
@@ -941,12 +942,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }),
                 _ => Err(SubsetError::Other),
             },
-            (Type::Union(ls), u) => all(ls.iter(), |l| self.is_subset_eq(l, u)),
+            (Type::Union(box Union { members: ls, .. }), u) => {
+                all(ls.iter(), |l| self.is_subset_eq(l, u))
+            }
             (l, Type::Intersect(u)) => all(u.0.iter(), |u| self.is_subset_eq(l, u)),
             (l, Type::Overload(overload)) => all(overload.signatures.iter(), |u| {
                 self.is_subset_eq(l, &u.as_type())
             }),
-            (l, Type::Union(us)) => {
+            (l, Type::Union(box Union { members: us, .. })) => {
                 // Check var and non-var elements separately, so that if we match a non-var, we
                 // don't pin the vars.
                 let (vars, nonvars): (Vec<_>, Vec<_>) = us.iter().partition(|u| {

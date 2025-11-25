@@ -13,6 +13,7 @@ use pyrefly_types::class::Class;
 #[cfg(test)]
 use pyrefly_types::class::ClassType;
 use pyrefly_types::types::Type;
+use pyrefly_types::types::Union;
 use serde::Serialize;
 
 use crate::report::pysa::ModuleContext;
@@ -133,12 +134,12 @@ fn strip_self_type(mut ty: Type) -> Type {
 
 fn strip_optional(type_: &Type) -> Option<&Type> {
     match type_ {
-        Type::Union(elements) if elements.len() == 2 && elements[0] == Type::None => {
-            Some(&elements[1])
-        }
-        Type::Union(elements) if elements.len() == 2 && elements[1] == Type::None => {
-            Some(&elements[0])
-        }
+        Type::Union(box Union {
+            members: elements, ..
+        }) if elements.len() == 2 && elements[0] == Type::None => Some(&elements[1]),
+        Type::Union(box Union {
+            members: elements, ..
+        }) if elements.len() == 2 && elements[1] == Type::None => Some(&elements[0]),
         _ => None,
     }
 }
@@ -209,7 +210,9 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
             ClassNamesFromType::from_class(class_type.class_object(), context)
         }
         Type::Tuple(_) => ClassNamesFromType::from_class(context.stdlib.tuple_object(), context),
-        Type::Union(elements) if !elements.is_empty() => elements
+        Type::Union(box Union {
+            members: elements, ..
+        }) if !elements.is_empty() => elements
             .iter()
             .map(|inner| get_classes_of_type(inner, context))
             .reduce(|acc, next| acc.join_with(next))
@@ -372,9 +375,11 @@ pub fn is_callable_like(ty: &Type) -> bool {
         Type::Callable(_) => true,
         Type::BoundMethod(_) => true,
         Type::Overload(_) => true,
-        Type::Union(unions) => {
-            unions.iter().any(is_callable_like)
-                && unions
+        Type::Union(box Union {
+            members: elements, ..
+        }) => {
+            elements.iter().any(is_callable_like)
+                && elements
                     .iter()
                     .all(|ty| ty.is_none() || ty.is_any() || is_callable_like(ty))
         }

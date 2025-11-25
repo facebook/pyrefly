@@ -11,6 +11,7 @@ use dupe::Dupe;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::types::Union;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
@@ -51,7 +52,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SelfType(ty_cls) | Type::ClassType(ty_cls) => {
                 self.has_superclass(ty_cls.class_object(), class)
             }
-            Type::Union(xs) => xs
+            Type::Union(box Union { members: xs, .. }) => xs
                 .iter()
                 .all(|x| self.is_compatible_constructor_return(x, class)),
             _ => false,

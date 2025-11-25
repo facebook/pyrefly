@@ -22,6 +22,7 @@ use pyrefly_types::class::Class;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Type;
+use pyrefly_types::types::Union;
 use pyrefly_util::thread_pool::ThreadPool;
 use rayon::prelude::*;
 use ruff_python_ast::AnyNodeRef;
@@ -499,7 +500,7 @@ fn export_signatures_from_type(ty: &Type, context: &ModuleContext) -> Vec<Functi
             BoundMethodType::Overload(overload) => export_overload_signatures(overload, context),
         },
         Type::Overload(overload) => export_overload_signatures(overload, context),
-        Type::Union(union) => union
+        Type::Union(box Union { members: union, .. }) => union
             .iter()
             .flat_map(|ty| export_signatures_from_type(ty, context))
             .collect::<Vec<_>>(),

@@ -12,6 +12,7 @@
  */
 
 use pyrefly_types::callable::FuncMetadata;
+use pyrefly_types::types::Union;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
@@ -476,7 +477,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Could be anything inside here, so add in Any.
                     res.push(Type::Any(AnyStyle::Implicit));
                 }
-                Type::Tuple(Tuple::Concrete(ts)) | Type::Union(ts) => {
+                Type::Tuple(Tuple::Concrete(ts)) | Type::Union(box Union { members: ts, .. }) => {
                     for t in ts {
                         f(me, t, res)
                     }
@@ -491,7 +492,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         f(me, t, res)
                     }
                 }
-                Type::Type(box Type::Union(ts)) => {
+                Type::Type(box Type::Union(box Union { members: ts, .. })) => {
                     for t in ts {
                         f(me, Type::type_form(t), res)
                     }

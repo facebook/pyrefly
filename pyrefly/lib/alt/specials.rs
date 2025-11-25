@@ -7,6 +7,7 @@
 
 use std::slice;
 
+use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
@@ -200,7 +201,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 fn is_valid_literal(x: &Type) -> bool {
                     match x {
                         Type::None | Type::Literal(_) | Type::Any(AnyStyle::Error) => true,
-                        Type::Union(xs) => xs.iter().all(is_valid_literal),
+                        Type::Union(box Union { members: xs, .. }) => {
+                            xs.iter().all(is_valid_literal)
+                        }
                         _ => false,
                     }
                 }

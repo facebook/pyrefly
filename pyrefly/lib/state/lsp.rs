@@ -32,6 +32,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::facet::FacetKind;
+use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -1175,7 +1176,7 @@ impl<'a> Transaction<'a> {
             let completions = |ty| solver.completions(ty, Some(name), false);
 
             match base_type {
-                Type::Union(tys) | Type::Intersect(box (tys, _)) => tys
+                Type::Union(box Union { members: tys, .. }) | Type::Intersect(box (tys, _)) => tys
                     .into_iter()
                     .filter_map(|ty_| {
                         self.find_definition_for_base_type(
@@ -2387,9 +2388,9 @@ impl<'a> Transaction<'a> {
                     ..Default::default()
                 });
             }
-            Type::Union(types) => {
-                for union_type in types {
-                    Self::add_literal_completions_from_type(union_type, completions);
+            Type::Union(box Union { members, .. }) => {
+                for member in members {
+                    Self::add_literal_completions_from_type(member, completions);
                 }
             }
             _ => {}
@@ -2483,8 +2484,8 @@ impl<'a> Transaction<'a> {
                                 .or_insert_with(|| field.ty.clone());
                         }
                     }
-                    Type::Union(types) => {
-                        stack.extend(types.into_iter());
+                    Type::Union(box Union { members, .. }) => {
+                        stack.extend(members.into_iter());
                     }
                     _ => {}
                 }

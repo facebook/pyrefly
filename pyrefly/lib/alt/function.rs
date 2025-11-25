@@ -21,6 +21,7 @@ use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::TParam;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::TParamsSource;
+use pyrefly_types::types::Union;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -903,7 +904,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (Arc<TParams>, Callable) {
         let returns_callable = match &signature.ret {
             Type::Callable(_) => true,
-            Type::Union(ts) => ts.iter().any(|t| matches!(t, Type::Callable(_))),
+            Type::Union(box Union { members: ts, .. }) => {
+                ts.iter().any(|t| matches!(t, Type::Callable(_)))
+            }
             _ => false,
         };
         if !returns_callable {

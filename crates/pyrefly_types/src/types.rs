@@ -9,6 +9,8 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -611,6 +613,40 @@ pub enum SuperObj {
     Class(ClassType),
 }
 
+#[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
+pub struct Union {
+    pub members: Vec<Type>,
+    pub display_name: Option<String>,
+}
+
+impl PartialEq for Union {
+    fn eq(&self, other: &Self) -> bool {
+        self.members == other.members
+    }
+}
+
+impl Hash for Union {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.members.hash(state)
+    }
+}
+
+impl Visit<Type> for Union {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        for member in &self.members {
+            member.visit(f);
+        }
+    }
+}
+
+impl VisitMut<Type> for Union {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        for member in &mut self.members {
+            member.visit_mut(f);
+        }
+    }
+}
+
 // Note: The fact that Literal and LiteralString are at the front is important for
 // optimisations in `unions_with_literals`.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
@@ -626,7 +662,8 @@ pub enum Type {
     BoundMethod(Box<BoundMethod>),
     /// An overloaded function.
     Overload(Overload),
-    Union(Vec<Type>),
+    /// Unions will hold an optional name to use when displaying the type
+    Union(Box<Union>),
     /// Our intersection support is partial, so we store a fallback type that we use for operations
     /// that are not yet supported on intersections.
     Intersect(Box<(Vec<Type>, Type)>),
@@ -1392,7 +1429,7 @@ impl Type {
     /// type[a | b] -> type[a] | type[b]
     pub fn distribute_type_over_union(self) -> Self {
         self.transform(&mut |ty| {
-            if let Type::Type(box Type::Union(members)) = ty {
+            if let Type::Type(box Type::Union(box Union { members, .. })) = ty {
                 *ty = unions(members.drain(..).map(Type::type_form).collect());
             }
         })
@@ -1437,7 +1474,7 @@ impl Type {
 
     pub fn sort_unions(self) -> Self {
         self.transform(&mut |ty| {
-            if let Type::Union(ts) = ty {
+            if let Type::Union(box Union { members: ts, .. }) = ty {
                 ts.sort();
             }
         })
@@ -1488,7 +1525,7 @@ impl Type {
 
     pub fn into_unions(self) -> Vec<Type> {
         match self {
-            Type::Union(types) => types,
+            Type::Union(box Union { members: types, .. }) => types,
             _ => vec![self],
         }
     }
@@ -1496,19 +1533,22 @@ impl Type {
     /// Create an optional type (union with None).
     pub fn optional(x: Self) -> Self {
         // We would like the resulting type not nested, and well sorted.
-        if let Type::Union(mut xs) = x {
+        if let Type::Union(box Union {
+            members: mut xs, ..
+        }) = x
+        {
             match xs.binary_search(&Type::None) {
-                Ok(_) => Type::Union(xs),
+                Ok(_) => Type::union(xs),
                 Err(i) => {
                     xs.insert(i, Type::None);
-                    Type::Union(xs)
+                    Type::union(xs)
                 }
             }
         } else {
             match x.cmp(&Type::None) {
                 Ordering::Equal => Type::None,
-                Ordering::Less => Type::Union(vec![x, Type::None]),
-                Ordering::Greater => Type::Union(vec![Type::None, x]),
+                Ordering::Less => Type::union(vec![x, Type::None]),
+                Ordering::Greater => Type::union(vec![Type::None, x]),
             }
         }
     }
@@ -1538,9 +1578,9 @@ impl Type {
             Type::Literal(Lit::Str(x)) => Some(!x.is_empty()),
             Type::None => Some(false),
             Type::Tuple(Tuple::Concrete(elements)) => Some(!elements.is_empty()),
-            Type::Union(options) => {
+            Type::Union(box Union { members, .. }) => {
                 let mut answer = None;
-                for option in options {
+                for option in members {
                     let option_bool = option.as_bool();
                     option_bool?;
                     if answer.is_none() {
@@ -1590,6 +1630,14 @@ impl Type {
             })
         })
     }
+
+    /// Creates a union from the provided types without simplifying
+    pub fn union(members: Vec<Type>) -> Self {
+        Type::Union(Box::new(Union {
+            members,
+            display_name: None,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -1616,8 +1664,8 @@ mod tests {
         let false_lit = Type::Literal(Lit::Bool(false));
         let none = Type::None;
 
-        let str_opt = Type::Union(vec![s, none.clone()]);
-        let false_opt = Type::Union(vec![false_lit, none]);
+        let str_opt = Type::union(vec![s, none.clone()]);
+        let false_opt = Type::union(vec![false_lit, none]);
 
         assert_eq!(str_opt.as_bool(), None);
         assert_eq!(false_opt.as_bool(), Some(false));
