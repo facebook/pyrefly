@@ -1713,7 +1713,10 @@ impl<'a> CallGraphVisitor<'a> {
                 )
                 .into_call_callees()
             }
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(class_type, _))) => {
+            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(
+                crate::alt::call::TargetWithTParams(_tparams, class_type),
+                _,
+            ))) => {
                 // Constructing a class instance.
                 let (init_method, new_method) = self
                     .module_context

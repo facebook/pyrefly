@@ -80,7 +80,7 @@ pub enum CallTarget {
     /// Method of a class. The `Type` is the self/cls argument.
     BoundMethod(Type, TargetWithTParams<Function>),
     /// A class object.
-    Class(ClassType, ConstructorKind),
+    Class(TargetWithTParams<ClassType>, ConstructorKind),
     /// A TypedDict.
     TypedDict(TypedDict),
     /// An overloaded function.
@@ -214,7 +214,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassDef(cls) => match self.instantiate(&cls) {
                 // `instantiate` can only return `ClassType` or `TypedDict`
                 Type::ClassType(cls) => CallTargetLookup::Ok(Box::new(CallTarget::Class(
-                    cls,
+                    TargetWithTParams(None, cls),
                     ConstructorKind::BareClassName,
                 ))),
                 Type::TypedDict(typed_dict) => {
@@ -224,13 +224,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             Type::Type(box Type::ClassType(cls)) | Type::Type(box Type::SelfType(cls)) => {
                 CallTargetLookup::Ok(Box::new(CallTarget::Class(
-                    cls,
+                    TargetWithTParams(None, cls),
                     ConstructorKind::TypeOfClass,
                 )))
             }
-            Type::Type(box Type::Tuple(tuple)) => CallTargetLookup::Ok(Box::new(
-                CallTarget::Class(self.erase_tuple_type(tuple), ConstructorKind::TypeOfClass),
-            )),
+            Type::Type(box Type::Tuple(tuple)) => {
+                CallTargetLookup::Ok(Box::new(CallTarget::Class(
+                    TargetWithTParams(None, self.erase_tuple_type(tuple)),
+                    ConstructorKind::TypeOfClass,
+                )))
+            }
             Type::Type(box Type::Quantified(quantified)) => {
                 CallTargetLookup::Ok(Box::new(CallTarget::Callable(TargetWithTParams(
                     None,
@@ -250,7 +253,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match &mut target {
                     CallTargetLookup::Ok(
                         box (CallTarget::Callable(TargetWithTParams(x, _))
-                        | CallTarget::Function(TargetWithTParams(x, _))),
+                        | CallTarget::Function(TargetWithTParams(x, _))
+                        | CallTarget::Class(TargetWithTParams(x, _), _)),
                     ) => {
                         *x = Some(forall.tparams);
                     }
@@ -757,7 +761,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         let res = match call_target {
-            CallTarget::Class(cls, constructor_kind) => {
+            CallTarget::Class(TargetWithTParams(_tparams, cls), constructor_kind) => {
                 if cls.has_qname("typing", "Any") {
                     return self.error(
                         errors,
