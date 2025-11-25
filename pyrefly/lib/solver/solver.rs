@@ -352,9 +352,7 @@ impl Solver {
         match &*variables.get(var) {
             Variable::Unwrap => UnwrapVarState::Unwrap,
             Variable::Answer(ty) => UnwrapVarState::Answer(ty.clone()),
-            other => panic!(
-                "Expected lambda parameter var to be Unwrap or Answer, got {other:?}"
-            ),
+            other => panic!("Expected lambda parameter var to be Unwrap or Answer, got {other:?}"),
         }
     }
 

@@ -35,9 +35,9 @@ use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprGenerator;
-use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprLambda;
 use ruff_python_ast::ExprList;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprStringLiteral;
@@ -58,7 +58,6 @@ use crate::alt::callable::CallArg;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
 use crate::alt::unwrap::HintRef;
-use crate::graph::index::Idx;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
@@ -68,6 +67,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
+use crate::graph::index::Idx;
 use crate::types::callable::Callable;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -339,8 +339,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .hint_from_type(branch.clone(), hint.errors())
                 .with_source_branches(hint.source_branches());
             let branch_errors = self.error_collector();
-            let info = self
-                .expr_infer_type_info_with_hint(x, Some(branch_hint.as_ref()), &branch_errors);
+            let info =
+                self.expr_infer_type_info_with_hint(x, Some(branch_hint.as_ref()), &branch_errors);
             if branch_errors.is_empty() && self.is_subset_eq(info.ty(), branch) {
                 errors.extend(branch_errors);
                 return info;
@@ -1255,7 +1255,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let param_vars: Vec<(Name, Var)> = if let Some(parameters) = &lambda.parameters {
             parameters
                 .iter_non_variadic_params()
-                .map(|x| (x.name().id.clone(), self.bindings().get_lambda_param(x.name())))
+                .map(|x| {
+                    (
+                        x.name().id.clone(),
+                        self.bindings().get_lambda_param(x.name()),
+                    )
+                })
                 .collect()
         } else {
             Vec::new()

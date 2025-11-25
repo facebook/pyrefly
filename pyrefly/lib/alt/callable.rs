@@ -575,10 +575,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if !self.type_contains_var(hint_ty) {
                                 use_hint = true;
                             } else if let Type::Union(options) = hint_ty {
-                                if options
-                                    .iter()
-                                    .any(|option| !self.type_contains_var(option))
-                                {
+                                if options.iter().any(|option| !self.type_contains_var(option)) {
                                     use_hint = true;
                                 }
                             }
@@ -628,10 +625,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if !self.type_contains_var(hint_ty) {
                                 use_hint = true;
                             } else if let Type::Union(options) = hint_ty {
-                                if options
-                                    .iter()
-                                    .any(|option| !self.type_contains_var(option))
-                                {
+                                if options.iter().any(|option| !self.type_contains_var(option)) {
                                     use_hint = true;
                                 }
                             }
