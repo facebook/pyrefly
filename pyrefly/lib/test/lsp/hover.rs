@@ -231,6 +231,27 @@ foo(x=1, y=2)
 }
 
 #[test]
+fn hover_returns_none_for_docstring_literals() {
+    let code = r#"
+def foo():
+    """Function docstring."""
+#    ^
+    return 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     """Function docstring."""
+         ^
+None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn hover_shows_parameter_doc_with_multiline_description() {
     let code = r#"
 def foo(param: int) -> None:

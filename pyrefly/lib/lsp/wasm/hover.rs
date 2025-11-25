@@ -26,6 +26,7 @@ use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -103,6 +104,42 @@ fn format_suppressed_errors_hover(errors: Vec<Error>) -> Hover {
         }),
         range: None,
     }
+}
+
+fn position_in_docstring(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> bool {
+    let ast = match transaction.get_ast(handle) {
+        Some(ast) => ast,
+        None => return false,
+    };
+    fn body_contains_docstring(body: &[Stmt], position: TextSize) -> bool {
+        if let Some(range) = Docstring::range_from_stmts(body)
+            && range.contains_inclusive(position)
+        {
+            return true;
+        }
+        for stmt in body {
+            match stmt {
+                Stmt::FunctionDef(func) => {
+                    if body_contains_docstring(func.body.as_slice(), position) {
+                        return true;
+                    }
+                }
+                Stmt::ClassDef(class_def) => {
+                    if body_contains_docstring(class_def.body.as_slice(), position) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    body_contains_docstring(ast.body.as_slice(), position)
 }
 
 pub struct HoverValue {
@@ -291,6 +328,10 @@ pub fn get_hover(
                 return Some(format_suppressed_errors_hover(suppressed_errors));
             }
         }
+    }
+
+    if position_in_docstring(transaction, handle, position) {
+        return None;
     }
 
     // Otherwise, fall through to the existing type hover logic
