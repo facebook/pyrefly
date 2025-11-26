@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Location;
+use lsp_types::InlayHint;
+use lsp_types::InlayHintLabel;
 use pyrefly_util::fs_anyhow;
 use tempfile::TempDir;
 
@@ -36,6 +38,74 @@ pub fn bundled_typeshed_path() -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(typeshed().unwrap().get_path_name());
     path
+}
+
+pub struct ExpectedTextEdit<'a> {
+    pub new_text: &'a str,
+    pub range_start: (u32, u32),
+    pub range_end: (u32, u32),
+}
+
+pub struct ExpectedInlayHint<'a> {
+    pub labels: &'a [&'a str],
+    pub position: (u32, u32),
+    pub text_edit: ExpectedTextEdit<'a>,
+}
+
+pub fn inlay_hints_match_expected(
+    result: Option<Vec<InlayHint>>,
+    expected: &[ExpectedInlayHint<'_>],
+) -> bool {
+    let hints = match result {
+        Some(hints) => hints,
+        None => return false,
+    };
+    if hints.len() != expected.len() {
+        return false;
+    }
+
+    for (hint, expected_hint) in hints.iter().zip(expected.iter()) {
+        let position = hint.position;
+        if position.line != expected_hint.position.0
+            || position.character != expected_hint.position.1
+        {
+            return false;
+        }
+
+        let parts = match &hint.label {
+            InlayHintLabel::LabelParts(parts) => parts,
+            _ => return false,
+        };
+        if parts.len() != expected_hint.labels.len() {
+            return false;
+        }
+        for (part, expected_value) in parts.iter().zip(expected_hint.labels.iter()) {
+            if part.value != *expected_value {
+                return false;
+            }
+            if *expected_value == "Literal" && part.location.is_none() {
+                return false;
+            }
+        }
+
+        let text_edits = match &hint.text_edits {
+            Some(edits) if edits.len() == 1 => &edits[0],
+            _ => return false,
+        };
+        if text_edits.new_text != expected_hint.text_edit.new_text {
+            return false;
+        }
+        let start = &expected_hint.text_edit.range_start;
+        let end = &expected_hint.text_edit.range_end;
+        if text_edits.range.start.line != start.0
+            || text_edits.range.start.character != start.1
+            || text_edits.range.end.line != end.0
+            || text_edits.range.end.character != end.1
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn copy_dir_recursively(src: &Path, dst: &Path) {
