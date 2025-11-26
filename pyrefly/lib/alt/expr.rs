@@ -2074,6 +2074,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(&context),
                     )
                 }
+                Type::Args(_) => {
+                    let tuple = Tuple::Unbounded(Box::new(self.stdlib.object().clone().to_type()));
+                    self.infer_tuple_subscript(
+                        tuple,
+                        slice,
+                        range,
+                        errors,
+                        Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
+                    )
+                }
+                Type::Kwargs(_) => {
+                    let kwargs_ty = self
+                        .stdlib
+                        .dict(
+                            self.stdlib.str().clone().to_type(),
+                            self.stdlib.object().clone().to_type(),
+                        )
+                        .to_type();
+                    self.call_method_or_error(
+                        &kwargs_ty,
+                        &dunder::GETITEM,
+                        range,
+                        &[CallArg::expr(slice)],
+                        &[],
+                        errors,
+                        Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
+                    )
+                }
                 Type::ClassType(ref cls) | Type::SelfType(ref cls)
                     if let Some(tuple) = self.as_tuple(cls) =>
                 {

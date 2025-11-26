@@ -301,6 +301,25 @@ def decorator(f: Callable[P, int]) -> Callable[P, None]:
 );
 
 testcase!(
+    test_paramspec_args_kwargs_subscriptable,
+    r#"
+from typing import Callable, ParamSpec, TypeVar
+
+FP = ParamSpec('FP')
+FR = TypeVar('FR')
+
+def decorate(f: Callable[FP, FR]) -> Callable[FP, FR]:
+  def wrapper(*args: FP.args, **kwargs: FP.kwargs) -> FR:
+    if len(args) > 0:
+      arg0 = args[0]
+    if 'foo' in kwargs:
+      foo = kwargs['foo']
+    return f(*args, **kwargs)
+  return wrapper
+"#,
+);
+
+testcase!(
     test_paramspec_named_arguments_concatenate,
     r#"
 from typing import Callable, ParamSpec

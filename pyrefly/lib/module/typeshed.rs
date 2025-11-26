@@ -15,7 +15,6 @@ use std::sync::LazyLock;
 use anyhow::anyhow;
 use dupe::Dupe;
 use pyrefly_bundled::bundled_typeshed;
-use pyrefly_config::error::ErrorDisplayConfig;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::module_name::ModuleName;
