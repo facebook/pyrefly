@@ -880,6 +880,8 @@ impl<'a> CalleesWithLocation<'a> {
                 Forallable::TypeAlias(t) => {
                     self.callee_from_type(&t.as_type(), call_target, callee_range, call_arguments)
                 }
+                Forallable::ParamSpecValue(_) => vec![],
+                Forallable::Concatenate(_, _) => vec![],
             },
             Type::SelfType(c) | Type::ClassType(c) => {
                 self.callee_from_mro(c.class_object(), "__call__", |_solver, c| {

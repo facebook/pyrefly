@@ -12,9 +12,11 @@ use std::cell::RefMut;
 use std::fmt;
 use std::fmt::Display;
 use std::mem;
+use std::sync::Arc;
 
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
+use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -41,11 +43,15 @@ use crate::error::context::TypeCheckKind;
 use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;
+use crate::types::callable::Param;
 use crate::types::callable::Params;
 use crate::types::module::ModuleType;
 use crate::types::simplify::simplify_tuples;
 use crate::types::simplify::unions;
 use crate::types::simplify::unions_with_literals;
+use crate::types::types::Forall;
+use crate::types::types::Forallable;
+use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -351,6 +357,16 @@ impl Solver {
         }
     }
 
+    /// Get the Quantified backing a Var, if it is backed by Variable::Quantified or Variable::Unsolved
+    pub fn get_quantified_for_var(&self, var: Var) -> Option<Quantified> {
+        let lock = self.variables.lock();
+        let variable = lock.get(var);
+        match &*variable {
+            Variable::Quantified(q) | Variable::Unsolved(q) => Some((**q).clone()),
+            _ => None,
+        }
+    }
+
     /// Finish the type returned from a function call. This entails expanding solved variables and
     /// erasing unsolved variables without defaults from unions.
     pub fn finish_function_return(&self, mut t: Type) -> Type {
@@ -489,6 +505,8 @@ impl Solver {
                 ret,
             }) = callable
             {
+                // Clone kind for use in Forall case since it's moved into the closure
+                let kind_for_forall = kind.as_ref().map(|k| (*k).clone());
                 let new_callable = |c| {
                     if let Some(k) = kind {
                         Type::Function(Box::new(Function {
@@ -504,6 +522,94 @@ impl Solver {
                         let params = mem::take(paramlist).prepend_types(ts).into_owned();
                         let new_callable = new_callable(Callable::list(params, ret.clone()));
                         *x = new_callable;
+                    }
+                    Type::Forall(box Forall {
+                        tparams: _,
+                        body: Forallable::ParamSpecValue(paramlist),
+                    }) => {
+                        // Lift the Forall to wrap the entire Callable
+                        //
+                        // The params may contain Vars that need to be resolved to their
+                        // representative Quantifieds (after all unifications are complete).
+                        // The return type may also contain Vars that are unified with param Vars.
+                        //
+                        // Strategy:
+                        // 1. Collect all Vars in params that are backed by Quantifieds
+                        // 2. Find the representative Quantified for each (after unification)
+                        // 3. Substitute Vars with representative Quantifieds in both params and ret
+                        // 4. Build new tparams from the representative Quantifieds
+
+                        let mut params = paramlist.prepend_types(ts).into_owned();
+
+                        // Collect Vars from params and their representative Quantifieds
+                        let mut var_to_representative: SmallMap<Var, Quantified> = SmallMap::new();
+                        let mut representative_quantifieds: Vec<Quantified> = Vec::new();
+
+                        for param in params.items() {
+                            let ty = match param {
+                                Param::PosOnly(_, ty, _) => ty,
+                                Param::Pos(_, ty, _) => ty,
+                                Param::VarArg(_, ty) => ty,
+                                Param::KwOnly(_, ty, _) => ty,
+                                Param::Kwargs(_, ty) => ty,
+                            };
+                            ty.universe(&mut |t| {
+                                if let Type::Var(v) = t {
+                                    if let Some(q) = self.get_quantified_for_var(*v) {
+                                        var_to_representative.insert(*v, q.clone());
+                                        if !representative_quantifieds.contains(&q) {
+                                            representative_quantifieds.push(q);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+
+                        // Check the return type for Vars that are unified with param Vars.
+                        // This handles both simple cases (return type is T) and complex cases
+                        // (return type is C[T] where T is inside a complex type).
+                        //
+                        // We use transform_mut which recurses into the type structure first,
+                        // then applies the transformation. This is necessary because visit_mut
+                        // returns early if the downcast to Type succeeds (which it does for ClassType).
+                        let mut final_ret = ret.clone();
+                        final_ret.transform_mut(&mut |t| {
+                            if let Type::Var(v) = t {
+                                if let Some(ret_q) = self.get_quantified_for_var(*v) {
+                                    if representative_quantifieds.contains(&ret_q) {
+                                        *t = Type::Quantified(Box::new(ret_q));
+                                    }
+                                }
+                            }
+                        });
+
+                        // Substitute Vars in params with their representative Quantifieds
+                        params.visit_mut(&mut |t| {
+                            if let Type::Var(v) = t {
+                                if let Some(q) = var_to_representative.get(v) {
+                                    *t = Type::Quantified(Box::new(q.clone()));
+                                }
+                            }
+                        });
+
+                        // Build new tparams from representative Quantifieds
+                        let new_tparams: Vec<TParam> = representative_quantifieds
+                            .into_iter()
+                            .map(|q| TParam {
+                                quantified: q,
+                                variance: PreInferenceVariance::PInvariant,
+                            })
+                            .collect();
+
+                        let forallable = if let Some(k) = kind_for_forall {
+                            Forallable::Function(Function {
+                                signature: Callable::list(params, final_ret),
+                                metadata: k,
+                            })
+                        } else {
+                            Forallable::Callable(Callable::list(params, final_ret))
+                        };
+                        *x = forallable.forall(Arc::new(TParams::new(new_tparams)));
                     }
                     Type::Ellipsis if ts.is_empty() => {
                         *x = new_callable(Callable::ellipsis(ret.clone()));
@@ -1270,6 +1376,11 @@ pub struct Subset<'a, Ans: LookupAnswer> {
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
+    /// Get the Quantified backing a Var, if it is backed by Variable::Quantified
+    pub fn get_quantified_for_var(&self, var: Var) -> Option<Quantified> {
+        self.solver.get_quantified_for_var(var)
+    }
+
     pub fn is_equal(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         self.is_subset_eq(got, want)?;
         self.is_subset_eq(want, got)

@@ -548,11 +548,43 @@ impl Forall<Forallable> {
 
 /// These are things that can have Forall around them, so often you see `Forall<Forallable>`
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
+#[derive(TypeEq)]
 pub enum Forallable {
     TypeAlias(TypeAlias),
     Function(Function),
     Callable(Callable),
+    ParamSpecValue(ParamList),
+    Concatenate(Box<[Type]>, Box<Forallable>),
+}
+
+impl Visit<Type> for Forallable {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        match self {
+            Self::TypeAlias(ta) => ta.visit(f),
+            Self::Function(func) => func.visit(f),
+            Self::Callable(callable) => callable.visit(f),
+            Self::ParamSpecValue(params) => params.visit(f),
+            Self::Concatenate(args, inner) => {
+                args.visit(f);
+                inner.visit(f);
+            }
+        }
+    }
+}
+
+impl VisitMut<Type> for Forallable {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        match self {
+            Self::TypeAlias(ta) => ta.visit_mut(f),
+            Self::Function(func) => func.visit_mut(f),
+            Self::Callable(callable) => callable.visit_mut(f),
+            Self::ParamSpecValue(params) => params.visit_mut(f),
+            Self::Concatenate(args, inner) => {
+                args.visit_mut(f);
+                inner.visit_mut(f);
+            }
+        }
+    }
 }
 
 impl Forallable {
@@ -572,6 +604,8 @@ impl Forallable {
             Self::Function(func) => func.metadata.kind.function_name(),
             Self::Callable(_) => Cow::Owned(Name::new_static("<callable>")),
             Self::TypeAlias(ta) => Cow::Borrowed(&ta.name),
+            Self::ParamSpecValue(_) => Cow::Owned(Name::new_static("<paramspec_value>")),
+            Self::Concatenate(_, _) => Cow::Owned(Name::new_static("<concatenate>")),
         }
     }
 
@@ -580,6 +614,10 @@ impl Forallable {
             Self::Function(func) => Type::Function(Box::new(func)),
             Self::Callable(callable) => Type::Callable(Box::new(callable)),
             Self::TypeAlias(ta) => Type::TypeAlias(Box::new(ta)),
+            Self::ParamSpecValue(params) => Type::ParamSpecValue(params),
+            Self::Concatenate(args, paramspec) => {
+                Type::Concatenate(args, Box::new(paramspec.as_type()))
+            }
         }
     }
 
@@ -588,6 +626,8 @@ impl Forallable {
             Self::Function(func) => func.signature.is_typeguard(),
             Self::Callable(callable) => callable.is_typeguard(),
             Self::TypeAlias(_) => false,
+            Self::ParamSpecValue(_) => false,
+            Self::Concatenate(_, _) => false,
         }
     }
 
@@ -596,6 +636,8 @@ impl Forallable {
             Self::Function(func) => func.signature.is_typeis(),
             Self::Callable(callable) => callable.is_typeis(),
             Self::TypeAlias(_) => false,
+            Self::ParamSpecValue(_) => false,
+            Self::Concatenate(_, _) => false,
         }
     }
 }

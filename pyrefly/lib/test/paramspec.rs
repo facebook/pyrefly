@@ -54,7 +54,7 @@ def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
 def foo[T](x: T, y: T) -> T:
     return x
 foo2 = identity(foo)
-reveal_type(foo2)  # E: revealed type: (x: @_, y: @_) -> @_
+reveal_type(foo2)  # E: revealed type: [R](x: R, y: R) -> R
 "#,
 );
 
@@ -69,8 +69,29 @@ class C[T]:
   def __init__(self, x: T) -> None:
     self.x = x
 c2 = identity(C)
-reveal_type(c2)  # E: revealed type: (x: @_) -> C[@_]
+reveal_type(c2)  # E: revealed type: [T](x: T) -> C[T]
 x: C[int] = c2(1)
+y = c2(1)
+reveal_type(y)  # E: revealed type: C[int]
+"#,
+);
+
+testcase!(
+    test_param_spec_generic_function_inference,
+    r#"
+from typing import Callable, assert_type
+
+def f[T](x: T) -> T:
+    return x
+
+def g[**P, R](f: Callable[P, R]) -> Callable[P, R]:
+    def inner(*args: P.args, **kwargs: P.kwargs):
+        return f(*args, **kwargs)
+    return inner
+
+h = g(f)
+assert_type(h(1), int)
+assert_type(h(""), str)
 "#,
 );
 

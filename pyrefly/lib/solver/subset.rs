@@ -8,6 +8,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::iter;
+use std::sync::Arc;
 
 use itertools::EitherOrBoth;
 use itertools::Itertools;
@@ -36,10 +37,13 @@ use crate::types::class::ClassType;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::simplify::unions;
 use crate::types::tuple::Tuple;
+use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::type_var::Variance;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
+use crate::types::types::TParam;
+use crate::types::types::TParams;
 use crate::types::types::Type;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -567,6 +571,66 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
     }
 
+    /// Create a ParamSpecValue type, wrapping it in Forall if it contains quantified variables
+    /// (either directly as Type::Quantified or as Type::Var backed by Variable::Quantified)
+    ///
+    /// IMPORTANT: We do NOT substitute Vars with Quantifieds here. The Vars must be preserved
+    /// so that after unification (e.g., T unified with R), we can correctly resolve all
+    /// references to the same representative Quantified in simplify_mut.
+    fn create_paramspec_value(&self, params: ParamList) -> Type {
+        // Collect all quantified variables used in the params
+        // We look for both Type::Quantified and Type::Var that are backed by Variable::Quantified
+        let mut quantifieds = Vec::new();
+
+        for param in params.items() {
+            let ty = match param {
+                Param::PosOnly(_, ty, _) => ty,
+                Param::Pos(_, ty, _) => ty,
+                Param::VarArg(_, ty) => ty,
+                Param::KwOnly(_, ty, _) => ty,
+                Param::Kwargs(_, ty) => ty,
+            };
+
+            ty.universe(&mut |t| {
+                match t {
+                    Type::Quantified(q) => {
+                        if !quantifieds.contains(&(**q)) {
+                            quantifieds.push((**q).clone());
+                        }
+                    }
+                    Type::Var(v) => {
+                        // Check if this Var is backed by a Quantified
+                        if let Some(q) = self.get_quantified_for_var(*v) {
+                            if !quantifieds.contains(&q) {
+                                quantifieds.push(q.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            });
+        }
+
+        if quantifieds.is_empty() {
+            // No quantified variables, return plain ParamSpecValue
+            Type::ParamSpecValue(params)
+        } else {
+            // Create TParams from the quantified variables
+            // Note: We keep the original Vars in the params - substitution will happen
+            // later in simplify_mut after all unifications are complete.
+            let tparams: Vec<TParam> = quantifieds
+                .into_iter()
+                .map(|q| TParam {
+                    quantified: q,
+                    variance: PreInferenceVariance::PInvariant,
+                })
+                .collect();
+
+            // Wrap in Forall, keeping original params (with Vars, not substituted Quantifieds)
+            Forallable::ParamSpecValue(params).forall(Arc::new(TParams::new(tparams)))
+        }
+    }
+
     fn is_paramlist_subset_of_paramspec(
         &mut self,
         got: &ParamList,
@@ -579,10 +643,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         let args = ParamList::new_types(want_ts.to_owned());
         let (pre, post) = got.items().split_at(args.len());
         self.is_subset_param_list(pre, args.items())?;
-        self.is_subset_eq(
-            &Type::ParamSpecValue(ParamList::new(post.to_vec())),
-            want_pspec,
-        )
+        let paramspec_value = self.create_paramspec_value(ParamList::new(post.to_vec()));
+        self.is_subset_eq(&paramspec_value, want_pspec)
     }
 
     fn is_paramspec_subset_of_paramlist(
@@ -597,10 +659,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         let args = ParamList::new_types(got_ts.to_owned());
         let (pre, post) = want.items().split_at(args.len());
         self.is_subset_param_list(args.items(), pre)?;
-        self.is_subset_eq(
-            got_pspec,
-            &Type::ParamSpecValue(ParamList::new(post.to_vec())),
-        )
+        let paramspec_value = self.create_paramspec_value(ParamList::new(post.to_vec()));
+        self.is_subset_eq(got_pspec, &paramspec_value)
     }
 
     fn is_paramspec_subset_of_paramspec(

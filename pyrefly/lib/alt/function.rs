@@ -1366,6 +1366,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }))
                 }),
                 Forallable::TypeAlias(_) => None,
+                Forallable::ParamSpecValue(_) => None,
+                Forallable::Concatenate(_, _) => None,
             },
             Type::Callable(callable) => callable
                 .split_first_param()

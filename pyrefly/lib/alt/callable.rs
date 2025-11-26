@@ -46,6 +46,7 @@ use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
 use crate::types::tuple::Tuple;
+use crate::types::types::Forallable;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -1043,6 +1044,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Params::ParamSpec(concatenate, p) => {
                 let p = self.solver().expand_vars(p);
                 match p {
+                    Type::Forall(box forall)
+                        if matches!(forall.body, Forallable::ParamSpecValue(_)) =>
+                    {
+                        // Instantiate fresh type variables for the Forall-wrapped ParamSpecValue
+                        if let Forallable::ParamSpecValue(params_before) = forall.body {
+                            let (_qs_params, instantiated_type) = self.solver().fresh_quantified(
+                                &forall.tparams,
+                                Type::ParamSpecValue(params_before),
+                                self.uniques,
+                            );
+
+                            // Extract the instantiated params
+                            if let Type::ParamSpecValue(params) = instantiated_type {
+                                self.callable_infer_params(
+                                    callable_name,
+                                    &params.prepend_types(&concatenate),
+                                    None,
+                                    self_arg,
+                                    args,
+                                    keywords,
+                                    range,
+                                    arg_errors,
+                                    call_errors,
+                                    context,
+                                )
+                            } else {
+                                unreachable!()
+                            }
+                        } else {
+                            unreachable!()
+                        }
+                    }
                     Type::ParamSpecValue(params) => self.callable_infer_params(
                         callable_name,
                         &params.prepend_types(&concatenate),

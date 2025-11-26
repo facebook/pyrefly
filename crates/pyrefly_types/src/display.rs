@@ -561,6 +561,24 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str(ta.name.as_str())
                 }
             }
+            Type::Forall(box Forall {
+                tparams,
+                body: Forallable::ParamSpecValue(_),
+            }) => {
+                output.write_str("[")?;
+                output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                output.write_str("]")?;
+                output.write_str("<ParamSpecValue>")
+            }
+            Type::Forall(box Forall {
+                tparams,
+                body: Forallable::Concatenate(_, _),
+            }) => {
+                output.write_str("[")?;
+                output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                output.write_str("]")?;
+                output.write_str("<Concatenate>")
+            }
             Type::Type(ty) => {
                 output.write_str("type[")?;
                 self.fmt_helper_generic(ty, false, output)?;
