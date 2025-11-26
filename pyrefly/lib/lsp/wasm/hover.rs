@@ -111,9 +111,8 @@ fn position_in_docstring(
     handle: &Handle,
     position: TextSize,
 ) -> bool {
-    let ast = match transaction.get_ast(handle) {
-        Some(ast) => ast,
-        None => return false,
+    let Some(ast) = transaction.get_ast(handle) else {
+        return false;
     };
     fn body_contains_docstring(body: &[Stmt], position: TextSize) -> bool {
         if let Some(range) = Docstring::range_from_stmts(body)
