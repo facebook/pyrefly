@@ -2635,6 +2635,7 @@ impl<'a> Transaction<'a> {
         results.dedup_by(|item1, item2| item1.label == item2.label && item1.detail == item2.detail);
         (results, is_incomplete)
     }
+
     fn completion_disabled_ranges_for_module(module: &ModuleInfo) -> Vec<TextRange> {
         let mut ranges = Vec::new();
         let source = module.lined_buffer().contents();

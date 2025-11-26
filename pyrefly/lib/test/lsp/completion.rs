@@ -2420,3 +2420,33 @@ Completion Results:
         report.trim(),
     );
 }
+
+#[test]
+fn test_no_completion_in_comments() {
+    let code = r#"
+# This is a comment
+#      ^
+import sys
+x = sys.version
+#       ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let positions = extract_cursors_for_test(code);
+    let txn = state.transaction();
+
+    // Position 0: inside comment - should return empty
+    let comment_completions = txn.completion(&handle, positions[0], ImportFormat::Absolute, true);
+    assert!(
+        comment_completions.is_empty(),
+        "Expected no completions in comment, but got {} completions",
+        comment_completions.len()
+    );
+
+    // Position 1: normal code - should return completions
+    let normal_completions = txn.completion(&handle, positions[1], ImportFormat::Absolute, true);
+    assert!(
+        !normal_completions.is_empty(),
+        "Expected completions in normal code but got none"
+    );
+}
