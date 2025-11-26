@@ -411,7 +411,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     "Runtime checkable protocol `{}` has an unsafe overlap with type `{}`",
                                     cls.name(),
                                     self.for_display(object_type.clone())
-                                ),];
+                                )];
                                 full_msg.extend(unsafe_overlap_errors);
                                 errors.add(
                                     range,
