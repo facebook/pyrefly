@@ -48,6 +48,7 @@ use crate::types::class::ClassType;
 use crate::types::keywords::KwCall;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
+use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
@@ -528,6 +529,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         self.solver()
             .finish_class_targs(&mut ctor_targs, self.uniques);
+        self.promote_invariant_targs(&mut ctor_targs);
         ret.subst_mut(&ctor_targs.substitution_map());
         Some(ret)
     }
@@ -614,9 +616,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // According to the spec, the actual type (as opposed to the class under construction)
                     // should take priority. However, if the actual type comes from a type error or an implicit
                     // Any, using the class under construction is still more useful.
-                    self.solver()
-                        .finish_class_targs(cls.targs_mut(), self.uniques);
-                    return ret.subst(&cls.targs().substitution_map());
+                    {
+                        let targs = cls.targs_mut();
+                        self.solver().finish_class_targs(targs, self.uniques);
+                        self.promote_invariant_targs(targs);
+                    }
+                    let substitution = cls.targs().substitution_map();
+                    return ret.subst(&substitution);
                 }
                 (true, has_errors)
             } else {
@@ -657,14 +663,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             self.record_resolved_trace(arguments_range, init_method);
         }
-        self.solver()
-            .finish_class_targs(cls.targs_mut(), self.uniques);
+        {
+            let targs = cls.targs_mut();
+            self.solver().finish_class_targs(targs, self.uniques);
+            self.promote_invariant_targs(targs);
+        }
         if let Some(mut ret) = dunder_new_ret {
             ret.subst_mut(&cls.targs().substitution_map());
             ret
         } else {
             cls.to_type()
         }
+    }
+
+    fn promote_invariant_targs(&self, targs: &mut TArgs) {
+        targs.iter_paired_mut().for_each(|(param, targ)| {
+            if !matches!(param.variance, PreInferenceVariance::PCovariant) {
+                *targ = targ.clone().promote_literals(self.stdlib);
+            }
+        });
     }
 
     fn construct_typed_dict(
@@ -704,6 +721,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         self.solver()
             .finish_class_targs(typed_dict.targs_mut(), self.uniques);
+        typed_dict.targs_mut().as_mut().iter_mut().for_each(|targ| {
+            let promoted = targ.clone().promote_literals(self.stdlib);
+            *targ = promoted;
+        });
         Type::TypedDict(typed_dict)
     }
 
@@ -932,6 +953,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 style.propagate()
             }
+        };
+        let res = match res {
+            Type::Union(members) => self.unions(members),
+            other => other,
         };
         if let Some(func_metadata) = kw_metadata {
             let mut kws = TypeMap::new();

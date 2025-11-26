@@ -986,14 +986,14 @@ def f(c: C, x: int | str):
 testcase!(
     test_typeguard_generic_function,
     r#"
-from typing import TypeGuard, assert_type
+from typing import TypeGuard, assert_type, Literal
 def f[T](x: object, y: T, z: T) -> TypeGuard[int]: ...
 def f2[T](x: object, y: T) -> TypeGuard[T]: ...
 def g(x: int | str):
     if f(x, 0, 0):
         assert_type(x, int)
     if f2(x, ""):
-        assert_type(x, str)
+        assert_type(x, Literal[''])
     "#,
 );
 

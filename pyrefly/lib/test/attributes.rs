@@ -1394,11 +1394,11 @@ assert_type(A.f(A[int]()), int)
 testcase!(
     test_access_generic_method_using_class_param_on_class,
     r#"
-from typing import assert_type, reveal_type, Any
+from typing import Literal, assert_type, reveal_type, Any
 class A[T]:
     def f[S](self, x: S) -> tuple[S, T]: ...
 reveal_type(A.f) # E: revealed type: [T, S](self: A[T], x: S) -> tuple[S, T]
-assert_type(A.f(A[int](), ""), tuple[str, int]) # E: assert_type(tuple[str, Any], tuple[str, int])
+assert_type(A.f(A[int](), ""), tuple[str, int]) # E: assert_type(tuple[Literal[''], Any], tuple[str, int])
     "#,
 );
 
@@ -1420,7 +1420,7 @@ assert_type(A.f(A[int]()), int)
 testcase!(
     test_access_overloaded_staticmethod_using_class_param_on_class,
     r#"
-from typing import assert_type, reveal_type, overload, Any
+from typing import Literal, assert_type, reveal_type, overload, Any
 class A[T]:
     @overload
     @staticmethod
@@ -1432,7 +1432,7 @@ class A[T]:
     def f(x = None) -> Any: ...
 reveal_type(A.f) # E: revealed type: Overload[(x: None = ...) -> None, [T](x: T) -> T]
 assert_type(A.f(), None)
-assert_type(A.f(0), int)
+assert_type(A.f(0), Literal[0])
     "#,
 );
 

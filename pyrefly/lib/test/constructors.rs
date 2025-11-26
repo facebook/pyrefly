@@ -202,7 +202,7 @@ class Meta(type):
 class C[T](metaclass=Meta):
     def __init__(self, x: T):
         pass
-assert_type(C(0), C[int]) # Correct, because metaclass call does not instantiate T=str
+assert_type(C(0), C[int]) # Correct, preserves the argument type passed to C
     "#,
 );
 
@@ -477,10 +477,10 @@ assert_type(C2(), C2[int])
 testcase!(
     test_specialize_in_new,
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 class C[T]:
     def __new__[T2](cls, x: T2) -> C[T2]: ...
-assert_type(C(0), C[int])
+assert_type(C(0), C[Literal[0]])
     "#,
 );
 
@@ -514,7 +514,7 @@ assert_type(C(0, "foo"), C[str])
 testcase!(
     test_new_and_init_generic,
     r#"
-from typing import Self,assert_type
+from typing import Self, assert_type
 
 class Class2[T]:
     def __new__(cls, *args, **kwargs) -> Self: ...

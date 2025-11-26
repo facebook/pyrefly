@@ -11,7 +11,7 @@ use crate::testcase;
 testcase!(
     test_tyvar_function,
     r#"
-from typing import TypeVar, assert_type
+from typing import TypeVar, assert_type, Literal
 
 T = TypeVar("T")
 
@@ -19,14 +19,14 @@ def foo(x: T) -> T:
     y: T = x
     return y
 
-assert_type(foo(1), int)
+assert_type(foo(1), Literal[1])
 "#,
 );
 
 testcase!(
     test_tyvar_alias,
     r#"
-from typing import assert_type
+from typing import assert_type, Literal
 import typing
 
 T = typing.TypeVar("T")
@@ -34,14 +34,14 @@ T = typing.TypeVar("T")
 def foo(x: T) -> T:
     return x
 
-assert_type(foo(1), int)
+assert_type(foo(1), Literal[1])
 "#,
 );
 
 testcase!(
     test_tyvar_quoted,
     r#"
-from typing import assert_type
+from typing import assert_type, Literal
 import typing
 
 T = typing.TypeVar("T")
@@ -49,7 +49,7 @@ T = typing.TypeVar("T")
 def foo(x: "T") -> "T":
     return x
 
-assert_type(foo(1), int)
+assert_type(foo(1), Literal[1])
 "#,
 );
 
@@ -680,11 +680,11 @@ testcase!(
     env_exported_type_var(),
     r#"
 import lib
-from typing import assert_type
+from typing import assert_type, Literal
 
 def f(x: lib.T) -> lib.T:
     return x
-assert_type(f(0), int)
+assert_type(f(0), Literal[0])
     "#,
 );
 
@@ -726,11 +726,11 @@ testcase!(
     test_legacy_typevar_imported_after_use,
     TestEnv::one("foo", "from typing import TypeVar\nT = TypeVar('T')"),
     r#"
-from typing import assert_type
+from typing import assert_type, Literal
 def f(x: "foo.T") -> "foo.T":
     return x
 import foo
-assert_type(f(0), int)
+assert_type(f(0), Literal[0])
     "#,
 );
 
@@ -795,7 +795,7 @@ testcase!(
         "from typing import TypeVar\nT = TypeVar('T')\nclass C: pass"
     ),
     r#"
-from typing import Generic, assert_type
+from typing import Generic, Literal, assert_type
 import foo
 
 # Here, the `foo.C` possible-legacy-tparam binding is the one that winds up in scope, we
@@ -804,7 +804,7 @@ import foo
 def f(x: foo.T, y: foo.C) -> foo.T:
     z: foo.T = x  # E: `T` is not assignable to `TypeVar[T]`
     return z  # E: Returned type `TypeVar[T]` is not assignable to declared return type `T
-assert_type(f(1, foo.C()), int)
+assert_type(f(1, foo.C()), Literal[1])
 
 # The same thing happens here, but it's a much bigger problem because now we forget
 # about the type variable identity for the entire class body, so the signatures come out

@@ -1613,6 +1613,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Literal(lit) => acc.push(AttributeBase1::ClassInstance(
                 lit.general_class_type(self.stdlib).clone(),
             )),
+            Type::Type(box Type::Literal(lit)) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(lit.general_class_type(self.stdlib).clone()),
+            )),
+            Type::Type(box Type::LiteralString) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(self.stdlib.str().clone()),
+            )),
             Type::TypeGuard(_) | Type::TypeIs(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.bool().clone()))
             }
