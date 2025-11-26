@@ -9,6 +9,9 @@ use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
 use crate::util::check_inlay_hint_label_values;
 use crate::util::get_test_files_root;
+use crate::util::inlay_hints_match_expected;
+use crate::util::ExpectedInlayHint;
+use crate::util::ExpectedTextEdit;
 
 #[test]
 fn test_inlay_hints() {
