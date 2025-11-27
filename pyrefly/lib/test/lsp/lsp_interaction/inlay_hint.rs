@@ -6,8 +6,8 @@
  */
 
 use lsp_types::request::InlayHintRequest;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::ClientRequestHandle;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -92,8 +92,7 @@ fn test_inlay_hint_default_config() {
                 }]
             }
         ]),
-    )
-        .unwrap();
+    );
 
     interaction.shutdown().unwrap();
 }
@@ -223,8 +222,7 @@ fn test_inlay_hint_disable_variables() {
                 "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
             }]
         }]),
-    )
-        .unwrap();
+    );
 
     interaction.shutdown().unwrap();
 }
@@ -275,8 +273,7 @@ fn test_inlay_hint_disable_returns() {
                 "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
             }]
         }]),
-    )
-        .unwrap();
+    );
 
     interaction.shutdown().unwrap();
 }
@@ -335,13 +332,10 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
     interaction.shutdown().unwrap();
 }
 
-fn expect_inlay_hint_response(
-    handle: ClientRequestHandle<'_, InlayHintRequest>,
-    expected: Value,
-) {
+fn expect_inlay_hint_response(handle: ClientRequestHandle<'_, InlayHintRequest>, expected: Value) {
     let mut expected = expected;
     strip_inlay_hint_locations(&mut expected);
-    handle.expect_response_with(move |result| {
+    let _ = handle.expect_response_with(move |result| {
         let mut actual_json = serde_json::to_value(&result).unwrap();
         strip_inlay_hint_locations(&mut actual_json);
         actual_json == expected

@@ -6,8 +6,8 @@
  */
 
 use lsp_types::request::InlayHintRequest;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::ClientRequestHandle;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -35,8 +35,7 @@ fn test_inlay_hints() {
     );
 
     expect_inlay_hint_response(
-        interaction
-            .inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0),
+        interaction.inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0),
         json!([{
             "label": [
                 {"value": " -> "},
@@ -59,12 +58,10 @@ fn test_inlay_hints() {
                 "range": {"end": {"character": 21, "line": 0}, "start": {"character": 21, "line": 0}}
             }]
         }]),
-    )
-        .unwrap();
+    );
 
     expect_inlay_hint_response(
-        interaction
-            .inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0),
+        interaction.inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0),
         json!([{
             "label": [
                 {"value": ": "},
@@ -87,12 +84,10 @@ fn test_inlay_hints() {
                 "range": {"end": {"character": 6, "line": 0}, "start": {"character": 6, "line": 0}}
             }]
         }]),
-    )
-        .unwrap();
+    );
 
     expect_inlay_hint_response(
-        interaction
-            .inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0),
+        interaction.inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0),
         json!([{
             "label": [
                 {"value": " -> "},
@@ -107,18 +102,14 @@ fn test_inlay_hints() {
                 "range": {"end": {"character": 15, "line": 0}, "start": {"character": 15, "line": 0}}
             }]
         }]),
-    )
-        .unwrap();
+    );
     interaction.shutdown().unwrap();
 }
 
-fn expect_inlay_hint_response(
-    handle: ClientRequestHandle<'_, InlayHintRequest>,
-    expected: Value,
-) {
+fn expect_inlay_hint_response(handle: ClientRequestHandle<'_, InlayHintRequest>, expected: Value) {
     let mut expected = expected;
     strip_inlay_hint_locations(&mut expected);
-    handle.expect_response_with(move |result| {
+    let _ = handle.expect_response_with(move |result| {
         let mut actual_json = serde_json::to_value(&result).unwrap();
         strip_inlay_hint_locations(&mut actual_json);
         actual_json == expected
