@@ -37,6 +37,8 @@ The following configuration options are IDE-specific and exposed as VSCode setti
 - Use a specific interpreter
   - If the [`Python`](https://marketplace.visualstudio.com/items?itemName=ms-python.python) VSCode extension is installed, [selecting an interpreter](https://code.visualstudio.com/docs/python/environments) will override the interpreter and settings Pyrefly uses to type check your project, even if one is specified in your Pyrefly configuration.
   - `python.defaultInterpreterPath` will override the default interpreter selected by VSCode for your workspace.
+- Control hover tooltip links
+  - `python.analysis.showHoverGoToLinks` [boolean: true]: Controls whether hover tooltips include "Go to definition" and "Go to type definition" navigation links. Set to `false` for cleaner tooltips with only type information.
 
 ## Issues?
 If you experience issues with the Pyrefly extension, please create an [issue](https://github.com/facebook/pyrefly/issues) on github.
@@ -225,6 +227,26 @@ Ensure the pyrefly is on `$PATH`, add following snippet to your `coc-settings.js
   }
 },
 ```
+
+:::tip
+Type errors aren't shown unless a configuration exists. To always display type errors with coc.nvim, add the following `initializationOptions` to your configuration:
+```json
+"languageserver": {
+  "pyrefly": {
+    "command": "pyrefly",
+    "args": ["lsp"],
+    "filetypes": ["python"],
+    "rootPatterns": ["pyrefly.toml", "pyproject.toml", ".git"],
+    "initializationOptions": {
+      "pyrefly": {
+        "displayTypeErrors": "force-on"
+      }
+    }
+  }
+}
+```
+Use `"default"` to only show type errors when a configuration exists, or `"force-off"` to never show them.
+:::
 
 ### Vim + ALE
 Pull the latest version of ALE and add the following lines to your configuration

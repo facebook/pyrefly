@@ -518,7 +518,7 @@ def f(x: Tensor, i: int):
 testcase!(
     test_tensor_type_method,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 def power(x: "Tensor", i: int) -> "Tensor":
     return x
@@ -527,7 +527,7 @@ class Tensor:
     __pow__ = power
 
 def f(x: Tensor, i: int):
-    reveal_type(x ** i) # E:  revealed type: Tensor
+    assert_type(x ** i, Tensor)
 
     "#,
 );
@@ -612,7 +612,7 @@ assert_type(A() + B(), A)  # E: `A.__add__` is deprecated
 testcase!(
     test_bind_dunder_callable_simple,
     r#"
-from typing import Callable, reveal_type
+from typing import Callable
 
 def foo_pow(base: "Foo", arg: "int | Foo") -> "Foo": return Foo()
 

@@ -14,10 +14,30 @@ use ruff_text_size::TextSize;
 use crate::state::lsp::ImportFormat;
 use crate::state::require::Require;
 use crate::state::state::State;
+use crate::state::state::Transaction;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
+
+// Some assertions compare literal completion dumps. pretty_assertions decorates
+// diffs with ANSI escapes, so we strip them to keep the expected strings stable.
+fn strip_ansi(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            for next in chars.by_ref() {
+                if next == 'm' {
+                    break;
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
 
 #[derive(Default)]
 struct ResultsFilter {
@@ -117,6 +137,14 @@ fn get_test_report(
     }
 }
 
+fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize) -> Vec<String> {
+    txn.completion(handle, position, ImportFormat::Absolute, true)
+        .into_iter()
+        .filter(|item| item.kind == Some(CompletionItemKind::FIELD))
+        .map(|item| item.label)
+        .collect()
+}
+
 #[test]
 fn dot_complete_basic_test() {
     let code = r#"
@@ -149,6 +177,95 @@ Completion Results:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn dict_key_completion_from_literal() {
+    let code = r#"
+def use_dict():
+    data = {"foo": 1, "bar": 2}
+    data[""]
+#        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.trim().contains(
+            r#"
+# main.py
+4 |     data[""]
+             ^
+Completion Results:
+- (Field) bar: Literal[2]
+- (Field) foo: Literal[1]
+"#
+            .trim()
+        )
+    );
+}
+
+#[test]
+fn dict_key_completion_from_nested_literal() {
+    let code = r#"
+def nested():
+    config = {"user": {"name": "Alice"}}
+    config["user"][""]
+#                  ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let labels = dict_field_labels(&txn, handle, position);
+    assert_eq!(labels, vec!["name".to_owned()]);
+}
+
+#[test]
+fn dict_key_completion_from_outer_literal() {
+    let code = r#"
+def nested():
+    config = {"user": {"name": "Alice"}}
+    config["user"][""]
+#           ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let labels = dict_field_labels(&txn, handle, position);
+    assert_eq!(labels, vec!["user".to_owned()]);
+}
+
+#[test]
+fn dict_key_completion_from_typed_dict() {
+    let code = r#"
+from typing import TypedDict
+
+class User(TypedDict):
+    name: str
+    age: int
+
+u: User
+u[""]
+#  ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.trim().contains(
+            r#"
+# main.py
+9 | u[""]
+       ^
+Completion Results:
+- (Field) age: int
+- (Field) name: str
+"#
+            .trim()
+        )
     );
 }
 
@@ -1035,6 +1152,8 @@ isins
          ^
 Completion Results:
 - (Function) isinstance
+- (Class) DivisionImpossible: from decimal import DivisionImpossible
+
 - (Class) FirstHeaderLineIsContinuationDefect: from email.errors import FirstHeaderLineIsContinuationDefect
 
 - (Class) MissingHeaderBodySeparatorDefect: from email.errors import MissingHeaderBodySeparatorDefect
@@ -1129,8 +1248,7 @@ foo("
 4 | foo("
          ^
 Completion Results:
-- (Value) 'a\nb': Literal['a\nb']
-- (Variable) x=: Literal['a\nb']"#
+- (Value) 'a\nb': Literal['a\nb']"#
             .trim(),
         report.trim(),
     );
@@ -1179,7 +1297,6 @@ foo('
 Completion Results:
 - (Value) 'bar': Literal['bar']
 - (Value) 'foo': Literal['foo']
-- (Variable) x=: Literal['bar', 'foo']
 "#
         .trim(),
         report.trim(),
@@ -1294,7 +1411,7 @@ Completion Results:
 #[test]
 fn completion_dict() {
     let code = r#"
-x = {"a": 3, "b", 4}
+x = {"a": 3, "b": 4}
 x["
 # ^
 "#;
@@ -1306,7 +1423,6 @@ x["
 3 | x["
       ^
 Completion Results:
-- (Variable) x: dict[int | str, int]
 "#
         .trim(),
         report.trim(),
@@ -2299,5 +2415,35 @@ Completion Results:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn test_no_completion_in_comments() {
+    let code = r#"
+# This is a comment
+#      ^
+import sys
+x = sys.version
+#       ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let positions = extract_cursors_for_test(code);
+    let txn = state.transaction();
+
+    // Position 0: inside comment - should return empty
+    let comment_completions = txn.completion(&handle, positions[0], ImportFormat::Absolute, true);
+    assert!(
+        comment_completions.is_empty(),
+        "Expected no completions in comment, but got {} completions",
+        comment_completions.len()
+    );
+
+    // Position 1: normal code - should return completions
+    let normal_completions = txn.completion(&handle, positions[1], ImportFormat::Absolute, true);
+    assert!(
+        !normal_completions.is_empty(),
+        "Expected completions in normal code but got none"
     );
 }

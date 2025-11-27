@@ -13,6 +13,7 @@ use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -26,8 +27,10 @@ use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_build::source_db::Target;
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::PYTHON_EXTENSIONS;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
@@ -55,6 +58,10 @@ use crate::error::ErrorDisplayConfig;
 use crate::finder::ConfigError;
 use crate::module_wildcard::Match;
 use crate::pyproject::PyProject;
+
+pub static GENERATED_FILE_CONFIG_OVERRIDE: LazyLock<
+    RwLock<SmallMap<ModulePathBuf, ArcId<ConfigFile>>>,
+> = LazyLock::new(|| RwLock::new(SmallMap::new()));
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
 pub struct SubConfig {
@@ -801,18 +808,19 @@ impl ConfigFile {
                  self.root.infer_with_first_use.unwrap())
     }
 
-    pub fn permissive_ignores(&self, path: &Path) -> bool {
-        self.get_from_sub_configs(|x| x.permissive_ignores, path)
+    pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
+        self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
             .unwrap_or_else(||
-                // we can use unwrap here, because the value in the root config must
-                // be set in `ConfigFile::configure()`.
-                self.root.permissive_ignores.unwrap())
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.enabled_ignores.as_ref().unwrap())
     }
+
     pub fn get_error_config(&self, path: &Path) -> ErrorConfig<'_> {
         ErrorConfig::new(
             self.errors(path),
             self.ignore_errors_in_generated_code(path),
-            self.permissive_ignores(path),
+            self.enabled_ignores(path).clone(),
             self.ignore_missing_source,
         )
     }
@@ -882,13 +890,24 @@ impl ConfigFile {
         result
     }
 
-    pub fn requery_source_db(&self, files: &SmallSet<ModulePath>) -> anyhow::Result<bool> {
-        let Some(source_db) = &self.source_db else {
+    pub fn requery_source_db(
+        this: &ArcId<Self>,
+        files: &SmallSet<ModulePath>,
+    ) -> anyhow::Result<bool> {
+        let Some(source_db) = &this.source_db else {
             return Ok(false);
         };
 
         let files = files.iter().map(|p| p.module_path_buf()).collect();
-        source_db.requery_source_db(files)
+        let result = source_db.requery_source_db(files)?;
+        let generated_files = source_db.get_generated_files();
+        if !generated_files.is_empty() {
+            let mut write = GENERATED_FILE_CONFIG_OVERRIDE.write();
+            for file in generated_files {
+                write.insert(file, this.dupe());
+            }
+        }
+        Ok(result)
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,
@@ -953,9 +972,24 @@ impl ConfigFile {
             self.root.infer_with_first_use = Some(true);
         }
 
-        if self.root.permissive_ignores.is_none() {
-            self.root.permissive_ignores = Some(false);
-        }
+        let tools_from_permissive_ignores = match self.root.permissive_ignores {
+            Some(true) => Some(Tool::all()),
+            Some(false) => Some(Tool::default_enabled()),
+            None => None,
+        };
+
+        let enabled_ignores = match (
+            tools_from_permissive_ignores,
+            self.root.enabled_ignores.clone(),
+        ) {
+            (None, None) => Tool::default_enabled(),
+            (None, Some(tools)) | (Some(tools), None) => tools,
+            (Some(_), Some(tools)) => {
+                configure_errors.push(anyhow!("Cannot use both `permissive-ignores` and `enabled-ignores`: `permissive-ignores` will be ignored."));
+                tools
+            }
+        };
+        self.root.enabled_ignores = Some(enabled_ignores);
 
         if let Some(build_system) = &self.build_system {
             match &self.source {
@@ -1102,7 +1136,10 @@ impl ConfigFile {
             (config, errors)
         }
         let config_path = config_path.absolutize();
-        let (config, errors) = f(&config_path);
+        let (config, mut errors) = f(&config_path);
+        if !config.ignore_missing_source {
+            errors.push(ConfigError::warn(anyhow!("`ignore-missing-source` is deprecated and will be removed in a future version. Please enable the `missing-source` error instead.")))
+        }
         let errors = errors.into_map(|err| err.context(format!("{}", config_path.display())));
         (config, errors)
     }
@@ -1263,6 +1300,7 @@ mod tests {
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     permissive_ignores: None,
+                    enabled_ignores: None,
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
@@ -1280,6 +1318,7 @@ mod tests {
                         ignore_missing_imports: Some(Vec::new()),
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         permissive_ignores: None,
+                        enabled_ignores: None,
                     }
                 }],
                 ignore_missing_source: true,
@@ -1651,6 +1690,7 @@ mod tests {
                 infer_with_first_use: Some(true),
                 extras: Default::default(),
                 permissive_ignores: Some(false),
+                enabled_ignores: None,
             },
             sub_configs: vec![
                 SubConfig {
@@ -1957,6 +1997,7 @@ mod tests {
                 infer_with_first_use: Some(true),
                 extras: Default::default(),
                 permissive_ignores: Some(false),
+                enabled_ignores: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -1988,6 +2029,7 @@ mod tests {
                 infer_with_first_use: Some(true),
                 extras: Default::default(),
                 permissive_ignores: Some(false),
+                enabled_ignores: None,
             },
             sub_configs: vec![],
             ..Default::default()

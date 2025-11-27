@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::max;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::mem;
@@ -59,12 +60,10 @@ use crate::binding::binding::NarrowUseLocation;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
-use crate::binding::bindings::UninitializedInFlow;
+use crate::binding::bindings::InitializedInFlow;
 use crate::binding::expr::Usage;
 use crate::binding::function::SelfAssignments;
 use crate::binding::narrow::NarrowOps;
-use crate::config::error_kind::ErrorKind;
-use crate::error::context::ErrorInfo;
 use crate::export::definitions::Definition;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
@@ -87,7 +86,7 @@ pub enum NameReadInfo {
     /// flow such that I am not defined in at least one branch.
     Flow {
         idx: Idx<Key>,
-        uninitialized: UninitializedInFlow,
+        initialized: InitializedInFlow,
     },
     /// The name is an anywhere-style lookup. If it came from a non-barrier scope
     /// relative to the current one, this means it is uninitialized; otherwise we
@@ -95,7 +94,7 @@ pub enum NameReadInfo {
     /// below it) and treat the read as initialized.
     Anywhere {
         key: Key,
-        uninitialized: UninitializedInFlow,
+        initialized: InitializedInFlow,
     },
     /// No such name is defined in the current scope stack.
     NotFound,
@@ -291,7 +290,7 @@ impl StaticInfo {
     fn as_key(&self, name: &Name) -> Key {
         let short_identifier = || {
             ShortIdentifier::new(&Identifier {
-                node_index: AtomicNodeIndex::dummy(),
+                node_index: AtomicNodeIndex::default(),
                 id: name.clone(),
                 range: self.range,
             })
@@ -546,15 +545,15 @@ impl FlowInfo {
         self.value.as_mut()
     }
 
-    fn uninitialized(&self) -> UninitializedInFlow {
+    fn initialized(&self) -> InitializedInFlow {
         self.value()
-            .map_or(UninitializedInFlow::No, |v| match v.style {
+            .map_or(InitializedInFlow::Yes, |v| match v.style {
                 FlowStyle::Uninitialized
                 | FlowStyle::ClassField {
                     initial_value: None,
-                } => UninitializedInFlow::Yes,
-                FlowStyle::PossiblyUninitialized => UninitializedInFlow::Conditionally,
-                _ => UninitializedInFlow::No,
+                } => InitializedInFlow::No,
+                FlowStyle::PossiblyUninitialized => InitializedInFlow::Conditionally,
+                _ => InitializedInFlow::Yes,
             })
     }
 }
@@ -800,7 +799,32 @@ struct ParameterUsage {
 }
 
 #[derive(Clone, Debug)]
+struct ImportUsage {
+    range: TextRange,
+    used: bool,
+    is_star_import: bool,
+}
+
+#[derive(Clone, Debug)]
+struct VariableUsage {
+    range: TextRange,
+    used: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct UnusedParameter {
+    pub name: Name,
+    pub range: TextRange,
+}
+
+#[derive(Clone, Debug)]
+pub struct UnusedImport {
+    pub name: Name,
+    pub range: TextRange,
+}
+
+#[derive(Clone, Debug)]
+pub struct UnusedVariable {
     pub name: Name,
     pub range: TextRange,
 }
@@ -887,6 +911,15 @@ pub struct Fork {
     range: TextRange,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum FlowBarrier {
+    /// Allow flow information from containing scopes, and check for name initialization errors.
+    AllowFlowChecked,
+    /// Allow flow information from containing scopes, and skip checks for name initialization errors.
+    AllowFlowUnchecked,
+    BlockFlow,
+}
+
 #[derive(Clone, Debug)]
 pub struct Scope {
     range: TextRange,
@@ -903,7 +936,7 @@ pub struct Scope {
     ///
     /// Set when we enter a scope like a function body with deferred evaluation, where the
     /// values we might see from containing scopes may not match their current values.
-    barrier: bool,
+    flow_barrier: FlowBarrier,
     /// What kind of scope is this? Used for a few purposes, including propagating
     /// information down from scopes (e.g. to figure out when we're in a class) and
     /// storing data from the current AST traversal for later analysis, especially
@@ -916,52 +949,62 @@ pub struct Scope {
     /// merge flows, including boolean ops, ternary operators, if and match statements,
     /// and exception handlers
     forks: Vec<Fork>,
+    /// Tracking imports in the current scope (module-level only)
+    imports: SmallMap<Name, ImportUsage>,
+    /// Tracking variables in the current scope (module, function, and method scopes)
+    variables: SmallMap<Name, VariableUsage>,
 }
 
 impl Scope {
-    fn new(range: TextRange, barrier: bool, kind: ScopeKind) -> Self {
+    fn new(range: TextRange, flow_barrier: FlowBarrier, kind: ScopeKind) -> Self {
         Self {
             range,
             stat: Default::default(),
             flow: Default::default(),
-            barrier,
+            flow_barrier,
             kind,
             loops: Default::default(),
             forks: Default::default(),
+            imports: SmallMap::new(),
+            variables: SmallMap::new(),
         }
     }
 
     pub fn annotation(range: TextRange) -> Self {
-        Self::new(range, false, ScopeKind::Annotation)
+        Self::new(range, FlowBarrier::AllowFlowChecked, ScopeKind::Annotation)
     }
 
     pub fn type_alias(range: TextRange) -> Self {
-        Self::new(range, false, ScopeKind::TypeAlias)
+        Self::new(range, FlowBarrier::AllowFlowChecked, ScopeKind::TypeAlias)
     }
 
     pub fn class_body(range: TextRange, indices: ClassIndices, name: Identifier) -> Self {
         Self::new(
             range,
-            false,
+            FlowBarrier::AllowFlowChecked,
             ScopeKind::Class(ScopeClass::new(name, indices)),
         )
     }
 
     pub fn comprehension(range: TextRange) -> Self {
-        Self::new(range, false, ScopeKind::Comprehension)
+        Self::new(
+            range,
+            FlowBarrier::AllowFlowChecked,
+            ScopeKind::Comprehension,
+        )
     }
 
     pub fn function(range: TextRange, is_async: bool) -> Self {
         Self::new(
             range,
-            true,
+            FlowBarrier::BlockFlow,
             ScopeKind::Function(ScopeFunction::new(is_async)),
         )
     }
     pub fn lambda(range: TextRange, is_async: bool) -> Self {
         Self::new(
             range,
-            false,
+            FlowBarrier::AllowFlowUnchecked,
             ScopeKind::Function(ScopeFunction::new(is_async)),
         )
     }
@@ -969,13 +1012,13 @@ impl Scope {
     pub fn method(range: TextRange, name: Identifier, is_async: bool) -> Self {
         Self::new(
             range,
-            true,
+            FlowBarrier::BlockFlow,
             ScopeKind::Method(ScopeMethod::new(name, is_async)),
         )
     }
 
     fn module(range: TextRange) -> Self {
-        Self::new(range, false, ScopeKind::Module)
+        Self::new(range, FlowBarrier::AllowFlowChecked, ScopeKind::Module)
     }
 
     fn parameters_mut(&mut self) -> Option<&mut SmallMap<Name, ParameterUsage>> {
@@ -1009,22 +1052,22 @@ fn contains_inclusive(range: TextRange, position: TextSize) -> bool {
 }
 
 impl ScopeTreeNode {
-    /// Return whether we hit a child scope with a barrier
+    /// Return any flow barrier we hit in a child scope
     fn visit_available_definitions(
         &self,
         table: &BindingTable,
         position: TextSize,
         visitor: &mut impl FnMut(Idx<Key>),
-    ) -> bool {
+    ) -> FlowBarrier {
         if !contains_inclusive(self.scope.range, position) {
-            return false;
+            return FlowBarrier::AllowFlowChecked;
         }
-        let mut barrier = false;
+        let mut flow_barrier = FlowBarrier::AllowFlowChecked;
         for node in &self.children {
             let hit_barrier = node.visit_available_definitions(table, position, visitor);
-            barrier = barrier || hit_barrier
+            flow_barrier = max(flow_barrier, hit_barrier);
         }
-        if !barrier {
+        if flow_barrier < FlowBarrier::BlockFlow {
             for info in self.scope.flow.info.values() {
                 if let Some(value) = info.value() {
                     visitor(value.idx);
@@ -1036,7 +1079,7 @@ impl ScopeTreeNode {
                 visitor(key);
             }
         }
-        barrier || self.scope.barrier
+        max(flow_barrier, self.scope.flow_barrier)
     }
 
     fn collect_available_definitions(
@@ -1086,6 +1129,11 @@ impl Scopes {
             ScopeKind::Class(_) => true,
             _ => false,
         }
+    }
+
+    pub fn in_function_scope(&self) -> bool {
+        self.iter_rev()
+            .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
     }
 
     /// Are we currently in a class body. If so, return the keys for the class and its metadata.
@@ -1160,6 +1208,14 @@ impl Scopes {
         let (a, b) = self.scopes.split_off_last();
         assert_eq!(a.len(), 0);
         ScopeTrace(b)
+    }
+
+    pub fn collect_module_unused_imports(&self) -> Vec<UnusedImport> {
+        let module_scope = self.scopes.first();
+        if !matches!(module_scope.scope.kind, ScopeKind::Module) {
+            return Vec::new();
+        }
+        Self::collect_unused_imports(module_scope.scope.imports.clone())
     }
 
     pub fn init_current_static(
@@ -1248,14 +1304,49 @@ impl Scopes {
             .collect()
     }
 
+    fn collect_unused_imports(imports: SmallMap<Name, ImportUsage>) -> Vec<UnusedImport> {
+        imports
+            .into_iter()
+            .filter_map(|(name, usage)| {
+                if usage.used || usage.is_star_import {
+                    None
+                } else {
+                    Some(UnusedImport {
+                        name,
+                        range: usage.range,
+                    })
+                }
+            })
+            .collect()
+    }
+
+    fn collect_unused_variables(variables: SmallMap<Name, VariableUsage>) -> Vec<UnusedVariable> {
+        variables
+            .into_iter()
+            .filter_map(|(name, usage)| {
+                if usage.used {
+                    None
+                } else {
+                    Some(UnusedVariable {
+                        name,
+                        range: usage.range,
+                    })
+                }
+            })
+            .collect()
+    }
+
     pub fn pop_function_scope(
         &mut self,
     ) -> (
         YieldsAndReturns,
         Option<SelfAssignments>,
         Vec<UnusedParameter>,
+        Vec<UnusedVariable>,
     ) {
-        match self.pop().kind {
+        let scope = self.pop();
+        let unused_variables = Self::collect_unused_variables(scope.variables.clone());
+        match scope.kind {
             ScopeKind::Method(method_scope) => (
                 method_scope.yields_and_returns,
                 Some(SelfAssignments {
@@ -1263,11 +1354,13 @@ impl Scopes {
                     instance_attributes: method_scope.instance_attributes,
                 }),
                 Self::collect_unused_parameters(method_scope.parameters),
+                unused_variables,
             ),
             ScopeKind::Function(function_scope) => (
                 function_scope.yields_and_returns,
                 None,
                 Self::collect_unused_parameters(function_scope.parameters),
+                unused_variables,
             ),
             unexpected => unreachable!("Tried to pop a function scope, but got {unexpected:?}"),
         }
@@ -1515,6 +1608,67 @@ impl Scopes {
             if let Some(parameters) = scope.parameters_mut()
                 && let Some(info) = parameters.get_mut(name)
             {
+                info.used = true;
+                break;
+            }
+        }
+    }
+
+    pub fn register_import(&mut self, name: &Identifier) {
+        self.register_import_with_star(name, false);
+    }
+
+    pub fn register_import_with_star(&mut self, name: &Identifier, is_star_import: bool) {
+        if matches!(self.current().kind, ScopeKind::Module) {
+            self.current_mut().imports.insert(
+                name.id.clone(),
+                ImportUsage {
+                    range: name.range,
+                    used: false,
+                    is_star_import,
+                },
+            );
+        }
+    }
+
+    pub fn mark_import_used(&mut self, name: &Name) {
+        for scope in self.iter_rev_mut() {
+            if let Some(info) = scope.imports.get_mut(name) {
+                info.used = true;
+                break;
+            }
+        }
+    }
+
+    pub fn register_variable(&mut self, name: &Identifier) {
+        // Track variables in Module, Function, and Method scopes
+        // Module-level variables won't be reported as unused since they can be imported
+        // by other modules, but function/method-level variables will be reported
+        if matches!(
+            self.current().kind,
+            ScopeKind::Module | ScopeKind::Function(_) | ScopeKind::Method(_)
+        ) {
+            // Preserve the `used` flag if the variable was already marked as used
+            // This handles cases like `foo = foo + 1` in loops where the variable
+            // is read before being reassigned
+            let was_used = self
+                .current()
+                .variables
+                .get(&name.id)
+                .is_some_and(|usage| usage.used);
+            self.current_mut().variables.insert(
+                name.id.clone(),
+                VariableUsage {
+                    range: name.range,
+                    used: was_used,
+                },
+            );
+        }
+    }
+
+    pub fn mark_variable_used(&mut self, name: &Name) {
+        for scope in self.iter_rev_mut() {
+            if let Some(info) = scope.variables.get_mut(name) {
                 info.used = true;
                 break;
             }
@@ -1796,7 +1950,7 @@ impl Scopes {
     /// Look up the information needed to create a `Usage` binding for a read of a name
     /// in the current scope stack.
     pub fn look_up_name_for_read(&self, name: Hashed<&Name>) -> NameReadInfo {
-        let mut barrier = false;
+        let mut flow_barrier = FlowBarrier::AllowFlowChecked;
         let is_current_scope_annotation = matches!(self.current().kind, ScopeKind::Annotation);
         for (lookup_depth, scope) in self.iter_rev().enumerate() {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
@@ -1809,22 +1963,27 @@ impl Scopes {
             if is_class
                 && !((lookup_depth == 0) || (is_current_scope_annotation && lookup_depth == 1))
             {
-                // Note: class body scopes have `barrier = false`, so skipping the barrier update is okay.
+                // Note: class body scopes have `flow_barrier = AllowFlowChecked`, so skipping the flow_barrier update is okay.
                 continue;
             }
 
             if let Some(flow_info) = scope.flow.get_info_hashed(name)
-                && !barrier
+                && flow_barrier < FlowBarrier::BlockFlow
             {
-                let uninitialized = flow_info.uninitialized();
+                let initialized = if flow_barrier == FlowBarrier::AllowFlowUnchecked {
+                    // Just assume the name is initialized without checking.
+                    InitializedInFlow::Yes
+                } else {
+                    flow_info.initialized()
+                };
                 // Because class body scopes are dynamic, if we know that the the name is
                 // definitely not initialized in the flow, we should skip it.
-                if is_class && matches!(uninitialized, UninitializedInFlow::Yes) {
+                if is_class && matches!(initialized, InitializedInFlow::No) {
                     continue;
                 }
                 return NameReadInfo::Flow {
                     idx: flow_info.idx(),
-                    uninitialized,
+                    initialized,
                 };
             }
             // Class body scopes are dynamic, not static, so if we don't find a name in the
@@ -1840,16 +1999,16 @@ impl Scopes {
                     // exception because they are synthesized scope entries that don't exist at all
                     // in the runtime; we treat them as always initialized to avoid false positives
                     // for uninitialized local checks in class bodies.
-                    uninitialized: if barrier
+                    initialized: if flow_barrier == FlowBarrier::BlockFlow
                         || matches!(static_info.style, StaticStyle::PossibleLegacyTParam)
                     {
-                        UninitializedInFlow::No
+                        InitializedInFlow::Yes
                     } else {
-                        UninitializedInFlow::Yes
+                        InitializedInFlow::No
                     },
                 };
             }
-            barrier = barrier || scope.barrier;
+            flow_barrier = max(flow_barrier, scope.flow_barrier);
         }
         NameReadInfo::NotFound
     }
@@ -2404,16 +2563,8 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn add_loop_exitpoint(&mut self, exit: LoopExit, range: TextRange) {
-        let in_loop = self.scopes.add_loop_exit(exit);
-        if !in_loop {
-            // Python treats break and continue outside of a loop as a syntax error.
-            self.error(
-                range,
-                ErrorInfo::Kind(ErrorKind::ParseError),
-                format!("Cannot `{exit}` outside loop"),
-            );
-        }
+    pub fn add_loop_exitpoint(&mut self, exit: LoopExit) {
+        self.scopes.add_loop_exit(exit);
     }
 
     /// Start a new fork in control flow (e.g. an if/else, match statement, etc)

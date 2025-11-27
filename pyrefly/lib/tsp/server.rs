@@ -15,6 +15,7 @@ use lsp_server::Connection;
 use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
+use lsp_types::ServerCapabilities;
 use tracing::info;
 use tsp_types::TSPRequests;
 
@@ -23,7 +24,6 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::server::ProcessEvent;
-use crate::lsp::non_wasm::server::ServerCapabilities;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::server::dispatch_lsp_events;

@@ -84,6 +84,8 @@ pub struct DataclassTransformKeywords {
     pub kw_only_default: bool,
     pub frozen_default: bool,
     pub field_specifiers: Vec<CalleeKind>,
+    /// Default converter to apply to fields that don't have an explicit converter.
+    pub _converter_default: Option<Type>,
 }
 
 impl DataclassTransformKeywords {
@@ -105,6 +107,7 @@ impl DataclassTransformKeywords {
                 }
                 _ => Vec::new(),
             },
+            _converter_default: None,
         }
     }
 
@@ -119,9 +122,9 @@ impl DataclassTransformKeywords {
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct DataclassFieldKeywords {
     pub init: bool,
-    /// Whether this field has a default. Note that this is derived from the various
+    /// This field's default, if any. Note that this is derived from the various
     /// default-related parameters but does not correspond directly to any of them
-    pub default: bool,
+    pub default: Option<Type>,
     /// None means that kw_only was not explicitly set
     pub kw_only: Option<bool>,
     /// Whether this field should have a corresponding parameter in `__init__` with the field name.
@@ -132,6 +135,7 @@ pub struct DataclassFieldKeywords {
     pub lt: Option<Type>,
     pub gt: Option<Type>,
     pub ge: Option<Type>,
+    pub le: Option<Type>,
     /// Whether we should strictly evaluate the type of the field
     pub strict: Option<bool>,
     /// If a converter callable is passed in, its first positional parameter
@@ -140,8 +144,7 @@ pub struct DataclassFieldKeywords {
 
 impl DataclassFieldKeywords {
     pub const INIT: Name = Name::new_static("init");
-    /// We combine default, default_factory, and factory into a single "default" keyword indicating
-    /// whether the field has a default. The default value isn't stored.
+    /// We combine default, default_factory, and factory into a single "default" keyword.
     pub const DEFAULT: Name = Name::new_static("default");
     pub const DEFAULT_FACTORY: Name = Name::new_static("default_factory");
     pub const FACTORY: Name = Name::new_static("factory");
@@ -153,13 +156,14 @@ impl DataclassFieldKeywords {
     pub fn new() -> Self {
         Self {
             init: true,
-            default: false,
+            default: None,
             kw_only: None,
             init_by_name: true,
             init_by_alias: None,
             lt: None,
             gt: None,
             ge: None,
+            le: None,
             converter_param: None,
             strict: None,
         }

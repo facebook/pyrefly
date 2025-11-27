@@ -552,7 +552,7 @@ impl<'a> BindingsBuilder<'a> {
                     match x.value {
                         Some(value) => self.stmt(
                             Stmt::Assign(StmtAssign {
-                                node_index: AtomicNodeIndex::dummy(),
+                                node_index: AtomicNodeIndex::default(),
                                 range: x.range,
                                 targets: vec![target],
                                 value,
@@ -869,6 +869,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     match x.asname {
                         Some(asname) => {
+                            self.scopes.register_import(&asname);
                             self.bind_definition(
                                 &asname,
                                 Binding::Module(m, m.components(), None),
@@ -882,6 +883,13 @@ impl<'a> BindingsBuilder<'a> {
                                 Key::Import(first.clone(), x.name.range),
                                 Binding::Module(m, vec![first.clone()], module_key),
                             );
+                            // Register the import using the first component (e.g., "os" from "os.path")
+                            // since that's the name that gets bound and used in code
+                            self.scopes.register_import(&Identifier {
+                                node_index: x.name.node_index.clone(),
+                                id: first.clone(),
+                                range: x.name.range,
+                            });
                             self.bind_name(&first, key, FlowStyle::MergeableImport(m));
                         }
                     }
@@ -968,11 +976,11 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::Pass(_) => { /* no-op */ }
-            Stmt::Break(x) => {
-                self.add_loop_exitpoint(LoopExit::Break, x.range);
+            Stmt::Break(_) => {
+                self.add_loop_exitpoint(LoopExit::Break);
             }
-            Stmt::Continue(x) => {
-                self.add_loop_exitpoint(LoopExit::Continue, x.range);
+            Stmt::Continue(_) => {
+                self.add_loop_exitpoint(LoopExit::Continue);
             }
             Stmt::IpyEscapeCommand(x) => {
                 if self.module_info.is_notebook() {
@@ -994,15 +1002,13 @@ impl<'a> BindingsBuilder<'a> {
             if &x.name == "*" {
                 for name in module_exports.wildcard(self.lookup).iter_hashed() {
                     let key = Key::Import(name.into_key().clone(), x.range);
-                    if let Some(ExportLocation::ThisModule(Export { is_deprecated, .. })) =
-                        exported.get_hashed(name)
-                        && *is_deprecated
+                    if let Some(ExportLocation::ThisModule(Export {
+                        deprecation: Some(deprecation),
+                        ..
+                    })) = exported.get_hashed(name)
                     {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::Deprecated),
-                            format!("`{name}` is deprecated"),
-                        );
+                        let msg = deprecation.as_error_message(format!("`{name}` is deprecated"));
+                        self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
                     let val = if exported.contains_key_hashed(name) {
                         Binding::Import(m, name.into_key().clone(), None)
@@ -1015,6 +1021,15 @@ impl<'a> BindingsBuilder<'a> {
                         Binding::Type(Type::any_error())
                     };
                     let key = self.insert_binding(key, val);
+                    // Register the imported name from wildcard imports
+                    self.scopes.register_import_with_star(
+                        &Identifier {
+                            node_index: AtomicNodeIndex::default(),
+                            id: name.into_key().clone(),
+                            range: x.range,
+                        },
+                        true,
+                    );
                     self.bind_name(
                         name.key(),
                         key,
@@ -1037,15 +1052,14 @@ impl<'a> BindingsBuilder<'a> {
                 // but there is an exception: if we are already looking at the
                 // `__init__` module of `x`, we always prefer the submodule.
                 let val = if (self.module_info.name() != m) && exported.contains_key(&x.name.id) {
-                    if let Some(ExportLocation::ThisModule(Export { is_deprecated, .. })) =
-                        exported.get(&x.name.id)
-                        && *is_deprecated
+                    if let Some(ExportLocation::ThisModule(Export {
+                        deprecation: Some(deprecation),
+                        ..
+                    })) = exported.get(&x.name.id)
                     {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::Deprecated),
-                            format!("`{}` is deprecated", x.name),
-                        );
+                        let msg =
+                            deprecation.as_error_message(format!("`{}` is deprecated", x.name));
+                        self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
                     Binding::Import(m, x.name.id.clone(), original_name_range)
                 } else {
@@ -1070,6 +1084,7 @@ impl<'a> BindingsBuilder<'a> {
                         Binding::Type(Type::any_explicit())
                     }
                 };
+                self.scopes.register_import(&asname);
                 self.bind_definition(&asname, val, FlowStyle::Import(m, x.name.id));
             }
         }

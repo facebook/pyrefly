@@ -17,6 +17,7 @@ use dupe::IterDupedExt;
 use itertools::Either;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::recurser::Guard;
@@ -797,12 +798,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fn go(&mut self, ty: &Type, in_type: bool) {
                 match ty {
                     Type::Never(_) if !in_type => (),
-                    Type::Union(tys) => {
+                    Type::Union(box Union { members, .. }) => {
                         self.seen_union = true;
-                        tys.iter().for_each(|ty| self.go(ty, in_type))
+                        members.iter().for_each(|ty| self.go(ty, in_type))
                     }
-                    Type::Type(box Type::Union(tys)) if !in_type => {
-                        tys.iter().for_each(|ty| self.go(ty, true))
+                    Type::Type(box Type::Union(box Union { members, .. })) if !in_type => {
+                        members.iter().for_each(|ty| self.go(ty, true))
                     }
                     Type::Var(v) if let Some(_guard) = self.me.recurse(*v) => {
                         self.go(&self.me.solver().force_var(*v), in_type)

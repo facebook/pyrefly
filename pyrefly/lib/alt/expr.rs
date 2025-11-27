@@ -12,13 +12,13 @@ use std::fmt::Display;
 use dupe::Dupe;
 use itertools::Either;
 use itertools::Itertools;
-use num_traits::ToPrimitive;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::typed_dict::ExtraItems;
+use pyrefly_types::types::Union;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -31,7 +31,6 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprGenerator;
 use ruff_python_ast::ExprNumberLiteral;
-use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprTuple;
@@ -236,18 +235,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check whether a type corresponds to a deprecated function or method, and if so, log a deprecation warning.
     pub fn check_for_deprecated_call(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
-        if !ty.is_deprecated_function() {
+        let Some(deprecation) = ty.function_deprecation() else {
             return;
-        }
+        };
         let deprecated_function = ty
             .to_func_kind()
             .map(|func_kind| func_kind.format(self.module().name()));
         if let Some(deprecated_function) = deprecated_function {
-            self.error(
-                errors,
+            errors.add(
                 range,
                 ErrorInfo::Kind(ErrorKind::Deprecated),
-                format!("`{deprecated_function}` is deprecated"),
+                deprecation.as_error_message(format!("`{deprecated_function}` is deprecated")),
             );
         }
     }
@@ -714,11 +712,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         _ => {
                             if let Some(iterable_ty) = self.unwrap_iterable(&ty) {
                                 if !unbounded.is_empty() {
-                                    unbounded
-                                        .push(Type::Tuple(Tuple::unbounded(self.unions(suffix))));
+                                    unbounded.push(Type::unbounded_tuple(self.unions(suffix)));
                                     suffix = Vec::new();
                                 }
-                                unbounded.push(Type::Tuple(Tuple::unbounded(iterable_ty)));
+                                unbounded.push(Type::unbounded_tuple(iterable_ty));
                                 hint_ts_iter.nth(usize::MAX);
                             } else {
                                 self.error(
@@ -757,8 +754,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::any_error()
         } else {
             match unbounded.as_slice() {
-                [] => Type::tuple(prefix),
-                [middle] => Type::Tuple(Tuple::unpacked(prefix, middle.clone(), suffix)),
+                [] => Type::concrete_tuple(prefix),
+                [middle] => Type::unpacked_tuple(prefix, middle.clone(), suffix),
                 // We can't precisely model unpacking two unbounded iterables, so we'll keep any
                 // concrete prefix and suffix elements and merge everything in between into an unbounded tuple
                 _ => {
@@ -769,11 +766,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .unwrap_or(Type::Any(AnyStyle::Implicit))
                         })
                         .collect();
-                    Type::Tuple(Tuple::unpacked(
+                    Type::unpacked_tuple(
                         prefix,
-                        Type::Tuple(Tuple::unbounded(self.unions(middle_types))),
+                        Type::unbounded_tuple(self.unions(middle_types)),
                         suffix,
-                    ))
+                    )
                 }
             }
         }
@@ -782,7 +779,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn split_tuple_hint<'b>(&self, hint: &'b Type) -> (Vec<&'b Tuple>, Vec<&'b Type>) {
         match hint {
             Type::Tuple(tuple) => (vec![tuple], Vec::new()),
-            Type::Union(ts) => ts.iter().partition_map(|t| match t {
+            Type::Union(box Union { members, .. }) => members.iter().partition_map(|t| match t {
                 Type::Tuple(tuple) => Either::Left(tuple),
                 _ => Either::Right(t),
             }),
@@ -827,7 +824,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let flattened_items = Ast::flatten_dict_items(items);
         let hints = hint.as_ref().map_or(Vec::new(), |hint| match hint.ty() {
-            Type::Union(ts) => ts
+            Type::Union(box Union { members: ts, .. }) => ts
                 .iter()
                 .map(|ty| HintRef::new(ty, hint.errors()))
                 .collect(),
@@ -1042,6 +1039,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///   and looking at the `__bool__` method, if it is present).
     /// - `None` if it's truthiness is not statically known.
     pub fn as_bool(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) -> Option<bool> {
+        if let Type::TypedDict(td) = ty {
+            // If a TypedDict has ANY required keys, it can never be empty.
+            // Therefore, it is always Truthy.
+            if self
+                .typed_dict_fields(td)
+                .values()
+                .any(|field| field.required)
+            {
+                return Some(true);
+            }
+        }
         ty.as_bool().or_else(|| {
             // If the object defines `__bool__`, we can check if it returns a statically known value
             if self
@@ -1216,7 +1224,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         ty.transform(&mut |ty| match ty {
             Type::SpecialForm(SpecialForm::Tuple) => {
-                *ty = Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)));
+                *ty = Type::unbounded_tuple(Type::Any(AnyStyle::Implicit));
             }
             Type::SpecialForm(SpecialForm::Callable) => {
                 *ty = Type::callable_ellipsis(Type::Any(AnyStyle::Implicit))
@@ -1226,9 +1234,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::ClassDef(cls) => {
                 if cls.is_builtin("tuple") {
-                    *ty = Type::type_form(Type::Tuple(Tuple::unbounded(Type::Any(
-                        AnyStyle::Implicit,
-                    ))));
+                    *ty = Type::type_form(Type::unbounded_tuple(Type::Any(AnyStyle::Implicit)));
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = Type::type_form(Type::any_explicit())
                 } else {
@@ -1824,7 +1830,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassType(cls) | Type::SelfType(cls) => {
                 self.has_superclass(cls.class_object(), self.stdlib.enum_class().class_object())
             }
-            Type::Union(variants) => variants
+            Type::Union(box Union {
+                members: variants, ..
+            }) => variants
                 .iter()
                 .all(|variant| self.is_enum_class_type(variant)),
             _ => false,
@@ -2035,19 +2043,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::Type(box Type::SpecialForm(special)) => {
                     self.apply_special_form(special, slice, range, errors)
                 }
-                Type::Tuple(Tuple::Concrete(ref elts)) => self.infer_tuple_index(
-                    elts.to_owned(),
+                Type::Tuple(ref tuple) => self.infer_tuple_subscript(
+                    tuple.clone(),
                     slice,
                     range,
-                    errors,
-                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
-                ),
-                Type::Tuple(_) => self.call_method_or_error(
-                    &base,
-                    &dunder::GETITEM,
-                    range,
-                    &[CallArg::expr(slice)],
-                    &[],
                     errors,
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
@@ -2076,10 +2075,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
                 Type::ClassType(ref cls) | Type::SelfType(ref cls)
-                    if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) =>
+                    if let Some(tuple) = self.as_tuple(cls) =>
                 {
-                    self.infer_tuple_index(
-                        elts,
+                    self.infer_tuple_subscript(
+                        tuple,
                         slice,
                         range,
                         errors,
@@ -2149,345 +2148,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             }
         })
-    }
-
-    /// When indexing/slicing concrete tuples with literals, try to infer a more precise type
-    fn infer_tuple_index(
-        &self,
-        elts: Vec<Type>,
-        index: &Expr,
-        range: TextRange,
-        errors: &ErrorCollector,
-        context: Option<&dyn Fn() -> ErrorContext>,
-    ) -> Type {
-        match index {
-            Expr::Slice(ExprSlice {
-                lower: lower_expr,
-                upper: upper_expr,
-                step: None,
-                ..
-            }) => {
-                let lower_literal = match lower_expr {
-                    Some(expr) => {
-                        let lower_type = self.expr_infer(expr, errors);
-                        match &lower_type {
-                            Type::Literal(lit) => lit.as_index_i64(),
-                            _ => None,
-                        }
-                    }
-                    None => Some(0),
-                };
-                let upper_literal = match upper_expr {
-                    Some(expr) => {
-                        let upper_type = self.expr_infer(expr, errors);
-                        match &upper_type {
-                            Type::Literal(lit) => lit.as_index_i64(),
-                            _ => None,
-                        }
-                    }
-                    None => Some(elts.len() as i64),
-                };
-                match (lower_literal, upper_literal) {
-                    (Some(lower), Some(upper))
-                        if lower <= upper
-                            && lower >= 0
-                            && upper >= 0
-                            && upper <= elts.len() as i64 =>
-                    {
-                        Type::Tuple(Tuple::concrete(
-                            elts[lower as usize..upper as usize].to_vec(),
-                        ))
-                    }
-                    _ => self.call_method_or_error(
-                        &Type::Tuple(Tuple::Concrete(elts)),
-                        &dunder::GETITEM,
-                        range,
-                        &[CallArg::expr(index)],
-                        &[],
-                        errors,
-                        context,
-                    ),
-                }
-            }
-            _ => {
-                let idx_type = self.expr_infer(index, errors);
-                match &idx_type {
-                    Type::Literal(lit) if let Some(idx) = lit.as_index_i64() => {
-                        let elt_idx = if idx >= 0 {
-                            idx
-                        } else {
-                            elts.len() as i64 + idx
-                        } as usize;
-                        if let Some(elt) = elts.get(elt_idx) {
-                            elt.clone()
-                        } else {
-                            self.error(
-                                errors,
-                                range,
-                                ErrorInfo::Kind(ErrorKind::BadIndex),
-                                format!(
-                                    "Index {idx} out of range for tuple with {} elements",
-                                    elts.len()
-                                ),
-                            )
-                        }
-                    }
-                    _ => self.call_method_or_error(
-                        &Type::Tuple(Tuple::Concrete(elts)),
-                        &dunder::GETITEM,
-                        range,
-                        &[CallArg::expr(index)],
-                        &[],
-                        errors,
-                        context,
-                    ),
-                }
-            }
-        }
-    }
-
-    fn subscript_str_literal(
-        &self,
-        value: &str,
-        base_type: &Type,
-        index_expr: &Expr,
-        errors: &ErrorCollector,
-        range: TextRange,
-        context: Option<&dyn Fn() -> ErrorContext>,
-    ) -> Type {
-        let fallback = || {
-            self.call_method_or_error(
-                base_type,
-                &dunder::GETITEM,
-                range,
-                &[CallArg::expr(index_expr)],
-                &[],
-                errors,
-                context,
-            )
-        };
-
-        if matches!(index_expr, Expr::Tuple(_)) {
-            return fallback();
-        }
-
-        let literal_index = |expr: &Expr| -> Option<i64> {
-            match self.expr_infer(expr, errors) {
-                Type::Literal(ref lit) => lit.as_index_i64(),
-                _ => None,
-            }
-        };
-
-        let chars: Vec<char> = value.chars().collect();
-        let len_usize = chars.len();
-        if len_usize > i64::MAX as usize {
-            return fallback();
-        }
-        let len = len_usize as i64;
-
-        if let Expr::Slice(slice) = index_expr {
-            let step = match slice.step.as_deref() {
-                Some(expr) => match literal_index(expr) {
-                    Some(value) if value != 0 => value,
-                    _ => return fallback(),
-                },
-                None => 1,
-            };
-
-            if step == i64::MIN {
-                return fallback();
-            }
-
-            let mut start = match slice.lower.as_deref() {
-                Some(expr) => match literal_index(expr) {
-                    Some(value) => value,
-                    None => return fallback(),
-                },
-                None => {
-                    if step < 0 {
-                        len.saturating_sub(1)
-                    } else {
-                        0
-                    }
-                }
-            };
-
-            let mut stop = match slice.upper.as_deref() {
-                Some(expr) => match literal_index(expr) {
-                    Some(value) => value,
-                    None => return fallback(),
-                },
-                None => {
-                    if step < 0 {
-                        match len.checked_add(1) {
-                            Some(v) => -v,
-                            None => return fallback(),
-                        }
-                    } else {
-                        len
-                    }
-                }
-            };
-
-            if step > 0 {
-                if start < 0 {
-                    start += len;
-                    if start < 0 {
-                        start = 0;
-                    }
-                } else if start > len {
-                    start = len;
-                }
-
-                if stop < 0 {
-                    stop += len;
-                    if stop < 0 {
-                        stop = 0;
-                    }
-                } else if stop > len {
-                    stop = len;
-                }
-            } else {
-                if start < 0 {
-                    start += len;
-                    if start < 0 {
-                        start = -1;
-                    }
-                } else if start >= len {
-                    start = len.saturating_sub(1);
-                }
-
-                if stop < 0 {
-                    stop += len;
-                    if stop < 0 {
-                        stop = -1;
-                    }
-                } else if stop >= len {
-                    stop = len.saturating_sub(1);
-                }
-            }
-
-            let slice_length = if step < 0 {
-                if stop < start {
-                    (start - stop - 1) / (-step) + 1
-                } else {
-                    0
-                }
-            } else if start < stop {
-                (stop - start - 1) / step + 1
-            } else {
-                0
-            };
-
-            if slice_length <= 0 {
-                return Type::Literal(Lit::Str("".into()));
-            }
-
-            if slice_length as usize as i64 != slice_length {
-                return fallback();
-            }
-
-            let mut result = String::new();
-            let mut idx = start;
-            for _ in 0..slice_length as usize {
-                if idx < 0 || idx >= len {
-                    return fallback();
-                }
-                let Some(&ch) = chars.get(idx as usize) else {
-                    return fallback();
-                };
-                result.push(ch);
-                idx = match idx.checked_add(step) {
-                    Some(next) => next,
-                    None => return fallback(),
-                };
-            }
-
-            Type::Literal(Lit::Str(result.into()))
-        } else {
-            let idx_ty = self.expr_infer(index_expr, errors);
-            if let Type::Literal(lit) = idx_ty
-                && let Some(idx) = lit.as_index_i64()
-            {
-                let normalized = if idx < 0 { len + idx } else { idx };
-                if normalized >= 0 && normalized < len {
-                    let ch = chars[normalized as usize];
-                    let mut buf = String::new();
-                    buf.push(ch);
-                    return Type::Literal(Lit::Str(buf.into()));
-                } else {
-                    return self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::BadIndex),
-                        format!(
-                            "Index `{idx}` out of range for string with {} elements",
-                            chars.len()
-                        ),
-                    );
-                }
-            }
-            fallback()
-        }
-    }
-
-    fn subscript_bytes_literal(
-        &self,
-        bytes: &[u8],
-        index_expr: &Expr,
-        errors: &ErrorCollector,
-        range: TextRange,
-        context: Option<&dyn Fn() -> ErrorContext>,
-    ) -> Type {
-        let index_ty = self.expr_infer(index_expr, errors);
-        match &index_ty {
-            Type::Literal(lit) => {
-                if let Some(idx) = lit.as_index_i64() {
-                    if idx >= 0
-                        && let Some(byte) = idx.to_usize().and_then(|idx| bytes.get(idx))
-                    {
-                        Type::Literal(Lit::Int(LitInt::new((*byte).into())))
-                    } else if idx < 0
-                        && let Some(byte) = idx
-                            .checked_neg()
-                            .and_then(|idx| idx.to_usize())
-                            .and_then(|idx| bytes.len().checked_sub(idx))
-                            .and_then(|idx| bytes.get(idx))
-                    {
-                        Type::Literal(Lit::Int(LitInt::new((*byte).into())))
-                    } else {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorInfo::Kind(ErrorKind::BadIndex),
-                            format!(
-                                "Index `{idx}` out of range for bytes with {} elements",
-                                bytes.len()
-                            ),
-                        )
-                    }
-                } else {
-                    self.call_method_or_error(
-                        &self.stdlib.bytes().clone().to_type(),
-                        &dunder::GETITEM,
-                        range,
-                        &[CallArg::expr(index_expr)],
-                        &[],
-                        errors,
-                        context,
-                    )
-                }
-            }
-            _ => self.call_method_or_error(
-                &self.stdlib.bytes().clone().to_type(),
-                &dunder::GETITEM,
-                range,
-                &[CallArg::expr(index_expr)],
-                &[],
-                errors,
-                context,
-            ),
-        }
     }
 
     /// Return the reason why we think `ty` is suspicious to use as a branching condition

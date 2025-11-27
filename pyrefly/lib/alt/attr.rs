@@ -13,8 +13,12 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::types::Forall;
+use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
+use pyrefly_types::types::Union;
 use pyrefly_types::types::Var;
+use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
@@ -1096,8 +1100,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &ClassBase,
         attr_name: &Name,
     ) -> Option<ClassAttribute> {
-        if !attr_name.starts_with("__")
-            || !attr_name.ends_with("__")
+        if !is_dunder(attr_name)
             // Constructors and the dataclass __post_init__ method are special-cased elsewhere and
             // should not go through magic dunder lookup.
             || [dunder::NEW, dunder::INIT, dunder::POST_INIT]
@@ -1738,6 +1741,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::None => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.none_type().clone(),
             )),
+            Type::Type(box Type::None) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(self.stdlib.none_type().clone()),
+            )),
+            Type::Type(
+                box (Type::Function(_)
+                | Type::Callable(_)
+                | Type::Overload(_)
+                | Type::Forall(box Forall {
+                    tparams: _,
+                    body: Forallable::Function(_) | Forallable::Callable(_),
+                })),
+            ) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(
+                self.stdlib.function_type().clone(),
+            ))),
+            Type::Type(box Type::BoundMethod(_)) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(self.stdlib.method_type().clone()),
+            )),
             Type::Never(_) => acc.push(AttributeBase1::Never),
             _ if ty.is_property_getter() => acc.push(AttributeBase1::Property(ty)),
             Type::Callable(_) => acc.push(AttributeBase1::ClassInstance(
@@ -1776,12 +1796,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SuperInstance(box (cls, obj)) => {
                 acc.push(AttributeBase1::SuperInstance(cls, obj))
             }
-            Type::Union(members) => {
+            Type::Union(box Union { members, .. }) => {
                 for ty in members {
                     self.as_attribute_base1(ty, acc)
                 }
             }
-            Type::Type(box Type::Union(members)) => {
+            Type::Type(box Type::Union(box Union { members, .. })) => {
                 for ty in members {
                     self.as_attribute_base1(Type::type_form(ty), acc)
                 }
@@ -1841,6 +1861,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut acc_fallback = Vec::new();
                 self.as_attribute_base1(x.1, &mut acc_fallback);
                 acc.push(AttributeBase1::Intersect(acc_intersect, acc_fallback));
+            }
+            Type::ElementOfTypeVarTuple(_) => {
+                acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
             }
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
@@ -2049,7 +2072,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 is_deprecated: matches!(
                                     export_location,
                                     ExportLocation::ThisModule(Export {
-                                        is_deprecated: true,
+                                        deprecation: Some(_),
                                         ..
                                     })
                                 ),
@@ -2081,7 +2104,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             is_deprecated: matches!(
                                 export_location,
                                 ExportLocation::ThisModule(Export {
-                                    is_deprecated: true,
+                                    deprecation: Some(_),
                                     ..
                                 })
                             ),
@@ -2131,7 +2154,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 | Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, _))
                                 | Attribute::Simple(ty)
                                 | Attribute::ClassAttribute(ClassAttribute::Property(ty, _, _))
-                                    if ty.is_deprecated_function() =>
+                                    if ty.function_deprecation().is_some() =>
                                 {
                                     is_deprecated = true;
                                 }

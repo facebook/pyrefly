@@ -15,6 +15,7 @@ use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::base::ConfigBase;
 use pyrefly_config::config::DirectoryRelativeFallbackSearchPathCache;
 use pyrefly_config::config::FallbackSearchPath;
+use pyrefly_config::config::GENERATED_FILE_CONFIG_OVERRIDE;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
@@ -150,6 +151,7 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
             cache_one.lock().clear();
             cache_parents.lock().clear();
             cache_ancestors.clear();
+            GENERATED_FILE_CONFIG_OVERRIDE.write().clear();
         })
     };
 
@@ -160,7 +162,13 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
         config
     });
 
-    ConfigFinder::new(
+    ConfigFinder::new_custom(
+        Box::new(move |_, path| {
+            Ok(GENERATED_FILE_CONFIG_OVERRIDE
+                .read()
+                .get(&path.module_path_buf())
+                .cloned())
+        }),
         Box::new(move |file| {
             let (file_config, parse_errors) = ConfigFile::from_file(file);
             let (config, validation_errors) =

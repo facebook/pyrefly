@@ -31,7 +31,6 @@ s: object = ""
 "#,
 );
 
-// T is bivariant in A since it's not used nor in a covariant nor contravariant position.
 testcase!(
     test_simple_generic_subtyping,
     r#"
@@ -42,8 +41,9 @@ class D[T]: pass
 
 b: A[int] = B[int]()
 c: A[int] = C()
-oops: A[int] = D[int]()  # E: `D[int]` is not assignable to `A[int]`
-ok: A[int] = A[str]()
+oops1: A[int] = D[int]()  # E: `D[int]` is not assignable to `A[int]`
+# Although T is bivariant in A, we follow mypy and pyright's lead in treating it as invariant.
+oops2: A[int] = A[str]()  # E: `A[str]` is not assignable to `A[int]`
 "#,
 );
 

@@ -17,3 +17,4 @@ pub mod transaction_manager;
 pub mod unsaved_file_tracker;
 pub mod will_rename_files;
 pub mod workspace;
+pub mod workspace_symbols;

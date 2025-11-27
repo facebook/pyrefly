@@ -15,8 +15,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "`TypeAlias[GoodTypeAlias3, type[list[int | None]]]` is not subscriptable",
-      "description": "`TypeAlias[GoodTypeAlias3, type[list[int | None]]]` is not subscriptable",
+      "concise_description": "`TypeAlias[GoodTypeAlias3, type[list[GoodTypeAlias2]]]` is not subscriptable",
+      "description": "`TypeAlias[GoodTypeAlias3, type[list[GoodTypeAlias2]]]` is not subscriptable",
       "line": 68,
       "name": "unsupported-operation",
       "severity": "error",
@@ -270,8 +270,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "`type[list[int | None]]` is not subscriptable",
-      "description": "`type[list[int | None]]` is not subscriptable",
+      "concise_description": "`type[list[GoodTypeAlias2]]` is not subscriptable",
+      "description": "`type[list[GoodTypeAlias2]]` is not subscriptable",
       "line": 77,
       "name": "unsupported-operation",
       "severity": "error",
@@ -3755,30 +3755,8 @@
     {
       "code": -2,
       "column": 41,
-      "concise_description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
-      "description": "Argument `() -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
-      "line": 48,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 55,
-      "stop_line": 48
-    },
-    {
-      "code": -2,
-      "column": 41,
       "concise_description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
       "description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> int` in function `model_field`",
-      "line": 49,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 55,
-      "stop_line": 49
-    },
-    {
-      "code": -2,
-      "column": 41,
-      "concise_description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
-      "description": "Argument `(*, x: int) -> int` is not assignable to parameter `converter` with type `(@_) -> @_` in function `model_field`",
       "line": 49,
       "name": "bad-argument-type",
       "severity": "error",
@@ -4298,7 +4276,7 @@
       "code": -2,
       "column": 44,
       "concise_description": "`Ham` is deprecated",
-      "description": "`Ham` is deprecated",
+      "description": "`Ham` is deprecated\n  Use Spam instead",
       "line": 18,
       "name": "deprecated",
       "severity": "warn",
@@ -4309,7 +4287,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
-      "description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
+      "description": "`_directives_deprecated_library.norwegian_blue` is deprecated\n  It is pining for the fjords",
       "line": 24,
       "name": "deprecated",
       "severity": "warn",
@@ -4320,7 +4298,7 @@
       "code": -2,
       "column": 5,
       "concise_description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
-      "description": "`_directives_deprecated_library.norwegian_blue` is deprecated",
+      "description": "`_directives_deprecated_library.norwegian_blue` is deprecated\n  It is pining for the fjords",
       "line": 25,
       "name": "deprecated",
       "severity": "warn",
@@ -4331,7 +4309,7 @@
       "code": -2,
       "column": 12,
       "concise_description": "Call to deprecated overload `_directives_deprecated_library.foo`",
-      "description": "Call to deprecated overload `_directives_deprecated_library.foo`",
+      "description": "Call to deprecated overload `_directives_deprecated_library.foo`\n  Only str will be allowed",
       "line": 30,
       "name": "deprecated",
       "severity": "warn",
@@ -4342,7 +4320,7 @@
       "code": -2,
       "column": 5,
       "concise_description": "`+` is not supported between `Spam` and `Literal[1]`",
-      "description": "`+` is not supported between `Spam` and `Literal[1]`\n  `_directives_deprecated_library.Spam.__add__` is deprecated",
+      "description": "`+` is not supported between `Spam` and `Literal[1]`\n  `_directives_deprecated_library.Spam.__add__` is deprecated\n  There is enough spam in the world",
       "line": 41,
       "name": "deprecated",
       "severity": "warn",
@@ -4353,7 +4331,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`+=` is not supported between `Spam` and `Literal[1]`",
-      "description": "`+=` is not supported between `Spam` and `Literal[1]`\n  `_directives_deprecated_library.Spam.__add__` is deprecated",
+      "description": "`+=` is not supported between `Spam` and `Literal[1]`\n  `_directives_deprecated_library.Spam.__add__` is deprecated\n  There is enough spam in the world",
       "line": 42,
       "name": "deprecated",
       "severity": "warn",
@@ -4364,7 +4342,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`_directives_deprecated_library.Spam.greasy` is deprecated",
-      "description": "`_directives_deprecated_library.Spam.greasy` is deprecated",
+      "description": "`_directives_deprecated_library.Spam.greasy` is deprecated\n  All spam will be equally greasy",
       "line": 44,
       "name": "deprecated",
       "severity": "warn",
@@ -4375,7 +4353,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`_directives_deprecated_library.Spam.shape` is deprecated",
-      "description": "`_directives_deprecated_library.Spam.shape` is deprecated",
+      "description": "`_directives_deprecated_library.Spam.shape` is deprecated\n  Shapes are becoming immutable",
       "line": 47,
       "name": "deprecated",
       "severity": "warn",
@@ -4386,7 +4364,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`_directives_deprecated_library.Spam.shape` is deprecated",
-      "description": "`_directives_deprecated_library.Spam.shape` is deprecated",
+      "description": "`_directives_deprecated_library.Spam.shape` is deprecated\n  Shapes are becoming immutable",
       "line": 48,
       "name": "deprecated",
       "severity": "warn",
@@ -4397,7 +4375,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`Invocable.__call__` is deprecated",
-      "description": "`Invocable.__call__` is deprecated",
+      "description": "`Invocable.__call__` is deprecated\n  Deprecated",
       "line": 58,
       "name": "deprecated",
       "severity": "warn",
@@ -4408,7 +4386,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "`lorem` is deprecated",
-      "description": "`lorem` is deprecated",
+      "description": "`lorem` is deprecated\n  Deprecated",
       "line": 69,
       "name": "deprecated",
       "severity": "warn",
@@ -4419,7 +4397,7 @@
       "code": -2,
       "column": 5,
       "concise_description": "`SupportsFoo1.foo` is deprecated",
-      "description": "`SupportsFoo1.foo` is deprecated",
+      "description": "`SupportsFoo1.foo` is deprecated\n  Deprecated",
       "line": 98,
       "name": "deprecated",
       "severity": "warn",
@@ -6850,19 +6828,7 @@
       "stop_line": 26
     }
   ],
-  "generics_typevartuple_concat.py": [
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "Returned type `tuple[*tuple[object | T, ...], object | T]` is not assignable to declared return type `tuple[*Ts, T]`",
-      "description": "Returned type `tuple[*tuple[object | T, ...], object | T]` is not assignable to declared return type `tuple[*Ts, T]`",
-      "line": 56,
-      "name": "bad-return",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 56
-    }
-  ],
+  "generics_typevartuple_concat.py": [],
   "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [
     {
@@ -7363,46 +7329,46 @@
   "literals_interactions.py": [
     {
       "code": -2,
-      "column": 5,
+      "column": 7,
       "concise_description": "Index 5 out of range for tuple with 3 elements",
       "description": "Index 5 out of range for tuple with 3 elements",
       "line": 15,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 9,
+      "stop_column": 8,
       "stop_line": 15
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 7,
       "concise_description": "Index -5 out of range for tuple with 3 elements",
       "description": "Index -5 out of range for tuple with 3 elements",
       "line": 16,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 9,
+      "stop_column": 8,
       "stop_line": 16
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 7,
       "concise_description": "Index 4 out of range for tuple with 3 elements",
       "description": "Index 4 out of range for tuple with 3 elements",
       "line": 17,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 9,
+      "stop_column": 8,
       "stop_line": 17
     },
     {
       "code": -2,
-      "column": 5,
+      "column": 7,
       "concise_description": "Index -4 out of range for tuple with 3 elements",
       "description": "Index -4 out of range for tuple with 3 elements",
       "line": 18,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 10,
+      "stop_column": 9,
       "stop_line": 18
     },
     {
@@ -7767,24 +7733,24 @@
   "namedtuples_define_class.py": [
     {
       "code": -2,
-      "column": 7,
+      "column": 10,
       "concise_description": "Index 3 out of range for tuple with 3 elements",
       "description": "Index 3 out of range for tuple with 3 elements",
       "line": 32,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 12,
+      "stop_column": 11,
       "stop_line": 32
     },
     {
       "code": -2,
-      "column": 7,
+      "column": 10,
       "concise_description": "Index -4 out of range for tuple with 3 elements",
       "description": "Index -4 out of range for tuple with 3 elements",
       "line": 33,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 13,
+      "stop_column": 12,
       "stop_line": 33
     },
     {
@@ -8081,24 +8047,24 @@
   "namedtuples_usage.py": [
     {
       "code": -2,
-      "column": 7,
+      "column": 9,
       "concise_description": "Index 3 out of range for tuple with 3 elements",
       "description": "Index 3 out of range for tuple with 3 elements",
       "line": 34,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 11,
+      "stop_column": 10,
       "stop_line": 34
     },
     {
       "code": -2,
-      "column": 7,
+      "column": 9,
       "concise_description": "Index -4 out of range for tuple with 3 elements",
       "description": "Index -4 out of range for tuple with 3 elements",
       "line": 35,
       "name": "bad-index",
       "severity": "error",
-      "stop_column": 12,
+      "stop_column": 11,
       "stop_line": 35
     },
     {
@@ -8546,14 +8512,25 @@
   "protocols_class_objects.py": [
     {
       "code": -2,
-      "column": 15,
-      "concise_description": "Cannot instantiate `Proto` because it is a protocol",
-      "description": "Cannot instantiate `Proto` because it is a protocol",
-      "line": 26,
-      "name": "bad-instantiation",
+      "column": 5,
+      "concise_description": "Argument `type[Proto]` is not assignable to parameter `cls` with type `type[Proto]` in function `fun`",
+      "description": "Argument `type[Proto]` is not assignable to parameter `cls` with type `type[Proto]` in function `fun`\n  Only concrete classes may be assigned to `type[Proto]` because `Proto` is a protocol",
+      "line": 29,
+      "name": "bad-argument-type",
       "severity": "error",
-      "stop_column": 17,
-      "stop_line": 26
+      "stop_column": 10,
+      "stop_line": 29
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "`type[Proto]` is not assignable to variable `var` with type `type[Proto]`",
+      "description": "`type[Proto]` is not assignable to variable `var` with type `type[Proto]`\n  Only concrete classes may be assigned to `type[Proto]` because `Proto` is a protocol",
+      "line": 34,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 12,
+      "stop_line": 34
     },
     {
       "code": -2,
@@ -9106,6 +9083,61 @@
       "severity": "error",
       "stop_column": 53,
       "stop_line": 61
+    },
+    {
+      "code": -2,
+      "column": 33,
+      "concise_description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`",
+      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: expected `BoundMethod[Proto3, (self: Proto3, a: int) -> int]`, got `BoundMethod[Concrete3A, (self: Concrete3A, a: str) -> None]`",
+      "line": 88,
+      "name": "invalid-argument",
+      "severity": "error",
+      "stop_column": 39,
+      "stop_line": 88
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3B`",
+      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3B`\n  Attribute `method1` has incompatible types: expected `BoundMethod[Proto3, (self: Proto3, a: int) -> int]`, got `int`",
+      "line": 92,
+      "name": "invalid-argument",
+      "severity": "error",
+      "stop_column": 48,
+      "stop_line": 92
+    },
+    {
+      "code": -2,
+      "column": 23,
+      "concise_description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3B`",
+      "description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3B`\n  Attribute `method1` has incompatible types: expected `BoundMethod[NonDataProtocol, (self: NonDataProtocol) -> int]`, got `int`",
+      "line": 92,
+      "name": "invalid-argument",
+      "severity": "error",
+      "stop_column": 48,
+      "stop_line": 92
+    },
+    {
+      "code": -2,
+      "column": 31,
+      "concise_description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`",
+      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: expected `BoundMethod[Proto3, (self: Proto3, a: int) -> int]`, got `BoundMethod[Concrete3A, (self: Concrete3A, a: str) -> None]`",
+      "line": 96,
+      "name": "invalid-argument",
+      "severity": "error",
+      "stop_column": 56,
+      "stop_line": 96
+    },
+    {
+      "code": -2,
+      "column": 31,
+      "concise_description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3A`",
+      "description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: expected `BoundMethod[NonDataProtocol, (self: NonDataProtocol) -> int]`, got `BoundMethod[Concrete3A, (self: Concrete3A, a: str) -> None]`",
+      "line": 96,
+      "name": "invalid-argument",
+      "severity": "error",
+      "stop_column": 56,
+      "stop_line": 96
     }
   ],
   "protocols_self.py": [],
@@ -10558,8 +10590,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "TypedDict item `method1` may not be initialized",
-      "description": "TypedDict item `method1` may not be initialized",
+      "concise_description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
+      "description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
       "line": 29,
       "name": "bad-class-definition",
       "severity": "error",
@@ -10569,8 +10601,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "TypedDict item `method2` may not be initialized",
-      "description": "TypedDict item `method2` may not be initialized",
+      "concise_description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
+      "description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
       "line": 34,
       "name": "bad-class-definition",
       "severity": "error",
@@ -10580,8 +10612,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "TypedDict item `method3` may not be initialized",
-      "description": "TypedDict item `method3` may not be initialized",
+      "concise_description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
+      "description": "TypedDict members must be declared in the form `field: Annotation` with no assignment",
       "line": 39,
       "name": "bad-class-definition",
       "severity": "error",
@@ -11442,17 +11474,6 @@
       "severity": "error",
       "stop_column": 34,
       "stop_line": 60
-    },
-    {
-      "code": -2,
-      "column": 75,
-      "concise_description": "Expected a type form, got instance of `Literal['RecursiveMovie']`",
-      "description": "Expected a type form, got instance of `Literal['RecursiveMovie']`",
-      "line": 71,
-      "name": "not-a-type",
-      "severity": "error",
-      "stop_column": 91,
-      "stop_line": 71
     }
   ],
   "typeddicts_type_consistency.py": [

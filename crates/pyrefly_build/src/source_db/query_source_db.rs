@@ -174,6 +174,7 @@ impl QuerySourceDatabase {
     ) -> Option<ModulePath> {
         let mut queue = VecDeque::new();
         let mut visited = SmallSet::new();
+        let mut namespace_candidates: SmallSet<ModulePath> = SmallSet::new();
         queue.push_front(target);
 
         while let Some(current_target) = queue.pop_front() {
@@ -185,18 +186,17 @@ impl QuerySourceDatabase {
             };
 
             match self.find_in_manifest(module, manifest, style_filter) {
-                // Return the value immediately. It's safe to return
-                // a implicit package here instead of continuing to search
-                // because during build system building, an __init__.py file will
-                // be output.
-                Some(Ok(result) | Err(result)) => return Some(result),
+                Some(Ok(result)) => return Some(result),
+                Some(Err(result)) => {
+                    namespace_candidates.insert(result);
+                }
                 _ => (),
             }
 
             manifest.deps.iter().for_each(|t| queue.push_back(t.dupe()));
         }
 
-        None
+        namespace_candidates.into_iter().min()
     }
 }
 
@@ -258,7 +258,8 @@ impl SourceDatabase for QuerySourceDatabase {
                     _ => (),
                 }
             }
-            return package_matches.into_iter().min();
+            // just take the first namespace package we found
+            return package_matches.into_iter().next();
         }
 
         None
@@ -350,6 +351,29 @@ impl SourceDatabase for QuerySourceDatabase {
         let origin = ModulePathBuf::from_path(origin?);
         let read = self.inner.read();
         read.path_lookup.get(&origin).copied()
+    }
+
+    fn get_generated_files(&self) -> SmallSet<ModulePathBuf> {
+        let read = self.inner.read();
+        read.db
+            .values()
+            .filter_map(|x| -> Option<Box<dyn Iterator<Item = ModulePathBuf>>> {
+                if x.relative_to.is_some() {
+                    Some(Box::new(x.srcs.values().flatten().copied()))
+                } else if let Some(build_root) = x.buildfile_path.parent() {
+                    Some(Box::new(
+                        x.srcs
+                            .values()
+                            .flatten()
+                            .filter(move |p| !p.starts_with(build_root))
+                            .copied(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect()
     }
 }
 
@@ -453,6 +477,8 @@ mod tests {
                 Target::from_string("//external:package".to_owned()),
             ModulePathBuf::new(PathBuf::from("/path/to/another/repository/package/external_package/non_python_file.thrift")) =>
                 Target::from_string("//external:package".to_owned()),
+            ModulePathBuf::new(root.join("generated/main.py")) => Target::from_string("//generated:main".to_owned()),
+            ModulePathBuf::new(root.join("build-out/materialized/generated/__init__.py")) => Target::from_string("//generated:lib".to_owned()),
         };
 
         assert_eq!(expected, path_lookup);
@@ -497,7 +523,13 @@ mod tests {
             },
             ModulePathBuf::new(PathBuf::from("/path/to/another/repository/package/external_package")) => smallset! {
                 Target::from_string("//external:package".to_owned()),
-            }
+            },
+            ModulePathBuf::new(root.join("generated")) => smallset! {
+                Target::from_string("//generated:main".to_owned()),
+            },
+            ModulePathBuf::new(root.join("build-out/materialized/generated/__init__.py")) => smallset! {
+                Target::from_string("//generated:lib".to_owned()),
+            },
         };
         assert_eq!(path_lookup, expected);
     }
@@ -657,6 +689,13 @@ mod tests {
             None,
             None,
         );
+
+        assert_lookup(
+            "generated",
+            "generated/main.py",
+            None,
+            Some("build-out/materialized/generated/__init__.py"),
+        );
     }
 
     #[test]
@@ -710,6 +749,7 @@ mod tests {
                         &[],
                         "colorama/BUCK",
                         &[],
+                        None,
                     ),
                     Target::from_string("//pyre/client/log:log".to_owned()) => TargetManifest::lib(
                         &[
@@ -730,6 +770,7 @@ mod tests {
                         &[],
                         "pyre/client/log/BUCK",
                         &[],
+                        None,
                     ),
                     Target::from_string("//implicit_package/test:lib".to_owned()) => TargetManifest::lib(
                         &[
@@ -745,6 +786,7 @@ mod tests {
                         ("implicit_package", &["implicit_package/test"]),
                         ("implicit_package/lib", &["implicit_package/test/lib"]),
                         ],
+                        None,
                     ),
             },
             root.clone(),

@@ -70,6 +70,7 @@ pub enum SpecialExport {
     BuiltinsSet,
     BuiltinsFrozenset,
     BuiltinsFloat,
+    Deprecated,
 }
 
 impl SpecialExport {
@@ -131,6 +132,7 @@ impl SpecialExport {
             "set" => Some(Self::BuiltinsSet),
             "frozenset" => Some(Self::BuiltinsFrozenset),
             "float" => Some(Self::BuiltinsFloat),
+            "deprecated" => Some(Self::Deprecated),
             _ => None,
         }
     }
@@ -196,6 +198,7 @@ impl SpecialExport {
                 "typing" | "typing_extensions" | "collections.abc"
             ),
             Self::PytestNoReturn => matches!(m.as_str(), "pytest"),
+            Self::Deprecated => matches!(m.as_str(), "warnings" | "typing_extensions"),
         }
     }
 

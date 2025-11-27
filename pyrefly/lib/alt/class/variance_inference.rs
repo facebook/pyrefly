@@ -13,6 +13,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_python::dunder;
+use pyrefly_types::types::Union;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
@@ -172,8 +173,8 @@ fn on_class(
             Type::Quantified(q) => {
                 on_var(q.name(), variance, inj);
             }
-            Type::Union(t) => {
-                for ty in t {
+            Type::Union(box Union { members: tys, .. }) => {
+                for ty in tys {
                     on_type(variance, inj, ty, on_edge, on_var);
                 }
             }
@@ -199,7 +200,7 @@ fn on_class(
                         // Unknown params
                     }
                     Params::ParamSpec(prefix, param_spec) => {
-                        for ty in prefix.iter() {
+                        for (ty, _) in prefix.iter() {
                             on_type(variance.inv(), inj, ty, on_edge, on_var);
                         }
                         on_type(variance.inv(), inj, param_spec, on_edge, on_var);

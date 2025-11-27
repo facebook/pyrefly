@@ -423,7 +423,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Tuple(Tuple::Unpacked(box (prefix, _, suffix)))
                         if prefix.len() + suffix.len() == len =>
                     {
-                        Type::tuple(prefix.iter().cloned().chain(suffix.clone()).collect())
+                        Type::concrete_tuple(prefix.iter().cloned().chain(suffix.clone()).collect())
                     }
                     Type::Tuple(Tuple::Unpacked(box (
                         prefix,
@@ -432,7 +432,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))) if prefix.len() + suffix.len() < len => {
                         let middle_elements =
                             vec![(**middle).clone(); len - prefix.len() - suffix.len()];
-                        Type::tuple(
+                        Type::concrete_tuple(
                             prefix
                                 .iter()
                                 .cloned()
@@ -442,7 +442,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     }
                     Type::Tuple(Tuple::Unbounded(elements)) => {
-                        Type::tuple(vec![(**elements).clone(); len])
+                        Type::concrete_tuple(vec![(**elements).clone(); len])
                     }
                     Type::ClassType(class)
                         if let Some(Tuple::Concrete(elts)) = self.as_tuple(class)
@@ -644,7 +644,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
                     let ret =
-                        self.call_infer(call_target, &args, &kws, range, errors, None, None, None);
+                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
                     if let Type::TypeGuard(t) = ret {
                         return *t;
                     }
@@ -657,7 +657,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
                     let ret =
-                        self.call_infer(call_target, &args, &kws, range, errors, None, None, None);
+                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
                     if let Type::TypeIs(t) = ret {
                         return self.intersect(ty, &t);
                     }
@@ -669,7 +669,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
                     let ret =
-                        self.call_infer(call_target, &args, &kws, range, errors, None, None, None);
+                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
                     if let Type::TypeIs(t) = ret {
                         return self.subtract(ty, &t);
                     }
@@ -798,7 +798,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // We synthesize a slice expression for the subscript here
                 // Use a synthesized fake range to avoid overwriting typing traces
                 let synthesized_slice = Expr::NumberLiteral(ExprNumberLiteral {
-                    node_index: AtomicNodeIndex::dummy(),
+                    node_index: AtomicNodeIndex::default(),
                     range: TextRange::empty(TextSize::from(0)),
                     value: Number::Int(Int::from(*idx as u64)),
                 });

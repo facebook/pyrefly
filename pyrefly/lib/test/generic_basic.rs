@@ -87,7 +87,7 @@ assert_type(C2[int], type[C2[int, *tuple[Any, ...]]])
 );
 
 testcase!(
-    bug = "same result in pyright, but revisit this once variance is implemented for properties",
+    bug = "T is pinned prematurely due to https://github.com/facebook/pyrefly/issues/105",
     test_generics,
     r#"
 from typing import Literal
@@ -95,7 +95,7 @@ class C[T]: ...
 def append[T](x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test") 
+append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
 "#,
 );
 testcase!(
@@ -193,7 +193,7 @@ b: B[tuple[tuple[Any, ...], Any, Any]] = B()  # Here's one valid way to pin them
 testcase!(
     test_paramspec_with_default_after_typevartuple,
     r#"
-from typing import Any, reveal_type, assert_type
+from typing import Any, assert_type
 class A[*Ts, **P1, **P2 = P1]:
     pass
 class B[*Ts, T, **P = [int, str]]:
@@ -478,6 +478,22 @@ from typing import assert_type
 def f[T](x: list[T] | list[None], y: list[T]) -> T:
     return y[0]
 assert_type(f([None], [0]), int)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1675
+testcase!(
+    bug = "Something is very broken, `T <: T` should always hold, so should `Any <: T`",
+    test_generic_should_equal_itself,
+    r#"
+from typing import cast, Iterator, Any
+def condition() -> bool: ...
+def f[T](iterator: Iterator[T]) -> T:
+    res = cast(T, None)
+    while condition():
+        for i in iterator:
+            res = i
+    return res  # E: Returned type `T` is not assignable to declared return type `T`
     "#,
 );
 

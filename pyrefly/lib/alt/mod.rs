@@ -20,6 +20,7 @@ pub mod overload;
 pub mod solve;
 pub mod special_calls;
 pub mod specials;
+pub mod subscript;
 pub mod traits;
 pub mod types;
 pub mod unwrap;

@@ -112,6 +112,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.show_binding_for_with(&bindings, idx)
                 }
                 AnyIdx::KeyExport(idx) => self.show_binding_for_with(&bindings, idx),
+                AnyIdx::KeyDecorator(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyDecoratedFunction(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyUndecoratedFunction(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyAnnotation(idx) => self.show_binding_for_with(&bindings, idx),

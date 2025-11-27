@@ -304,6 +304,11 @@ from typing import Protocol
 class A(Protocol):
     pass
 a: A = A()  # E: Cannot instantiate `A` because it is a protocol
+
+class B(A):
+    pass
+type_a: type[A] = B
+a = type_a()  # This is OK because it's not a bare class name
     "#,
 );
 
@@ -628,4 +633,123 @@ class C:
 
 x: P = C() # OK
     "#,
+);
+
+testcase!(
+    test_assign_to_type_protocol,
+    r#"
+from typing import Protocol
+
+class CanFly(Protocol):
+    def fly(self) -> None: ...
+
+class A:
+    def __init__(self, wingspan: float) -> None: ...
+    def fly(self) -> None: ...
+
+cls1: type[CanFly] = CanFly # E: `type[CanFly]` is not assignable to `type[CanFly]`
+cls2: type[CanFly] = A      # OK
+    "#,
+);
+
+testcase!(
+    test_runtime_checkable_unsafe_overlap,
+    r#"
+from typing import Protocol, runtime_checkable
+@runtime_checkable
+class UnsafeProtocol(Protocol):
+    def foo(self) -> int: ...
+class No:
+    def foo(self) -> str:
+        return "not an int"
+isinstance(No(), UnsafeProtocol) # E: Runtime checkable protocol `UnsafeProtocol` has an unsafe overlap with type `No`
+issubclass(No, UnsafeProtocol) # E: Runtime checkable protocol `UnsafeProtocol` has an unsafe overlap with type `No`
+    "#,
+);
+
+testcase!(
+    bug = "@runtime_checkable doesn't propagate through inheritance",
+    test_runtime_checkable_unsafe_overlap_with_inheritance,
+    r#"
+from typing import Protocol, runtime_checkable
+@runtime_checkable
+class UnsafeProtocol(Protocol):
+    def foo(self) -> int: ...
+@runtime_checkable  # E: @runtime_checkable can only be applied to Protocol classes
+class ChildUnsafeProtocol(UnsafeProtocol):
+    def bar(self) -> str: ...
+class No:
+    def foo(self) -> str:
+        return "not an int"
+    def bar(self) -> int:
+        return 42
+isinstance(No(), ChildUnsafeProtocol)
+issubclass(No, ChildUnsafeProtocol)
+    "#,
+);
+
+testcase!(
+    test_unsafe_overlap_with_abc,
+    r#"
+from collections.abc import Sized
+class X:
+    def __len__(self) -> str:
+        return "42"
+isinstance(X(), Sized) # E: Runtime checkable protocol `Sized` has an unsafe overlap with type `X`
+issubclass(X, Sized) # E: Runtime checkable protocol `Sized` has an unsafe overlap with type `X`
+"#,
+);
+
+testcase!(
+    test_runtime_checkable_generics_no_error,
+    r#"
+from typing import Protocol, runtime_checkable, TypeVar
+T = TypeVar('T')
+@runtime_checkable
+class GenericProtocol(Protocol[T]):
+    def get(self, x: T) -> T: ...
+
+class IntImpl:
+    def get(self, x: int) -> int:
+        return 42
+isinstance(IntImpl(), GenericProtocol)
+issubclass(IntImpl, GenericProtocol)
+"#,
+);
+
+testcase!(
+    test_runtime_checkable_generics_unsafe_overlap_inconsistent_within_method,
+    r#"
+from typing import Protocol, runtime_checkable, TypeVar
+T = TypeVar('T')
+@runtime_checkable
+class GenericProtocol(Protocol[T]):
+    def get(self, x: T) -> T: ...
+
+class IntImpl:
+    def get(self, x: str) -> int:
+        return 42
+isinstance(IntImpl(), GenericProtocol)  # E: Runtime checkable protocol `GenericProtocol` has an unsafe overlap with type `IntImpl`
+issubclass(IntImpl, GenericProtocol)  # E: Runtime checkable protocol `GenericProtocol` has an unsafe overlap with type `IntImpl`
+"#,
+);
+
+testcase!(
+    test_runtime_checkable_generics_unsafe_overlap_inconsistent_across_methods,
+    r#"
+from typing import Protocol, runtime_checkable, TypeVar
+T = TypeVar('T')
+@runtime_checkable
+class GenericProtocol(Protocol[T]):
+    def get(self, x: T) -> T: ...
+    def get2(self, x: T) -> T: ...
+
+class Impl:
+    def get(self, x: str) -> str:
+        return ""
+    def get2(self, x: int) -> int:
+        return 42
+isinstance(Impl(), GenericProtocol)  # E: Runtime checkable protocol `GenericProtocol` has an unsafe overlap with type `Impl`
+issubclass(Impl, GenericProtocol)  # E: Runtime checkable protocol `GenericProtocol` has an unsafe overlap with type `Impl`
+"#,
 );

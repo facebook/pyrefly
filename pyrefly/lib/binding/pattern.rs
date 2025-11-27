@@ -99,7 +99,7 @@ impl<'a> BindingsBuilder<'a> {
                     .count();
                 let mut subject_idx = subject_idx;
                 let synthesized_len = Expr::NumberLiteral(ExprNumberLiteral {
-                    node_index: AtomicNodeIndex::dummy(),
+                    node_index: AtomicNodeIndex::default(),
                     range: x.range,
                     value: Number::Int(Int::from(num_non_star_patterns as u64)),
                 });

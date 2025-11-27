@@ -80,10 +80,10 @@ pub fn queue_source_db_rebuild_and_recheck(
         }
         let new_invalidated_configs: SmallSet<ArcId<ConfigFile>> = configs_to_paths
             .into_iter()
-            .filter(|(c, files)| match c.requery_source_db(files) {
+            .filter(|(c, files)| match ConfigFile::requery_source_db(c, files) {
                 Ok(reloaded) => reloaded,
                 Err(error) => {
-                    info!("Error reloading source database for config: {error}");
+                    info!("Error reloading source database for config: {error:?}");
                     false
                 }
             })

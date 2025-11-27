@@ -67,9 +67,13 @@ jobs:
             # necessary for glibc 2.31
             container: ubuntu:20.04
             github_env: $GITHUB_ENV
-          - os: macos-14
+          # x86 EOL on github-actions is august 2027 according to https://github.com/actions/runner-images/issues/13046
+          # we are currently cross-compiling but still running on macos-15-intel for the e2e tests. at EOL, we
+          # likely need to disable the e2e test for this platform (e2e test tries starting binary on the machine).
+          - os: macos-15-intel
             platform: darwin
             arch: x64
+            rust_target: x86_64-apple-darwin
             github_env: $GITHUB_ENV
           - os: macos-14
             platform: darwin

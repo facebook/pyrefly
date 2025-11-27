@@ -190,6 +190,95 @@ c = Concrete()
 "#,
 );
 
+testcase!(
+    test_call_abstract_classmethod_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "Base": ...
+
+Base.build()  # E: Cannot call abstract method `Base.build`
+
+cls: type[Base] = Base
+cls.build()  # OK
+"#,
+);
+
+testcase!(
+    bug = "We should error on abstract static method calls when the class name is directly referenced",
+    test_call_abstract_staticmethod_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @staticmethod
+    @abstractmethod
+    def helper() -> None: ...
+
+Base.helper()  # This should error
+
+cls: type[Base] = Base
+cls.helper()  # This should not error
+"#,
+);
+
+testcase!(
+    test_call_abstract_method_on_final_class_errors,
+    r#"
+from abc import ABC, abstractmethod
+from typing import final, Protocol
+
+@final
+class FinalBase(ABC):  # E: Final class `FinalBase` cannot have unimplemented abstract members: `build`
+    @classmethod
+    @abstractmethod
+    def build(cls) -> int: ...
+
+@final
+class FinalProtocol(Protocol):
+    @classmethod
+    def build(cls) -> int: ...
+
+class NotFinalBase(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> int: ...
+
+def err(cls: type[FinalBase]):
+    cls.build()  # E: Cannot call abstract method `FinalBase.build`
+
+def ok(cls: type[NotFinalBase]):
+    cls.build()  # OK
+
+def ok(cls: type[FinalProtocol]):
+    cls.build()  # OK
+"#,
+);
+
+testcase!(
+    bug = "We should error on method calls from the class, when the class name is directly referenced",
+    test_call_base_method_directly_errors,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self) -> None: ...
+
+class Concrete(Base):
+    def foo(self) -> None:
+        print("ok")
+
+Base.foo(Concrete())  # This should error
+
+cls: type[Base] = Base
+cls.foo(Concrete())  # This should not error
+"#,
+);
+
 fn env_super_protocol() -> TestEnv {
     let mut env = TestEnv::one_with_path(
         "foo",

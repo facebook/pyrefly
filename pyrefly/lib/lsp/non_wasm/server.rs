@@ -72,8 +72,12 @@ use lsp_types::ImplementationProviderCapability;
 use lsp_types::InitializeParams;
 use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
+use lsp_types::InlayHintLabelPart;
 use lsp_types::InlayHintParams;
 use lsp_types::Location;
+use lsp_types::NotebookCellSelector;
+use lsp_types::NotebookDocumentSyncOptions;
+use lsp_types::NotebookSelector;
 use lsp_types::NumberOrString;
 use lsp_types::OneOf;
 use lsp_types::Position;
@@ -97,6 +101,7 @@ use lsp_types::SemanticTokensRangeParams;
 use lsp_types::SemanticTokensRangeResult;
 use lsp_types::SemanticTokensResult;
 use lsp_types::SemanticTokensServerCapabilities;
+use lsp_types::ServerCapabilities;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
@@ -177,7 +182,6 @@ use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
-use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -219,10 +223,6 @@ use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
 use crate::lsp::wasm::notebook::DidOpenNotebookDocument;
 use crate::lsp::wasm::notebook::DidSaveNotebookDocument;
-use crate::lsp::wasm::notebook::NotebookCellSelector;
-use crate::lsp::wasm::notebook::NotebookDocumentSelector;
-use crate::lsp::wasm::notebook::NotebookDocumentSyncOptions;
-use crate::lsp::wasm::notebook::NotebookDocumentSyncRegistrationOptions;
 use crate::lsp::wasm::provide_type::ProvideType;
 use crate::lsp::wasm::provide_type::ProvideTypeResponse;
 use crate::lsp::wasm::provide_type::provide_type;
@@ -281,22 +281,6 @@ pub trait TspInterface {
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent>;
-}
-
-/// Until we upgrade lsp-types to 0.96 or newer, we'll need to patch in the notebook document
-/// sync capabilities
-#[derive(Debug, PartialEq, Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServerCapabilities {
-    #[serde(flatten)]
-    capabilities: lsp_types::ServerCapabilities,
-
-    /// Defines how notebook documents are synced.
-    ///
-    /// @since 3.17.0
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notebook_document_sync:
-        Option<OneOf<NotebookDocumentSyncOptions, NotebookDocumentSyncRegistrationOptions>>,
 }
 
 #[derive(Clone, Dupe)]
@@ -395,8 +379,10 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
                             break;
                         }
                     }
-                    Err(_) => {
-                        return;
+                    Err(e) => {
+                        error!("Error handling shutdown: {:?}", e);
+                        // still exit in the case of error
+                        break;
                     }
                 }
                 if lsp_queue.send(LspEvent::LspRequest(x)).is_err() {
@@ -467,99 +453,95 @@ pub fn capabilities(
         .and_then(|c| c.augments_syntax_tokens)
         .unwrap_or(false);
     ServerCapabilities {
-        capabilities: lsp_types::ServerCapabilities {
-            position_encoding: Some(PositionEncodingKind::UTF16),
-            text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                TextDocumentSyncKind::INCREMENTAL,
-            )),
-            definition_provider: Some(OneOf::Left(true)),
-            declaration_provider: Some(DeclarationCapability::Simple(true)),
-            type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
-            implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
-            code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-                code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
-                ..Default::default()
-            })),
-            completion_provider: Some(CompletionOptions {
-                trigger_characters: Some(vec![".".to_owned()]),
-                ..Default::default()
-            }),
-            document_highlight_provider: Some(OneOf::Left(true)),
-            // Find references won't work properly if we don't know all the files.
-            references_provider: match indexing_mode {
-                IndexingMode::None => None,
-                IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
-                    Some(OneOf::Left(true))
-                }
-            },
-            rename_provider: match indexing_mode {
-                IndexingMode::None => None,
-                IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
-                    Some(OneOf::Right(RenameOptions {
-                        prepare_provider: Some(true),
-                        work_done_progress_options: Default::default(),
-                    }))
-                }
-            },
-            signature_help_provider: Some(SignatureHelpOptions {
-                trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
-                ..Default::default()
-            }),
-            hover_provider: Some(HoverProviderCapability::Simple(true)),
-            inlay_hint_provider: Some(OneOf::Left(true)),
-            document_symbol_provider: Some(OneOf::Left(true)),
-            workspace_symbol_provider: Some(OneOf::Left(true)),
-            folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
-            semantic_tokens_provider: if augments_syntax_tokens {
-                // We currently only return partial tokens (e.g. no tokens for keywords right now).
-                // If the client doesn't support `augments_syntax_tokens` to fallback baseline
-                // syntax highlighting for tokens we don't provide, it will be a regression
-                // (e.g. users might lose keyword highlighting).
-                // Therefore, we should not produce semantic tokens if the client doesn't support `augments_syntax_tokens`.
-                Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
-                    SemanticTokensOptions {
-                        legend: SemanticTokensLegends::lsp_semantic_token_legends(),
-                        full: Some(SemanticTokensFullOptions::Bool(true)),
-                        range: Some(true),
-                        ..Default::default()
-                    },
-                ))
-            } else {
-                None
-            },
-            workspace: Some(WorkspaceServerCapabilities {
-                workspace_folders: Some(WorkspaceFoldersServerCapabilities {
-                    supported: Some(true),
-                    change_notifications: Some(OneOf::Left(true)),
-                }),
-                file_operations: Some(lsp_types::WorkspaceFileOperationsServerCapabilities {
-                    will_rename: Some(lsp_types::FileOperationRegistrationOptions {
-                        filters: vec![lsp_types::FileOperationFilter {
-                            pattern: lsp_types::FileOperationPattern {
-                                glob: "**/*.{py,pyi}".to_owned(),
-
-                                matches: Some(lsp_types::FileOperationPatternKind::File),
-                                options: None,
-                            },
-                            scheme: Some("file".to_owned()),
-                        }],
-                    }),
-                    ..Default::default()
-                }),
-            }),
+        position_encoding: Some(PositionEncodingKind::UTF16),
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(
+            TextDocumentSyncKind::INCREMENTAL,
+        )),
+        definition_provider: Some(OneOf::Left(true)),
+        declaration_provider: Some(DeclarationCapability::Simple(true)),
+        type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
+        implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
             ..Default::default()
+        })),
+        completion_provider: Some(CompletionOptions {
+            trigger_characters: Some(vec![".".to_owned(), "'".to_owned(), "\"".to_owned()]),
+            ..Default::default()
+        }),
+        document_highlight_provider: Some(OneOf::Left(true)),
+        // Find references won't work properly if we don't know all the files.
+        references_provider: match indexing_mode {
+            IndexingMode::None => None,
+            IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
+                Some(OneOf::Left(true))
+            }
         },
+        rename_provider: match indexing_mode {
+            IndexingMode::None => None,
+            IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
+                Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                }))
+            }
+        },
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
+            ..Default::default()
+        }),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        inlay_hint_provider: Some(OneOf::Left(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        semantic_tokens_provider: if augments_syntax_tokens {
+            // We currently only return partial tokens (e.g. no tokens for keywords right now).
+            // If the client doesn't support `augments_syntax_tokens` to fallback baseline
+            // syntax highlighting for tokens we don't provide, it will be a regression
+            // (e.g. users might lose keyword highlighting).
+            // Therefore, we should not produce semantic tokens if the client doesn't support `augments_syntax_tokens`.
+            Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
+                SemanticTokensOptions {
+                    legend: SemanticTokensLegends::lsp_semantic_token_legends(),
+                    full: Some(SemanticTokensFullOptions::Bool(true)),
+                    range: Some(true),
+                    ..Default::default()
+                },
+            ))
+        } else {
+            None
+        },
+        workspace: Some(WorkspaceServerCapabilities {
+            workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                supported: Some(true),
+                change_notifications: Some(OneOf::Left(true)),
+            }),
+            file_operations: Some(lsp_types::WorkspaceFileOperationsServerCapabilities {
+                will_rename: Some(lsp_types::FileOperationRegistrationOptions {
+                    filters: vec![lsp_types::FileOperationFilter {
+                        pattern: lsp_types::FileOperationPattern {
+                            glob: "**/*.{py,pyi}".to_owned(),
+
+                            matches: Some(lsp_types::FileOperationPatternKind::File),
+                            options: None,
+                        },
+                        scheme: Some("file".to_owned()),
+                    }],
+                }),
+                ..Default::default()
+            }),
+        }),
         notebook_document_sync: Some(OneOf::Left(NotebookDocumentSyncOptions {
-            // If a selector provides no notebook document filter but only a cell selector,
-            // all notebook documents that contain at least one matching cell will be synced.
-            notebook_selector: vec![NotebookDocumentSelector {
+            notebook_selector: vec![NotebookSelector::ByCells {
                 notebook: None,
-                cells: Some(vec![NotebookCellSelector {
+                cells: vec![NotebookCellSelector {
                     language: "python".into(),
-                }]),
+                }],
             }],
             save: None,
         })),
+        ..Default::default()
     }
 }
 
@@ -1270,6 +1252,22 @@ impl Server {
             filewatcher_registered: AtomicBool::new(false),
             version_info: Mutex::new(HashMap::new()),
         };
+
+        if let Some(init_options) = &s.initialize_params.initialization_options {
+            let mut modified = false;
+            s.workspaces
+                .apply_client_configuration(&mut modified, &None, init_options.clone());
+            if let Some(workspace_folders) = &s.initialize_params.workspace_folders {
+                for folder in workspace_folders {
+                    s.workspaces.apply_client_configuration(
+                        &mut modified,
+                        &Some(folder.uri.clone()),
+                        init_options.clone(),
+                    );
+                }
+            }
+        }
+
         s.setup_file_watcher_if_necessary();
         s.request_settings_for_all_workspaces();
         s
@@ -1442,6 +1440,18 @@ impl Server {
             .unwrap_or(false)
     }
 
+    /// Helper to append all additional diagnostics (unreachable, unused parameters/imports/variables)
+    fn append_ide_specific_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        Self::append_unreachable_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_parameter_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_import_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_variable_diagnostics(transaction, handle, diagnostics);
+    }
+
     /// Validate open files and send errors to the LSP. In the case of an ongoing recheck
     /// (i.e., another transaction is already being committed or the state is locked for writing),
     /// we still update diagnostics using a non-committable transaction, which may have slightly stale
@@ -1482,8 +1492,7 @@ impl Server {
                     continue;
                 }
                 let handle = make_open_handle(&self.state, path);
-                Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
-                Self::append_unused_parameter_diagnostics(transaction, &handle, diagnostics);
+                Self::append_ide_specific_diagnostics(transaction, &handle, diagnostics);
             }
             self.connection
                 .publish_diagnostics(diags, notebook_cell_urls);
@@ -2609,11 +2618,15 @@ impl Server {
 
     fn hover(&self, transaction: &Transaction<'_>, params: HoverParams) -> Option<Hover> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(HoverRequest::METHOD))?;
+        let (handle, lsp_config) =
+            self.make_handle_with_lsp_analysis_config_if_enabled(uri, Some(HoverRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position =
             self.from_lsp_position(uri, &info, params.text_document_position_params.position);
-        get_hover(transaction, &handle, position)
+        let show_go_to_links = lsp_config
+            .and_then(|c| c.show_hover_go_to_links)
+            .unwrap_or(true);
+        get_hover(transaction, &handle, position, show_go_to_links)
     }
 
     fn inlay_hints(
@@ -2635,7 +2648,7 @@ impl Server {
         )?;
         let res = t
             .into_iter()
-            .filter_map(|(text_size, label_text, _locations)| {
+            .filter_map(|(text_size, label_parts)| {
                 // If the url is a notebook cell, filter out inlay hints for other cells
                 if info.to_cell_for_lsp(text_size) != maybe_cell_idx {
                     return None;
@@ -2643,13 +2656,31 @@ impl Server {
                 let position = info.to_lsp_position(text_size);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
+                    let label = InlayHintLabel::LabelParts(
+                        label_parts
+                            .iter()
+                            .map(|(text, location_opt)| {
+                                let location = location_opt
+                                    .as_ref()
+                                    .and_then(|loc| self.to_lsp_location(loc));
+
+                                InlayHintLabelPart {
+                                    value: text.clone(),
+                                    tooltip: None,
+                                    location,
+                                    command: None,
+                                }
+                            })
+                            .collect(),
+                    );
+
                     Some(InlayHint {
                         position,
-                        label: InlayHintLabel::String(label_text.clone()),
+                        label,
                         kind: None,
                         text_edits: Some(vec![TextEdit {
                             range: Range::new(position, position),
-                            new_text: label_text,
+                            new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
                         }]),
                         tooltip: None,
                         padding_left: None,
@@ -2806,6 +2837,54 @@ impl Server {
         }
     }
 
+    fn append_unused_import_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_imports() {
+                let lsp_range = module_info.to_lsp_range(unused.range);
+                items.push(Diagnostic {
+                    range: lsp_range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("Pyrefly".to_owned()),
+                    message: format!("Import `{}` is unused", unused.name.as_str()),
+                    code: Some(NumberOrString::String("unused-import".to_owned())),
+                    code_description: None,
+                    related_information: None,
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    data: None,
+                });
+            }
+        }
+    }
+
+    fn append_unused_variable_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_variables() {
+                let lsp_range = module_info.to_lsp_range(unused.range);
+                items.push(Diagnostic {
+                    range: lsp_range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("Pyrefly".to_owned()),
+                    message: format!("Variable `{}` is unused", unused.name.as_str()),
+                    code: Some(NumberOrString::String("unused-variable".to_owned())),
+                    code_description: None,
+                    related_information: None,
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    data: None,
+                });
+            }
+        }
+    }
+
     fn docstring_ranges(
         &self,
         transaction: &Transaction<'_>,
@@ -2909,8 +2988,7 @@ impl Server {
                 items.push(diag);
             }
         }
-        Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
-        Self::append_unused_parameter_diagnostics(transaction, &handle, &mut items);
+        Self::append_ide_specific_diagnostics(transaction, &handle, &mut items);
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,
