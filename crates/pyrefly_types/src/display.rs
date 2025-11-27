@@ -93,19 +93,12 @@ pub struct TypeDisplayContext<'a> {
     /// Should we display for IDE Hover? This makes type names more readable but less precise.
     hover: bool,
     always_display_module_name: bool,
-    tuple_qname: Option<&'a QName>,
+    extra_symbol_qnames: SmallMap<&'static str, &'a QName>,
 }
 
 impl<'a> TypeDisplayContext<'a> {
     pub fn new(xs: &[&'a Type]) -> Self {
-        Self::new_with_tuple(xs, None)
-    }
-
-    pub fn new_with_tuple(xs: &[&'a Type], tuple_qname: Option<&'a QName>) -> Self {
-        let mut res = Self {
-            tuple_qname,
-            ..Self::default()
-        };
+        let mut res = Self::default();
         for x in xs {
             res.add(x);
         }
@@ -129,8 +122,13 @@ impl<'a> TypeDisplayContext<'a> {
         })
     }
 
-    pub(crate) fn tuple_qname(&self) -> Option<&'a QName> {
-        self.tuple_qname
+    pub fn add_symbol_qname(&mut self, symbol: &'static str, qname: &'a QName) {
+        self.add_qname(qname);
+        self.extra_symbol_qnames.insert(symbol, qname);
+    }
+
+    pub(crate) fn symbol_qname(&self, symbol: &'static str) -> Option<&'a QName> {
+        self.extra_symbol_qnames.get(symbol).copied()
     }
 
     /// Force that we always display at least the module name for qualified names.
@@ -581,9 +579,11 @@ impl<'a> TypeDisplayContext<'a> {
                 }
             }
             Type::Intersect(x) => self.fmt_type_sequence(x.0.iter(), " & ", true, output),
-            Type::Tuple(t) => {
-                t.fmt_with_type(output, &|ty, o| self.fmt_helper_generic(ty, false, o))
-            }
+            Type::Tuple(t) => t.fmt_with_type(
+                output,
+                &|ty, o| self.fmt_helper_generic(ty, false, o),
+                self.symbol_qname("tuple"),
+            ),
             Type::Forall(box Forall {
                 tparams,
                 body: body @ Forallable::Callable(c),
@@ -794,22 +794,12 @@ impl Type {
         c.display(self).to_string()
     }
 
-    pub fn get_types_with_locations(&self) -> Vec<(String, Option<TextRangeWithModule>)> {
-        self.get_types_with_locations_with_tuple_qname(None)
-    }
-
-    pub fn get_types_with_locations_with_stdlib(
+    pub fn get_types_with_locations(
         &self,
         stdlib: &Stdlib,
     ) -> Vec<(String, Option<TextRangeWithModule>)> {
-        self.get_types_with_locations_with_tuple_qname(Some(stdlib.tuple_object().qname()))
-    }
-
-    fn get_types_with_locations_with_tuple_qname(
-        &self,
-        tuple_qname: Option<&QName>,
-    ) -> Vec<(String, Option<TextRangeWithModule>)> {
-        let ctx = TypeDisplayContext::new_with_tuple(&[self], tuple_qname);
+        let mut ctx = TypeDisplayContext::new(&[self]);
+        ctx.add_symbol_qname("tuple", stdlib.tuple_object().qname());
         let mut output = OutputWithLocations::new(&ctx);
         ctx.fmt_helper_generic(self, false, &mut output).unwrap();
         output.parts().to_vec()
@@ -1688,7 +1678,8 @@ def overloaded_func[T](
         t: &Type,
         tuple_qname: &pyrefly_python::qname::QName,
     ) -> Vec<(String, Option<TextRangeWithModule>)> {
-        let ctx = TypeDisplayContext::new_with_tuple(&[t], Some(tuple_qname));
+        let mut ctx = TypeDisplayContext::new(&[t]);
+        ctx.add_symbol_qname("tuple", tuple_qname);
         let output = ctx.get_types_with_location(t, false);
         output.parts().to_vec()
     }

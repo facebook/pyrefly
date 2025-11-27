@@ -10,6 +10,7 @@ use std::fmt;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::qname::QName;
 
 use crate::type_output::TypeOutput;
 use crate::types::Type;
@@ -63,8 +64,13 @@ impl Tuple {
         &self,
         output: &mut O,
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
+        tuple_qname: Option<&QName>,
     ) -> fmt::Result {
-        output.write_tuple_keyword()?;
+        if let Some(qname) = tuple_qname {
+            output.write_qname(qname)?;
+        } else {
+            output.write_str("tuple")?;
+        }
         output.write_str("[")?;
         match self {
             Self::Concrete(elts) => {

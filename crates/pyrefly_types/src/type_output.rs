@@ -26,9 +26,6 @@ pub trait TypeOutput {
     fn write_lit(&mut self, lit: &Lit) -> fmt::Result;
     fn write_targs(&mut self, targs: &TArgs) -> fmt::Result;
     fn write_type(&mut self, ty: &Type) -> fmt::Result;
-    fn write_tuple_keyword(&mut self) -> fmt::Result {
-        self.write_str("tuple")
-    }
 }
 
 /// Implementation of `TypeOutput` that writes formatted types to plain text.
@@ -142,16 +139,6 @@ impl TypeOutput for OutputWithLocations<'_> {
     fn write_type(&mut self, ty: &Type) -> fmt::Result {
         // Format the type and extract location if it has a qname
         self.context.fmt_helper_generic(ty, false, self)
-    }
-
-    fn write_tuple_keyword(&mut self) -> fmt::Result {
-        if let Some(qname) = self.context.tuple_qname() {
-            let location = TextRangeWithModule::new(qname.module().clone(), qname.range());
-            self.parts.push((qname.id().to_string(), Some(location)));
-            Ok(())
-        } else {
-            self.write_str("tuple")
-        }
     }
 }
 
@@ -541,7 +528,8 @@ mod tests {
         let int_type = Type::ClassType(ClassType::new(int_class, TArgs::default()));
         let tuple_type = Type::Tuple(Tuple::Concrete(vec![int_type]));
 
-        let ctx = TypeDisplayContext::new_with_tuple(&[&tuple_type], Some(tuple_cls.qname()));
+        let mut ctx = TypeDisplayContext::new(&[&tuple_type]);
+        ctx.add_symbol_qname("tuple", tuple_cls.qname());
         let mut output = OutputWithLocations::new(&ctx);
 
         ctx.fmt_helper_generic(&tuple_type, false, &mut output)
