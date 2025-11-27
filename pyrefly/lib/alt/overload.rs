@@ -367,7 +367,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ];
             for overload in overloads {
                 let suffix = if overload.1.signature == closest_overload.func.1.signature {
-                    " [closest match]"
+                    "# [closest match]"
                 } else {
                     ""
                 };
@@ -383,7 +383,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let signature = self
                     .solver()
                     .for_display(Type::Callable(Box::new(signature)));
-                msg.push(format!("{signature}{suffix}"));
+                let signature = signature.as_hover_string();
+                msg.push(format!("def {signature}:{suffix}\n    ..."));
             }
             // We intentionally discard closest_overload.call_errors. When no overload matches,
             // there's a high likelihood that the "closest" one by our heuristic isn't the right
