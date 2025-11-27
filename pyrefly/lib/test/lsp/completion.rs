@@ -1384,19 +1384,26 @@ Completion Results:
 #[test]
 fn completion_literal_do_not_duplicate_quotes() {
     let code = r#"
-from typing import Literal
-def foo(fruit: Literal["apple", "pear"]) -> None: ...
-foo('
+from typing import Literal, Union
+class Foo: ...
+def foo(x: Union[Union[Literal['foo']] | Literal[1] | Foo]): ...
+foo(''
 #    ^
 "#;
     let report =
         get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
-    
-    // We expect the completion to NOT insert extra quotes if we are already in a quote.
-    // Currently it likely inserts quotes.
-    println!("{}", report);
-    assert!(report.contains("inserting `apple`"), "Should insert unquoted apple");
-    assert!(report.contains("inserting `pear`"), "Should insert unquoted pear");
+    assert_eq!(
+        r#"
+# main.py
+5 | foo(''
+         ^
+Completion Results:
+- (Value) 'foo': Literal['foo']
+- (Value) 1: Literal[1]
+"#
+        .trim(),
+        report.trim(),
+    );
 }
 
 // todo(kylei): completion on known dict values
