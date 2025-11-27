@@ -133,7 +133,7 @@ impl TestAssertion {
                 Some(NarrowOps::from_single_narrow_op(
                     arg0,
                     AtomicNarrowOp::Is(Expr::NoneLiteral(ExprNoneLiteral {
-                        node_index: AtomicNodeIndex::dummy(),
+                        node_index: AtomicNodeIndex::default(),
                         range: TextRange::default(),
                     })),
                     arg0.range(),
@@ -143,7 +143,7 @@ impl TestAssertion {
                 Some(NarrowOps::from_single_narrow_op(
                     arg0,
                     AtomicNarrowOp::IsNot(Expr::NoneLiteral(ExprNoneLiteral {
-                        node_index: AtomicNodeIndex::dummy(),
+                        node_index: AtomicNodeIndex::default(),
                         range: TextRange::default(),
                     })),
                     arg0.range(),

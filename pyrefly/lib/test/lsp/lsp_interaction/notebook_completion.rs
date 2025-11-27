@@ -16,10 +16,12 @@ fn test_notebook_completion() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["abcdef = 1", ""]);
     interaction.change_notebook(
         "notebook.ipynb",
@@ -42,7 +44,8 @@ fn test_notebook_completion() {
         .completion_cell("notebook.ipynb", "cell2", 0, 2)
         .expect_completion_response_with(|list| {
             list.items.iter().any(|item| item.label == "abcdef")
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

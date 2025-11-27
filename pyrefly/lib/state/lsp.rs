@@ -32,6 +32,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::facet::FacetKind;
+use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -65,6 +66,7 @@ use serde::Deserialize;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
 
+use crate::ModuleInfo;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
@@ -1180,7 +1182,7 @@ impl<'a> Transaction<'a> {
             let completions = |ty| solver.completions(ty, Some(name), false);
 
             match base_type {
-                Type::Union(tys) | Type::Intersect(box (tys, _)) => tys
+                Type::Union(box Union { members: tys, .. }) | Type::Intersect(box (tys, _)) => tys
                     .into_iter()
                     .filter_map(|ty_| {
                         self.find_definition_for_base_type(
@@ -1681,6 +1683,10 @@ impl<'a> Transaction<'a> {
         Some(code_actions)
     }
 
+    /// Determines whether a module is a third-party package.
+    ///
+    /// Checks if the module's path is located within any of the configured
+    /// site-packages directories (e.g., `site-packages/`, `dist-packages/`).
     fn is_third_party_module(&self, module: &Module, handle: &Handle) -> bool {
         let config = self.get_config(handle);
         let module_path = module.path();
@@ -1900,6 +1906,30 @@ impl<'a> Transaction<'a> {
         .unwrap_or_default()
     }
 
+    /// Collects all keyword arguments with a specific name within a module.
+    ///
+    /// This function traverses the AST of the given module and identifies all function calls
+    /// that use a keyword argument matching the expected name. For each match, it captures
+    /// both the keyword argument identifier and information about the function being called.
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - Handle to the module to search within
+    /// * `expected_name` - The name of the keyword argument to search for
+    ///
+    /// # Returns
+    ///
+    /// A vector of tuples, where each tuple contains:
+    /// - `Identifier`: The keyword argument identifier that matched the expected name
+    /// - `CalleeKind`: Information about the function being called with this keyword argument
+    ///
+    /// Returns an empty vector if the AST cannot be retrieved.
+    ///
+    /// # Example
+    ///
+    /// For a module containing calls like `foo(bar=1)` and `baz(bar=2)`, searching for
+    /// the name `bar` would return both keyword argument identifiers along with their
+    /// respective callee information (`foo` and `baz`).
     pub(self) fn collect_local_keyword_arguments_by_name(
         &self,
         handle: &Handle,
@@ -1933,6 +1963,22 @@ impl<'a> Transaction<'a> {
         results
     }
 
+    /// Finds all local keyword argument references that correspond to a specific parameter definition.
+    ///
+    /// Given a parameter's definition range and name, this function identifies all keyword arguments
+    /// in function calls within the same module that refer to this parameter. This is useful for
+    /// LSP features like "Find All References" for function parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - Handle to the module containing the parameter definition
+    /// * `definition_range` - The text range where the parameter is defined
+    /// * `expected_name` - The name of the parameter to search for
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(Vec<TextRange>)` containing the text ranges of all keyword argument usages
+    /// that reference this parameter definition, or `None` if the AST cannot be retrieved.
     pub(crate) fn local_keyword_argument_references_from_parameter_definition(
         &self,
         handle: &Handle,
@@ -2406,9 +2452,9 @@ fn add_literal_completions(
                     ..Default::default()
                 });
             }
-            Type::Union(types) => {
-                for union_type in types {
-                    Self::add_literal_completions_from_type(union_type, completions, in_string);
+            Type::Union(box Union { members, .. }) => {
+                for member in members {
+                    Self::add_literal_completions_from_type(member, completions);
                 }
             }
             _ => {}
@@ -2502,8 +2548,8 @@ fn add_literal_completions(
                                 .or_insert_with(|| field.ty.clone());
                         }
                     }
-                    Type::Union(types) => {
-                        stack.extend(types.into_iter());
+                    Type::Union(box Union { members, .. }) => {
+                        stack.extend(members.into_iter());
                     }
                     _ => {}
                 }
@@ -2628,6 +2674,14 @@ fn add_literal_completions(
         import_format: ImportFormat,
         supports_completion_item_details: bool,
     ) -> (Vec<CompletionItem>, bool) {
+        // Check if position is in a disabled range (comments)
+        if let Some(module) = self.get_module_info(handle) {
+            let disabled_ranges = Self::comment_ranges_for_module(&module);
+            if disabled_ranges.iter().any(|range| range.contains(position)) {
+                return (Vec::new(), false);
+            }
+        }
+
         let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
             handle,
             position,
@@ -2643,6 +2697,23 @@ fn add_literal_completions(
         });
         results.dedup_by(|item1, item2| item1.label == item2.label && item1.detail == item2.detail);
         (results, is_incomplete)
+    }
+
+    fn comment_ranges_for_module(module: &ModuleInfo) -> Vec<TextRange> {
+        let mut ranges = Vec::new();
+        let source = module.lined_buffer().contents();
+        let mut offset = TextSize::from(0);
+
+        for line in source.lines() {
+            if let Some(comment_pos) = pyrefly_python::ignore::find_comment_start_in_line(line) {
+                let comment_start = offset + TextSize::from(comment_pos as u32);
+                let comment_end = offset + TextSize::from(line.len() as u32);
+                ranges.push(TextRange::new(comment_start, comment_end));
+            }
+            offset += TextSize::from((line.len() + 1) as u32);
+        }
+
+        ranges
     }
 
     fn completion_sorted_opt_with_incomplete(

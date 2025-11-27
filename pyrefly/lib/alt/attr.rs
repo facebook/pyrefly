@@ -16,6 +16,7 @@ use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::types::Forall;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
+use pyrefly_types::types::Union;
 use pyrefly_types::types::Var;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
@@ -1795,12 +1796,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SuperInstance(box (cls, obj)) => {
                 acc.push(AttributeBase1::SuperInstance(cls, obj))
             }
-            Type::Union(members) => {
+            Type::Union(box Union { members, .. }) => {
                 for ty in members {
                     self.as_attribute_base1(ty, acc)
                 }
             }
-            Type::Type(box Type::Union(members)) => {
+            Type::Type(box Type::Union(box Union { members, .. })) => {
                 for ty in members {
                     self.as_attribute_base1(Type::type_form(ty), acc)
                 }

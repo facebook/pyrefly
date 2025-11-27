@@ -11,6 +11,7 @@ use clap::Parser;
 use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::finder::ConfigFinder;
+use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
@@ -197,7 +198,9 @@ fn hint_to_string(
     let hint = hint.promote_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
     let hint = match hint {
-        Type::Union(types) => unions_with_literals(types, stdlib, enum_members),
+        Type::Union(box Union { members: types, .. }) => {
+            unions_with_literals(types, stdlib, enum_members)
+        }
         _ => hint,
     };
     hint.to_string()

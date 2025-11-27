@@ -105,6 +105,10 @@ impl SourceDatabase for PlaygroundSourceDatabase {
     fn get_target(&self, _: Option<&Path>) -> Option<Target> {
         None
     }
+
+    fn get_generated_files(&self) -> SmallSet<ModulePathBuf> {
+        SmallSet::new()
+    }
 }
 
 #[derive(Serialize)]
@@ -668,7 +672,7 @@ mod tests {
 
         let expected_headers = &[
             "Could not find import of `t`",
-            "Parse error: Expected 'import', found newline",
+            "Parse error: Expected `import`, found newline",
         ];
         let expected_details = &[
             "  Looked in these locations:\n  Build system source database",

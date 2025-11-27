@@ -18,10 +18,12 @@ fn test_notebook_hover_basic() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     // Open notebook with a single cell containing "x = 3"
     interaction.open_notebook("notebook.ipynb", vec!["x = 3"]);
@@ -34,9 +36,10 @@ fn test_notebook_hover_basic() {
                 "kind": "markdown",
                 "value": "```python\n(variable) x: Literal[3]\n```",
             }
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -44,10 +47,12 @@ fn test_notebook_hover_import() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     // Open notebook with a single cell containing "from typing import List"
     interaction.open_notebook("notebook.ipynb", vec!["from typing import List"]);
@@ -63,7 +68,8 @@ fn test_notebook_hover_import() {
                 "kind": "markdown",
                 "value": format!("```python\n(class) List: type[list]\n```\n\nGo to [list]({}#L3349,7)", expected_url.as_str()),
             }
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

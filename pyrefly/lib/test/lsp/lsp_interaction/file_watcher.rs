@@ -22,14 +22,16 @@ fn setup_file_watcher_test() -> LspInteraction {
     interaction.set_root(root.path().to_path_buf());
 
     let scope_uri = Url::from_file_path(root.path()).unwrap();
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        file_watch: true,
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            file_watch: true,
+            ..Default::default()
+        })
+        .unwrap();
 
     // Consume the initial registration
-    interaction.client.expect_file_watcher_register();
+    interaction.client.expect_file_watcher_register().unwrap();
 
     // Acknowledge the registration
     interaction
@@ -56,7 +58,7 @@ fn test_file_modification_no_reregister() {
     // The test passes if shutdown succeeds without seeing any registration requests
     // The shutdown will consume remaining messages and any unexpected registration
     // would cause the test to hang or fail
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 /// Test that file creation DOES trigger watcher re-registration
@@ -68,10 +70,10 @@ fn test_file_creation_triggers_reregister() {
     interaction.client.file_created("new_file.py");
 
     // Expect unregister then register
-    interaction.client.expect_file_watcher_unregister();
-    interaction.client.expect_file_watcher_register();
+    interaction.client.expect_file_watcher_unregister().unwrap();
+    interaction.client.expect_file_watcher_register().unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 /// Test that file deletion DOES trigger watcher re-registration
@@ -83,10 +85,10 @@ fn test_file_deletion_triggers_reregister() {
     interaction.client.file_deleted("text_document.py");
 
     // Expect unregister then register
-    interaction.client.expect_file_watcher_unregister();
-    interaction.client.expect_file_watcher_register();
+    interaction.client.expect_file_watcher_unregister().unwrap();
+    interaction.client.expect_file_watcher_register().unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 /// Test that config file changes DOES trigger watcher re-registration
@@ -98,10 +100,10 @@ fn test_config_file_change_triggers_reregister() {
     interaction.client.file_modified("pyrefly.toml");
 
     // Expect unregister then register
-    interaction.client.expect_file_watcher_unregister();
-    interaction.client.expect_file_watcher_register();
+    interaction.client.expect_file_watcher_unregister().unwrap();
+    interaction.client.expect_file_watcher_register().unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 /// Test that multiple file modifications (batch) do NOT trigger watcher re-registration
@@ -117,7 +119,7 @@ fn test_multiple_file_modifications_no_reregister() {
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     // The test passes if shutdown succeeds without seeing any registration requests
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 /// Test that mixed events (modification + creation) DOES trigger watcher re-registration
@@ -130,8 +132,8 @@ fn test_mixed_events_triggers_reregister() {
     interaction.client.file_created("new_file.py");
 
     // Expect unregister then register (because of creation)
-    interaction.client.expect_file_watcher_unregister();
-    interaction.client.expect_file_watcher_register();
+    interaction.client.expect_file_watcher_unregister().unwrap();
+    interaction.client.expect_file_watcher_register().unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

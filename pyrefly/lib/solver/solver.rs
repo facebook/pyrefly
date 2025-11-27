@@ -16,6 +16,7 @@ use std::mem;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::types::TArgs;
+use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
@@ -456,8 +457,17 @@ impl Solver {
     /// Simplify a type as much as we can.
     fn simplify_mut(&self, t: &mut Type) {
         t.transform_mut(&mut |x| {
-            if let Type::Union(xs) = x {
-                *x = unions(mem::take(xs));
+            if let Type::Union(box Union {
+                members: xs,
+                display_name: original_name,
+            }) = x
+            {
+                let mut merged = unions(mem::take(xs));
+                // Preserve union display names during simplification
+                if let Type::Union(box Union { display_name, .. }) = &mut merged {
+                    *display_name = original_name.clone();
+                }
+                *x = merged;
             }
             if let Type::Intersect(y) = x {
                 *x = intersect(mem::take(&mut y.0), y.1.clone());
@@ -525,7 +535,7 @@ impl Solver {
     /// See test::generic_basic::test_typevar_or_none for why we need to do this.
     fn erase_unsolved_variables(&self, t: &mut Type) {
         t.transform_mut(&mut |x| match x {
-            Type::Union(xs) => {
+            Type::Union(box Union { members: xs, .. }) => {
                 let erase_type = |x: &Type| match x {
                     Type::Var(v) => {
                         let lock = self.variables.lock();
@@ -772,8 +782,7 @@ impl Solver {
         let lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Var(v) = t
-                && let Variable::Quantified(q) = &*lock.get(*v)
-                && **q == param.quantified
+                && !matches!(&*lock.get(*v), Variable::Answer(_))
             {
                 *t = param.quantified.clone().to_type();
             }
@@ -957,7 +966,7 @@ impl Solver {
                         _ => res.push(v.to_type()),
                     }
                 }
-                Type::Union(ts) => {
+                Type::Union(box Union { members: ts, .. }) => {
                     for t in ts {
                         expand(t, variables, recurser, res);
                     }

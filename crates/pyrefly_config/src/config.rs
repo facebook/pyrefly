@@ -13,6 +13,7 @@ use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -29,6 +30,7 @@ use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
@@ -56,6 +58,10 @@ use crate::error::ErrorDisplayConfig;
 use crate::finder::ConfigError;
 use crate::module_wildcard::Match;
 use crate::pyproject::PyProject;
+
+pub static GENERATED_FILE_CONFIG_OVERRIDE: LazyLock<
+    RwLock<SmallMap<ModulePathBuf, ArcId<ConfigFile>>>,
+> = LazyLock::new(|| RwLock::new(SmallMap::new()));
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
 pub struct SubConfig {
@@ -884,13 +890,24 @@ impl ConfigFile {
         result
     }
 
-    pub fn requery_source_db(&self, files: &SmallSet<ModulePath>) -> anyhow::Result<bool> {
-        let Some(source_db) = &self.source_db else {
+    pub fn requery_source_db(
+        this: &ArcId<Self>,
+        files: &SmallSet<ModulePath>,
+    ) -> anyhow::Result<bool> {
+        let Some(source_db) = &this.source_db else {
             return Ok(false);
         };
 
         let files = files.iter().map(|p| p.module_path_buf()).collect();
-        source_db.requery_source_db(files)
+        let result = source_db.requery_source_db(files)?;
+        let generated_files = source_db.get_generated_files();
+        if !generated_files.is_empty() {
+            let mut write = GENERATED_FILE_CONFIG_OVERRIDE.write();
+            for file in generated_files {
+                write.insert(file, this.dupe());
+            }
+        }
+        Ok(result)
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,

@@ -74,6 +74,30 @@ use crate::commands::lsp::run_lsp;
 use crate::lsp::wasm::provide_type::ProvideType;
 use crate::test::util::init_test;
 
+#[derive(Debug)]
+pub enum LspMessageError {
+    Timeout { description: String },
+    Disconnected { description: String },
+}
+
+impl std::fmt::Display for LspMessageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LspMessageError::Timeout { description } => {
+                write!(f, "Timeout waiting for message: {description}")
+            }
+            LspMessageError::Disconnected { description } => {
+                write!(
+                    f,
+                    "Channel disconnected while waiting for message: {description}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for LspMessageError {}
+
 #[derive(Default)]
 pub struct InitializeSettings {
     pub workspace_folders: Option<Vec<(String, Url)>>,
@@ -127,30 +151,39 @@ pub struct ServerRequestHandle<'a, R: lsp_types::request::Request> {
 }
 
 impl<'a, R: lsp_types::request::Request> ClientRequestHandle<'a, R> {
-    pub fn expect_response(self, expected: Value) {
-        self.client.expect_response::<R>(self.id, expected);
+    pub fn expect_response(self, expected: Value) -> Result<(), LspMessageError> {
+        self.client.expect_response::<R>(self.id, expected)
     }
 
-    pub fn expect_response_error(self, expected: Value) {
-        self.client.expect_response_error(self.id, expected);
+    pub fn expect_response_error(self, expected: Value) -> Result<(), LspMessageError> {
+        self.client.expect_response_error(self.id, expected)
     }
 
-    pub fn expect_response_with(self, matcher: impl Fn(R::Result) -> bool) {
+    pub fn expect_response_with(
+        self,
+        matcher: impl Fn(R::Result) -> bool,
+    ) -> Result<(), LspMessageError> {
         self.client.expect_response_with::<R>(self.id, matcher)
     }
 }
 
 impl<'a> ClientRequestHandle<'a, Completion> {
-    pub fn expect_completion_response_with(self, matcher: impl Fn(&CompletionList) -> bool) {
+    pub fn expect_completion_response_with(
+        self,
+        matcher: impl Fn(&CompletionList) -> bool,
+    ) -> Result<(), LspMessageError> {
         self.client
-            .expect_completion_response_with(self.id, matcher);
+            .expect_completion_response_with(self.id, matcher)
     }
 }
 
 impl<'a> ClientRequestHandle<'a, HoverRequest> {
-    pub fn expect_hover_response_with_markup(self, matcher: impl Fn(Option<&str>) -> bool) {
+    pub fn expect_hover_response_with_markup(
+        self,
+        matcher: impl Fn(Option<&str>) -> bool,
+    ) -> Result<(), LspMessageError> {
         self.client
-            .expect_hover_response_with_markup(self.id, matcher);
+            .expect_hover_response_with_markup(self.id, matcher)
     }
 }
 
@@ -162,10 +195,10 @@ impl<'a> ClientRequestHandle<'a, GotoDefinition> {
         char_start: u32,
         line_end: u32,
         char_end: u32,
-    ) {
+    ) -> Result<(), LspMessageError> {
         self.client.expect_definition_response_absolute(
             self.id, file, line_start, char_start, line_end, char_end,
-        );
+        )
     }
 
     pub fn expect_definition_response_from_root(
@@ -175,10 +208,10 @@ impl<'a> ClientRequestHandle<'a, GotoDefinition> {
         char_start: u32,
         line_end: u32,
         char_end: u32,
-    ) {
+    ) -> Result<(), LspMessageError> {
         self.client.expect_definition_response_from_root(
             self.id, file, line_start, char_start, line_end, char_end,
-        );
+        )
     }
 }
 
@@ -190,10 +223,10 @@ impl<'a> ClientRequestHandle<'a, GotoTypeDefinition> {
         char_start: u32,
         line_end: u32,
         char_end: u32,
-    ) {
+    ) -> Result<(), LspMessageError> {
         self.client.expect_definition_response_absolute(
             self.id, file, line_start, char_start, line_end, char_end,
-        );
+        )
     }
 
     pub fn expect_definition_response_from_root(
@@ -203,10 +236,10 @@ impl<'a> ClientRequestHandle<'a, GotoTypeDefinition> {
         char_start: u32,
         line_end: u32,
         char_end: u32,
-    ) {
+    ) -> Result<(), LspMessageError> {
         self.client.expect_definition_response_from_root(
             self.id, file, line_start, char_start, line_end, char_end,
-        );
+        )
     }
 }
 
@@ -214,9 +247,9 @@ impl<'a> ClientRequestHandle<'a, GotoImplementation> {
     pub fn expect_implementation_response_from_root(
         self,
         implementations: Vec<(&'static str, u32, u32, u32, u32)>,
-    ) {
+    ) -> Result<(), LspMessageError> {
         self.client
-            .expect_implementation_response_from_root(self.id, implementations);
+            .expect_implementation_response_from_root(self.id, implementations)
     }
 }
 
@@ -678,20 +711,26 @@ impl TestClient {
         &self,
         description: &str,
         matcher: impl Fn(Message) -> Option<T>,
-    ) -> T {
+    ) -> Result<T, LspMessageError> {
         loop {
             match self.recv_timeout() {
                 Ok(msg) => {
                     eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
                     if let Some(actual) = matcher(msg) {
-                        return actual;
+                        return Ok(actual);
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    panic!("Timeout waiting for message: {description}");
+                    return Err(LspMessageError::Timeout {
+                        description: format!("Timeout waiting for message: {description}"),
+                    });
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    panic!("Channel disconnected while waiting for message: {description}");
+                    return Err(LspMessageError::Disconnected {
+                        description: format!(
+                            "Channel disconnected while waiting for message: {description}"
+                        ),
+                    });
                 }
             }
         }
@@ -700,7 +739,7 @@ impl TestClient {
     pub fn expect_request<R: lsp_types::request::Request>(
         &self,
         expected: Value,
-    ) -> ServerRequestHandle<'_, R> {
+    ) -> Result<ServerRequestHandle<'_, R>, LspMessageError> {
         // Validate that expected can be parsed as R::Params
         let expected: R::Params = serde_json::from_value(expected.clone()).unwrap();
         let id = self.expect_message(&format!("Request {}", R::METHOD), |msg| {
@@ -712,15 +751,19 @@ impl TestClient {
             } else {
                 None
             }
-        });
-        ServerRequestHandle {
+        })?;
+        Ok(ServerRequestHandle {
             id,
             client: self,
             _type: PhantomData,
-        }
+        })
     }
 
-    pub fn expect_response<R: lsp_types::request::Request>(&self, id: RequestId, expected: Value) {
+    pub fn expect_response<R: lsp_types::request::Request>(
+        &self,
+        id: RequestId,
+        expected: Value,
+    ) -> Result<(), LspMessageError> {
         // Validate that expected can be parsed as R::Result
         let expected: R::Result = serde_json::from_value(expected.clone()).unwrap();
         let actual: R::Result =
@@ -732,11 +775,16 @@ impl TestClient {
                 } else {
                     None
                 }
-            });
+            })?;
         assert_eq!(json!(expected), json!(actual));
+        Ok(())
     }
 
-    pub fn expect_response_error(&self, id: RequestId, expected: Value) {
+    pub fn expect_response_error(
+        &self,
+        id: RequestId,
+        expected: Value,
+    ) -> Result<(), LspMessageError> {
         let expected: ResponseError = serde_json::from_value(expected).unwrap();
         let actual = self.expect_message(&format!("Response error id={}", id), |msg| {
             if let Message::Response(x) = msg
@@ -746,15 +794,16 @@ impl TestClient {
             } else {
                 None
             }
-        });
+        })?;
         assert_eq!(json!(expected), json!(actual));
+        Ok(())
     }
 
     pub fn expect_response_with<R: lsp_types::request::Request>(
         &self,
         id: RequestId,
         matcher: impl Fn(R::Result) -> bool,
-    ) {
+    ) -> Result<(), LspMessageError> {
         self.expect_message(
             &format!("Response {} matching condition", R::METHOD),
             |msg| {
@@ -767,14 +816,15 @@ impl TestClient {
                     None
                 }
             },
-        )
+        )?;
+        Ok(())
     }
 
     pub fn expect_completion_response_with(
         &self,
         id: RequestId,
         matcher: impl Fn(&CompletionList) -> bool,
-    ) {
+    ) -> Result<(), LspMessageError> {
         self.expect_response_with::<Completion>(id, |result| {
             // Pyrefly always returns a CompletionList
             match result {
@@ -788,7 +838,7 @@ impl TestClient {
         &self,
         id: RequestId,
         matcher: impl Fn(Option<&str>) -> bool,
-    ) {
+    ) -> Result<(), LspMessageError> {
         self.expect_response_with::<HoverRequest>(id, |result| {
             // Pyrefly always returns either an empty array or markup
             let hover = result.expect("Unexpected null completion response");
@@ -801,7 +851,11 @@ impl TestClient {
     }
 
     /// Wait for a publishDiagnostics notification, then check if it has the correct path and count
-    pub fn expect_publish_diagnostics_error_count(&self, path: PathBuf, count: usize) {
+    pub fn expect_publish_diagnostics_error_count(
+        &self,
+        path: PathBuf,
+        count: usize,
+    ) -> Result<(), LspMessageError> {
         self.expect_message(
             &format!(
                 "publishDiagnostics notification with {count} errors for file: {}",
@@ -824,10 +878,15 @@ impl TestClient {
                     None
                 }
             },
-        );
+        )?;
+        Ok(())
     }
 
-    pub fn expect_publish_diagnostics_uri(&self, uri: &Url, count: usize) {
+    pub fn expect_publish_diagnostics_uri(
+        &self,
+        uri: &Url,
+        count: usize,
+    ) -> Result<(), LspMessageError> {
         self.expect_message(
             &format!("publishDiagnostics notification {count} errors for uri: {uri}"),
             |msg| {
@@ -845,7 +904,8 @@ impl TestClient {
                     None
                 }
             },
-        );
+        )?;
+        Ok(())
     }
 
     pub fn expect_definition_response_absolute(
@@ -856,7 +916,7 @@ impl TestClient {
         char_start: u32,
         line_end: u32,
         char_end: u32,
-    ) {
+    ) -> Result<(), LspMessageError> {
         self.expect_response::<GotoDefinition>(
             id,
             json!(
@@ -878,7 +938,7 @@ impl TestClient {
         char_start: u32,
         line_end: u32,
         char_end: u32,
-    ) {
+    ) -> Result<(), LspMessageError> {
         self.expect_response::<GotoDefinition>(
             id,
             json!(
@@ -896,7 +956,7 @@ impl TestClient {
         &self,
         id: RequestId,
         implementations: Vec<(&'static str, u32, u32, u32, u32)>,
-    ) {
+    ) -> Result<(), LspMessageError> {
         let locations: Vec<_> = implementations
             .into_iter()
             .map(|(file, line_start, char_start, line_end, char_end)| {
@@ -913,24 +973,25 @@ impl TestClient {
         self.expect_response::<GotoImplementation>(id, json!(locations))
     }
 
-    pub fn expect_any_message(&self) {
+    pub fn expect_any_message(&self) -> Result<(), LspMessageError> {
         match self.recv_timeout() {
             Ok(msg) => {
                 eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                Ok(())
             }
-            Err(RecvTimeoutError::Timeout) => {
-                panic!("Timeout waiting for response");
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                panic!("Channel disconnected");
-            }
+            Err(RecvTimeoutError::Timeout) => Err(LspMessageError::Timeout {
+                description: "Timeout waiting for response message".to_owned(),
+            }),
+            Err(RecvTimeoutError::Disconnected) => Err(LspMessageError::Disconnected {
+                description: "Channel disconnected".to_owned(),
+            }),
         }
     }
 
     pub fn expect_configuration_request(
         &self,
         scope_uris: Option<Vec<&Url>>,
-    ) -> ServerRequestHandle<'_, WorkspaceConfiguration> {
+    ) -> Result<ServerRequestHandle<'_, WorkspaceConfiguration>, LspMessageError> {
         let items = scope_uris
             .unwrap_or_default()
             .into_iter()
@@ -948,7 +1009,7 @@ impl TestClient {
 
     /// Expect a file watcher registration request.
     /// Validates that the request is specifically registering the file watcher (ID: "FILEWATCHER").
-    pub fn expect_file_watcher_register(&self) {
+    pub fn expect_file_watcher_register(&self) -> Result<(), LspMessageError> {
         let params: RegistrationParams =
             self.expect_message(&format!("Request {}", RegisterCapability::METHOD), |msg| {
                 if let Message::Request(x) = msg
@@ -958,13 +1019,14 @@ impl TestClient {
                 } else {
                     None
                 }
-            });
+            })?;
         assert!(params.registrations.iter().any(|x| x.id == "FILEWATCHER"));
+        Ok(())
     }
 
     /// Expect a file watcher unregistration request.
     /// Validates that the request is specifically unregistering the file watcher (ID: "FILEWATCHER").
-    pub fn expect_file_watcher_unregister(&self) {
+    pub fn expect_file_watcher_unregister(&self) -> Result<(), LspMessageError> {
         let params: UnregistrationParams = self.expect_message(
             &format!("Request {}", UnregisterCapability::METHOD),
             |msg| {
@@ -976,13 +1038,14 @@ impl TestClient {
                     None
                 }
             },
-        );
+        )?;
         assert!(
             params
                 .unregisterations
                 .iter()
                 .any(|x| x.id == "FILEWATCHER")
         );
+        Ok(())
     }
 
     /// Helper function to merge JSON values, with the source taking precedence
@@ -1038,24 +1101,26 @@ impl LspInteraction {
         Self { client }
     }
 
-    pub fn initialize(&self, settings: InitializeSettings) {
+    pub fn initialize(&self, settings: InitializeSettings) -> Result<(), LspMessageError> {
         self.client
             .send_initialize(self.client.get_initialize_params(&settings));
-        self.client.expect_any_message();
+        self.client.expect_any_message()?;
         self.client.send_initialized();
         if let Some(settings) = settings.configuration {
-            self.client.expect_any_message();
+            self.client.expect_any_message()?;
             self.client.send_response::<WorkspaceConfiguration>(
                 RequestId::from(1),
                 settings.unwrap_or(json!([])),
             );
         }
+        Ok(())
     }
 
-    pub fn shutdown(&self) {
-        self.client.send_shutdown().expect_response(json!(null));
+    pub fn shutdown(&self) -> Result<(), LspMessageError> {
+        self.client.send_shutdown().expect_response(json!(null))?;
 
         self.client.send_exit();
+        Ok(())
     }
 
     pub fn set_root(&mut self, root: PathBuf) {

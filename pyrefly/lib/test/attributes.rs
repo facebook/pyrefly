@@ -1398,7 +1398,7 @@ from typing import assert_type, reveal_type, Any
 class A[T]:
     def f[S](self, x: S) -> tuple[S, T]: ...
 reveal_type(A.f) # E: revealed type: [T, S](self: A[T], x: S) -> tuple[S, T]
-assert_type(A.f(A[int](), ""), tuple[str, int]) # E: assert_type(tuple[str, Any], tuple[str, int])
+assert_type(A.f(A[int](), ""), tuple[str, int])
     "#,
 );
 

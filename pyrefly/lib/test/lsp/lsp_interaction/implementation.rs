@@ -18,13 +18,15 @@ fn implementation_on_definition_test() {
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     let test_root = root.path().join("references_cross_file_method_inheritance");
     interaction.set_root(test_root.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![(
-            "test".to_owned(),
-            Url::from_file_path(test_root.clone()).unwrap(),
-        )]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Url::from_file_path(test_root.clone()).unwrap(),
+            )]),
+            ..Default::default()
+        })
+        .unwrap();
 
     // Open the base file
     interaction.client.did_open("base.py");
@@ -38,9 +40,10 @@ fn implementation_on_definition_test() {
         .expect_implementation_response_from_root(vec![
             ("child.py", 9, 8, 9, 14),          // Child.method
             ("child_of_child.py", 9, 8, 9, 14), // ChildOfChild.method
-        ]);
+        ])
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -49,13 +52,15 @@ fn implementation_on_call_test() {
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     let test_root = root.path().join("references_cross_file_method_inheritance");
     interaction.set_root(test_root.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![(
-            "test".to_owned(),
-            Url::from_file_path(test_root.clone()).unwrap(),
-        )]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Url::from_file_path(test_root.clone()).unwrap(),
+            )]),
+            ..Default::default()
+        })
+        .unwrap();
 
     // Open the usage file
     interaction.client.did_open("usage.py");
@@ -69,7 +74,8 @@ fn implementation_on_call_test() {
         .expect_implementation_response_from_root(vec![
             ("child.py", 9, 8, 9, 14),          // Child.method
             ("child_of_child.py", 9, 8, 9, 14), // ChildOfChild.method
-        ]);
+        ])
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

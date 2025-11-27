@@ -228,6 +228,26 @@ Ensure the pyrefly is on `$PATH`, add following snippet to your `coc-settings.js
 },
 ```
 
+:::tip
+Type errors aren't shown unless a configuration exists. To always display type errors with coc.nvim, add the following `initializationOptions` to your configuration:
+```json
+"languageserver": {
+  "pyrefly": {
+    "command": "pyrefly",
+    "args": ["lsp"],
+    "filetypes": ["python"],
+    "rootPatterns": ["pyrefly.toml", "pyproject.toml", ".git"],
+    "initializationOptions": {
+      "pyrefly": {
+        "displayTypeErrors": "force-on"
+      }
+    }
+  }
+}
+```
+Use `"default"` to only show type errors when a configuration exists, or `"force-off"` to never show them.
+:::
+
 ### Vim + ALE
 Pull the latest version of ALE and add the following lines to your configuration
 to enable Pyrefly in Vim with ALE:

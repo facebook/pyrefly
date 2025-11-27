@@ -28,6 +28,10 @@ pub trait TypeOutput {
     fn write_type(&mut self, ty: &Type) -> fmt::Result;
 }
 
+/// Implementation of `TypeOutput` that writes formatted types to plain text.
+///
+/// This struct wraps a `fmt::Formatter` and delegates type formatting to the
+/// [`TypeDisplayContext`] to produce typed formatted as plain text.
 pub struct DisplayOutput<'a, 'b, 'f> {
     context: &'a TypeDisplayContext<'a>,
     formatter: &'b mut fmt::Formatter<'f>,
@@ -402,7 +406,7 @@ mod tests {
 
         let int_type = Type::ClassType(ClassType::new(int_class, TArgs::default()));
         let str_type = Type::ClassType(ClassType::new(str_class, TArgs::default()));
-        let union_type = Type::Union(vec![int_type, str_type, Type::None]);
+        let union_type = Type::union(vec![int_type, str_type, Type::None]);
 
         let ctx = TypeDisplayContext::new(&[&union_type]);
         let mut output = OutputWithLocations::new(&ctx);

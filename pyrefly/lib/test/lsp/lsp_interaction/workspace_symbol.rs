@@ -20,11 +20,13 @@ fn test_workspace_symbol() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
+            ..Default::default()
+        })
+        .unwrap();
 
     interaction.client.did_open("autoimport_provider.py");
 
@@ -47,7 +49,8 @@ fn test_workspace_symbol() {
                 },
                 "name": "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
             }
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

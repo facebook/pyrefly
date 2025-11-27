@@ -1440,6 +1440,18 @@ impl Server {
             .unwrap_or(false)
     }
 
+    /// Helper to append all additional diagnostics (unreachable, unused parameters/imports/variables)
+    fn append_ide_specific_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        Self::append_unreachable_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_parameter_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_import_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_variable_diagnostics(transaction, handle, diagnostics);
+    }
+
     /// Validate open files and send errors to the LSP. In the case of an ongoing recheck
     /// (i.e., another transaction is already being committed or the state is locked for writing),
     /// we still update diagnostics using a non-committable transaction, which may have slightly stale
@@ -1480,10 +1492,7 @@ impl Server {
                     continue;
                 }
                 let handle = make_open_handle(&self.state, path);
-                Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
-                Self::append_unused_parameter_diagnostics(transaction, &handle, diagnostics);
-                Self::append_unused_import_diagnostics(transaction, &handle, diagnostics);
-                Self::append_unused_variable_diagnostics(transaction, &handle, diagnostics);
+                Self::append_ide_specific_diagnostics(transaction, &handle, diagnostics);
             }
             self.connection
                 .publish_diagnostics(diags, notebook_cell_urls);
@@ -2979,10 +2988,7 @@ impl Server {
                 items.push(diag);
             }
         }
-        Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
-        Self::append_unused_parameter_diagnostics(transaction, &handle, &mut items);
-        Self::append_unused_import_diagnostics(transaction, &handle, &mut items);
-        Self::append_unused_variable_diagnostics(transaction, &handle, &mut items);
+        Self::append_ide_specific_diagnostics(transaction, &handle, &mut items);
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,

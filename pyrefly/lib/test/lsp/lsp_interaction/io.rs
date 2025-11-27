@@ -20,7 +20,9 @@ fn test_edits_while_recheck() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
     let path = root.path().join("basic/foo.py");
@@ -53,9 +55,10 @@ fn test_edits_while_recheck() {
     interaction
         .client
         .definition("foo.py", 6, 18)
-        .expect_definition_response_from_root("bar.py", 6, 6, 6, 9);
+        .expect_definition_response_from_root("bar.py", 6, 6, 6, 9)
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -65,11 +68,13 @@ fn test_file_watcher() {
     interaction.set_root(root.path().to_path_buf());
 
     let scope_uri = Url::from_file_path(root.path()).unwrap();
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        file_watch: true,
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            file_watch: true,
+            ..Default::default()
+        })
+        .unwrap();
 
     interaction.client.expect_request::<RegisterCapability>(
         json!({
@@ -87,7 +92,8 @@ fn test_file_watcher() {
                 }
             }]
         }),
-    ).send_response(json!(null));
+    ).unwrap()
+    .send_response(json!(null));
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::VecDeque;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::TParam;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::TParamsSource;
+use pyrefly_types::types::Union;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -84,6 +86,62 @@ fn is_class_property_decorator_type(ty: &Type) -> bool {
         Type::ClassDef(cls) => is_class_property_decorator_class_object(cls),
         Type::ClassType(cls) => is_class_property_decorator_class_object(cls.class_object()),
         _ => false,
+    }
+}
+
+struct ParentParamHints {
+    posonly: VecDeque<Type>,
+    positional: VecDeque<Type>,
+    kwonly: SmallMap<Name, Type>,
+    vararg: Option<Type>,
+    kwargs: Option<Type>,
+}
+
+impl ParentParamHints {
+    fn new(params: ParamList, drop_first: bool) -> Self {
+        let mut items = params.into_items().into_iter();
+        if drop_first {
+            items.next();
+        }
+        let mut hints = Self {
+            posonly: VecDeque::new(),
+            positional: VecDeque::new(),
+            kwonly: SmallMap::new(),
+            vararg: None,
+            kwargs: None,
+        };
+        for param in items {
+            match param {
+                Param::PosOnly(_, ty, _) => hints.posonly.push_back(ty),
+                Param::Pos(_, ty, _) => hints.positional.push_back(ty),
+                Param::VarArg(_, ty) => hints.vararg = Some(ty),
+                Param::KwOnly(name, ty, _) => {
+                    hints.kwonly.insert(name, ty);
+                }
+                Param::Kwargs(_, ty) => hints.kwargs = Some(ty),
+            }
+        }
+        hints
+    }
+
+    fn take_posonly(&mut self) -> Option<Type> {
+        self.posonly.pop_front()
+    }
+
+    fn take_positional(&mut self) -> Option<Type> {
+        self.positional.pop_front()
+    }
+
+    fn take_vararg(&mut self) -> Option<Type> {
+        self.vararg.take()
+    }
+
+    fn take_kwonly(&mut self, name: &Identifier) -> Option<Type> {
+        self.kwonly.shift_remove(&name.id)
+    }
+
+    fn take_kwargs(&mut self) -> Option<Type> {
+        self.kwargs.take()
     }
 }
 
@@ -321,6 +379,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }));
 
         let mut decorator_param_hints = self.decorator_param_hints(&decorators);
+        let mut parent_param_hints = if flags.is_override {
+            defining_cls.as_ref().and_then(|cls| {
+                self.inherited_method_signature(cls, &def.name.id).and_then(
+                    |(params, inherited_flags)| {
+                        if inherited_flags.is_staticmethod == flags.is_staticmethod
+                            && inherited_flags.is_classmethod == flags.is_classmethod
+                        {
+                            Some(ParentParamHints::new(
+                                params,
+                                !inherited_flags.is_staticmethod,
+                            ))
+                        } else {
+                            None
+                        }
+                    },
+                )
+            })
+        } else {
+            None
+        };
 
         if stub_or_impl == FunctionStubOrImpl::Stub {
             flags.lacks_implementation = true;
@@ -342,6 +420,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             stub_or_impl,
             &mut self_type,
             &mut decorator_param_hints,
+            &mut parent_param_hints,
             errors,
         );
         let mut tparams = self.scoped_type_params(def.type_params.as_deref());
@@ -606,7 +685,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         default: Option<&Expr>,
         stub_or_impl: FunctionStubOrImpl,
         self_type: &mut Option<Type>,
-        decorator_hint: Option<Type>,
+        hint: Option<Type>,
         errors: &ErrorCollector,
     ) -> (Type, Required) {
         // We only want to use self for the first param, so take & replace with None
@@ -635,7 +714,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Otherwise, it will be forced to Any
                 if let Some(ty) = self_type {
                     self.solver().solve_parameter(*var, ty);
-                } else if let Some(hint) = decorator_hint {
+                } else if let Some(hint) = hint {
                     self.solver().solve_parameter(*var, hint);
                 } else if let Required::Optional(Some(default_ty)) = &required {
                     self.solver().solve_parameter(
@@ -658,6 +737,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         stub_or_impl: FunctionStubOrImpl,
         self_type: &mut Option<Type>,
         decorator_param_hints: &mut Option<DecoratorParamHints>,
+        parent_param_hints: &mut Option<ParentParamHints>,
         errors: &ErrorCollector,
     ) -> (Vec<Param>, Option<Quantified>) {
         let mut paramspec_args = None;
@@ -667,12 +747,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let decorator_hint = decorator_param_hints
                 .as_mut()
                 .and_then(|hint| hint.next_positional());
+            let parent_hint = if self_type.is_some() {
+                None
+            } else {
+                parent_param_hints
+                    .as_mut()
+                    .and_then(|hint| hint.take_posonly())
+            };
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                decorator_hint,
+                decorator_hint.or(parent_hint),
                 errors,
             );
             Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
@@ -687,12 +774,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let decorator_hint = decorator_param_hints
                 .as_mut()
                 .and_then(|hint| hint.next_positional());
+            let parent_hint = if self_type.is_some() {
+                None
+            } else {
+                parent_param_hints
+                    .as_mut()
+                    .and_then(|hint| hint.take_positional())
+            };
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                decorator_hint,
+                decorator_hint.or(parent_hint),
                 errors,
             );
 
@@ -719,12 +813,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }));
         params.extend(def.parameters.vararg.iter().map(|x| {
+            let parent_hint = parent_param_hints
+                .as_mut()
+                .and_then(|hint| hint.take_vararg());
             let (ty, _) = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
                 stub_or_impl,
                 self_type,
-                None,
+                parent_hint,
                 errors,
             );
             if let Type::Args(q) = &ty {
@@ -746,23 +843,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         params.extend(def.parameters.kwonlyargs.iter().map(|x| {
+            let parent_hint = parent_param_hints
+                .as_mut()
+                .and_then(|hint| hint.take_kwonly(&x.parameter.name));
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                None,
+                parent_hint,
                 errors,
             );
             Param::KwOnly(x.parameter.name.id.clone(), ty, required)
         }));
         if let Some(x) = &def.parameters.kwarg {
+            let parent_hint = parent_param_hints
+                .as_mut()
+                .and_then(|hint| hint.take_kwargs());
             let (ty, _) = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
                 stub_or_impl,
                 self_type,
-                None,
+                parent_hint,
                 errors,
             );
             if let Type::Kwargs(q) = &ty {
@@ -903,7 +1006,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (Arc<TParams>, Callable) {
         let returns_callable = match &signature.ret {
             Type::Callable(_) => true,
-            Type::Union(ts) => ts.iter().any(|t| matches!(t, Type::Callable(_))),
+            Type::Union(box Union { members: ts, .. }) => {
+                ts.iter().any(|t| matches!(t, Type::Callable(_)))
+            }
             _ => false,
         };
         if !returns_callable {

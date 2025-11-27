@@ -75,20 +75,24 @@ fn test_initialize_basic() {
         }, "serverInfo": {
             "name":"pyrefly-lsp",
             "version":"pyrefly-lsp-test-version"
-        }}));
+        }}))
+        .unwrap();
     interaction.client.send_initialized();
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
 fn test_shutdown() {
     let interaction = LspInteraction::new();
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction
         .client
         .send_shutdown()
-        .expect_response(json!(null));
+        .expect_response(json!(null))
+        .unwrap();
 
     interaction.client.send_exit();
     interaction.client.expect_stop();
@@ -103,7 +107,9 @@ fn test_shutdown_with_messages_in_between() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     let test_file = root.path().join("basic.py");
     let uri = Url::from_file_path(&test_file).unwrap();
@@ -121,13 +127,14 @@ fn test_shutdown_with_messages_in_between() {
         }));
 
     // Expect initial diagnostics
-    interaction.client.expect_any_message();
+    interaction.client.expect_any_message().unwrap();
 
     // Send shutdown request & wait for response
     interaction
         .client
         .send_shutdown()
-        .expect_response(json!(null));
+        .expect_response(json!(null))
+        .unwrap();
 
     // After shutdown, send a request (simulating what might happen with :wq)
     // Per LSP spec, this should be rejected with InvalidRequest
@@ -145,7 +152,9 @@ fn test_shutdown_with_messages_in_between() {
 #[test]
 fn test_exit_without_shutdown() {
     let interaction = LspInteraction::new();
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.send_exit();
     interaction.client.expect_stop();
@@ -168,15 +177,16 @@ fn test_initialize_with_python_path() {
     interaction
         .client
         .send_initialize(interaction.client.get_initialize_params(&settings));
-    interaction.client.expect_any_message();
+    interaction.client.expect_any_message().unwrap();
     interaction.client.send_initialized();
 
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
+        .unwrap()
         .send_configuration_response(json!([{"pythonPath": python_path}]));
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 // This test exists as a regression test for certain notebooks that mock a fake file in /tmp/.
@@ -186,7 +196,9 @@ fn test_nonexistent_file() {
     let nonexistent_filename = root.path().join("nonexistent_file.py");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction
         .client
@@ -206,7 +218,8 @@ fn test_nonexistent_file() {
                 "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string()
             },
         }))
-        .expect_response(json!({"items":[],"kind":"full"}));
+        .expect_response(json!({"items":[],"kind":"full"}))
+        .unwrap();
 
     let notebook_content = std::fs::read_to_string(root.path().join("notebook.py")).unwrap();
     interaction
@@ -222,32 +235,39 @@ fn test_nonexistent_file() {
             }],
         }));
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
 fn test_unknown_request() {
     let interaction = LspInteraction::new();
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
     interaction.client.send_message(Message::Request(Request {
         id: RequestId::from(1),
         method: "fake-method".to_owned(),
         params: json!(null),
     }));
-    interaction.client.expect_response_error(
-        RequestId::from(1),
-        json!({
-            "code": -32601,
-            "message": "Unknown request: fake-method",
-            "data": null,
-        }),
-    );
+    interaction
+        .client
+        .expect_response_error(
+            RequestId::from(1),
+            json!({
+                "code": -32601,
+                "message": "Unknown request: fake-method",
+                "data": null,
+            }),
+        )
+        .unwrap();
 }
 
 #[test]
 fn test_connection_closed_server_stops() {
     let mut interaction = LspInteraction::new();
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     // Close the connection by dropping both the receiver and sender
     // This simulates the client disconnecting unexpectedly

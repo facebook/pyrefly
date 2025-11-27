@@ -466,6 +466,9 @@ pub struct DataclassMetadata {
     pub init_defaults: InitDefaults,
     /// Whether a default can be passed positionally to field specifier calls
     pub default_can_be_positional: bool,
+    /// Default converter to apply to fields that don't have an explicit converter.
+    /// Inherited from the dataclass_transform decorator's converter_default parameter.
+    pub _converter_default: Option<Type>,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

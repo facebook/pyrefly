@@ -16,10 +16,12 @@ fn test_notebook_signature_help_basic() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     interaction.open_notebook(
         "notebook.ipynb",
@@ -39,7 +41,8 @@ fn test_notebook_signature_help_basic() {
             }],
             "activeSignature": 0,
             "activeParameter": 0
-        }));
+        }))
+        .unwrap();
 
     // Provide the first argument & check signature help works for the second one
     let cell_uri = interaction.cell_uri("notebook.ipynb", "cell1");
@@ -74,7 +77,8 @@ fn test_notebook_signature_help_basic() {
             }],
             "activeSignature": 0,
             "activeParameter": 1
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

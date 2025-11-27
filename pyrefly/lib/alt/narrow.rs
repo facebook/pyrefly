@@ -798,7 +798,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // We synthesize a slice expression for the subscript here
                 // Use a synthesized fake range to avoid overwriting typing traces
                 let synthesized_slice = Expr::NumberLiteral(ExprNumberLiteral {
-                    node_index: AtomicNodeIndex::dummy(),
+                    node_index: AtomicNodeIndex::default(),
                     range: TextRange::empty(TextSize::from(0)),
                     value: Number::Int(Int::from(*idx as u64)),
                 });

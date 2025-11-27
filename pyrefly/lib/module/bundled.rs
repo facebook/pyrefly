@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -15,6 +16,9 @@ use std::sync::LazyLock;
 
 use anyhow::Context as _;
 use pyrefly_config::config::ConfigFile;
+use pyrefly_config::error::ErrorDisplayConfig;
+use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_config::error_kind::Severity;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
@@ -27,6 +31,34 @@ pub fn set_readonly(path: &Path, value: bool) -> anyhow::Result<()> {
     permissions.set_readonly(value);
     fs::set_permissions(path, permissions)?;
     Ok(())
+}
+
+/// Creates a base config file for bundled stubs with common settings.
+///
+/// This helper function encapsulates the common configuration logic shared across
+/// different bundled stub types (typeshed stdlib, typeshed third-party, and third-party stubs).
+///
+/// # Parameters
+/// * `search_paths` - Optional search paths to add to the config
+/// * `error_overrides` - Optional error kind overrides (e.g., to ignore certain errors)
+pub fn create_bundled_stub_config(
+    search_paths: Option<Vec<PathBuf>>,
+    error_overrides: Option<HashMap<ErrorKind, Severity>>,
+) -> ConfigFile {
+    let mut config_file = ConfigFile::default();
+    config_file.python_environment.site_package_path = Some(Vec::new());
+
+    if let Some(paths) = search_paths {
+        config_file.search_path_from_file = paths;
+    }
+
+    if let Some(overrides) = error_overrides {
+        config_file.root.errors = Some(ErrorDisplayConfig::new(overrides));
+    }
+
+    config_file.root.disable_type_errors_in_ide = Some(true);
+    config_file.configure();
+    config_file
 }
 
 pub trait BundledStub {

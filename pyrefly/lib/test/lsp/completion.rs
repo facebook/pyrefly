@@ -1152,6 +1152,8 @@ isins
          ^
 Completion Results:
 - (Function) isinstance
+- (Class) DivisionImpossible: from decimal import DivisionImpossible
+
 - (Class) FirstHeaderLineIsContinuationDefect: from email.errors import FirstHeaderLineIsContinuationDefect
 
 - (Class) MissingHeaderBodySeparatorDefect: from email.errors import MissingHeaderBodySeparatorDefect
@@ -1246,9 +1248,7 @@ foo("
 4 | foo("
          ^
 Completion Results:
-- (Value) 'a\nb': Literal['a\nb'] inserting `a
-b`
-- (Variable) x=: Literal['a\nb']"#
+- (Value) 'a\nb': Literal['a\nb']"#
             .trim(),
         report.trim(),
     );
@@ -1295,9 +1295,8 @@ foo('
 4 | foo('
          ^
 Completion Results:
-- (Value) 'bar': Literal['bar'] inserting `bar`
-- (Value) 'foo': Literal['foo'] inserting `foo`
-- (Variable) x=: Literal['bar', 'foo']
+- (Value) 'bar': Literal['bar']
+- (Value) 'foo': Literal['foo']
 "#
         .trim(),
         report.trim(),
@@ -1411,7 +1410,7 @@ Completion Results:
 #[test]
 fn completion_dict() {
     let code = r#"
-x = {"a": 3, "b", 4}
+x = {"a": 3, "b": 4}
 x["
 # ^
 "#;
@@ -1423,7 +1422,6 @@ x["
 3 | x["
       ^
 Completion Results:
-- (Variable) x: dict[int | str, int]
 "#
         .trim(),
         report.trim(),
@@ -2416,5 +2414,35 @@ Completion Results:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn test_no_completion_in_comments() {
+    let code = r#"
+# This is a comment
+#      ^
+import sys
+x = sys.version
+#       ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let positions = extract_cursors_for_test(code);
+    let txn = state.transaction();
+
+    // Position 0: inside comment - should return empty
+    let comment_completions = txn.completion(handle, positions[0], ImportFormat::Absolute, true);
+    assert!(
+        comment_completions.is_empty(),
+        "Expected no completions in comment, but got {} completions",
+        comment_completions.len()
+    );
+
+    // Position 1: normal code - should return completions
+    let normal_completions = txn.completion(handle, positions[1], ImportFormat::Absolute, true);
+    assert!(
+        !normal_completions.is_empty(),
+        "Expected completions in normal code but got none"
     );
 }

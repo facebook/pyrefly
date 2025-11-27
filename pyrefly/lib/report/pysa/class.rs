@@ -14,6 +14,7 @@ use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_types::class::Class;
+use pyrefly_types::class::ClassType;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
@@ -23,6 +24,7 @@ use serde::ser::SerializeStruct;
 use starlark_map::Hashed;
 
 use crate::alt::class::class_field::ClassField;
+use crate::alt::class::class_field::WithDefiningClass;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassField;
@@ -230,7 +232,7 @@ pub fn get_all_classes(context: &ModuleContext) -> impl Iterator<Item = Class> {
         .map(|idx| context.answers.get_idx(idx).unwrap().0.dupe().unwrap())
 }
 
-pub fn get_class_field(
+pub fn get_class_field_from_current_class_only(
     class: &Class,
     field_name: &Name,
     context: &ModuleContext,
@@ -241,6 +243,20 @@ pub fn get_class_field(
             solver.get_field_from_current_class_only(class, field_name)
         })
         .unwrap()
+}
+
+pub fn get_super_class_member(
+    class: &Class,
+    field_name: &Name,
+    start_lookup_cls: Option<&ClassType>,
+    context: &ModuleContext,
+) -> Option<WithDefiningClass<Arc<ClassField>>> {
+    context
+        .transaction
+        .ad_hoc_solve(&context.handle, |solver| {
+            solver.get_super_class_member(class, start_lookup_cls, field_name)
+        })
+        .flatten()
 }
 
 pub fn get_context_from_class<'a>(
@@ -282,7 +298,8 @@ pub fn get_class_fields<'a>(
     context: &'a ModuleContext<'a>,
 ) -> impl Iterator<Item = (Cow<'a, Name>, Arc<ClassField>)> {
     let regular_fields = class.fields().filter_map(|name| {
-        get_class_field(class, name, context).map(|field| (Cow::Borrowed(name), field))
+        get_class_field_from_current_class_only(class, name, context)
+            .map(|field| (Cow::Borrowed(name), field))
     });
 
     let synthesized_fields_idx = context

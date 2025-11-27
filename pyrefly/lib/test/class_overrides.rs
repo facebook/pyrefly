@@ -151,6 +151,148 @@ class Derived2(Base):
 );
 
 testcase!(
+    test_override_infers_parameter_type,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type, override
+
+T = TypeVar("T")
+
+class G(Generic[T]):
+    def foo(self, value: T) -> T:
+        return value
+
+class C(G[int]):
+    @override
+    def foo(self, value):
+        assert_type(value, int)
+        return value
+
+    def bar(self, value):
+        assert_type(value, Any)
+    "#,
+);
+
+testcase!(
+    test_override_requires_decorator,
+    r#"
+from typing import Any, assert_type
+
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    def foo(self, x):
+        assert_type(x, Any)
+    "#,
+);
+
+testcase!(
+    test_override_static_and_class_methods,
+    r#"
+from typing import assert_type, override
+
+class Base:
+    @staticmethod
+    def sm(x: int) -> None: ...
+
+    @classmethod
+    def cm(cls, y: str) -> None: ...
+
+class Derived(Base):
+    @override
+    @staticmethod
+    def sm(x):
+        assert_type(x, int)
+
+    @override
+    @classmethod
+    def cm(cls, y):
+        assert_type(y, str)
+    "#,
+);
+
+testcase!(
+    test_override_parameter_kinds,
+    r#"
+from typing import assert_type, override
+
+class Base:
+    def g(self, /, x: int, *args: str, y: bool, **kwargs: float) -> None: ...
+
+class Derived(Base):
+    @override
+    def g(self, /, x, *args, y, **kwargs):
+        assert_type(x, int)
+        assert_type(args, tuple[str, ...])
+        assert_type(y, bool)
+        assert_type(kwargs, dict[str, float])
+    "#,
+);
+
+testcase!(
+    test_decorator_hint_takes_precedence_over_parent_hint,
+    r#"
+from typing import Any, assert_type, Callable, override
+
+def decorate(x: Callable[[Any, float], None]) -> Callable[[Any, float], None]:
+    return x
+
+class A:
+    def f(self, x: int, /):
+        pass
+
+class B(A):
+    @decorate
+    @override
+    def f(self, x, /):
+        assert_type(x, float)
+    "#,
+);
+
+testcase!(
+    test_mixed_decorator_and_parent_hints,
+    r#"
+from typing import Any, assert_type, Callable, override
+
+def decorate(x: Callable[[Any, float], None]) -> Any:
+    return x
+
+class A:
+    def f(self, x: int, y: str | None = None, /):
+        pass
+
+class B(A):
+    @decorate
+    @override
+    def f(self, x, y=None, /):
+        assert_type(x, float)
+        assert_type(y, str | None)
+    "#,
+);
+
+testcase!(
+    test_overloaded_parent_provides_no_hint,
+    r#"
+from typing import Any, assert_type, overload, override
+
+class A:
+    @overload
+    def f(self, x: int) -> int: ...
+    @overload
+    def f(self, x: str) -> str: ...
+    def f(self, x):
+        return x
+
+class B(A):
+    @override
+    def f(self, x):
+        assert_type(x, Any)
+        return x
+
+    "#,
+);
+
+testcase!(
     test_no_base_override,
     r#"
 from typing import override
@@ -577,7 +719,7 @@ class A:
     def f(self, x: TA1):
         pass
 class B(A):
-    def f(self, x: TA2):  # E: `B.f` has type `BoundMethod[B, (self: B, x: float | int) -> None]`, which is not assignable to `BoundMethod[B, (self: B, x: float | int | None) -> None]`, the type of `A.f`
+    def f(self, x: TA2):  # E: `B.f` has type `BoundMethod[B, (self: B, x: TA2) -> None]`, which is not assignable to `BoundMethod[B, (self: B, x: TA1) -> None]`, the type of `A.f`
         pass
     "#,
 );
@@ -626,4 +768,25 @@ class Foo:
 class Bar(Foo):
     x = 1  # OK - explicit Optional annotation allows override
     "#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/1372
+testcase!(
+    test_property_setter_inheritance,
+    r#"
+from typing import *
+
+class Myclass:
+    @property
+    def hello(self) -> int:
+        return 1
+
+    @hello.setter
+    def hello(self, value: int):
+        pass
+
+class MySubclass(Myclass):
+    def __init__(self):
+        self.hello = 1
+"#,
 );

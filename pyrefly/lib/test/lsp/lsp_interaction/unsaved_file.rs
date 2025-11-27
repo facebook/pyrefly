@@ -17,7 +17,9 @@ use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 #[test]
 fn test_semantic_tokens_for_unsaved_file() {
     let interaction = LspInteraction::new();
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     let uri = Url::parse("untitled:Untitled-1").unwrap();
     let text = r#"def foo():
@@ -35,15 +37,18 @@ foo()
         .expect_response_with(|response| match response {
             Some(SemanticTokensResult::Tokens(xs)) => !xs.data.is_empty(),
             _ => false,
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
 fn test_completion_for_unsaved_file() {
     let interaction = LspInteraction::new();
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     let uri = Url::parse("untitled:Untitled-2").unwrap();
     let text = r#"import math
@@ -57,7 +62,8 @@ math.
             "textDocument": {"uri": uri.to_string()},
             "position": {"line": 1, "character": 5}
         }))
-        .expect_completion_response_with(|list| !list.items.is_empty());
+        .expect_completion_response_with(|list| !list.items.is_empty())
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

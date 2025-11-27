@@ -121,7 +121,7 @@ impl<'me> ruff_python_parser::semantic_errors::SemanticSyntaxContext
 
     fn in_module_scope(&self) -> bool {
         // TODO: Properly implement this
-        false
+        true
     }
 
     fn in_function_scope(&self) -> bool {
@@ -135,6 +135,21 @@ impl<'me> ruff_python_parser::semantic_errors::SemanticSyntaxContext
     }
 
     fn in_notebook(&self) -> bool {
+        // TODO: Properly implement this
+        false
+    }
+
+    fn has_nonlocal_binding(&self, _: &str) -> bool {
+        // TODO: Properly implement this
+        false
+    }
+
+    fn in_loop_context(&self) -> bool {
+        // TODO: Properly implement this
+        false
+    }
+
+    fn is_bound_parameter(&self, _: &str) -> bool {
         // TODO: Properly implement this
         false
     }

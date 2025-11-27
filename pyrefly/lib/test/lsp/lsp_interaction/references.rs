@@ -20,11 +20,13 @@ fn test_references_for_usage_with_config() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     let foo = root_path.join("foo.py");
     let bar = root_path.join("bar.py");
@@ -76,9 +78,10 @@ fn test_references_for_usage_with_config() {
                 "range": {"start":{"line":10,"character":4},"end":{"character":7,"line":10}},
                 "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -88,11 +91,13 @@ fn test_finds_references_outside_config_when_workspace_larger_than_config() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     let core = root_path.join("module_dir/core.py");
     let usage = root_path.join("module_dir/usage.py");
@@ -121,9 +126,10 @@ fn test_finds_references_outside_config_when_workspace_larger_than_config() {
                 "range": {"start":{"line":8,"character":0},"end":{"character":6,"line":8}},
                 "uri": Url::from_file_path(usage.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -133,11 +139,13 @@ fn test_references_workspace_smaller_than_config() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     let core = root_path.join("core.py");
     let usage_in_config = root_path.join("usage_in_config.py");
@@ -178,9 +186,10 @@ fn test_references_workspace_smaller_than_config() {
                 "range": {"start":{"line":8,"character":0},"end":{"character":5,"line":8}},
                 "uri": Url::from_file_path(usage_in_config.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -190,10 +199,12 @@ fn test_references_cross_file_no_config() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let bar = root_path.join("bar.py");
     let foo = root_path.join("foo.py");
@@ -237,9 +248,10 @@ fn test_references_cross_file_no_config() {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -249,10 +261,12 @@ fn test_references_cross_file_no_config_nested() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let bar = root_path.join("models/bar.py");
     let foo = root_path.join("services/foo.py");
@@ -295,9 +309,10 @@ fn test_references_cross_file_no_config_nested() {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -307,10 +322,12 @@ fn test_references_cross_file_with_marker_file() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let bar = root_path.join("bar.py");
     let foo = root_path.join("foo.py");
@@ -341,9 +358,10 @@ fn test_references_cross_file_with_marker_file() {
                 "range": {"start":{"line":10,"character":0},"end":{"character":3,"line":10}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -353,11 +371,13 @@ fn test_references_for_definition_with_config() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     let foo = root_path.join("foo.py");
     let bar = root_path.join("bar.py");
@@ -409,9 +429,10 @@ fn test_references_for_definition_with_config() {
                 "range": {"start":{"line":10,"character":4},"end":{"character":7,"line":10}},
                 "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -421,11 +442,13 @@ fn test_references_for_import_with_config() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     let foo = root_path.join("foo.py");
     let bar = root_path.join("bar.py");
@@ -477,9 +500,10 @@ fn test_references_for_import_with_config() {
                 "range": {"start":{"line":10,"character":4},"end":{"character":7,"line":10}},
                 "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -489,11 +513,13 @@ fn test_references_for_aliased_import_with_config() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     let various_imports = root_path.join("various_imports.py");
 
@@ -514,9 +540,10 @@ fn test_references_for_aliased_import_with_config() {
                 "range": {"start":{"line":7,"character":0},"end":{"line":7,"character":1}},
                 "uri": Url::from_file_path(various_imports.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -526,11 +553,13 @@ fn test_references_after_file_modification_with_config() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     let foo = root_path.join("foo.py");
     let bar = root_path.join("bar.py");
@@ -585,9 +614,10 @@ fn test_references_after_file_modification_with_config() {
                 "range": {"start":{"line":10,"character":4},"end":{"character":7,"line":10}},
                 "uri": Url::from_file_path(with_synthetic_bindings.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -597,11 +627,13 @@ fn test_references_after_file_modification_with_line_offset_with_config() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     let bar = root_path.join("bar.py");
 
@@ -625,9 +657,10 @@ fn test_references_after_file_modification_with_line_offset_with_config() {
                 "range": {"start":{"line":12,"character":0},"end":{"character":3,"line":12}},
                 "uri": Url::from_file_path(bar.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -637,10 +670,12 @@ fn test_references_cross_file_method_inheritance() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let base_py = root_path.join("base.py");
     let child_py = root_path.join("child.py");
@@ -678,9 +713,10 @@ fn test_references_cross_file_method_inheritance() {
                 "range": {"start":{"line":7,"character":8},"end":{"line":7,"character":14}},
                 "uri": Url::from_file_path(base_py.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 // Test for __init__ priority
@@ -694,10 +730,12 @@ fn test_references_for_init_priority() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let person_py = root_path.join("person.py");
     let usage_py = root_path.join("usage.py");
@@ -722,9 +760,10 @@ fn test_references_for_init_priority() {
                 "range": {"start":{"line":8,"character":5},"end":{"line":8,"character":11}},
                 "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 // Test for __new__ priority
@@ -738,10 +777,12 @@ fn test_references_for_new_priority() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let singleton_py = root_path.join("singleton.py");
     let usage_py = root_path.join("usage.py");
@@ -765,9 +806,10 @@ fn test_references_for_new_priority() {
                 "range": {"start":{"line":7,"character":8},"end":{"line":7,"character":15}},
                 "uri": Url::from_file_path(singleton_py.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 // Test for metaclass __call__ priority
@@ -781,10 +823,12 @@ fn test_references_for_metaclass_call_priority() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let singleton_meta_py = root_path.join("singleton_meta.py");
     let usage_py = root_path.join("usage.py");
@@ -809,7 +853,8 @@ fn test_references_for_metaclass_call_priority() {
                 "range": {"start":{"line":8,"character":5},"end":{"line":8,"character":14}},
                 "uri": Url::from_file_path(usage_py.clone()).unwrap().to_string()
             },
-        ]));
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

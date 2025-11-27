@@ -19,7 +19,9 @@ fn test_prepare_rename() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
@@ -39,9 +41,10 @@ fn test_prepare_rename() {
         .expect_response(json!({
             "start": {"line": 6, "character": 16},
             "end": {"line": 6, "character": 19},
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -52,11 +55,13 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
+            ..Default::default()
+        })
+        .unwrap();
 
     let user_code = root_path.join("user_code.py");
 
@@ -74,7 +79,8 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
                 "character": 25  // Position on "external_function"
             }
         }))
-        .expect_response(serde_json::Value::Null);
+        .expect_response(serde_json::Value::Null)
+        .unwrap();
 
     // Verify that attempting to rename a third party symbol returns an error
     interaction
@@ -93,9 +99,10 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
             "code": -32600,
             "message": "Third-party symbols cannot be renamed",
             "data": null,
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -106,11 +113,13 @@ fn test_rename() {
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
+            ..Default::default()
+        })
+        .unwrap();
 
     let foo = root_path.join("foo.py");
     let bar = root_path.join("bar.py");
@@ -181,7 +190,8 @@ fn test_rename() {
                     },
                 ]
             }
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

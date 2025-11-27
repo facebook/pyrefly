@@ -16,10 +16,12 @@ fn test_inlay_hints() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
     interaction.open_notebook(
         "notebook.ipynb",
         vec![
@@ -52,7 +54,8 @@ fn test_inlay_hints() {
                 "newText": " -> tuple[Literal[1], Literal[2]]",
                 "range": {"end": {"character": 21, "line": 0}, "start": {"character": 21, "line": 0}}
             }]
-        }]));
+        }]))
+        .unwrap();
 
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0)
@@ -77,7 +80,8 @@ fn test_inlay_hints() {
                 "newText": ": tuple[Literal[1], Literal[2]]",
                 "range": {"end": {"character": 6, "line": 0}, "start": {"character": 6, "line": 0}}
             }]
-        }]));
+        }]))
+        .unwrap();
 
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0)
@@ -94,6 +98,7 @@ fn test_inlay_hints() {
                 "newText": " -> Literal[0]",
                 "range": {"end": {"character": 15, "line": 0}, "start": {"character": 15, "line": 0}}
             }]
-        }]));
-    interaction.shutdown();
+        }]))
+        .unwrap();
+    interaction.shutdown().unwrap();
 }

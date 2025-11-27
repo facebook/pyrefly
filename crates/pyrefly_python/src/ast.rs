@@ -287,11 +287,11 @@ impl Ast {
     pub fn pattern_match_singleton_to_expr(x: &PatternMatchSingleton) -> Expr {
         match x.value {
             Singleton::None => Expr::NoneLiteral(ExprNoneLiteral {
-                node_index: AtomicNodeIndex::dummy(),
+                node_index: AtomicNodeIndex::default(),
                 range: x.range,
             }),
             Singleton::True | Singleton::False => Expr::BooleanLiteral(ExprBooleanLiteral {
-                node_index: AtomicNodeIndex::dummy(),
+                node_index: AtomicNodeIndex::default(),
                 range: x.range,
                 value: x.value == Singleton::True,
             }),
@@ -319,10 +319,10 @@ impl Ast {
 
     pub fn str_expr(s: &str, range: TextRange) -> Expr {
         Expr::StringLiteral(ExprStringLiteral {
-            node_index: AtomicNodeIndex::dummy(),
+            node_index: AtomicNodeIndex::default(),
             range,
             value: StringLiteralValue::single(StringLiteral {
-                node_index: AtomicNodeIndex::dummy(),
+                node_index: AtomicNodeIndex::default(),
                 range,
                 value: s.into(),
                 flags: StringLiteralFlags::empty(),

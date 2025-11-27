@@ -19,10 +19,12 @@ fn test_notebook_definition_import() {
     interaction.set_root(root.path().to_path_buf());
     // fake configuration so we never find system python
     // todo(kylei): better solution for this
-    interaction.initialize(InitializeSettings {
-        configuration: Some(Some(json!([{"pythonPath": "/fake/python/path"}]))),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{"pythonPath": "/fake/python/path"}]))),
+            ..Default::default()
+        })
+        .unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["from typing import List"]);
 
     // Jump to definition of "List"
@@ -34,9 +36,10 @@ fn test_notebook_definition_import() {
                 loc.uri.to_file_path().unwrap().ends_with("typing.pyi")
             }
             _ => false,
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -44,10 +47,12 @@ fn test_notebook_definition_cross_cell() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["x = 1", "y = x"]);
 
     // Jump to definition of "x" in the second cell
@@ -66,8 +71,9 @@ fn test_notebook_definition_cross_cell() {
                     "character": 1
                 }
             }
-        }));
-    interaction.shutdown();
+        }))
+        .unwrap();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -75,10 +81,12 @@ fn test_notebook_definition_same_cell() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["x = 1\ny = x"]);
 
     // Jump to definition of "x" on the second line
@@ -97,6 +105,7 @@ fn test_notebook_definition_same_cell() {
                     "character": 1
                 }
             }
-        }));
-    interaction.shutdown();
+        }))
+        .unwrap();
+    interaction.shutdown().unwrap();
 }

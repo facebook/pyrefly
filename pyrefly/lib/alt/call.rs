@@ -14,6 +14,7 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
+use pyrefly_types::types::Union;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::Arguments;
@@ -260,7 +261,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Var(v) if let Some(_guard) = self.recurse(v) => {
                 self.as_call_target_impl(self.solver().force_var(v), quantified, dunder_call)
             }
-            Type::Union(xs) => {
+            Type::Union(box Union { members: xs, .. }) => {
                 let xs_length = xs.len();
                 let targets = xs
                     .into_iter()
@@ -315,7 +316,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
                 Restriction::Bound(bound) => match bound {
-                    Type::Union(members) => {
+                    Type::Union(box Union { members, .. }) => {
                         let mut targets = Vec::new();
                         for member in members {
                             if let CallTargetLookup::Ok(target) = self.as_call_target_impl(

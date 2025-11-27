@@ -109,17 +109,19 @@ pydantic_testcase!(
     r#"
 from pydantic import BaseModel
 from typing import reveal_type
+from decimal import Decimal
 
 class Model(BaseModel):
     x: int = 0
 
 reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, x: Any = ..., **Unknown) -> None
 
-# int field accepts: int, bool, float, str, bytes  
+# int field accepts: int, bool, float, str, bytes, Decimal
 Model(x=1)
 Model(x=True)
 Model(x=1.0)
 Model(x='123')
 Model(x=b'123')
+Model(x=Decimal('123'))
     "#,
 );

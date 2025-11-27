@@ -18,7 +18,9 @@ fn test_will_rename_files_changes_open_files_when_indexing_disabled() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     let foo = "tests_requiring_config/foo.py";
     let bar = "tests_requiring_config/bar.py";
@@ -51,9 +53,10 @@ fn test_will_rename_files_changes_open_files_when_indexing_disabled() {
                     }
                 ]
             }
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -64,10 +67,12 @@ fn test_will_rename_files_with_marker_file_no_config() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let bar = "bar.py";
     let foo = "foo.py";
@@ -102,9 +107,10 @@ fn test_will_rename_files_with_marker_file_no_config() {
                     },
                 ]
             }
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -112,7 +118,9 @@ fn test_will_rename_files_changes_folder() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     let bar = "tests_requiring_config/bar.py";
     let foo = "tests_requiring_config/foo.py";
@@ -145,9 +153,10 @@ fn test_will_rename_files_changes_folder() {
                     }
                 ]
             }
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -155,7 +164,9 @@ fn test_will_rename_files_changes_nothing_when_no_files_open() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     // Expect a response with no edits since indexing only happens once a file in a config is open
     interaction
@@ -164,9 +175,10 @@ fn test_will_rename_files_changes_nothing_when_no_files_open() {
             "tests_requiring_config/bar.py",
             "tests_requiring_config/baz.py",
         )
-        .expect_response(json!(null));
+        .expect_response(json!(null))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -174,7 +186,9 @@ fn test_will_rename_files_changes_everything_when_indexed() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     let bar = "tests_requiring_config/bar.py";
     interaction.client.did_open(bar);
@@ -229,9 +243,10 @@ fn test_will_rename_files_changes_everything_when_indexed() {
                     }
                 ]
             }
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -239,7 +254,9 @@ fn test_will_rename_files_without_config() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     let foo = "foo.py";
     let bar = "bar.py";
@@ -270,9 +287,10 @@ fn test_will_rename_files_without_config() {
                     }
                 ],
             }
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -283,10 +301,12 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let bar = "bar.py";
     interaction.client.did_open(bar);
@@ -324,9 +344,10 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
                     },
                 ],
             }
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -345,7 +366,7 @@ fn test_will_rename_files_document_changes() {
         })),
         ..Default::default()
     };
-    interaction.initialize(settings);
+    interaction.initialize(settings).unwrap();
 
     let bar: &'static str = "tests_requiring_config/bar.py";
     interaction.client.did_open(bar);
@@ -419,7 +440,8 @@ fn test_will_rename_files_document_changes() {
                     ]
                 }
             ]
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

@@ -14,13 +14,14 @@ use crate::literal::Lit;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::types::Type;
+use crate::types::Union;
 
 /// Turn unions of unions into a flattened list for one union, and return the deduped list.
 fn flatten_and_dedup(xs: Vec<Type>) -> Vec<Type> {
     fn flatten(xs: Vec<Type>, res: &mut Vec<Type>) {
         for x in xs {
             match x {
-                Type::Union(xs) => flatten(xs, res),
+                Type::Union(box Union { members, .. }) => flatten(members, res),
                 Type::Never(_) => {}
                 _ => res.push(x),
             }
@@ -76,7 +77,12 @@ fn unions_internal(
         }
         collapse_tuple_unions_with_empty(&mut res);
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
-        try_collapse(res).unwrap_or_else(Type::Union)
+        try_collapse(res).unwrap_or_else(|members| {
+            Type::Union(Box::new(Union {
+                members,
+                display_name: None,
+            }))
+        })
     })
 }
 

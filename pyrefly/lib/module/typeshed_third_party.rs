@@ -20,6 +20,7 @@ use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
 use crate::module::bundled::BundledStub;
+use crate::module::bundled::create_bundled_stub_config;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -71,10 +72,7 @@ impl BundledStub for BundledTypeshedThirdParty {
 
     fn config() -> ArcId<ConfigFile> {
         static CONFIG: LazyLock<ArcId<ConfigFile>> = LazyLock::new(|| {
-            let mut config_file = ConfigFile::default();
-            config_file.python_environment.site_package_path = Some(Vec::new());
-            config_file.root.disable_type_errors_in_ide = Some(true);
-            config_file.configure();
+            let config_file = create_bundled_stub_config(None, None);
             ArcId::new(config_file)
         });
         CONFIG.dupe()

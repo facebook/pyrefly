@@ -64,8 +64,6 @@ use crate::binding::bindings::InitializedInFlow;
 use crate::binding::expr::Usage;
 use crate::binding::function::SelfAssignments;
 use crate::binding::narrow::NarrowOps;
-use crate::config::error_kind::ErrorKind;
-use crate::error::context::ErrorInfo;
 use crate::export::definitions::Definition;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
@@ -292,7 +290,7 @@ impl StaticInfo {
     fn as_key(&self, name: &Name) -> Key {
         let short_identifier = || {
             ShortIdentifier::new(&Identifier {
-                node_index: AtomicNodeIndex::dummy(),
+                node_index: AtomicNodeIndex::default(),
                 id: name.clone(),
                 range: self.range,
             })
@@ -2565,16 +2563,8 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn add_loop_exitpoint(&mut self, exit: LoopExit, range: TextRange) {
-        let in_loop = self.scopes.add_loop_exit(exit);
-        if !in_loop {
-            // Python treats break and continue outside of a loop as a syntax error.
-            self.error(
-                range,
-                ErrorInfo::Kind(ErrorKind::ParseError),
-                format!("Cannot `{exit}` outside loop"),
-            );
-        }
+    pub fn add_loop_exitpoint(&mut self, exit: LoopExit) {
+        self.scopes.add_loop_exit(exit);
     }
 
     /// Start a new fork in control flow (e.g. an if/else, match statement, etc)

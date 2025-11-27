@@ -38,7 +38,7 @@ pub(crate) mod query_source_db;
 // with the same data (especially when deserialied) point to the same value.
 static TARGET_INTERNER: Interner<String> = Interner::new();
 
-#[derive(Debug, Clone, Dupe, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Dupe, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Target(Intern<String>);
 impl Serialize for Target {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -53,9 +53,15 @@ impl<'de> Deserialize<'de> for Target {
     }
 }
 
+impl fmt::Debug for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Self as fmt::Display>::fmt(self, f)
+    }
+}
+
 impl fmt::Display for Target {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", &**self.0)
     }
 }
 
@@ -120,4 +126,6 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>>;
     /// Get the target for the given [`ModulePath`], if one exists.
     fn get_target(&self, origin: Option<&Path>) -> Option<Target>;
+    /// Get any generated files for which we might have to override the config finder.
+    fn get_generated_files(&self) -> SmallSet<ModulePathBuf>;
 }

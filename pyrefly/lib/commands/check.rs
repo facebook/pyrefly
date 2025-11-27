@@ -421,7 +421,7 @@ impl Handles {
         let mut errors = Vec::new();
         let mut reloaded_configs = SmallSet::new();
         for (config, files) in &configs {
-            match config.requery_source_db(files) {
+            match ConfigFile::requery_source_db(config, files) {
                 Ok(reload) if reload => {
                     reloaded_configs.insert(config.dupe());
                 }

@@ -22,7 +22,9 @@ fn test_completion_basic() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
@@ -48,9 +50,10 @@ fn test_completion_basic() {
     interaction
         .client
         .completion("foo.py", 11, 1)
-        .expect_completion_response_with(|list| list.items.iter().any(|item| item.label == "Bar"));
+        .expect_completion_response_with(|list| list.items.iter().any(|item| item.label == "Bar"))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -58,7 +61,9 @@ fn test_completion_sorted_in_sorttext_order() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
@@ -88,9 +93,10 @@ fn test_completion_sorted_in_sorttext_order() {
             list.items
                 .iter()
                 .is_sorted_by_key(|x| (&x.sort_text, &x.label))
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -98,7 +104,9 @@ fn test_completion_keywords() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
@@ -137,9 +145,10 @@ fn test_completion_keywords() {
                 }
             }
             has_if && has_import && has_def
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -154,7 +163,9 @@ fn test_import_completion_skips_hidden_directories() {
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(workspace);
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
@@ -177,9 +188,10 @@ fn test_import_completion_skips_hidden_directories() {
         .expect_completion_response_with(|list| {
             assert!(list.items.iter().all(|item| item.label != ".hiddenpkg"));
             true
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -191,7 +203,9 @@ fn test_completion_with_autoimport() {
         LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     let file = root_path.join("foo.py");
     interaction.client.did_open("foo.py");
@@ -215,9 +229,9 @@ fn test_completion_with_autoimport() {
             && item.detail.as_ref().is_some_and(|detail| detail.contains("from autoimport_provider import"))
             && item.additional_text_edits.as_ref().is_some_and(|edits| !edits.is_empty())
         })
-    });
+    }).unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -228,10 +242,12 @@ fn test_completion_with_autoimport_without_config() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let foo_path = root_path.join("foo.py");
     interaction.client.did_open("foo.py");
@@ -252,9 +268,10 @@ fn test_completion_with_autoimport_without_config() {
     interaction
         .client
         .completion("foo.py", 0, 3)
-        .expect_completion_response_with(|list| !list.items.is_empty());
+        .expect_completion_response_with(|list| !list.items.is_empty())
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -265,10 +282,12 @@ fn test_completion_with_autoimport_in_defined_module() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     let file = root_path.join("autoimport_provider.py");
     interaction.client.did_open("autoimport_provider.py");
@@ -302,9 +321,9 @@ fn test_completion_with_autoimport_in_defined_module() {
             item.label == "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
                 && item.detail.as_ref().is_some_and(|detail| detail == "() -> None")
         })
-    });
+    }).unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -315,19 +334,22 @@ fn test_completion_with_autoimport_duplicates() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
     interaction
         .client
         .completion("foo.py", 5, 14)
-        .expect_completion_response_with(|list| !list.items.is_empty());
+        .expect_completion_response_with(|list| !list.items.is_empty())
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -335,7 +357,9 @@ fn test_module_completion() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("tests_requiring_config"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
@@ -350,9 +374,10 @@ fn test_module_completion() {
                 "kind": 9,
                 "sortText": "0"
             }],
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -360,7 +385,9 @@ fn test_module_completion_reexports_sorted_lower() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("reexport_test"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("test.py");
 
@@ -397,9 +424,10 @@ fn test_module_completion_reexports_sorted_lower() {
                     .iter()
                     .cartesian_product(reexports.iter())
                     .all(|(direct_sort, reexport_sort)| reexport_sort > direct_sort)
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -407,7 +435,9 @@ fn test_relative_module_completion() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction
         .client
@@ -419,9 +449,10 @@ fn test_relative_module_completion() {
         .expect_response(json!({
             "isIncomplete": false,
             "items": [],
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -433,7 +464,9 @@ fn test_stdlib_submodule_completion() {
         LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
     interaction.client.did_change("foo.py", "import email.");
@@ -446,9 +479,10 @@ fn test_stdlib_submodule_completion() {
                     && item.detail.as_deref() == Some("email.errors")
                     && item.kind == Some(CompletionItemKind::MODULE)
             })
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -460,7 +494,9 @@ fn test_stdlib_class_completion() {
         LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
 
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
     interaction.client.did_change("foo.py", "FirstHeader");
@@ -471,9 +507,10 @@ fn test_stdlib_class_completion() {
             list.items.iter().any(|item| {
                 item.label == "FirstHeaderLineIsContinuationDefect (import email.errors)"
             })
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -481,7 +518,9 @@ fn test_completion_incomplete_below_autoimport_threshold() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
@@ -499,9 +538,10 @@ fn test_completion_incomplete_below_autoimport_threshold() {
                 Some(CompletionResponse::List(list)) => list.is_incomplete,
                 _ => false,
             }
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -509,7 +549,9 @@ fn test_completion_complete_above_autoimport_threshold() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
@@ -526,9 +568,10 @@ fn test_completion_complete_above_autoimport_threshold() {
                 Some(CompletionResponse::List(list)) => !list.is_incomplete,
                 _ => false,
             }
-        });
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -536,7 +579,9 @@ fn test_completion_complete_with_local_completions() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
@@ -550,7 +595,8 @@ fn test_completion_complete_with_local_completions() {
     interaction
         .client
         .completion("foo.py", 0, 2)
-        .expect_completion_response_with(|list| list.is_incomplete);
+        .expect_completion_response_with(|list| list.is_incomplete)
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

@@ -160,8 +160,8 @@ assert_type(y, Generator[int, None, None])
 testcase!(
     test_bad_loop_command,
     r#"
-break  # E: Cannot `break` outside loop
-continue  # E: Cannot `continue` outside loop
+break  # E: `break` outside loop
+continue  # E: `continue` outside loop
     "#,
 );
 
@@ -711,7 +711,7 @@ x: list[int] = [1, 2, 3]
 match x:
     case [a] | a: # E: name capture `a` makes remaining patterns unreachable
         assert_type(a, list[int] | int)
-    case [b] | _:
+    case [b] | _:  # E: alternative patterns bind different names
         assert_type(b, int)  # E: `b` may be uninitialized
 
 match x:

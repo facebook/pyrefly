@@ -12,5 +12,5 @@ mod config;
 mod extra;
 mod field;
 mod root_model;
-mod strict;
+mod strictness;
 mod util;

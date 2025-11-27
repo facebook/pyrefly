@@ -552,7 +552,7 @@ impl<'a> BindingsBuilder<'a> {
                     match x.value {
                         Some(value) => self.stmt(
                             Stmt::Assign(StmtAssign {
-                                node_index: AtomicNodeIndex::dummy(),
+                                node_index: AtomicNodeIndex::default(),
                                 range: x.range,
                                 targets: vec![target],
                                 value,
@@ -976,11 +976,11 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::Pass(_) => { /* no-op */ }
-            Stmt::Break(x) => {
-                self.add_loop_exitpoint(LoopExit::Break, x.range);
+            Stmt::Break(_) => {
+                self.add_loop_exitpoint(LoopExit::Break);
             }
-            Stmt::Continue(x) => {
-                self.add_loop_exitpoint(LoopExit::Continue, x.range);
+            Stmt::Continue(_) => {
+                self.add_loop_exitpoint(LoopExit::Continue);
             }
             Stmt::IpyEscapeCommand(x) => {
                 if self.module_info.is_notebook() {
@@ -1024,7 +1024,7 @@ impl<'a> BindingsBuilder<'a> {
                     // Register the imported name from wildcard imports
                     self.scopes.register_import_with_star(
                         &Identifier {
-                            node_index: AtomicNodeIndex::dummy(),
+                            node_index: AtomicNodeIndex::default(),
                             id: name.into_key().clone(),
                             range: x.range,
                         },

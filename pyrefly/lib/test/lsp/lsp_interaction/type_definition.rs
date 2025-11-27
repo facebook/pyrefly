@@ -17,9 +17,11 @@ fn builtins_import_goes_to_typeshed() {
     let result_file = pyrefly_typeshed_materialized.join("builtins.pyi");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            ..Default::default()
+        })
+        .unwrap();
     interaction.client.did_open("imports_builtins_no_config.py");
     interaction
         .client
@@ -30,7 +32,8 @@ fn builtins_import_goes_to_typeshed() {
             6,
             3348,
             10,
-        );
+        )
+        .unwrap();
     assert!(
         pyrefly_typeshed_materialized.join("pyrefly.toml").exists(),
         "Expected pyrefly.toml to exist at {:?}",

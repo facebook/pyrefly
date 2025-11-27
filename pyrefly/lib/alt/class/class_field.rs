@@ -18,10 +18,12 @@ use pyrefly_python::dunder;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::simplify::unions;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TParams;
+use pyrefly_types::types::Union;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::ResultExt;
 use pyrefly_util::visit::Visit;
@@ -944,7 +946,9 @@ fn make_bound_method_helper(
         Type::Overload(overload) if should_bind2(&overload.metadata) => {
             BoundMethodType::Overload(overload)
         }
-        Type::Union(ref ts) => {
+        Type::Union(box Union {
+            members: ref ts, ..
+        }) => {
             let mut bound_methods = Vec::with_capacity(ts.len());
             for t in ts {
                 match make_bound_method_helper(obj.clone(), t.clone(), should_bind) {
@@ -1141,6 +1145,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             ClassFieldDefinition::DefinedInMethod { value, method, .. } => {
+                // Check if there's an inherited property field from a parent class
+                // If so, we should just use the parent's property instead of creating a new field
+                if !Ast::is_mangled_attr(name) {
+                    // Use get_field_from_ancestors to only look at parent classes, not the current class
+                    if let Some(parent_field) = self.get_field_from_ancestors(
+                        class,
+                        self.get_mro_for_class(class).ancestors(self.stdlib),
+                        name,
+                        &|cls, name| self.get_field_from_current_class_only(cls, name),
+                    ) {
+                        let ClassField(ClassFieldInner::Simple { ty, .. }, ..) =
+                            &*parent_field.value;
+                        // Check if the parent field is a property (either getter or setter with getter)
+                        if ty.is_property_getter() || ty.is_property_setter_with_getter().is_some()
+                        {
+                            // If we found a property in the parent, just return the parent's field
+                            // This ensures the property with its setter is properly inherited
+                            return Arc::unwrap_or_clone(parent_field.value);
+                        }
+                    }
+                }
+
                 let initial_value =
                     initial_value_storage.push(RawClassFieldInitialization::Method(method.clone()));
                 if let Some(annotated_ty) =
@@ -2621,6 +2647,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
+    /// Return the first inherited method signature (parameters and flags) for `name`.
+    pub(crate) fn inherited_method_signature(
+        &self,
+        cls: &Class,
+        name: &Name,
+    ) -> Option<(ParamList, FuncFlags)> {
+        let derived_instance = self.instantiate(cls);
+        for ancestor in self.get_mro_for_class(cls).ancestors(self.stdlib) {
+            let parent_cls = ancestor.class_object();
+            let Some(member) = self.get_class_member(parent_cls, name) else {
+                continue;
+            };
+            let instance = Instance::of_protocol(ancestor, derived_instance.clone());
+            let instantiated = member.instantiate_for(&instance);
+            if let Some(sig) = Self::callable_params_and_flags(instantiated.ty()) {
+                return Some(sig);
+            }
+        }
+        None
+    }
+
     pub fn get_metaclass_attribute(
         &self,
         cls: &ClassBase,
@@ -3331,5 +3378,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Type> {
         self.get_bounded_quantified_attribute(quantified, upper_bound, &dunder::CALL)
             .and_then(|attr| attr.as_instance_method())
+    }
+
+    fn callable_params_and_flags(mut ty: Type) -> Option<(ParamList, FuncFlags)> {
+        let mut flags = None;
+        ty.transform_toplevel_func_metadata(|meta| {
+            if flags.is_none() {
+                flags = Some(meta.flags.clone());
+            }
+        });
+        let flags = flags?;
+        let params = match ty.callable_signatures().as_slice() {
+            [sig] if let Params::List(list) = &sig.params => Some(list.clone()),
+            _ => None,
+        }?;
+        Some((params, flags))
     }
 }

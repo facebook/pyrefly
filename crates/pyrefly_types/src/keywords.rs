@@ -84,6 +84,8 @@ pub struct DataclassTransformKeywords {
     pub kw_only_default: bool,
     pub frozen_default: bool,
     pub field_specifiers: Vec<CalleeKind>,
+    /// Default converter to apply to fields that don't have an explicit converter.
+    pub _converter_default: Option<Type>,
 }
 
 impl DataclassTransformKeywords {
@@ -105,6 +107,7 @@ impl DataclassTransformKeywords {
                 }
                 _ => Vec::new(),
             },
+            _converter_default: None,
         }
     }
 

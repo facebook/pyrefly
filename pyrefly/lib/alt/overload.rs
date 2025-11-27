@@ -14,6 +14,7 @@ use pyrefly_types::callable::ArgCounts;
 use pyrefly_types::callable::Param;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::TArgs;
+use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
@@ -149,7 +150,7 @@ impl<'a> ArgsExpander<'a> {
     /// Expands a type according to https://typing.python.org/en/latest/spec/overload.html#argument-type-expansion.
     fn expand_type<Ans: LookupAnswer>(ty: Type, solver: &AnswersSolver<Ans>) -> Vec<Type> {
         match ty {
-            Type::Union(ts) => ts,
+            Type::Union(box Union { members: ts, .. }) => ts,
             Type::ClassType(cls) if cls.is_builtin("bool") => vec![
                 Type::Literal(Lit::Bool(true)),
                 Type::Literal(Lit::Bool(false)),
@@ -161,7 +162,9 @@ impl<'a> ArgsExpander<'a> {
                     .map(Type::Literal)
                     .collect()
             }
-            Type::Type(box Type::Union(ts)) => ts.into_map(Type::type_form),
+            Type::Type(box Type::Union(box Union { members: ts, .. })) => {
+                ts.into_map(Type::type_form)
+            }
             Type::Tuple(Tuple::Concrete(elements)) => {
                 let mut count = 1;
                 let mut changed = false;

@@ -18,7 +18,9 @@ fn test_text_document_did_change() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("text_document.py");
 
@@ -60,9 +62,10 @@ fn test_text_document_did_change() {
     interaction
         .client
         .diagnostic("text_document.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -70,7 +73,9 @@ fn test_text_document_did_change_unicode() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     interaction.client.did_open("utf.py");
 
@@ -114,7 +119,8 @@ fn test_text_document_did_change_unicode() {
     interaction
         .client
         .diagnostic("utf.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

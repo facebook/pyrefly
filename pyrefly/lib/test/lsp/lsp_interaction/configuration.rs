@@ -30,20 +30,23 @@ fn test_did_change_configuration() {
     let scope_uri = Url::from_file_path(root.path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{}]));
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[cfg(unix)]
@@ -95,40 +98,50 @@ fn test_pythonpath_change() {
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(Some(
-            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
-        )),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("custom_interpreter/src/foo.py");
     // Prior to the config taking effect, there should be 1 diagnostic showing an import error
-    interaction.client.expect_publish_diagnostics_error_count(
-        test_files_root.path().join("custom_interpreter/src/foo.py"),
-        1,
-    );
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(
+            test_files_root.path().join("custom_interpreter/src/foo.py"),
+            1,
+        )
+        .expect("Failed to receive publish diagnostics");
 
     // The definition response is in the same file
     interaction
         .client
         .definition("custom_interpreter/src/foo.py", 5, 31)
-        .expect_definition_response_from_root("custom_interpreter/src/foo.py", 5, 26, 5, 37);
+        .expect_definition_response_from_root("custom_interpreter/src/foo.py", 5, 26, 5, 37)
+        .unwrap();
 
     interaction.client.did_change_configuration();
     interaction
         .client
         .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect("")
         .send_configuration_response(json!([
             {
                 "pythonPath": interpreter_path.to_str().unwrap()
             }
         ]));
     // After the new config takes effect, publish diagnostics should have 0 errors
-    interaction.client.expect_publish_diagnostics_error_count(
-        test_files_root.path().join("custom_interpreter/src/foo.py"),
-        0,
-    );
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(
+            test_files_root.path().join("custom_interpreter/src/foo.py"),
+            0,
+        )
+        .expect("Failed to receive publish diagnostics");
     // The definition can now be found in site-packages
     interaction
         .client
@@ -139,7 +152,8 @@ fn test_pythonpath_change() {
             6,
             6,
             17,
-        );
+        )
+        .unwrap();
 
     // Try setting the interpreter back to a bad interpreter, and make sure it fails
     // successfully
@@ -147,23 +161,28 @@ fn test_pythonpath_change() {
     interaction
         .client
         .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect("")
         .send_configuration_response(json!([
             {
                 "pythonPath": bad_interpreter_path.to_str().unwrap()
             }
         ]));
     // After the bad config takes effect, publish diagnostics should have 1 error
-    interaction.client.expect_publish_diagnostics_error_count(
-        test_files_root.path().join("custom_interpreter/src/foo.py"),
-        1,
-    );
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(
+            test_files_root.path().join("custom_interpreter/src/foo.py"),
+            1,
+        )
+        .expect("Failed to receive publish diagnostics");
     // The definition should not be found in site-packages
     interaction
         .client
         .definition("custom_interpreter/src/foo.py", 5, 31)
-        .expect_definition_response_from_root("custom_interpreter/src/foo.py", 5, 26, 5, 37);
+        .expect_definition_response_from_root("custom_interpreter/src/foo.py", 5, 26, 5, 37)
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 // Only run this test on unix since windows has no way to mock a .exe without compiling something
@@ -187,24 +206,29 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(Some(
-            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
-        )),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction
         .client
         .did_open("custom_interpreter_config/src/foo.py");
     // Prior to the config taking effect, things should work with the interpreter in the provided
     // config
-    interaction.client.expect_publish_diagnostics_error_count(
-        test_files_root
-            .path()
-            .join("custom_interpreter_config/src/foo.py"),
-        0,
-    );
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(
+            test_files_root
+                .path()
+                .join("custom_interpreter_config/src/foo.py"),
+            0,
+        )
+        .expect("Failed to receive publish diagnostics");
     // The definition response is in the same file
     interaction
         .client
@@ -215,24 +239,29 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
             6,
             6,
             17,
-        );
+        )
+        .unwrap();
 
     interaction.client.did_change_configuration();
     interaction
         .client
         .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .expect("")
         .send_configuration_response(json!([
             {
                 "pythonPath": bad_interpreter_path.to_str().unwrap()
             }
         ]));
     // After the new config takes effect, results should stay the same
-    interaction.client.expect_publish_diagnostics_error_count(
-        test_files_root
-            .path()
-            .join("custom_interpreter_config/src/foo.py"),
-        0,
-    );
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(
+            test_files_root
+                .path()
+                .join("custom_interpreter_config/src/foo.py"),
+            0,
+        )
+        .expect("Failed to receive publish diagnostics");
     // The definition can still be found in site-packages
     interaction
         .client
@@ -243,9 +272,10 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
             6,
             6,
             17,
-        );
+        )
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -255,11 +285,13 @@ fn test_disable_language_services() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("foo.py");
     interaction
@@ -277,21 +309,24 @@ fn test_disable_language_services() {
                     "character": 9
                 }
             }
-        }));
+        }))
+        .unwrap();
 
     interaction.client.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{"pyrefly": {"disableLanguageServices": true}}]));
 
     interaction
         .client
         .definition("foo.py", 6, 16)
-        .expect_response(json!([]));
+        .expect_response(json!([]))
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -300,10 +335,12 @@ fn test_disable_language_services_default_workspace() {
     let root_path = test_files_root.path().join("basic");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("foo.py");
     interaction
@@ -321,21 +358,24 @@ fn test_disable_language_services_default_workspace() {
                     "character": 9
                 }
             }
-        }));
+        }))
+        .unwrap();
 
     interaction.client.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(None)
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{"pyrefly": {"disableLanguageServices": true}}]));
 
     interaction
         .client
         .definition("foo.py", 6, 16)
-        .expect_response(json!([]));
+        .expect_response(json!([]))
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -345,11 +385,13 @@ fn test_disable_specific_language_services_via_analysis_config() {
     let scope_uri = Url::from_file_path(this_test_root.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(this_test_root.to_path_buf());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("foo.py");
 
@@ -364,7 +406,8 @@ fn test_disable_specific_language_services_via_analysis_config() {
                     + Url::from_file_path(this_test_root.join("bar.py")).unwrap().as_str()
                     + "#L7,7)"
             }
-        }));
+        }))
+        .unwrap();
 
     // Test definition works initially
     interaction
@@ -382,13 +425,15 @@ fn test_disable_specific_language_services_via_analysis_config() {
                     "character": 9
                 }
             }
-        }));
+        }))
+        .unwrap();
 
     // Change configuration to disable only hover (using pyrefly.disabledLanguageServices)
     interaction.client.did_change_configuration();
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([
             {
                 "pyrefly": {
@@ -403,7 +448,8 @@ fn test_disable_specific_language_services_via_analysis_config() {
     interaction
         .client
         .hover("foo.py", 6, 17)
-        .expect_response(json!({"contents": []}));
+        .expect_response(json!({"contents": []}))
+        .expect("Failed to receive expected response");
 
     // But definition should still work
     interaction
@@ -421,9 +467,10 @@ fn test_disable_specific_language_services_via_analysis_config() {
                     "character": 9
                 }
             }
-        }));
+        }))
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -432,10 +479,12 @@ fn test_did_change_workspace_folder() {
     let scope_uri = Url::from_file_path(root.path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction
         .client
@@ -449,9 +498,10 @@ fn test_did_change_workspace_folder() {
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{}]));
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 fn get_diagnostics_result() -> serde_json::Value {
@@ -468,13 +518,15 @@ fn test_disable_type_errors_language_services_still_work() {
     let scope_uri = Url::from_file_path(&root_path).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(Some(
-            json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]),
-        )),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("foo.py");
 
@@ -488,9 +540,10 @@ fn test_disable_type_errors_language_services_still_work() {
                     + Url::from_file_path(root_path.join("bar.py")).unwrap().as_str()
                     + "#L7,7)"
             }
-        }));
+        }))
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -499,42 +552,49 @@ fn test_disable_type_errors_workspace_folder() {
     let scope_uri = Url::from_file_path(test_files_root.path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("type_errors.py");
 
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
     interaction.client.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]));
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
     interaction.client.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result());
+        .expect_response(get_diagnostics_result())
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -542,41 +602,48 @@ fn test_disable_type_errors_default_workspace() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("type_errors.py");
 
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
     interaction.client.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(None)
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]));
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
     interaction.client.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(None)
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result());
+        .expect_response(get_diagnostics_result())
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -586,31 +653,36 @@ fn test_disable_type_errors_config() {
     let scope_uri = Url::from_file_path(test_files_root.as_path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("type_errors.py");
 
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
     interaction.client.did_change_configuration();
 
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result());
+        .expect_response(get_diagnostics_result())
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 /// If we failed to parse pylance configs, we would fail to apply the `disableTypeErrors` settings.
@@ -620,10 +692,12 @@ fn test_parse_pylance_configs() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("type_errors.py");
 
@@ -631,6 +705,7 @@ fn test_parse_pylance_configs() {
     interaction
         .client
         .expect_configuration_request(None)
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([
             {
                 "pyrefly": {"displayTypeErrors": "force-off"},
@@ -649,9 +724,10 @@ fn test_parse_pylance_configs() {
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -659,29 +735,34 @@ fn test_diagnostics_default_workspace() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("type_errors.py");
 
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
     interaction.client.did_change_configuration();
     interaction
         .client
         .expect_configuration_request(None)
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result());
+        .expect_response(get_diagnostics_result())
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -690,29 +771,34 @@ fn test_diagnostics_default_workspace_with_config() {
     let root = test_root.path().join("tests_requiring_config");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.clone());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("type_errors.py");
 
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result());
+        .expect_response(get_diagnostics_result())
+        .expect("Failed to receive expected response");
 
     interaction.client.did_change_configuration();
     interaction
         .client
         .expect_configuration_request(None)
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]));
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -721,30 +807,35 @@ fn test_diagnostics_in_workspace() {
     let scope_uri = Url::from_file_path(root.path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction.client.did_open("type_errors.py");
 
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
     interaction.client.did_change_configuration();
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result());
+        .expect_response(get_diagnostics_result())
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -752,12 +843,14 @@ fn test_diagnostics_file_not_in_includes() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(Some(
-            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
-        )),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction
         .client
@@ -770,15 +863,17 @@ fn test_diagnostics_file_not_in_includes() {
     interaction
         .client
         .diagnostic("diagnostics_file_not_in_includes/type_errors_include.py")
-        .expect_response(get_diagnostics_result());
+        .expect_response(get_diagnostics_result())
+        .expect("Failed to receive expected response");
 
     // prove that it ignores a file not in project includes
     interaction
         .client
         .diagnostic("diagnostics_file_not_in_includes/type_errors_exclude.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -786,12 +881,14 @@ fn test_diagnostics_file_in_excludes() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(Some(
-            json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
-        )),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     interaction
         .client
@@ -804,15 +901,17 @@ fn test_diagnostics_file_in_excludes() {
     interaction
         .client
         .diagnostic("diagnostics_file_in_excludes/type_errors_include.py")
-        .expect_response(get_diagnostics_result());
+        .expect_response(get_diagnostics_result())
+        .expect("Failed to receive expected response");
 
     // prove that it ignores a file not in project includes
     interaction
         .client
         .diagnostic("diagnostics_file_in_excludes/type_errors_exclude.py")
-        .expect_response(json!({"items": [], "kind": "full"}));
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -824,16 +923,18 @@ fn test_initialization_options_respected() {
     interaction.set_root(root_path.clone());
 
     // Pass configuration via initialization_options instead of waiting for workspace/configuration
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
-        initialization_options: Some(json!({
-            "pyrefly": {
-                "disableLanguageServices": true
-            }
-        })),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            initialization_options: Some(json!({
+                "pyrefly": {
+                    "disableLanguageServices": true
+                }
+            })),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     // Open a file and immediately test that language services are disabled
     // This proves that initialization_options were respected without needing
@@ -843,9 +944,10 @@ fn test_initialization_options_respected() {
     interaction
         .client
         .definition("foo.py", 6, 16)
-        .expect_response(json!([]));
+        .expect_response(json!([]))
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]
@@ -857,16 +959,18 @@ fn test_initialization_options_without_workspace_folders() {
 
     // Pass configuration via initialization_options for a client that doesn't support workspace folders
     // This should apply configuration to the default workspace
-    interaction.initialize(InitializeSettings {
-        workspace_folders: None,
-        initialization_options: Some(json!({
-            "pyrefly": {
-                "disableLanguageServices": true
-            }
-        })),
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: None,
+            initialization_options: Some(json!({
+                "pyrefly": {
+                    "disableLanguageServices": true
+                }
+            })),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
 
     // Open a file and immediately test that language services are disabled
     // This proves that initialization_options were applied to the default workspace
@@ -874,7 +978,8 @@ fn test_initialization_options_without_workspace_folders() {
     interaction
         .client
         .definition("foo.py", 6, 16)
-        .expect_response(json!([]));
+        .expect_response(json!([]))
+        .expect("Failed to receive expected response");
 
-    interaction.shutdown();
+    interaction.shutdown().expect("Failed to shutdown");
 }

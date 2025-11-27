@@ -16,10 +16,12 @@ fn test_provide_type_basic() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     interaction.client.did_open("bar.py");
 
@@ -31,9 +33,10 @@ fn test_provide_type_basic() {
                 "kind": "plaintext",
                 "value": "typing.Literal[3]",
             }]
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -41,10 +44,12 @@ fn test_provide_type() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     interaction.client.did_open("foo.py");
 
@@ -56,7 +61,8 @@ fn test_provide_type() {
                 "kind": "plaintext",
                 "value": "type[bar.Bar]".to_owned()
             }]
-        }));
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

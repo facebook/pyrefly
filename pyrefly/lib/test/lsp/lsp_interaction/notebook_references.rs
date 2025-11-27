@@ -16,15 +16,18 @@ fn test_notebook_references() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["x = 1\ny = x"]);
 
     // TODO: references always returns empty for notebooks atm
     interaction
         .references_cell("notebook.ipynb", "cell1", 0, 0, true)
-        .expect_response(json!([]));
-    interaction.shutdown();
+        .expect_response(json!([]))
+        .unwrap();
+    interaction.shutdown().unwrap();
 }
