@@ -140,9 +140,8 @@ impl<'a> Transaction<'a> {
                                     {
                                         ty = return_ty;
                                     }
-                                    // Use get_types_with_locations_with_stdlib to get type parts with location info
-                                    let type_parts =
-                                        ty.get_types_with_locations_with_stdlib(stdlib.as_ref());
+                                    // Use get_types_with_locations to get type parts with location info
+                                    let type_parts = ty.get_types_with_locations(stdlib.as_ref());
                                     let label_parts = once((" -> ".to_owned(), None))
                                         .chain(
                                             type_parts
@@ -183,8 +182,8 @@ impl<'a> Transaction<'a> {
                     if let Some(e) = e
                         && is_interesting(e, &ty, class_name)
                     {
-                        // Use get_types_with_locations_with_stdlib to get type parts with location info
-                        let type_parts = ty.get_types_with_locations_with_stdlib(stdlib.as_ref());
+                        // Use get_types_with_locations to get type parts with location info
+                        let type_parts = ty.get_types_with_locations(stdlib.as_ref());
                         let label_parts = once((": ".to_owned(), None))
                             .chain(
                                 type_parts

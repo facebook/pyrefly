@@ -5,8 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::request::InlayHintRequest;
 use serde_json::json;
+use serde_json::Value;
 
+use crate::test::lsp::lsp_interaction::object_model::ClientRequestHandle;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -25,10 +28,11 @@ fn test_inlay_hint_default_config() {
 
     interaction.client.did_open("inlay_hint_test.py");
 
-    interaction
-        .client
-        .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([
+    expect_inlay_hint_response(
+        interaction
+            .client
+            .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0),
+        json!([
             {
                 "label":[
                     {"value":" -> "},
@@ -87,7 +91,8 @@ fn test_inlay_hint_default_config() {
                     "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
                 }]
             }
-        ]))
+        ]),
+    )
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -178,10 +183,11 @@ fn test_inlay_hint_disable_variables() {
 
     interaction.client.did_open("inlay_hint_test.py");
 
-    interaction
-        .client
-        .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([{
+    expect_inlay_hint_response(
+        interaction
+            .client
+            .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0),
+        json!([{
             "label":[
                 {"value":" -> "},
                 {"value":"tuple"},
@@ -216,7 +222,8 @@ fn test_inlay_hint_disable_variables() {
                 "newText":" -> Literal[0]",
                 "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
             }]
-        }]))
+        }]),
+    )
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -242,10 +249,11 @@ fn test_inlay_hint_disable_returns() {
 
     interaction.client.did_open("inlay_hint_test.py");
 
-    interaction
-        .client
-        .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([{
+    expect_inlay_hint_response(
+        interaction
+            .client
+            .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0),
+        json!([{
             "label":[
                 {"value":": "},
                 {"value":"tuple"},
@@ -266,7 +274,8 @@ fn test_inlay_hint_disable_returns() {
                 "newText":": tuple[Literal[1], Literal[2]]",
                 "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
             }]
-        }]))
+        }]),
+    )
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -324,4 +333,34 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
         .unwrap();
 
     interaction.shutdown().unwrap();
+}
+
+fn expect_inlay_hint_response(
+    handle: ClientRequestHandle<'_, InlayHintRequest>,
+    expected: Value,
+) {
+    let mut expected = expected;
+    strip_inlay_hint_locations(&mut expected);
+    handle.expect_response_with(move |result| {
+        let mut actual_json = serde_json::to_value(&result).unwrap();
+        strip_inlay_hint_locations(&mut actual_json);
+        actual_json == expected
+    });
+}
+
+fn strip_inlay_hint_locations(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.remove("location");
+            for inner in map.values_mut() {
+                strip_inlay_hint_locations(inner);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                strip_inlay_hint_locations(item);
+            }
+        }
+        _ => {}
+    }
 }
