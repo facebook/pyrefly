@@ -95,28 +95,24 @@ fn hover_shows_third_party_function_name() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("rename_third_party"));
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
     interaction.client.did_open("user_code.py");
     // Column/line values follow LSP's zero-based positions
-    interaction.client.hover("user_code.py", 14, 25);
-    interaction.client.expect_response_with(
-        |response| {
-            response
-                .result
-                .as_ref()
-                .and_then(|value| value.get("contents"))
-                .and_then(|contents| contents.get("value"))
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| value.contains("external_function"))
-        },
-        "hover should show the function name for third-party modules",
-    );
+    interaction
+        .client
+        .hover("user_code.py", 14, 25)
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| text.contains("external_function"))
+        })
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]

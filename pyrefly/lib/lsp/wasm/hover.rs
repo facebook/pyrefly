@@ -26,7 +26,6 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
-use pyrefly_types::display::format_hover_code_snippet;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::Type;
@@ -219,9 +218,16 @@ impl HoverValue {
                     let cleaned = doc.trim().replace('\n', "  \n");
                     format!("{prefix}**Parameter `{}`**\n{}", name, cleaned)
                 });
-        let mut kind_formatted = self.kind.map_or("".to_owned(), |kind| {
-            format!("{} ", kind.display_for_hover())
-        });
+        let kind_formatted = self.kind.map_or_else(
+            || {
+                if self.type_.is_function_type() {
+                    "(function) ".to_owned()
+                } else {
+                    String::new()
+                }
+            },
+            |kind| format!("{} ", kind.display_for_hover()),
+        );
         let name_formatted = self
             .name
             .as_ref()
@@ -231,27 +237,10 @@ impl HoverValue {
         } else {
             String::new()
         };
-        let type_display = self
-            .display
-            .clone()
-            .unwrap_or_else(|| self.type_.as_hover_string());
-        // Ensure callable hover bodies always contain a proper `def name(...)` so IDE syntax
-        // highlighting stays consistent, even when metadata is missing and we fall back to
-        // inferred identifiers.
-        let snippet = format_hover_code_snippet(&self.type_, self.name.as_deref(), type_display);
-        let kind_formatted = self.kind.map_or_else(
-            || {
-                snippet
-                    .default_kind_label
-                    .map(str::to_owned)
-                    .unwrap_or_default()
-            },
-            |kind| format!("{} ", kind.display_for_hover()),
-        );
-        let name_formatted = self
-            .name
-            .as_ref()
-            .map_or("".to_owned(), |s| format!("{s}: "));
+        let type_display = self.display.clone().unwrap_or_else(|| {
+            self.type_
+                .as_hover_string_with_fallback_name(self.name.as_deref())
+        });
 
         Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -450,15 +439,6 @@ pub fn get_hover(
     // Otherwise, fall through to the existing type hover logic
     let type_ = transaction.get_type_at(handle, position)?;
     let fallback_name_from_type = fallback_hover_name_from_type(&type_);
-    let type_display = transaction.ad_hoc_solve(handle, {
-        let mut cloned = type_.clone();
-        move |solver| {
-            // If the type is a callable, rewrite the signature to expand TypedDict-based
-            // `**kwargs` entries, ensuring hover text shows the actual keyword names users can pass.
-            cloned.visit_toplevel_callable_mut(|c| expand_callable_kwargs_for_hover(&solver, c));
-            cloned.as_hover_string()
-        }
-    });
     let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,
@@ -498,6 +478,15 @@ pub fn get_hover(
     };
 
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
+
+    let name_for_display = name.clone();
+    let type_display = transaction.ad_hoc_solve(handle, {
+        let mut cloned = type_.clone();
+        move |solver| {
+            cloned.visit_toplevel_callable_mut(|c| expand_callable_kwargs_for_hover(&solver, c));
+            cloned.as_hover_string_with_fallback_name(name_for_display.as_deref())
+        }
+    });
 
     let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
         Some(Docstring(docstring, module))
