@@ -1760,7 +1760,7 @@ T = foooooo
             .completion(handle, position, ImportFormat::Absolute, false);
     completions
         .into_iter()
-        .find(|item| item.label == "foooooo (import bar)")
+        .find(|item| item.label == "foooooo")
         .expect("expected foooooo to be in completions");
 }
 

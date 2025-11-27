@@ -225,7 +225,7 @@ fn test_completion_with_autoimport() {
 
     interaction.client.completion("foo.py", 0, 43).expect_completion_response_with(|list| {
         list.items.iter().any(|item| {
-            item.label == "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search (import autoimport_provider)"
+            item.label == "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
             && item.detail.as_ref().is_some_and(|detail| detail.contains("from autoimport_provider import"))
             && item.additional_text_edits.as_ref().is_some_and(|edits| !edits.is_empty())
         })
@@ -504,9 +504,9 @@ fn test_stdlib_class_completion() {
         .client
         .completion("foo.py", 0, 11)
         .expect_completion_response_with(|list| {
-            list.items.iter().any(|item| {
-                item.label == "FirstHeaderLineIsContinuationDefect (import email.errors)"
-            })
+            list.items
+                .iter()
+                .any(|item| item.label == "FirstHeaderLineIsContinuationDefect")
         })
         .unwrap();
 
