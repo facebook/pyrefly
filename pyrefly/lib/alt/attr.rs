@@ -23,6 +23,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -41,6 +42,7 @@ use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::solver::solver::SubsetError;
+use crate::suggest::best_suggestion;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
@@ -518,7 +520,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         todo_ctx: &str,
     ) -> Type {
         let attr_base = self.as_attribute_base(base.clone());
-        let lookup_result = attr_base.map_or_else(
+        let lookup_result = attr_base.clone().map_or_else(
             || LookupResult::internal_error(InternalError::AttributeBaseUndefined(base.clone())),
             |attr_base| self.lookup_attr_from_base(attr_base, attr_name),
         );
@@ -545,13 +547,83 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             error_messages.sort();
             error_messages.dedup();
-            self.error(
-                errors,
+            let mut msg = vec1![error_messages.join("\n")];
+            if let Some(suggestion) = attr_base
+                .as_ref()
+                .and_then(|attr_base| self.suggest_attribute_name(attr_name, attr_base))
+            {
+                msg.push(format!("Did you mean `{suggestion}`?"));
+            }
+            errors.add(
                 range,
                 ErrorInfo::new(ErrorKind::MissingAttribute, context),
-                error_messages.join("\n"),
-            )
+                msg,
+            );
+            Type::any_error()
         }
+    }
+
+    fn add_class_fields(&self, class: &Class, candidates: &mut SmallSet<Name>) {
+        let mut add_fields_for = |cls: &Class| {
+            for name in self.get_class_field_map(cls).keys() {
+                candidates.insert(name.clone());
+            }
+        };
+        add_fields_for(class);
+        let mro = self.get_mro_for_class(class);
+        for ancestor in mro.ancestors_no_object() {
+            add_fields_for(ancestor.class_object());
+        }
+    }
+
+    fn collect_attribute_candidates_from_base(
+        &self,
+        base: &AttributeBase1,
+        candidates: &mut SmallSet<Name>,
+    ) {
+        match base {
+            AttributeBase1::ClassInstance(class) => {
+                self.add_class_fields(class.class_object(), candidates);
+            }
+            AttributeBase1::ClassObject(class_base) => {
+                self.add_class_fields(class_base.class_object(), candidates);
+            }
+            AttributeBase1::LiteralString => {
+                self.add_class_fields(self.stdlib.str().class_object(), candidates);
+            }
+            AttributeBase1::TypedDict(td) => {
+                self.add_class_fields(td.class_object(), candidates);
+            }
+            AttributeBase1::SuperInstance(class, ..) => {
+                self.add_class_fields(class.class_object(), candidates);
+            }
+            AttributeBase1::Quantified(_, class_type) => {
+                self.add_class_fields(class_type.class_object(), candidates);
+            }
+            AttributeBase1::SelfType(class_type) => {
+                self.add_class_fields(class_type.class_object(), candidates);
+            }
+            AttributeBase1::ProtocolSubset(inner) => {
+                self.collect_attribute_candidates_from_base(inner, candidates);
+            }
+            AttributeBase1::Intersect(lhs, rhs) => {
+                for b in lhs {
+                    self.collect_attribute_candidates_from_base(b, candidates);
+                }
+                for b in rhs {
+                    self.collect_attribute_candidates_from_base(b, candidates);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn suggest_attribute_name(&self, missing: &Name, attr_base: &AttributeBase) -> Option<Name> {
+        let mut candidates = SmallSet::new();
+        for base in attr_base.0.iter() {
+            self.collect_attribute_candidates_from_base(base, &mut candidates);
+        }
+        best_suggestion(missing, candidates.iter().map(|candidate| (candidate, 0)))
     }
 
     /// Can the attribute be successfully looked up in all cases?

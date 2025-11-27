@@ -73,6 +73,7 @@ use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
+use crate::suggest::best_suggestion;
 use crate::types::class::ClassDefIndex;
 use crate::types::type_info::JoinStyle;
 
@@ -1945,6 +1946,43 @@ impl Scopes {
             Some(value) if matches!(value.style, FlowStyle::MergeableImport(..)) => Some(value.idx),
             _ => None,
         }
+    }
+
+    pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
+        let mut candidates: Vec<(&Name, usize)> = Vec::new();
+        let mut flow_barrier = FlowBarrier::AllowFlowChecked;
+        let is_current_scope_annotation = matches!(self.current().kind, ScopeKind::Annotation);
+        for (lookup_depth, scope) in self.iter_rev().enumerate() {
+            let is_class = matches!(scope.kind, ScopeKind::Class(_));
+            if is_class
+                && !((lookup_depth == 0) || (is_current_scope_annotation && lookup_depth == 1))
+            {
+                continue;
+            }
+
+            if flow_barrier < FlowBarrier::BlockFlow {
+                for candidate in scope.flow.info.keys() {
+                    if let Some(static_info) = scope.stat.0.get(candidate)
+                        && static_info.range.start() >= position
+                    {
+                        continue;
+                    }
+                    candidates.push((candidate, lookup_depth));
+                }
+            }
+
+            if !is_class {
+                for (candidate, static_info) in scope.stat.0.iter() {
+                    if static_info.range.start() < position {
+                        candidates.push((candidate, lookup_depth));
+                    }
+                }
+            }
+
+            flow_barrier = max(flow_barrier, scope.flow_barrier);
+        }
+
+        best_suggestion(missing, candidates)
     }
 
     /// Look up the information needed to create a `Usage` binding for a read of a name

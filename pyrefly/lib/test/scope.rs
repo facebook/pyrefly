@@ -18,6 +18,83 @@ class C:
 "#,
 );
 
+testcase!(
+    test_unknown_name_suggests_similar,
+    r#"
+long_variable_name = 1
+long_variable_name2 = long_variuble_name  # E: Did you mean `long_variable_name`?
+"#,
+);
+
+testcase!(
+    test_unknown_name_suggests_from_enclosing_scope,
+    r#"
+outer_value = 10
+def f() -> int:
+    return outer_vlaue  # E: Did you mean `outer_value`?
+"#,
+);
+
+testcase!(
+    test_unknown_name_no_suggest_from_future_defs,
+    r#"
+future_value = missing  # E: `missing` is uninitialized
+missing = 1
+"#,
+);
+
+testcase!(
+    test_unknown_name_no_suggest_from_class_scope_in_method,
+    r#"
+class C:
+    x = 1
+    def m(self) -> int:
+        return x  # E: Could not find name `x`
+"#,
+);
+
+testcase!(
+    test_unknown_name_suggests_in_class_body,
+    r#"
+class Foo:
+    x = 42
+    y = xx + 42  # E: Did you mean `x`?
+"#,
+);
+
+testcase!(
+    test_unknown_name_prefers_inner_scope,
+    r#"
+value = 0
+def f() -> int:
+    local_value = 1
+    return local_valu  # E: Did you mean `local_value`?
+"#,
+);
+
+testcase!(
+    test_unknown_name_ties_prefer_shallower_scope,
+    r#"
+global_value = 1
+def outer() -> int:
+    global_value2 = 2
+    def inner() -> int:
+        globl_value = 3
+        return globl_valu  # E: Did you mean `globl_value`?
+    return inner()
+"#,
+);
+
+testcase!(
+    test_unknown_name_no_suggestion_when_far,
+    r#"
+alpha = 1
+beta = 2
+gamma = 3
+missing_completely = delta  # E: Could not find name `delta`
+"#,
+);
+
 // The python compiler enforces static scoping rules in most cases - for example, if a function
 // defines a name and we try to read it before we write it, Python will normally not fall back
 // to searching in enclosing scopes.

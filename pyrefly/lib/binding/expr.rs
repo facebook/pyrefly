@@ -28,6 +28,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
+use vec1::vec1;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingDecorator;
@@ -342,6 +343,9 @@ impl<'a> BindingsBuilder<'a> {
                 self.insert_binding(key, Binding::Forward(value))
             }
             NameLookupResult::NotFound => {
+                let suggestion = self
+                    .scopes
+                    .suggest_similar_name(&name.id, name.range.start());
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
@@ -355,14 +359,17 @@ impl<'a> BindingsBuilder<'a> {
                 } else if self.scopes.in_class_body()
                     && let Some((cls, _)) = self.scopes.current_class_and_metadata_keys()
                 {
-                    self.insert_binding(key, Binding::ClassBodyUnknownName(cls, name.clone()))
+                    self.insert_binding(
+                        key,
+                        Binding::ClassBodyUnknownName(cls, name.clone(), suggestion),
+                    )
                 } else {
                     // Record a type error and fall back to `Any`.
-                    self.error(
-                        name.range,
-                        ErrorInfo::Kind(ErrorKind::UnknownName),
-                        format!("Could not find name `{name}`"),
-                    );
+                    let mut msg = vec1![format!("Could not find name `{name}`")];
+                    if let Some(suggestion) = suggestion {
+                        msg.push(format!("Did you mean `{suggestion}`?"));
+                    }
+                    self.error_multiline(name.range, ErrorInfo::Kind(ErrorKind::UnknownName), msg);
                     self.insert_binding(key, Binding::Type(Type::any_error()))
                 }
             }

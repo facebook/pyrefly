@@ -2624,7 +2624,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             }
-            Binding::ClassBodyUnknownName(class_key, name) => {
+            Binding::ClassBodyUnknownName(class_key, name, suggestion) => {
+                let add_unknown_name_error = |errors: &ErrorCollector| {
+                    let mut msg = vec1![format!("Could not find name `{name}`")];
+                    if let Some(suggestion) = &suggestion {
+                        msg.push(format!("Did you mean `{suggestion}`?"));
+                    }
+                    errors.add(name.range, ErrorInfo::Kind(ErrorKind::UnknownName), msg);
+                    Type::any_error()
+                };
                 // We're specifically looking for attributes that are inherited from the parent class
                 if let Some(cls) = &self.get_idx(*class_key).as_ref().0
                     && !self.get_class_field_map(cls).contains_key(&name.id)
@@ -2640,22 +2648,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None,
                     );
                     if attr_ty.is_error() {
-                        self.error(
-                            errors,
-                            name.range,
-                            ErrorInfo::Kind(ErrorKind::UnknownName),
-                            format!("Could not find name `{name}`"),
-                        )
+                        add_unknown_name_error(errors)
                     } else {
                         attr_ty
                     }
                 } else {
-                    self.error(
-                        errors,
-                        name.range,
-                        ErrorInfo::Kind(ErrorKind::UnknownName),
-                        format!("Could not find name `{name}`"),
-                    )
+                    add_unknown_name_error(errors)
                 }
             }
             Binding::CompletedPartialType(unpinned_idx, first_use) => {

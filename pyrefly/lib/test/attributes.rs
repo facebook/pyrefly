@@ -1813,6 +1813,64 @@ assert_type(C().f(), Any)
 );
 
 testcase!(
+    test_missing_attribute_suggests_similar_name,
+    r#"
+class Foo:
+    value = 1
+
+def f(obj: Foo) -> None:
+    obj.vaule  # E: Object of class `Foo` has no attribute `vaule`\n  Did you mean `value`?
+"#,
+);
+
+testcase!(
+    test_missing_attribute_suggests_builtin_str_method,
+    r#"
+"".lowerr  # E: Object of class `str` has no attribute `lowerr`\n  Did you mean `lower`?
+"#,
+);
+
+testcase!(
+    test_missing_attribute_suggests_inherited,
+    r#"
+class Base:
+    field = 1
+
+class Child(Base):
+    pass
+
+def f(x: Child) -> None:
+    x.filed  # E: Object of class `Child` has no attribute `filed`\n  Did you mean `field`?
+"#,
+);
+
+testcase!(
+    test_missing_attribute_suggests_typed_dict_field,
+    r#"
+from typing import TypedDict
+class TD(TypedDict):
+    foo: int
+
+def f(x: TD) -> int:
+    return x.fo  # E: Object of class `TD` has no attribute `fo`\n  Did you mean `foo`?
+"#,
+);
+
+testcase!(
+    test_missing_attribute_suggests_enum_member,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(x: Color) -> Color:
+    return x.BLU  # E: Object of class `Color` has no attribute `BLU`\n  Did you mean `BLUE`?
+"#,
+);
+
+testcase!(
     test_class_toplevel_inherited_attr_name,
     r#"
 # at the class top level, inherited attribute names should be considered in scope
