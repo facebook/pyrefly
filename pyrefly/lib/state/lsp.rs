@@ -2202,19 +2202,9 @@ impl<'a> Transaction<'a> {
                     (insert_text, Some(vec![import_text_edit]), module_name)
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
-                let (label, label_details) = if supports_completion_item_details {
-                    (
-                        name,
-                        Some(CompletionItemLabelDetails {
-                            detail: Some(auto_import_label_detail),
-                            description: Some(module_description),
-                        }),
-                    )
-                } else {
-                    (format!("{name}{auto_import_label_detail}"), None)
-                };
+
                 completions.push(CompletionItem {
-                    label,
+                    label: name,
                     detail: Some(insert_text),
                     kind: export
                         .symbol_kind
@@ -2222,7 +2212,12 @@ impl<'a> Transaction<'a> {
                             Some(k.to_lsp_completion_item_kind())
                         }),
                     additional_text_edits,
-                    label_details,
+                    label_details: supports_completion_item_details.then_some(
+                        CompletionItemLabelDetails {
+                            detail: Some(auto_import_label_detail),
+                            description: Some(module_description),
+                        },
+                    ),
                     tags: if export.deprecation.is_some() {
                         Some(vec![CompletionItemTag::DEPRECATED])
                     } else {
@@ -2250,23 +2245,18 @@ impl<'a> Transaction<'a> {
                         (insert_text, Some(vec![import_text_edit]))
                     };
                     let auto_import_label_detail = format!(" (import {module_name_str})");
-                    let (label, label_details) = if supports_completion_item_details {
-                        (
-                            module_name_str.clone(),
-                            Some(CompletionItemLabelDetails {
-                                detail: Some(auto_import_label_detail),
-                                description: Some(module_name_str.clone()),
-                            }),
-                        )
-                    } else {
-                        (format!("{module_name_str}{auto_import_label_detail}"), None)
-                    };
+
                     completions.push(CompletionItem {
-                        label,
+                        label: module_name_str.clone(),
                         detail: Some(insert_text),
                         kind: Some(CompletionItemKind::MODULE),
                         additional_text_edits,
-                        label_details,
+                        label_details: supports_completion_item_details.then_some(
+                            CompletionItemLabelDetails {
+                                detail: Some(auto_import_label_detail),
+                                description: Some(module_name_str),
+                            },
+                        ),
                         ..Default::default()
                     });
                 }
