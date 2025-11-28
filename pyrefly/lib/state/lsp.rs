@@ -2723,6 +2723,14 @@ impl<'a> Transaction<'a> {
                     }
                     let exports = self.get_exports(&handle);
                     for (name, export) in exports.iter() {
+                        // Filter out implicitly re-exported builtins
+                        if let ExportLocation::OtherModule(module, _) = &export {
+                            if *module == ModuleName::builtins()
+                                || *module == ModuleName::extra_builtins()
+                            {
+                                continue;
+                            }
+                        }
                         let is_deprecated = match export {
                             ExportLocation::ThisModule(export) => export.deprecation.is_some(),
                             ExportLocation::OtherModule(_, _) => false,

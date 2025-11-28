@@ -2447,3 +2447,40 @@ x = sys.version
         "Expected completions in normal code but got none"
     );
 }
+
+#[test]
+fn test_no_builtins_in_import_completions() {
+    // Use a prefix "Arith" to trigger completion for ArithmeticError
+    let code = r#"
+from lib import Arith
+#                   ^
+"#;
+    // Explicitly import * from builtins to force them into import_all.
+    // In the real LSP environment, builtins appear in exports implicitly.
+    // In this test environment, we must explicitly import them
+    // to simulate that condition and verify our filter logic works.
+    let lib = r#"
+from builtins import *
+def foo(): pass
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("lib", lib)],
+        get_default_test_report(),
+    );
+
+    assert!(
+        report.contains("foo"),
+        "Should contain defined function 'foo'"
+    );
+
+    assert!(
+        report.contains("__name__"),
+        "Should contain implicit global '__name__'"
+    );
+
+    assert!(
+        !report.contains("ArithmeticError"),
+        "Should NOT contain builtin 'ArithmeticError' in import completions. Report:\n{}",
+        report
+    );
+}
