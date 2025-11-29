@@ -473,6 +473,7 @@ pub struct FindDefinitionItemWithDocstring {
     pub definition_range: TextRange,
     pub module: Module,
     pub docstring_range: Option<TextRange>,
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1111,6 +1112,7 @@ impl<'a> Transaction<'a> {
             definition_range: location,
             module: module_info,
             docstring_range,
+            display_name: Some(name.id.to_string()),
         })
     }
 
@@ -1135,6 +1137,7 @@ impl<'a> Transaction<'a> {
             definition_range: location,
             module: self.get_module_info(&handle)?,
             docstring_range,
+            display_name: Some(name.id.to_string()),
         })
     }
 
@@ -1159,6 +1162,7 @@ impl<'a> Transaction<'a> {
                     definition_range: definition.range,
                     module: definition.module,
                     docstring_range,
+                    display_name: Some(name.to_string()),
                 })
             } else {
                 None
@@ -1294,6 +1298,7 @@ impl<'a> Transaction<'a> {
             definition_range: TextRange::default(),
             module: module_info,
             docstring_range: self.get_module_docstring_range(&handle),
+            display_name: Some(module_name.to_string()),
         })
     }
 
@@ -1431,6 +1436,7 @@ impl<'a> Transaction<'a> {
                     module,
                     definition_range: identifier.range,
                     docstring_range,
+                    display_name: Some(identifier.id.to_string()),
                 }]
             }),
             Some(IdentifierWithContext {
@@ -1444,6 +1450,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range,
+                        display_name: Some(identifier.id.to_string()),
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1457,6 +1464,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range,
+                        display_name: Some(identifier.id.to_string()),
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1470,6 +1478,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1483,6 +1492,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1496,6 +1506,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1508,6 +1519,7 @@ impl<'a> Transaction<'a> {
                     definition_range: item.definition_range,
                     module: item.module.clone(),
                     docstring_range: None,
+                    display_name: Some(identifier.id.to_string()),
                 }),
             Some(IdentifierWithContext {
                 identifier,
@@ -1727,6 +1739,7 @@ impl<'a> Transaction<'a> {
                  definition_range,
                  module,
                  docstring_range: _,
+                 ..
              }| {
                 self.local_references_from_definition(handle, metadata, definition_range, &module)
             },

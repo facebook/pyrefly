@@ -2257,6 +2257,7 @@ impl Server {
                     definition_range,
                     module,
                     docstring_range: _,
+                    ..
                 } = definition;
                 // find_global_implementations_from_definition returns Vec<TextRangeWithModule>
                 // but we need to return Vec<(ModuleInfo, Vec<TextRange>)> to match the helper's
@@ -2508,6 +2509,7 @@ impl Server {
                     definition_range,
                     module,
                     docstring_range: _,
+                    ..
                 } = definition;
                 transaction.find_global_references_from_definition(
                     handle.sys_info(),

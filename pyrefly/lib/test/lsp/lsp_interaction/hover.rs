@@ -91,6 +91,31 @@ fn hover_attribute_prefers_py_docstring_over_pyi() {
 }
 
 #[test]
+fn hover_shows_third_party_function_name() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("rename_third_party"));
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("user_code.py");
+    // Column/line values follow LSP's zero-based positions
+    interaction
+        .client
+        .hover("user_code.py", 14, 25)
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| text.contains("external_function"))
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_hover_import() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
