@@ -657,6 +657,19 @@ from foo import
 2 | from foo import
                    ^
 Completion Results:
+- (Variable) imperial_guard
+- (Variable) __annotations__
+- (Variable) __builtins__
+- (Variable) __cached__
+- (Variable) __debug__
+- (Variable) __dict__
+- (Variable) __doc__
+- (Variable) __file__
+- (Variable) __loader__
+- (Variable) __name__
+- (Variable) __package__
+- (Variable) __path__
+- (Variable) __spec__
 
 
 # foo.py
@@ -691,6 +704,21 @@ from foo import func
 2 | from foo import func
                ^
 Completion Results:
+- (Variable) deprecated
+- (Variable) func_ok
+- (Variable) __annotations__
+- (Variable) __builtins__
+- (Variable) __cached__
+- (Variable) __debug__
+- (Variable) __dict__
+- (Variable) __doc__
+- (Variable) __file__
+- (Variable) __loader__
+- (Variable) __name__
+- (Variable) __package__
+- (Variable) __path__
+- (Variable) __spec__
+- (Variable) [DEPRECATED] func_not_ok
 
 2 | from foo import func
                         ^
@@ -738,6 +766,19 @@ from foo import imperial
 2 | from foo import imperial
                ^
 Completion Results:
+- (Variable) imperial_guard
+- (Variable) __annotations__
+- (Variable) __builtins__
+- (Variable) __cached__
+- (Variable) __debug__
+- (Variable) __dict__
+- (Variable) __doc__
+- (Variable) __file__
+- (Variable) __loader__
+- (Variable) __name__
+- (Variable) __package__
+- (Variable) __path__
+- (Variable) __spec__
 
 2 | from foo import imperial
                            ^
@@ -2482,5 +2523,131 @@ def foo(): pass
         !report.contains("ArithmeticError"),
         "Should NOT contain builtin 'ArithmeticError' in import completions. Report:\n{}",
         report
+    );
+}
+
+#[test]
+fn test_completion_from_import_trailing_space() {
+    let utils_code = "def format_number(x): pass";
+    // Place cursor after 'import '
+    let main_code = r#"
+from utils import 
+#                 ^
+"#;
+
+    let (handles, state) = mk_multi_file_state(
+        &[("utils", utils_code), ("main", main_code)],
+        Require::indexing(),
+        false,
+    );
+
+    let handle = handles.get("main").unwrap();
+    let cursors = extract_cursors_for_test(main_code);
+    let position = cursors[0];
+
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+
+    assert!(
+        completions.iter().any(|c| c.label == "format_number"),
+        "format_number not found"
+    );
+}
+
+#[test]
+fn test_completion_import_trailing_space() {
+    let main_code = r#"
+import 
+#      ^
+"#;
+    let utils_code = "";
+
+    let (handles, state) = mk_multi_file_state(
+        &[("utils", utils_code), ("main", main_code)],
+        Require::indexing(),
+        false,
+    );
+
+    let handle = handles.get("main").unwrap();
+    let cursors = extract_cursors_for_test(main_code);
+    let position = cursors[0];
+
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+
+    assert!(
+        completions.iter().any(|c| c.label == "utils"),
+        "utils module not found"
+    );
+    assert!(
+        !completions.iter().any(|c| c.label == "__main__"),
+        "__main__ should not be found"
+    );
+}
+
+#[test]
+fn test_completion_from_import_multiple_spaces() {
+    let utils_code = "def format_number(x): pass";
+    // Place cursor after 'import   '
+    let main_code = r#"
+from utils import   
+#                   ^
+"#;
+
+    let (handles, state) = mk_multi_file_state(
+        &[("utils", utils_code), ("main", main_code)],
+        Require::indexing(),
+        false,
+    );
+
+    let handle = handles.get("main").unwrap();
+    let cursors = extract_cursors_for_test(main_code);
+    let position = cursors[0];
+
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+
+    assert!(
+        completions.iter().any(|c| c.label == "format_number"),
+        "format_number not found"
+    );
+}
+
+#[test]
+fn test_completion_import_multiple_spaces() {
+    let main_code = r#"
+import   
+#        ^
+"#;
+    let utils_code = "";
+
+    let (handles, state) = mk_multi_file_state(
+        &[("utils", utils_code), ("main", main_code)],
+        Require::indexing(),
+        false,
+    );
+
+    let handle = handles.get("main").unwrap();
+    let cursors = extract_cursors_for_test(main_code);
+    let position = cursors[0];
+
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+
+    assert!(
+        completions.iter().any(|c| c.label == "utils"),
+        "utils module not found"
+    );
+    assert!(
+        !completions.iter().any(|c| c.label == "__main__"),
+        "__main__ should not be found"
     );
 }

@@ -2629,6 +2629,60 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn add_module_exports_completions(
+        &self,
+        handle: &Handle,
+        module_name: ModuleName,
+        completions: &mut Vec<CompletionItem>,
+    ) {
+        if let Some(handle) = self.import_handle(handle, module_name, None).finding() {
+            let exports = self.get_exports(&handle);
+            for (name, export) in exports.iter() {
+                // Filter out implicitly re-exported builtins
+                if let ExportLocation::OtherModule(module, _) = &export {
+                    if *module == ModuleName::builtins() || *module == ModuleName::extra_builtins()
+                    {
+                        continue;
+                    }
+                }
+                let is_deprecated = match export {
+                    ExportLocation::ThisModule(export) => export.deprecation.is_some(),
+                    ExportLocation::OtherModule(_, _) => false,
+                };
+                completions.push(CompletionItem {
+                    label: name.to_string(),
+                    // todo(kylei): completion kind for exports
+                    kind: Some(CompletionItemKind::VARIABLE),
+                    tags: if is_deprecated {
+                        Some(vec![CompletionItemTag::DEPRECATED])
+                    } else {
+                        None
+                    },
+                    ..Default::default()
+                })
+            }
+        }
+    }
+
+    fn add_all_modules_completions(&self, handle: &Handle, completions: &mut Vec<CompletionItem>) {
+        let mut seen_root_modules = std::collections::HashSet::new();
+        for module_name in self.modules() {
+            if module_name == handle.module() {
+                continue;
+            }
+            let root_module_name = module_name.first_component();
+            let root_module_str = root_module_name.as_str();
+
+            if seen_root_modules.insert(root_module_str.to_string()) {
+                completions.push(CompletionItem {
+                    label: root_module_str.to_owned(),
+                    kind: Some(CompletionItemKind::MODULE),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
     // Kept for backwards compatibility - used by external callers (lsp/server.rs, playground.rs)
     // who don't need the is_incomplete flag
     pub fn completion(
@@ -2711,43 +2765,16 @@ impl<'a> Transaction<'a> {
                 identifier,
                 context: IdentifierContext::ImportedName { module_name, .. },
             }) => {
-                if let Some(handle) = self.import_handle(handle, module_name, None).finding() {
-                    // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
-                    // If the user might be typing the `import` keyword, add that as an autocomplete option.
-                    if "import".starts_with(identifier.as_str()) {
-                        result.push(CompletionItem {
-                            label: "import".to_owned(),
-                            kind: Some(CompletionItemKind::KEYWORD),
-                            ..Default::default()
-                        })
-                    }
-                    let exports = self.get_exports(&handle);
-                    for (name, export) in exports.iter() {
-                        // Filter out implicitly re-exported builtins
-                        if let ExportLocation::OtherModule(module, _) = &export {
-                            if *module == ModuleName::builtins()
-                                || *module == ModuleName::extra_builtins()
-                            {
-                                continue;
-                            }
-                        }
-                        let is_deprecated = match export {
-                            ExportLocation::ThisModule(export) => export.deprecation.is_some(),
-                            ExportLocation::OtherModule(_, _) => false,
-                        };
-                        result.push(CompletionItem {
-                            label: name.to_string(),
-                            // todo(kylei): completion kind for exports
-                            kind: Some(CompletionItemKind::VARIABLE),
-                            tags: if is_deprecated {
-                                Some(vec![CompletionItemTag::DEPRECATED])
-                            } else {
-                                None
-                            },
-                            ..Default::default()
-                        })
-                    }
+                // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
+                // If the user might be typing the `import` keyword, add that as an autocomplete option.
+                if "import".starts_with(identifier.as_str()) {
+                    result.push(CompletionItem {
+                        label: "import".to_owned(),
+                        kind: Some(CompletionItemKind::KEYWORD),
+                        ..Default::default()
+                    })
                 }
+                self.add_module_exports_completions(handle, module_name, &mut result);
             }
             // TODO: Handle relative import (via ModuleName::new_maybe_relative)
             Some(IdentifierWithContext {
@@ -2846,24 +2873,97 @@ impl<'a> Transaction<'a> {
                 // todo(kylei): optimization, avoid duplicate ast walks
                 if let Some(mod_module) = self.get_ast(handle) {
                     let nodes = Ast::locate_node(&mod_module, position);
+
+                    // If no node covers the current position, try to find a preceding import statement
+                    let mut processed_as_import_statement = false;
                     if nodes.is_empty() {
+                        for stmt in mod_module.body.iter().rev() {
+                            let stmt_end = stmt.range().end();
+                            if stmt_end <= position {
+                                let text_after_stmt =
+                                    if let Some(module_info) = self.get_module_info(handle) {
+                                        module_info
+                                            .code_at(TextRange::new(stmt_end, position))
+                                            .to_owned()
+                                    } else {
+                                        "".to_owned()
+                                    };
+
+                                if text_after_stmt.trim().is_empty()
+                                    && !text_after_stmt.contains('\n')
+                                {
+                                    match stmt {
+                                        ruff_python_ast::Stmt::ImportFrom(import_from) => {
+                                            // `from ... import <cursor>`
+                                            if let Some(module) = &import_from.module {
+                                                if position >= module.range().end() {
+                                                    self.add_module_exports_completions(
+                                                        handle,
+                                                        ModuleName::from_str(module.as_str()),
+                                                        &mut result,
+                                                    );
+                                                    processed_as_import_statement = true;
+                                                }
+                                            }
+                                        }
+                                        ruff_python_ast::Stmt::Import(_) => {
+                                            // `import <cursor>`
+                                            self.add_all_modules_completions(handle, &mut result);
+                                            processed_as_import_statement = true;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                break; // Found the most relevant preceding statement
+                            }
+                        }
+                    }
+
+                    if !processed_as_import_statement && nodes.is_empty() {
                         self.add_keyword_completions(handle, &mut result);
                         self.add_local_variable_completions(handle, None, position, &mut result);
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
-                    self.add_literal_completions(handle, position, &mut result);
-                    self.add_dict_key_completions(
-                        handle,
-                        mod_module.as_ref(),
-                        position,
-                        &mut result,
-                    );
-                    // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
-                    // in foo(<>), the first containing node is AnyNodeRef::ExprCall
-                    if let Some(first) = nodes.first()
-                        && matches!(first, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
-                    {
-                        self.add_kwargs_completions(handle, position, &mut result);
+
+                    // Original logic for when nodes are found, or after fallback if not processed as import
+                    if let Some(first) = nodes.first() {
+                        match first {
+                            AnyNodeRef::StmtImportFrom(import_from) => {
+                                // `from ... import <cursor>`
+                                if let Some(module) = &import_from.module {
+                                    if position >= module.range().end() {
+                                        self.add_module_exports_completions(
+                                            handle,
+                                            ModuleName::from_str(module.as_str()),
+                                            &mut result,
+                                        );
+                                    }
+                                }
+                            }
+                            AnyNodeRef::StmtImport(_) => {
+                                // `import <cursor>`
+                                self.add_all_modules_completions(handle, &mut result);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Remaining general completions if no specific import context was found or handled
+                    if !processed_as_import_statement || !nodes.is_empty() {
+                        self.add_literal_completions(handle, position, &mut result);
+                        self.add_dict_key_completions(
+                            handle,
+                            mod_module.as_ref(),
+                            position,
+                            &mut result,
+                        );
+                        // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
+                        // in foo(<>), the first containing node is AnyNodeRef::ExprCall
+                        if let Some(first) = nodes.first()
+                            && matches!(first, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
+                        {
+                            self.add_kwargs_completions(handle, position, &mut result);
+                        }
                     }
                 }
             }
