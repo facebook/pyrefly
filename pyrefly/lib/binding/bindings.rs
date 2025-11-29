@@ -13,6 +13,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
@@ -192,6 +193,7 @@ pub struct BindingsBuilder<'a> {
     pub has_docstring: bool,
     pub scopes: Scopes,
     table: BindingTable,
+    error_suppression_depth: usize,
     pub untyped_def_behavior: UntypedDefBehavior,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
@@ -380,6 +382,7 @@ impl Bindings {
             has_docstring: Ast::has_docstring(&x),
             scopes: Scopes::module(x.range, enable_trace),
             table: Default::default(),
+            error_suppression_depth: 0,
             untyped_def_behavior,
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
@@ -667,6 +670,29 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    pub fn with_error_suppression<R>(
+        &mut self,
+        f: impl FnOnce(&mut BindingsBuilder<'a>) -> R,
+    ) -> R {
+        self.error_suppression_depth += 1;
+        let result = f(self);
+        self.error_suppression_depth -= 1;
+        result
+    }
+
+    #[inline]
+    fn errors_suppressed(&self) -> bool {
+        self.error_suppression_depth > 0
+    }
+
+    pub(crate) fn should_bind_unreachable_branches(&self) -> bool {
+        matches!(
+            self.module_info.path().details(),
+            ModulePathDetails::FileSystem(_) | ModulePathDetails::Memory(_)
+        ) && self.module_info.name() != ModuleName::builtins()
+            && self.module_info.name() != ModuleName::extra_builtins()
+    }
+
     fn inject_globals(&mut self) {
         for global in ImplicitGlobal::implicit_globals(self.has_docstring) {
             let key = Key::ImplicitGlobal(global.name().clone());
@@ -788,10 +814,16 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn error(&self, range: TextRange, info: ErrorInfo, msg: String) {
+        if self.errors_suppressed() {
+            return;
+        }
         self.errors.add(range, info, vec1![msg]);
     }
 
     pub fn error_multiline(&self, range: TextRange, info: ErrorInfo, msg: Vec1<String>) {
+        if self.errors_suppressed() {
+            return;
+        }
         self.errors.add(range, info, msg);
     }
 
@@ -975,19 +1007,29 @@ impl<'a> BindingsBuilder<'a> {
         idx: Idx<Key>,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
-        let name = Hashed::new(name);
-        let write_info = self
+        let mut hashed_name = Hashed::new(name);
+        let mut write_info = self
             .scopes
-            .define_in_current_flow(name, idx, style)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Name `{name}` not found in static scope of module `{}`.",
-                    self.module_info.name(),
-                )
-            });
+            .define_in_current_flow(hashed_name, idx, style.clone());
+        if write_info.is_none()
+            && self.errors_suppressed()
+            && self.should_bind_unreachable_branches()
+        {
+            let key_range = self.table.types.0.idx_to_key(idx).range();
+            self.scopes.add_synthetic_definition(name, key_range);
+            // Recreate the hash since it borrows `name` by reference and we just mutated state
+            hashed_name = Hashed::new(name);
+            write_info = self.scopes.define_in_current_flow(hashed_name, idx, style);
+        }
+        let write_info = write_info.unwrap_or_else(|| {
+            panic!(
+                "Name `{name}` not found in static scope of module `{}`.",
+                self.module_info.name(),
+            )
+        });
         if let Some(range) = write_info.anywhere_range {
             self.table
-                .record_bind_in_anywhere(name.into_key().clone(), range, idx);
+                .record_bind_in_anywhere(hashed_name.into_key().clone(), range, idx);
         }
         write_info.annotation
     }
