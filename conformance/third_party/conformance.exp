@@ -6828,7 +6828,19 @@
       "stop_line": 26
     }
   ],
-  "generics_typevartuple_concat.py": [],
+  "generics_typevartuple_concat.py": [
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "Returned type `tuple[*tuple[T | ElementOf[Ts], ...], T | ElementOf[Ts]]` is not assignable to declared return type `tuple[*Ts, T]`",
+      "description": "Returned type `tuple[*tuple[T | ElementOf[Ts], ...], T | ElementOf[Ts]]` is not assignable to declared return type `tuple[*Ts, T]`",
+      "line": 56,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 30,
+      "stop_line": 56
+    }
+  ],
   "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [
     {

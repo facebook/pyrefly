@@ -739,7 +739,7 @@ impl TestClient {
     pub fn expect_request<R: lsp_types::request::Request>(
         &self,
         expected: Value,
-    ) -> Result<ServerRequestHandle<'_, R>, LspMessageError> {
+    ) -> ServerRequestHandle<'_, R> {
         // Validate that expected can be parsed as R::Params
         let expected: R::Params = serde_json::from_value(expected.clone()).unwrap();
         let id = self.expect_message(&format!("Request {}", R::METHOD), |msg| {
@@ -991,7 +991,7 @@ impl TestClient {
     pub fn expect_configuration_request(
         &self,
         scope_uris: Option<Vec<&Url>>,
-    ) -> Result<ServerRequestHandle<'_, WorkspaceConfiguration>, LspMessageError> {
+    ) -> ServerRequestHandle<'_, WorkspaceConfiguration> {
         let items = scope_uris
             .unwrap_or_default()
             .into_iter()

@@ -241,6 +241,7 @@ impl<'a> TypeDisplayContext<'a> {
             output.write_str(&format!("{}.{}", module, name))
         } else {
             output.write_str(name)
+            // write!(f, "{name}")
         }
     }
 
@@ -274,28 +275,6 @@ impl<'a> TypeDisplayContext<'a> {
         Ok(())
     }
 
-    /// Core formatting logic for types that works with any `TypeOutput` implementation.
-    ///
-    /// The method uses the `TypeOutput` trait abstraction to write output in various ways.
-    /// This allows it to work for various purposes. (e.g., `DisplayOutput` for plain text
-    /// or `OutputWithLocations` for tracking source locations).
-    ///
-    /// Note that the formatted type is not actually returned from this function. The type will
-    /// be collected in whatever `TypeOutput` is provided.
-    ///
-    /// # Arguments
-    ///
-    /// * `t` - The type to format
-    /// * `is_toplevel` - Whether this type is at the top level of the display.
-    ///   - When `true` and hover mode is enabled:
-    ///     - Callables, functions, and overloads are formatted with newlines for readability
-    ///     - Functions show `def func_name(...)` syntax instead of compact callable syntax
-    ///     - Overloads are displayed with `@overload` decorators
-    ///     - Type aliases are expanded to show their definition
-    ///   - When `false`, these types use compact inline formatting.
-    /// * `output` - The output writer implementing `TypeOutput`. This abstraction allows
-    ///   the same formatting logic to be used for different purposes (plain formatting,
-    ///   location tracking, etc.)
     pub fn fmt_helper_generic(
         &self,
         t: &Type,
@@ -468,18 +447,14 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Union(box Union { members: types, .. }) if types.is_empty() => {
                 self.maybe_fmt_with_module("typing", "Never", output)
             }
-            Type::Union(box Union {
-                display_name: Some(name),
-                ..
-            }) if !is_toplevel => output.write_str(name),
-            Type::Union(box Union { members, .. }) => {
+            Type::Union(types) => {
                 let mut literal_idx = None;
                 let mut literals = Vec::new();
                 let mut union_members: Vec<&Type> = Vec::new();
                 // Track seen types to deduplicate (mainly to prettify types for functions with different names but the same signature)
                 let mut seen_types = SmallSet::new();
 
-                for t in members.iter() {
+                for t in types.iter() {
                     match t {
                         Type::Literal(lit) => {
                             if literal_idx.is_none() {
@@ -571,7 +546,35 @@ impl<'a> TypeDisplayContext<'a> {
                     self.fmt_type_sequence(union_members, " | ", true, output)
                 }
             }
-            Type::Intersect(x) => self.fmt_type_sequence(x.0.iter(), " & ", true, output),
+            Type::Intersect(x) => {
+                let display_types: Vec<String> =
+                    x.0.iter()
+                        .map(|t| {
+                            let mut temp = String::new();
+                            {
+                                use std::fmt::Write;
+                                match t {
+                                    Type::Callable(_) | Type::Function(_) => {
+                                        let temp_formatter = Fmt(|f| {
+                                            let mut temp_output = DisplayOutput::new(self, f);
+                                            self.fmt_helper_generic(t, false, &mut temp_output)
+                                        });
+                                        write!(&mut temp, "({})", temp_formatter).ok();
+                                    }
+                                    _ => {
+                                        let temp_formatter = Fmt(|f| {
+                                            let mut temp_output = DisplayOutput::new(self, f);
+                                            self.fmt_helper_generic(t, false, &mut temp_output)
+                                        });
+                                        write!(&mut temp, "{}", temp_formatter).ok();
+                                    }
+                                }
+                            }
+                            temp
+                        })
+                        .collect();
+                output.write_str(&display_types.join(" & "))
+            }
             Type::Tuple(t) => {
                 t.fmt_with_type(output, &|ty, o| self.fmt_helper_generic(ty, false, o))
             }
@@ -1211,12 +1214,8 @@ pub mod tests {
             "None | Literal[True, 'test'] | LiteralString"
         );
         assert_eq!(
-            Type::type_form(Type::Union(Box::new(Union {
-                members: vec![nonlit1, nonlit2],
-                display_name: Some("MyUnion".to_owned())
-            })))
-            .to_string(),
-            "type[MyUnion]"
+            Type::union(vec![nonlit1, nonlit2]).to_string(),
+            "None | LiteralString"
         );
     }
 

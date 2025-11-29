@@ -1145,28 +1145,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             ClassFieldDefinition::DefinedInMethod { value, method, .. } => {
-                // Check if there's an inherited property field from a parent class
-                // If so, we should just use the parent's property instead of creating a new field
-                if !Ast::is_mangled_attr(name) {
-                    // Use get_field_from_ancestors to only look at parent classes, not the current class
-                    if let Some(parent_field) = self.get_field_from_ancestors(
-                        class,
-                        self.get_mro_for_class(class).ancestors(self.stdlib),
-                        name,
-                        &|cls, name| self.get_field_from_current_class_only(cls, name),
-                    ) {
-                        let ClassField(ClassFieldInner::Simple { ty, .. }, ..) =
-                            &*parent_field.value;
-                        // Check if the parent field is a property (either getter or setter with getter)
-                        if ty.is_property_getter() || ty.is_property_setter_with_getter().is_some()
-                        {
-                            // If we found a property in the parent, just return the parent's field
-                            // This ensures the property with its setter is properly inherited
-                            return Arc::unwrap_or_clone(parent_field.value);
-                        }
-                    }
-                }
-
                 let initial_value =
                     initial_value_storage.push(RawClassFieldInitialization::Method(method.clone()));
                 if let Some(annotated_ty) =
@@ -1248,9 +1226,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     inherited_annotation,
                     is_inherited,
                 )
-            }
-        };
+            };
 
+        let magically_initialized = {
+            // We consider fields to be always-initialized if it's defined within stub files.
+            // See https://github.com/python/typeshed/pull/13875 for reasoning.
+            class.module_path().is_interface()
+            // We consider fields to be always-initialized if it's annotated explicitly with `ClassVar`.
+            || direct_annotation
+                .as_ref()
+                .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
+        };
         let initialization = match initial_value {
             RawClassFieldInitialization::ClassBody(None) => {
                 ClassFieldInitialization::ClassBody(None)
@@ -1258,10 +1244,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             RawClassFieldInitialization::ClassBody(Some(e)) => {
                 // If this field was created via a call to a dataclass field specifier, extract field flags from the call.
                 if let Some(dm) = metadata.dataclass_metadata()
-                    && let Expr::Call(call) = e
+                    && let Expr::Call(ExprCall {
+                        node_index: _,
+                        range: _,
+                        func,
+                        arguments,
+                    }) = e
                 {
-                    let flags = self.compute_dataclass_field_initialization(call, dm);
-                    ClassFieldInitialization::ClassBody(flags.map(Box::new))
+                    // We already type-checked this expression as part of computing the type for the ClassField,
+                    // so we can ignore any errors encountered here.
+                    let ignore_errors = self.error_swallower();
+                    let func_ty = self.expr_infer(func, &ignore_errors);
+                    let func_kind = func_ty.callee_kind();
+                    if let Some(func_kind) = func_kind
+                        && dm.field_specifiers.contains(&func_kind)
+                    {
+                        let flags =
+                            self.dataclass_field_keywords(&func_ty, arguments, dm, &ignore_errors);
+                        ClassFieldInitialization::ClassBody(Some(flags))
+                    } else {
+                        ClassFieldInitialization::ClassBody(None)
+                    }
                 } else {
                     ClassFieldInitialization::ClassBody(None)
                 }
@@ -1273,21 +1276,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             RawClassFieldInitialization::Method(MethodThatSetsAttr {
                 instance_or_class: MethodSelfKind::Instance,
                 ..
-            }) => ClassFieldInitialization::Method,
-            RawClassFieldInitialization::Uninitialized => {
-                // We consider fields to be always-initialized if it's defined within stub files.
-                // See https://github.com/python/typeshed/pull/13875 for reasoning.
-                if class.module_path().is_interface()
-                    // We consider fields to be always-initialized if it's annotated explicitly with `ClassVar`.
-                    || direct_annotation
-                        .as_ref()
-                        .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
-                {
-                    ClassFieldInitialization::Magic
-                } else {
-                    ClassFieldInitialization::Uninitialized
-                }
+            })
+            | RawClassFieldInitialization::Uninitialized
+                if magically_initialized =>
+            {
+                ClassFieldInitialization::Magic
             }
+            RawClassFieldInitialization::Method(MethodThatSetsAttr {
+                instance_or_class: MethodSelfKind::Instance,
+                ..
+            }) => ClassFieldInitialization::Method,
+            RawClassFieldInitialization::Uninitialized => ClassFieldInitialization::Uninitialized,
         };
 
         if let Some(annotation) = direct_annotation.as_ref() {
@@ -1654,33 +1653,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
                 IsInherited::Maybe,
             ),
-        }
-    }
-
-    /// Extract dataclass field keywords from a call expression if it's a dataclass field specifier.
-    fn compute_dataclass_field_initialization(
-        &self,
-        call: &ExprCall,
-        dm: &crate::alt::types::class_metadata::DataclassMetadata,
-    ) -> Option<DataclassFieldKeywords> {
-        let ExprCall {
-            node_index: _,
-            range: _,
-            func,
-            arguments,
-        } = call;
-        // We already type-checked this expression as part of computing the type for the ClassField,
-        // so we can ignore any errors encountered here.
-        let ignore_errors = self.error_swallower();
-        let func_ty = self.expr_infer(func, &ignore_errors);
-        let func_kind = func_ty.callee_kind();
-        if let Some(func_kind) = func_kind
-            && dm.field_specifiers.contains(&func_kind)
-        {
-            let flags = self.dataclass_field_keywords(&func_ty, arguments, dm, &ignore_errors);
-            Some(flags)
-        } else {
-            None
         }
     }
 

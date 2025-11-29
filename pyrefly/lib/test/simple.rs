@@ -1924,6 +1924,7 @@ z: int = y
 testcase!(
     test_yield_in_annotation,
     r#"
+from typing import reveal_type
 def test():
     x: (yield 1)  # E:
     "#,
@@ -1932,6 +1933,7 @@ def test():
 testcase!(
     test_yield_from_in_annotation,
     r#"
+from typing import reveal_type
 def test():
     x: (yield from [1])  # E:
     "#,

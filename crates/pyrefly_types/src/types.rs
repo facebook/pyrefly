@@ -1474,11 +1474,7 @@ impl Type {
 
     pub fn sort_unions_and_drop_names(self) -> Self {
         self.transform(&mut |ty| {
-            if let Type::Union(box Union {
-                members: ts,
-                display_name,
-            }) = ty
-            {
+            if let Type::Union(box Union { members: ts, .. }) = ty {
                 ts.sort();
                 *display_name = None;
             }

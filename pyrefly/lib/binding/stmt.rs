@@ -1024,7 +1024,7 @@ impl<'a> BindingsBuilder<'a> {
                     // Register the imported name from wildcard imports
                     self.scopes.register_import_with_star(
                         &Identifier {
-                            node_index: AtomicNodeIndex::default(),
+                            node_index: AtomicNodeIndex::dummy(),
                             id: name.into_key().clone(),
                             range: x.range,
                         },
