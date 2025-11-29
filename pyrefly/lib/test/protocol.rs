@@ -668,23 +668,22 @@ issubclass(No, UnsafeProtocol) # E: Runtime checkable protocol `UnsafeProtocol` 
 );
 
 testcase!(
-    bug = "@runtime_checkable doesn't propagate through inheritance",
     test_runtime_checkable_unsafe_overlap_with_inheritance,
     r#"
 from typing import Protocol, runtime_checkable
 @runtime_checkable
 class UnsafeProtocol(Protocol):
     def foo(self) -> int: ...
-@runtime_checkable  # E: @runtime_checkable can only be applied to Protocol classes
-class ChildUnsafeProtocol(UnsafeProtocol):
+@runtime_checkable
+class ChildUnsafeProtocol(UnsafeProtocol, Protocol):
     def bar(self) -> str: ...
 class No:
     def foo(self) -> str:
         return "not an int"
     def bar(self) -> int:
         return 42
-isinstance(No(), ChildUnsafeProtocol)
-issubclass(No, ChildUnsafeProtocol)
+isinstance(No(), ChildUnsafeProtocol) # E: Runtime checkable protocol `ChildUnsafeProtocol` has an unsafe overlap with type `No`
+issubclass(No, ChildUnsafeProtocol) # E: Runtime checkable protocol `ChildUnsafeProtocol` has an unsafe overlap with type `No`
     "#,
 );
 

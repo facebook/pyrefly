@@ -372,6 +372,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // fresh vars and solve them during the is_subset_eq check below.
                         let protocol_instance_ty = self.instantiate_fresh_class(cls);
                         if let Some(object_type) = &object_type {
+                            let mut unsafe_overlap_errors = vec![];
                             for field_name in &protocol_metadata.members {
                                 if !self.has_attr(object_type, field_name) {
                                     // It's okay if the field is missing, since
@@ -395,23 +396,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     "runtime_checkable_protocol_unsafe_overlap",
                                 );
                                 if !self.is_subset_eq(&field_ty, &protocol_field_ty) {
-                                    errors.add(
-                                        range,
-                                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                                        vec1![
-                                            format!(
-                                                "Runtime checkable protocol `{}` has an unsafe overlap with type `{}`",
-                                                cls.name(),
-                                                self.for_display(object_type.clone())
-                                            ),
-                                            format!(
-                                                "Attribute `{}` has incompatible types: expected `{}`, got `{}`",
-                                                field_name,
-                                                self.for_display(protocol_field_ty),
-                                                self.for_display(field_ty),
-                                            ),
-                                        ]);
+                                    unsafe_overlap_errors.push(
+                                        format!(
+                                            "Attribute `{}` has incompatible types: expected `{}`, got `{}`",
+                                            field_name,
+                                            self.for_display(protocol_field_ty),
+                                            self.for_display(field_ty),
+                                        ),
+                                    );
                                 }
+                            }
+                            if !unsafe_overlap_errors.is_empty() {
+                                let mut full_msg = vec1![format!(
+                                    "Runtime checkable protocol `{}` has an unsafe overlap with type `{}`",
+                                    cls.name(),
+                                    self.for_display(object_type.clone())
+                                )];
+                                full_msg.extend(unsafe_overlap_errors);
+                                errors.add(
+                                    range,
+                                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                    full_msg,
+                                );
                             }
                         }
                     }
