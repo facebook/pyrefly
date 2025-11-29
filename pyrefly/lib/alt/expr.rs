@@ -59,6 +59,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
+use crate::suggest::best_suggestion;
 use crate::types::callable::Callable;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -2126,25 +2127,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let key_ty = self.expr_infer(slice, errors);
                     self.distribute_over_union(&key_ty, |ty| match ty {
                         Type::Literal(Lit::Str(field_name)) => {
-                            if let Some(field) =
-                                self.typed_dict_field(&typed_dict, &Name::new(field_name))
-                            {
+                            let fields = self.typed_dict_fields(&typed_dict);
+                            if let Some(field) = fields.get(&Name::new(field_name)) {
                                 field.ty.clone()
                             } else if let ExtraItems::Extra(extra) =
                                 self.typed_dict_extra_items(typed_dict.class_object())
                             {
                                 extra.ty
                             } else {
-                                self.error(
-                                    errors,
+                                let mut msg = vec1![format!(
+                                    "TypedDict `{}` does not have key `{}`",
+                                    typed_dict.name(),
+                                    field_name
+                                )];
+                                if let Some(suggestion) = best_suggestion(
+                                    &Name::new(field_name),
+                                    fields.keys().map(|candidate| (candidate, 0usize)),
+                                ) {
+                                    msg.push(format!("Did you mean `{suggestion}`?"));
+                                }
+                                errors.add(
                                     slice.range(),
                                     ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
-                                    format!(
-                                        "TypedDict `{}` does not have key `{}`",
-                                        typed_dict.name(),
-                                        field_name
-                                    ),
-                                )
+                                    msg,
+                                );
+                                Type::any_error()
                             }
                         }
                         Type::ClassType(cls)

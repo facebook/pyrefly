@@ -1965,3 +1965,15 @@ class D(TypedDict):
 D(x=5)
 "#,
 );
+
+testcase!(
+    test_typed_dict_missing_key_via_subscript,
+    r#"
+from typing import TypedDict
+class TD(TypedDict):
+    foo: int
+
+td: TD = {"foo": 1}
+td["fo"]  # E: TypedDict `TD` does not have key `fo`\n  Did you mean `foo`?
+"#,
+);

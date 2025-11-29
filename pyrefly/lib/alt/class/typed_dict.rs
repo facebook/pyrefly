@@ -36,6 +36,7 @@ use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::solver::SubsetError;
+use crate::suggest::best_suggestion;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
@@ -120,15 +121,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         None => {
-                            self.error(
-                                check_errors,
+                            let mut msg = vec1![format!(
+                                "Key `{}` is not defined in TypedDict `{}`",
+                                key_name,
+                                typed_dict.name()
+                            )];
+                            if let Some(suggestion) = best_suggestion(
+                                &key_name,
+                                fields.keys().map(|candidate| (candidate, 0usize)),
+                            ) {
+                                msg.push(format!("Did you mean `{suggestion}`?"));
+                            }
+                            check_errors.add(
                                 key.range(),
                                 ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
-                                format!(
-                                    "Key `{}` is not defined in TypedDict `{}`",
-                                    key_name,
-                                    typed_dict.name()
-                                ),
+                                msg,
                             );
                         }
                     }

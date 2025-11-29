@@ -1446,7 +1446,7 @@ pub enum Binding {
     /// A name in the class body that wasn't found in the static scope
     /// It could either be an unbound name or a reference to an inherited attribute
     /// We'll find out which when we solve the class
-    ClassBodyUnknownName(Idx<KeyClass>, Identifier),
+    ClassBodyUnknownName(Idx<KeyClass>, Identifier, Option<Name>),
 }
 
 impl DisplayWith<Bindings> for Binding {
@@ -1710,13 +1710,17 @@ impl DisplayWith<Bindings> for Binding {
                 )
             }
             Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
-            Self::ClassBodyUnknownName(class_key, name) => {
+            Self::ClassBodyUnknownName(class_key, name, suggestion) => {
                 write!(
                     f,
-                    "ClassBodyUnknownName({}, {})",
+                    "ClassBodyUnknownName({}, {}",
                     m.display(ctx.idx_to_key(*class_key)),
                     name,
-                )
+                )?;
+                if let Some(suggestion) = suggestion {
+                    write!(f, ", {suggestion}")?;
+                }
+                write!(f, ")")
             }
         }
     }
@@ -1790,7 +1794,7 @@ impl Binding {
             | Binding::CompletedPartialType(..)
             | Binding::PartialTypeWithUpstreamsCompleted(..)
             | Binding::Delete(_)
-            | Binding::ClassBodyUnknownName(_, _) => None,
+            | Binding::ClassBodyUnknownName(_, _, _) => None,
         }
     }
 }
