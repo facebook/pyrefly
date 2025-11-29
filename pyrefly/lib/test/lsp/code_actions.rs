@@ -236,3 +236,66 @@ my_export
         report.trim()
     );
 }
+
+#[test]
+fn test_import_from_stdlib() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("a", "TypeVar('T')\n# ^")],
+        get_test_report,
+    );
+    // TODO: Ideally `typing` would be preferred over `ast`.
+    assert_eq!(
+        r#"
+# a.py
+1 | TypeVar('T')
+      ^
+Code Actions Results:
+# Title: Insert import: `from ast import TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+from ast import TypeVar
+TypeVar('T')
+# ^
+# Title: Insert import: `from typing import TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+from typing import TypeVar
+TypeVar('T')
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn test_skip_deprecated_import() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            (
+                "a",
+                "from warnings import deprecated\n@deprecated('')\ndef my_func(): pass",
+            ),
+            ("b", "my_func()\n# ^"),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# a.py
+
+# b.py
+1 | my_func()
+      ^
+Code Actions Results:
+"#
+        .trim(),
+        report.trim()
+    );
+}
