@@ -2639,11 +2639,11 @@ impl<'a> Transaction<'a> {
             let exports = self.get_exports(&handle);
             for (name, export) in exports.iter() {
                 // Filter out implicitly re-exported builtins
-                if let ExportLocation::OtherModule(module, _) = &export {
-                    if *module == ModuleName::builtins() || *module == ModuleName::extra_builtins()
-                    {
-                        continue;
-                    }
+                if let ExportLocation::OtherModule(module, _) = &export
+                    && (*module == ModuleName::builtins()
+                        || *module == ModuleName::extra_builtins())
+                {
+                    continue;
                 }
                 let is_deprecated = match export {
                     ExportLocation::ThisModule(export) => export.deprecation.is_some(),
@@ -2673,7 +2673,7 @@ impl<'a> Transaction<'a> {
             let root_module_name = module_name.first_component();
             let root_module_str = root_module_name.as_str();
 
-            if seen_root_modules.insert(root_module_str.to_string()) {
+            if seen_root_modules.insert(root_module_str.to_owned()) {
                 completions.push(CompletionItem {
                     label: root_module_str.to_owned(),
                     kind: Some(CompletionItemKind::MODULE),
@@ -2895,15 +2895,15 @@ impl<'a> Transaction<'a> {
                                     match stmt {
                                         ruff_python_ast::Stmt::ImportFrom(import_from) => {
                                             // `from ... import <cursor>`
-                                            if let Some(module) = &import_from.module {
-                                                if position >= module.range().end() {
-                                                    self.add_module_exports_completions(
-                                                        handle,
-                                                        ModuleName::from_str(module.as_str()),
-                                                        &mut result,
-                                                    );
-                                                    processed_as_import_statement = true;
-                                                }
+                                            if let Some(module) = &import_from.module
+                                                && position >= module.range().end()
+                                            {
+                                                self.add_module_exports_completions(
+                                                    handle,
+                                                    ModuleName::from_str(module.as_str()),
+                                                    &mut result,
+                                                );
+                                                processed_as_import_statement = true;
                                             }
                                         }
                                         ruff_python_ast::Stmt::Import(_) => {
@@ -2930,14 +2930,14 @@ impl<'a> Transaction<'a> {
                         match first {
                             AnyNodeRef::StmtImportFrom(import_from) => {
                                 // `from ... import <cursor>`
-                                if let Some(module) = &import_from.module {
-                                    if position >= module.range().end() {
-                                        self.add_module_exports_completions(
-                                            handle,
-                                            ModuleName::from_str(module.as_str()),
-                                            &mut result,
-                                        );
-                                    }
+                                if let Some(module) = &import_from.module
+                                    && position >= module.range().end()
+                                {
+                                    self.add_module_exports_completions(
+                                        handle,
+                                        ModuleName::from_str(module.as_str()),
+                                        &mut result,
+                                    );
                                 }
                             }
                             AnyNodeRef::StmtImport(_) => {
