@@ -46,6 +46,7 @@ mod natural;
 mod new_type;
 mod operators;
 mod overload;
+mod pandas;
 mod paramspec;
 mod pattern_match;
 mod perf;
