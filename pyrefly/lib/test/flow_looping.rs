@@ -685,3 +685,20 @@ for i in range(10):
     a = d.get('x', a)
     "#,
 );
+
+// Test for https://github.com/facebook/pyrefly/issues/1565
+testcase!(
+    bug = "False positive: int is not assignable to int with nested while loops",
+    test_nested_while_int_assignment,
+    r#"
+def decode(s: str):
+    i = 0
+    while i < len(s):
+        j = i
+        while (
+            s[j] != ""
+        ):
+            j += 1
+        i = j + 1
+    "#,
+);

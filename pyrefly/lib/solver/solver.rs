@@ -1324,9 +1324,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let variable1 = variables.get(*v1);
                 let variable2 = variables.get(*v2);
                 match (&*variable1, &*variable2) {
-                    (_, Variable::LoopRecursive(..)) => Err(SubsetError::internal_error(
-                        "Did not expect `Variable::LoopRecursive` to appear as `want` in is_subset_eq",
-                    )),
+                    (_, Variable::LoopRecursive(t2, _)) => {
+                        // When a LoopRecursive variable appears as `want`, use its prior type instead.
+                        // This handles nested loops where an inner loop variable's prior depends on
+                        // an outer loop variable that is still being analyzed.
+                        // See: https://github.com/facebook/pyrefly/issues/1565
+                        let t2 = t2.clone();
+                        drop(variable1);
+                        drop(variable2);
+                        drop(variables);
+                        self.is_subset_eq(got, &t2)
+                    }
                     (Variable::Parameter, _) | (_, Variable::Parameter) => {
                         Err(SubsetError::internal_error(
                             "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
@@ -1478,9 +1486,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let variables = self.solver.variables.lock();
                 let v2_ref = variables.get(*v2);
                 match &*v2_ref {
-                    Variable::LoopRecursive(..) => Err(SubsetError::internal_error(
-                        "Did not expect `Variable::LoopRecursive` to appear as `want` in is_subset_eq",
-                    )),
+                    Variable::LoopRecursive(t2, _) => {
+                        // When a LoopRecursive variable appears as `want`, use its prior type instead.
+                        // This handles nested loops where an inner loop variable's prior depends on
+                        // an outer loop variable that is still being analyzed.
+                        // See: https://github.com/facebook/pyrefly/issues/1565
+                        let t2 = t2.clone();
+                        drop(v2_ref);
+                        drop(variables);
+                        self.is_subset_eq(t1, &t2)
+                    }
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
                     )),
