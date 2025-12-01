@@ -193,7 +193,7 @@ impl ReportArgs {
                 && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
             {
                 let fun = bindings.get(bindings.get(*x).undecorated_idx);
-                let func_name = module.code_at(id.range());
+                let func_name = fun.def.name.as_str();
                 let location = Self::range_to_location(module, fun.def.range);
 
                 // Get return annotation from ReturnTypeKind
@@ -224,7 +224,7 @@ impl ReportArgs {
                 let all_params = Self::extract_parameters(&fun.def.parameters);
 
                 for param in all_params {
-                    let param_name = module.code_at(param.name.range());
+                    let param_name = param.name.as_str();
                     let param_annotation = param
                         .annotation
                         .as_ref()
