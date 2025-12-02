@@ -1086,16 +1086,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut t_acc = Type::never();
         let last_index = values.len() - 1;
         for (i, value) in values.iter().enumerate() {
-            // If there isn't a hint for the overall expression, use the preceding branches as a "soft" hint
-            // for the next one. Most useful for expressions like `optional_list or []`.
-            let hint = hint.or_else(|| {
-                if t_acc.is_never() {
-                    None
-                } else {
-                    Some(HintRef::soft(&t_acc))
-                }
-            });
-            let mut t = self.expr_infer_with_hint(value, hint, errors);
+            let operand_hint = if matches!(op, BoolOp::Or) && matches!(value, Expr::Call(_)) {
+                // Drop the hint for function calls in 'OR' expressions.
+                // This prevents the expected type (e.g. Optional[str]) from improperly influencing
+                // a generic function's inference (forcing it to return Optional[str]
+                // instead of str), while still preserving hints for literals like [].
+                None
+            } else {
+                // Use external hint, or fall back to previous branches
+                hint.or_else(|| {
+                    if t_acc.is_never() {
+                        None
+                    } else {
+                        Some(HintRef::soft(&t_acc))
+                    }
+                })
+            };
+            let mut t = self.expr_infer_with_hint(value, operand_hint, errors);
             self.expand_vars_mut(&mut t);
             // If this is not the last entry, we have to make a type-dependent decision and also narrow the
             // result; both operations require us to force `Var` first or they become unpredictable.
