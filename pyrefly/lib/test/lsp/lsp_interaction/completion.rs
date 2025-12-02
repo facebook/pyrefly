@@ -326,8 +326,6 @@ fn test_completion_with_autoimport_in_defined_module() {
     interaction.shutdown().unwrap();
 }
 
-// TODO: figure out why this test fails on Windows.
-#[cfg(unix)]
 #[test]
 fn test_completion_with_autoimport_duplicates() {
     let root = get_test_files_root();
@@ -345,6 +343,11 @@ fn test_completion_with_autoimport_duplicates() {
 
     interaction.client.did_open("foo.py");
 
+    // Wait for publishDiagnostics to ensure file is fully validated
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(root_path.join("foo.py"), 1)
+        .unwrap();
     interaction
         .client
         .completion("foo.py", 5, 14)
