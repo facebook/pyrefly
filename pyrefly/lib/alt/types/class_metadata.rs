@@ -365,10 +365,11 @@ impl Display for ClassSynthesizedFields {
 
 /// A struct representing a class's metaclass. A value of `None` indicates
 /// no explicit metaclass, in which case the default metaclass is `type`.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
 pub enum Metaclass {
     Direct(ClassType),
     Inherited(ClassType),
+    #[default]
     None,
 }
 
@@ -379,12 +380,6 @@ impl Display for Metaclass {
             Self::Inherited(metaclass) => write!(f, "inherited({metaclass})"),
             Self::None => write!(f, "type"),
         }
-    }
-}
-
-impl Default for Metaclass {
-    fn default() -> Self {
-        Self::None
     }
 }
 
