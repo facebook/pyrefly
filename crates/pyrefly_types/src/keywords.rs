@@ -8,8 +8,6 @@
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
-use pyrefly_util::visit::Visit;
-use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::ordered_map::OrderedMap;
 
@@ -20,7 +18,9 @@ use crate::tuple::Tuple;
 use crate::types::CalleeKind;
 use crate::types::Type;
 
-#[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash, Visit, VisitMut
+)]
 pub struct TypeMap(pub OrderedMap<Name, Type>);
 
 impl TypeMap {
@@ -37,22 +37,6 @@ impl TypeMap {
             Type::Literal(Lit::Str(s)) => Some(&**s),
             _ => None,
         })
-    }
-}
-
-impl Visit<Type> for TypeMap {
-    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
-        for (_, ty) in self.0.iter() {
-            ty.visit(f);
-        }
-    }
-}
-
-impl VisitMut<Type> for TypeMap {
-    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
-        for (_, ty) in self.0.iter_mut() {
-            ty.visit_mut(f);
-        }
     }
 }
 

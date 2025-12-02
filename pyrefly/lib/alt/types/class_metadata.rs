@@ -315,16 +315,8 @@ impl ClassSynthesizedField {
 }
 
 /// A class's synthesized fields, such as a dataclass's `__init__` method.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default, VisitMut)]
 pub struct ClassSynthesizedFields(SmallMap<Name, ClassSynthesizedField>);
-
-impl VisitMut<Type> for ClassSynthesizedFields {
-    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
-        for field in self.0.values_mut() {
-            field.visit_mut(f);
-        }
-    }
-}
 
 impl ClassSynthesizedFields {
     pub fn new(fields: SmallMap<Name, ClassSynthesizedField>) -> Self {

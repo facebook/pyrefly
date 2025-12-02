@@ -1646,15 +1646,6 @@ impl Type {
     }
 }
 
-impl Visit<Type> for OrderedMap<Type, Type> {
-    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
-        for (key, value) in self.iter() {
-            key.visit(f);
-            value.visit(f);
-        }
-    }
-}
-
 impl VisitMut<Type> for OrderedMap<Type, Type> {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
         for value in self.values_mut() {
