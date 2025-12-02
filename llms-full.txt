@@ -71,6 +71,19 @@ On a method, navigate to all reimplementations.
 />
 ---
 
+### [Move/rename file](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_didRename)
+
+When moving or renaming a file, Pyrefly will do it's best to rename all references to it.
+<video
+  src="/videos/go-to-implementation.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
 
 ### [Find references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references)
 
@@ -499,6 +512,26 @@ Ensure the pyrefly is on `$PATH`, add following snippet to your `coc-settings.js
   }
 },
 ```
+
+:::tip
+Type errors aren't shown unless a configuration exists. To always display type errors with coc.nvim, add the following `initializationOptions` to your configuration:
+```json
+"languageserver": {
+  "pyrefly": {
+    "command": "pyrefly",
+    "args": ["lsp"],
+    "filetypes": ["python"],
+    "rootPatterns": ["pyrefly.toml", "pyproject.toml", ".git"],
+    "initializationOptions": {
+      "pyrefly": {
+        "displayTypeErrors": "force-on"
+      }
+    }
+  }
+}
+```
+Use `"default"` to only show type errors when a configuration exists, or `"force-off"` to never show them.
+:::
 
 ### Vim + ALE
 Pull the latest version of ALE and add the following lines to your configuration
@@ -2826,6 +2859,15 @@ class Ex:
 
 x = Ex()
 x.meaning = 0
+```
+
+## redefinition
+
+Pyrefly reports this error when a name that already has an annotation in the current scope is annotated again with a different type. Re-annotating the same variable can lead to confusing types; prefer introducing a new name instead.
+
+```python
+def f(x: int) -> None:
+    x: str = str(x)  # redefinition
 ```
 
 ## redundant-cast

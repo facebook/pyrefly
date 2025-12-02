@@ -936,6 +936,15 @@ x = Ex()
 x.meaning = 0
 ```
 
+## redefinition
+
+Pyrefly reports this error when a name that already has an annotation in the current scope is annotated again with a different type. Re-annotating the same variable can lead to confusing types; prefer introducing a new name instead.
+
+```python
+def f(x: int) -> None:
+    x: str = str(x)  # redefinition
+```
+
 ## redundant-cast
 
 This warning is raised when `typing.cast()` is used to cast a value to a type it is already compatible with. Such casts are unnecessary and can be removed to improve code clarity.
