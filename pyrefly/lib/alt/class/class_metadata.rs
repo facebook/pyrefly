@@ -13,6 +13,7 @@ use itertools::Itertools;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::annotation::Annotation;
+use pyrefly_types::keywords::ConverterMap;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::display::DisplayWithCtx;
@@ -780,7 +781,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
-                        converter_table: OrderedMap::new(),
+                        converter_table: ConverterMap::new(),
                     });
                 }
                 // `@dataclass(...)`
@@ -801,7 +802,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
-                        converter_table: OrderedMap::new(),
+                        converter_table: ConverterMap::new(),
                     });
                 }
                 _ => {}
@@ -815,7 +816,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 alias_keyword,
                 init_defaults,
                 default_can_be_positional,
-                converter_table: OrderedMap::new(),
+                converter_table: ConverterMap::new(),
             });
         }
         dataclass_metadata

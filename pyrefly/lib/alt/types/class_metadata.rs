@@ -15,12 +15,12 @@ use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_types::callable::Deprecation;
+use pyrefly_types::keywords::ConverterMap;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
-use starlark_map::ordered_map::OrderedMap;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -457,7 +457,7 @@ pub struct DataclassMetadata {
     /// Conversion table mapping field types to the union of types they can accept.
     /// Inherited from the dataclass_transform decorator's converter_table parameter.
     #[allow(dead_code)]
-    pub converter_table: OrderedMap<Type, Type>,
+    pub converter_table: ConverterMap,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

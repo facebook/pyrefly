@@ -8,6 +8,7 @@
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::ordered_map::OrderedMap;
 
@@ -71,7 +72,7 @@ pub struct DataclassTransformKeywords {
     /// Conversion table mapping field types to the union of types they can accept.
     /// See https://typing.python.org/en/latest/spec/dataclasses.html#converters.
     #[allow(dead_code)]
-    pub converter_table: OrderedMap<Type, Type>,
+    pub converter_table: ConverterMap,
 }
 
 impl DataclassTransformKeywords {
@@ -93,12 +94,32 @@ impl DataclassTransformKeywords {
                 }
                 _ => Vec::new(),
             },
-            converter_table: OrderedMap::new(),
+            converter_table: ConverterMap::new(),
         }
     }
 
     pub fn new() -> Self {
         Self::from_type_map(&TypeMap::new())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, TypeEq)]
+pub struct ConverterMap(OrderedMap<Type, Type>);
+
+impl ConverterMap {
+    pub fn new() -> Self {
+        Self(OrderedMap::new())
+    }
+}
+
+impl VisitMut<Type> for ConverterMap {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        // The converter map is built from static type information, so the keys shouldn't contain
+        // anything interesting for visiting.
+        for value in self.0.values_mut() {
+            value.visit_mut(f);
+        }
     }
 }
 
