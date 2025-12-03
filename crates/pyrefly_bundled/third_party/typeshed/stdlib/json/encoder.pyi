@@ -10,8 +10,20 @@ INFINITY: Final[float]  # undocumented
 
 def py_encode_basestring(s: str) -> str: ...  # undocumented
 def py_encode_basestring_ascii(s: str) -> str: ...  # undocumented
-def encode_basestring(s: str, /) -> str: ...  # undocumented
-def encode_basestring_ascii(s: str, /) -> str: ...  # undocumented
+def encode_basestring(s: str, /) -> str:
+    """
+    encode_basestring(string) -> string
+
+    Return a JSON representation of a Python string
+    """
+    ...
+def encode_basestring_ascii(s: str, /) -> str:
+    """
+    encode_basestring_ascii(string) -> string
+
+    Return an ASCII-only JSON representation of a Python string
+    """
+    ...
 
 class JSONEncoder:
     item_separator: str

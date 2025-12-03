@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -570,5 +571,64 @@ class A[T]:
 # Note: pyright says the type is A[int | str]; mypy says A[object].
 # Either is okay, but A[int] is definitely wrong and we shouldn't emit the not assignable error.
 assert_type(A(0, "1"), A[int | str]) # E: assert_type(A[int], A[int | str]) # E: `Literal['1']` is not assignable to parameter `y` with type `int`
+    "#,
+);
+
+testcase!(
+    test_use_default_for_unsolved_typevar_in_function_with_infer_with_first_use,
+    TestEnv::new_with_infer_with_first_use(true),
+    r#"
+from typing import assert_type
+def f[T = int]() -> T: ...
+assert_type(f(), int)
+    "#,
+);
+
+testcase!(
+    test_use_default_for_unsolved_typevar_in_function_no_infer_with_first_use,
+    TestEnv::new_with_infer_with_first_use(false),
+    r#"
+from typing import assert_type
+def f[T = int]() -> T: ...
+assert_type(f(), int)
+    "#,
+);
+
+testcase!(
+    test_arg_against_typevar_bound,
+    r#"
+from typing import Callable, Iterable
+def reduce[_S](function: Callable[[_S, _S], _S], iterable: Iterable[_S]) -> _S: ...
+def f[_T: str](arg1: _T, arg2: _T) -> _T: ...
+reduce(f, [1])  # E: `int` is not assignable to upper bound `str` of type variable `_T`
+reduce(f, ["ok"])
+    "#,
+);
+
+testcase!(
+    test_catch_typevar_default_violation,
+    r#"
+def f[T = int]() -> list[T]: ...
+x = f()
+x.append("oops")  # E: `Literal['oops']` is not assignable to parameter `object` with type `int`
+    "#,
+);
+
+testcase!(
+    test_typevar_with_default_or_none,
+    r#"
+from typing import assert_type
+def f[T1, T2 = str](x: T1, y: T2 | None = None) -> T1 | T2: ...
+assert_type(f(1), int | str)
+    "#,
+);
+
+testcase!(
+    test_unsolved_typevar_with_constraints,
+    r#"
+from typing import TypeVar
+T = TypeVar("T", int, str)
+def f(t: T | None) -> None:...
+f(None)
     "#,
 );

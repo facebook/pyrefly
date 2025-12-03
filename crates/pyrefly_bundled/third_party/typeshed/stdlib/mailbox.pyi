@@ -101,7 +101,13 @@ class Mailbox(Generic[_MessageT]):
     def unlock(self) -> None: ...
     @abstractmethod
     def close(self) -> None: ...
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """
+        Represent a PEP 585 generic type
+
+        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        """
+        ...
 
 class Maildir(Mailbox[MaildirMessage]):
     colon: str
@@ -250,7 +256,13 @@ class _ProxyFile(Generic[AnyStr]):
     def flush(self) -> None: ...
     @property
     def closed(self) -> bool: ...
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """
+        Represent a PEP 585 generic type
+
+        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        """
+        ...
 
 class _PartialFile(_ProxyFile[AnyStr]):
     def __init__(self, f: IO[AnyStr], start: int | None = None, stop: int | None = None) -> None: ...

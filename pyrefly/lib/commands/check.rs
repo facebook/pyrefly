@@ -31,6 +31,7 @@ use pyrefly_config::finder::ConfigError;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::args::clap_env;
 use pyrefly_util::display;
 use pyrefly_util::display::count;
 use pyrefly_util::display::number_thousands;
@@ -153,7 +154,7 @@ pub struct SnippetCheckArgs {
     /// When not set, Pyrefly will perform an upward-filesystem-walk approach to find the nearest
     /// pyrefly.toml or pyproject.toml with `tool.pyrefly` section'. If no config is found, Pyrefly exits with error.
     /// If both a pyrefly.toml and valid pyproject.toml are found, pyrefly.toml takes precedence.
-    #[arg(long, short, value_name = "FILE")]
+    #[arg(long, short, value_name = "FILE", env = clap_env("CONFIG"))]
     config: Option<PathBuf>,
 
     /// Output related configuration options
@@ -232,6 +233,16 @@ struct OutputArgs {
         value_name = "INDEX",
     )]
     summarize_errors: Option<usize>,
+
+    /// Filter the error summary to show only a specific error kind (e.g., bad-assignment, missing-return, etc.).
+    /// Must be used in conjunction with --summarize-errors.
+    #[arg(
+        long,
+        value_enum,
+        value_name = "ERROR_KIND",
+        hide_possible_values = true
+    )]
+    only: Option<crate::config::error_kind::ErrorKind>,
 
     /// By default show the number of errors. Pass `--summary` to show information about lines checked and time/memory,
     /// or `--summary=none` to hide the summary line entirely.
@@ -407,24 +418,12 @@ impl Handles {
                 .insert(path.dupe());
         }
 
-        let mut errors = Vec::new();
-        let mut reloaded_configs = SmallSet::new();
-        for (config, files) in &configs {
-            match config.requery_source_db(files) {
-                Ok(reload) if reload => {
-                    reloaded_configs.insert(config.dupe());
-                }
-                Err(error) => {
-                    errors.push(ConfigError::error(error));
-                }
-                _ => (),
-            }
-        }
+        let reloaded_configs = ConfigFile::requery_source_db(&configs);
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
             .collect();
-        (result, reloaded_configs, errors)
+        (result, reloaded_configs, Vec::new())
     }
 
     fn update<'a>(
@@ -700,9 +699,12 @@ impl CheckArgs {
         let report_errors_start = Instant::now();
         let mut config_errors = transaction.get_config_errors();
         config_errors.append(&mut sourcedb_errors);
-        let config_errors_count = config_errors.len();
+        let mut config_errors_count = 0;
         for error in config_errors {
             error.print();
+            if error.severity() >= Severity::Error {
+                config_errors_count += 1;
+            }
         }
 
         let relative_to = self.output.relative_to.as_ref().map_or_else(
@@ -749,8 +751,8 @@ impl CheckArgs {
         if let Some(limit) = self.output.count_errors {
             print_error_counts(&errors.shown, limit);
         }
-        if let Some(path_index) = self.output.summarize_errors {
-            print_error_summary(&errors.shown, path_index);
+        if self.output.summarize_errors.is_some() {
+            print_error_summary(&errors.shown, self.output.only);
         }
         let mut shown_errors_count = config_errors_count;
         for error in &errors.shown {

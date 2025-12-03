@@ -6,9 +6,10 @@
  */
 
 use std::env;
-use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+
+use sha2::Digest;
 
 fn get_input_path() -> PathBuf {
     match env::var_os("TYPESHED_ROOT") {
@@ -24,9 +25,9 @@ fn get_input_path() -> PathBuf {
 }
 
 fn get_output_path() -> Result<PathBuf, std::env::VarError> {
-    // When building with Buck, output artifact path is specified directly using this env var
+    // When building with Buck, output artifact directory is specified using this env var
     match env::var_os("OUT") {
-        Some(path) => Ok(PathBuf::from(path)),
+        Some(path) => Ok(Path::new(&path).join("typeshed.tar.zst")),
         None => {
             // When building with Cargo, this env var is the containing directory of the artifact
             let out_dir = env::var("OUT_DIR")?;
@@ -42,11 +43,22 @@ fn main() -> Result<(), std::io::Error> {
 
     let input_path = get_input_path();
     let output_path = get_output_path().unwrap();
-    let output_file = File::create(output_path)?;
-    let encoder = zstd::stream::write::Encoder::new(output_file, 0)?;
+    let digest_path = output_path.with_file_name("typeshed.sha256");
+
+    // Create the tar.zst archive
+    let mut archive_bytes = Vec::new();
+    let encoder = zstd::stream::write::Encoder::new(&mut archive_bytes, 0)?;
     let mut tar = tar::Builder::new(encoder);
     tar.append_dir_all("", input_path)?;
     let encoder = tar.into_inner()?;
     encoder.finish()?;
+
+    // Compute SHA256 hash of the archive
+    let hash = sha2::Sha256::digest(&archive_bytes);
+
+    // Write digest to file
+    std::fs::write(&output_path, &archive_bytes)?;
+    std::fs::write(&digest_path, hash)?;
+
     Ok(())
 }

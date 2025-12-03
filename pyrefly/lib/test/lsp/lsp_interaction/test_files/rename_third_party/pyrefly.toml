@@ -1,0 +1,2 @@
+
+site_package_path = ["venv_third_party/lib/python3.12/site-packages"]

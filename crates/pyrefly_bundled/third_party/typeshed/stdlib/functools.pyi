@@ -37,10 +37,36 @@ if sys.version_info >= (3, 14):
 
 else:
     @overload
-    def reduce(function: Callable[[_T, _S], _T], iterable: Iterable[_S], initial: _T, /) -> _T: ...
+    def reduce(function: Callable[[_T, _S], _T], iterable: Iterable[_S], initial: _T, /) -> _T:
+        """
+        reduce(function, iterable[, initial]) -> value
+
+        Apply a function of two arguments cumulatively to the items of an iterable, from left to right.
+
+        This effectively reduces the iterable to a single value.  If initial is present,
+        it is placed before the items of the iterable in the calculation, and serves as
+        a default when the iterable is empty.
+
+        For example, reduce(lambda x, y: x+y, [1, 2, 3, 4, 5])
+        calculates ((((1 + 2) + 3) + 4) + 5).
+        """
+        ...
 
 @overload
-def reduce(function: Callable[[_T, _T], _T], iterable: Iterable[_T], /) -> _T: ...
+def reduce(function: Callable[[_T, _T], _T], iterable: Iterable[_T], /) -> _T:
+    """
+    reduce(function, iterable[, initial]) -> value
+
+    Apply a function of two arguments cumulatively to the items of an iterable, from left to right.
+
+    This effectively reduces the iterable to a single value.  If initial is present,
+    it is placed before the items of the iterable in the calculation, and serves as
+    a default when the iterable is empty.
+
+    For example, reduce(lambda x, y: x+y, [1, 2, 3, 4, 5])
+    calculates ((((1 + 2) + 3) + 4) + 5).
+    """
+    ...
 
 class _CacheInfo(NamedTuple):
     hits: int
@@ -56,9 +82,15 @@ class _CacheParameters(TypedDict):
 @final
 class _lru_cache_wrapper(Generic[_T]):
     __wrapped__: Callable[..., _T]
-    def __call__(self, *args: Hashable, **kwargs: Hashable) -> _T: ...
-    def cache_info(self) -> _CacheInfo: ...
-    def cache_clear(self) -> None: ...
+    def __call__(self, *args: Hashable, **kwargs: Hashable) -> _T:
+        """Call self as a function."""
+        ...
+    def cache_info(self) -> _CacheInfo:
+        """Report cache statistics"""
+        ...
+    def cache_clear(self) -> None:
+        """Clear the cache and cache statistics"""
+        ...
     def cache_parameters(self) -> _CacheParameters: ...
     def __copy__(self) -> _lru_cache_wrapper[_T]: ...
     def __deepcopy__(self, memo: Any, /) -> _lru_cache_wrapper[_T]: ...
@@ -149,18 +181,35 @@ else:
     ) -> _Wrapper[_PWrapped, _RWrapped]: ...
 
 def total_ordering(cls: type[_T]) -> type[_T]: ...
-def cmp_to_key(mycmp: Callable[[_T, _T], int]) -> Callable[[_T], SupportsAllComparisons]: ...
+def cmp_to_key(mycmp: Callable[[_T, _T], int]) -> Callable[[_T], SupportsAllComparisons]:
+    """
+    Convert a cmp= function into a key= function.
+
+    mycmp
+      Function that compares two objects.
+    """
+    ...
 @disjoint_base
 class partial(Generic[_T]):
     @property
-    def func(self) -> Callable[..., _T]: ...
+    def func(self) -> Callable[..., _T]:
+        """function object to use in future partial calls"""
+        ...
     @property
-    def args(self) -> tuple[Any, ...]: ...
+    def args(self) -> tuple[Any, ...]:
+        """tuple of arguments to future partial calls"""
+        ...
     @property
-    def keywords(self) -> dict[str, Any]: ...
+    def keywords(self) -> dict[str, Any]:
+        """dictionary of keyword arguments to future partial calls"""
+        ...
     def __new__(cls, func: Callable[..., _T], /, *args: Any, **kwargs: Any) -> Self: ...
-    def __call__(self, /, *args: Any, **kwargs: Any) -> _T: ...
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __call__(self, /, *args: Any, **kwargs: Any) -> _T:
+        """Call self as a function."""
+        ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """See PEP 585"""
+        ...
 
 # With protocols, this could change into a generic protocol that defines __get__ and returns _T
 _Descriptor: TypeAlias = Any
@@ -183,7 +232,13 @@ class partialmethod(Generic[_T]):
     def __get__(self, obj: Any, cls: type[Any] | None = None) -> Callable[..., _T]: ...
     @property
     def __isabstractmethod__(self) -> bool: ...
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """
+        Represent a PEP 585 generic type
+
+        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        """
+        ...
 
 if sys.version_info >= (3, 11):
     _RegType: TypeAlias = type[Any] | types.UnionType
@@ -235,7 +290,13 @@ class cached_property(Generic[_T_co]):
     def __set_name__(self, owner: type[Any], name: str) -> None: ...
     # __set__ is not defined at runtime, but @cached_property is designed to be settable
     def __set__(self, instance: object, value: _T_co) -> None: ...  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """
+        Represent a PEP 585 generic type
+
+        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        """
+        ...
 
 def cache(user_function: Callable[..., _T], /) -> _lru_cache_wrapper[_T]: ...
 def _make_key(

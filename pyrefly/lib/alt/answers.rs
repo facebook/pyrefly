@@ -73,13 +73,21 @@ pub struct Index {
     /// A map from (attribute definition module) to a list of pairs of
     /// (range of attribute definition in the definition, range of reference in the current module).
     pub externally_defined_attribute_references: SmallMap<ModulePath, Vec<(TextRange, TextRange)>>,
+    /// A map from (child method range) to a list of parent method definitions (ModulePath, parent method range).
+    /// This is used to find reimplementations when doing find-references on parent methods.
+    pub parent_methods_map: SmallMap<TextRange, Vec<(ModulePath, TextRange)>>,
 }
 
 #[derive(Debug)]
-struct OverloadedCallee {
-    all_overloads: Vec<Callable>,
-    closest_overload: Callable,
-    is_closest_overload_chosen: bool,
+enum OverloadedCallee {
+    Resolved {
+        callable: Callable,
+    },
+    Candidates {
+        all: Vec<Callable>,
+        closest: Callable,
+        is_closest_chosen: bool,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -570,13 +578,18 @@ impl Answers {
 
     pub fn get_chosen_overload_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        let overloaded_callee = lock.overloaded_callees.get(&range)?;
-        if overloaded_callee.is_closest_overload_chosen {
-            Some(self.deep_force(Type::Callable(Box::new(
-                overloaded_callee.closest_overload.clone(),
-            ))))
-        } else {
-            None
+        match lock.overloaded_callees.get(&range)? {
+            OverloadedCallee::Resolved { callable } => {
+                Some(self.deep_force(Type::Callable(Box::new(callable.clone()))))
+            }
+            OverloadedCallee::Candidates {
+                closest,
+                is_closest_chosen,
+                ..
+            } if *is_closest_chosen => {
+                Some(self.deep_force(Type::Callable(Box::new(closest.clone()))))
+            }
+            _ => None,
         }
     }
 
@@ -586,23 +599,29 @@ impl Answers {
         range: TextRange,
     ) -> Option<(Vec<Callable>, Option<usize>)> {
         let lock = self.trace.as_ref()?.lock();
-        let overloaded_callee = lock.overloaded_callees.get(&range)?;
-        let chosen_overload_index =
-            overloaded_callee
-                .all_overloads
-                .iter()
-                .enumerate()
-                .find_map(|(index, signature)| {
-                    if signature == &overloaded_callee.closest_overload {
-                        Some(index)
-                    } else {
-                        None
-                    }
-                });
-        Some((
-            overloaded_callee.all_overloads.clone(),
-            chosen_overload_index,
-        ))
+        match lock.overloaded_callees.get(&range)? {
+            OverloadedCallee::Resolved { callable } => Some((vec![callable.clone()], Some(0))),
+            OverloadedCallee::Candidates { all, closest, .. } => {
+                let chosen_index = all.iter().position(|signature| signature == closest);
+                Some((all.clone(), chosen_index))
+            }
+        }
+    }
+
+    pub fn add_parent_method_mapping(
+        &self,
+        child_range: TextRange,
+        parent_module: ModulePath,
+        parent_range: TextRange,
+    ) {
+        if let Some(index) = &self.index {
+            index
+                .lock()
+                .parent_methods_map
+                .entry(child_range)
+                .or_default()
+                .push((parent_module, parent_range));
+        }
     }
 }
 
@@ -628,18 +647,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self.current().solver
     }
 
-    pub fn record_overload_trace_from_type(&self, loc: TextRange, ty: Type) {
+    pub fn record_resolved_trace(&self, loc: TextRange, ty: Type) {
         if let Some(trace) = &self.current().trace
             && let Some(callable) = ty.to_callable()
         {
-            trace.lock().overloaded_callees.insert(
-                loc,
-                OverloadedCallee {
-                    all_overloads: vec![callable.clone()],
-                    closest_overload: callable,
-                    is_closest_overload_chosen: true,
-                },
-            );
+            trace
+                .lock()
+                .overloaded_callees
+                .insert(loc, OverloadedCallee::Resolved { callable });
         }
     }
 
@@ -655,13 +670,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(trace) = &self.current().trace {
             trace.lock().overloaded_callees.insert(
                 loc,
-                OverloadedCallee {
-                    all_overloads: all_overloads
-                        .into_iter()
-                        .map(|func| (*func).clone())
-                        .collect(),
-                    closest_overload: closest_overload.clone(),
-                    is_closest_overload_chosen,
+                OverloadedCallee::Candidates {
+                    all: all_overloads.into_iter().cloned().collect(),
+                    closest: closest_overload.clone(),
+                    is_closest_chosen: is_closest_overload_chosen,
                 },
             );
         }

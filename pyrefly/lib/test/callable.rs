@@ -675,9 +675,9 @@ class P2(Protocol):
     def __call__(self, *, v1: int) -> None: ...
 class P3(Protocol):
     def __call__(self, *, v1: int, v2: str, v4: str) -> None: ...
-x: P1 = func1  # E: `(**kwargs: Unpack[TypedDict[TD]]) -> None` is not assignable to `P1`
-y: P2 = func1  # E: `(**kwargs: Unpack[TypedDict[TD]]) -> None` is not assignable to `P2`
-z: P3 = func1  # E: `(**kwargs: Unpack[TypedDict[TD]]) -> None` is not assignable to `P3`
+x: P1 = func1  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `P1`
+y: P2 = func1  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `P2`
+z: P3 = func1  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `P3`
 "#,
 );
 
@@ -1046,5 +1046,73 @@ from typing import Annotated, Any, assert_type
 def f(*args: Annotated, **kwargs: Annotated): # E: # E:
     assert_type(args, tuple[Any, ...])
     assert_type(kwargs, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_isinstance_narrow,
+    r#"
+from typing import assert_type, reveal_type, Any, Callable
+def f(x: object):
+    if isinstance(x, Callable):
+        assert_type(x, Callable[..., Any])
+def g(x: int):
+    if isinstance(x, Callable):
+        reveal_type(x)  # E: ((...) -> Unknown) & int
+    "#,
+);
+
+testcase!(
+    test_isinstance_error,
+    r#"
+from typing import Any, Callable
+def f(x: object):
+    isinstance(x, Callable[..., Any])  # E: Expected class object, got `type[(...) -> Any]`
+    "#,
+);
+
+testcase!(
+    test_unbound_name_ok_in_lambda,
+    r#"
+x: int
+f1 = lambda: x
+f2 = lambda: [x for _ in range(10)]
+    "#,
+);
+
+testcase!(
+    test_unknown_name_error_in_lambda,
+    r#"
+f = lambda: x  # E: Could not find name `x`
+    "#,
+);
+
+testcase!(
+    test_unbound_module_name_ok_in_def,
+    r#"
+from typing import assert_type
+x: int
+def f():
+    assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_unbound_local_name_error_in_def,
+    r#"
+def f():
+    x: int
+    print(x)  # E: `x` is uninitialized
+    "#,
+);
+
+testcase!(
+    test_anywhere_name_in_lambda,
+    r#"
+from typing import assert_type
+f = lambda: A.x
+class A:
+    x: int = 0
+assert_type(f(), int)
     "#,
 );

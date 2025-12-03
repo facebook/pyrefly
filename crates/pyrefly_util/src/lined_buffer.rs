@@ -139,10 +139,22 @@ impl LinedBuffer {
     /// For notebook, the input range is relative to the concatenated contents of the whole notebook
     /// and the output range is relative to a specific cell.
     pub fn to_lsp_range(&self, x: TextRange, notebook: Option<&Notebook>) -> lsp_types::Range {
-        lsp_types::Range::new(
-            self.to_lsp_position(x.start(), notebook),
-            self.to_lsp_position(x.end(), notebook),
-        )
+        let start_cell = self.to_cell_for_lsp(x.start(), notebook);
+        let end_cell = self.to_cell_for_lsp(x.end(), notebook);
+        let start = self.to_lsp_position(x.start(), notebook);
+        let mut end = self.to_lsp_position(x.end(), notebook);
+        if let Some(start_cell) = start_cell
+            && let Some(end_cell) = end_cell
+            && end_cell != start_cell
+        {
+            // If the range spans multiple cells, as can happen when a parse error reaches the next line
+            // We should return the "next" line in the same cell, instead of line 0 in the next cell
+            end = lsp_types::Position {
+                line: start.line + 1,
+                character: end.character,
+            }
+        };
+        lsp_types::Range::new(start, end)
     }
 
     /// Translates a text size to a LSP position.

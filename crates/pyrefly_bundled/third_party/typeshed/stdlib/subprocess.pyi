@@ -84,7 +84,13 @@ class CompletedProcess(Generic[_T]):
     stderr: _T
     def __init__(self, args: _CMD, returncode: int, stdout: _T | None = None, stderr: _T | None = None) -> None: ...
     def check_returncode(self) -> None: ...
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """
+        Represent a PEP 585 generic type
+
+        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        """
+        ...
 
 if sys.version_info >= (3, 11):
     # 3.11 adds "process_group" argument
@@ -497,7 +503,6 @@ elif sys.version_info >= (3, 10):
     ) -> CompletedProcess[Any]: ...
 
 else:
-    # 3.9 adds arguments "user", "group", "extra_groups" and "umask"
     @overload
     def run(
         args: _CMD,
@@ -2033,7 +2038,13 @@ class Popen(Generic[AnyStr]):
         self, exc_type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> None: ...
     def __del__(self) -> None: ...
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias: ...
+    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        """
+        Represent a PEP 585 generic type
+
+        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        """
+        ...
 
 # The result really is always a str.
 if sys.version_info >= (3, 11):

@@ -6,12 +6,15 @@
  */
 
 use std::fmt::Display;
+use std::path::Path;
 use std::str::FromStr;
 
 use clap::Parser;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::args::clap_env;
 use starlark_map::small_map::SmallMap;
 
 use crate::commands::check::FullCheckArgs;
@@ -112,6 +115,7 @@ fn dump_config(
         error.print();
     }
     for (config, files) in configs_to_files.into_iter() {
+        let config_env = clap_env("CONFIG");
         match &config.source {
             ConfigSource::Synthetic => {
                 println!("Default configuration");
@@ -123,7 +127,14 @@ fn dump_config(
                 );
             }
             ConfigSource::File(path) => {
-                println!("Configuration at `{}`", path.display());
+                let config_from = if std::env::var(&config_env)
+                    .is_ok_and(|f| &Path::new(&f).absolutize() == path)
+                {
+                    format!(" (from env {})", config_env)
+                } else {
+                    "".to_owned()
+                };
+                println!("Configuration at `{}`{}", path.display(), config_from);
             }
         }
         println!("  Using interpreter: {}", config.interpreters);

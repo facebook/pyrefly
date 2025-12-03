@@ -77,17 +77,7 @@ pub fn queue_source_db_rebuild_and_recheck(
                 .or_default()
                 .insert(handle.path().dupe());
         }
-        let new_invalidated_configs: SmallSet<ArcId<ConfigFile>> = configs_to_paths
-            .into_iter()
-            .filter(|(c, files)| match c.requery_source_db(files) {
-                Ok(reloaded) => reloaded,
-                Err(error) => {
-                    eprintln!("Error reloading source database for config: {error}");
-                    false
-                }
-            })
-            .map(|(c, _)| c)
-            .collect();
+        let new_invalidated_configs = ConfigFile::requery_source_db(&configs_to_paths);
         if !new_invalidated_configs.is_empty() {
             let mut lock = invalidated_configs.lock();
             for c in new_invalidated_configs {

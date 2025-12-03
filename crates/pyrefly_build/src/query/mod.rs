@@ -15,6 +15,7 @@ use std::process::Command;
 
 use anyhow::Context as _;
 use dupe::Dupe as _;
+use itertools::Itertools as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::SysInfo;
@@ -98,12 +99,39 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
             ));
         }
 
-        serde_json::from_slice(&result.stdout).with_context(|| {
-            format!(
-                "Failed to construct valid `TargetManifestDatabase` from querier result. Command run: `{}`",
-                cmd.get_program().display(),
-            )
-        })
+        match serde_json::from_slice(&result.stdout)
+                .with_context(|| {
+                    format!(
+                        "Failed to construct valid `TargetManifestDatabase` from querier result. Command run: {} {}",
+                        cmd.get_program().display(),
+                        cmd.get_args().map(|a| a.to_string_lossy()).join(" "),
+                    )
+                }) {
+            Err(e) => {
+                let Some(downcast) = e.downcast_ref::<serde_json::error::Error>() else {
+                    return Err(e);
+                };
+                let Ok(content) = String::from_utf8(result.stdout) else {
+                    return Err(e);
+                };
+                let lines = content.lines().collect::<Vec<_>>();
+                let error_line = downcast.line();
+                let start = std::cmp::max(0, error_line - 30);
+                let end = std::cmp::min(lines.len() - 1, error_line + 20);
+                let cont = std::cmp::min(error_line + 1, end);
+
+                let e = e.context(
+                    format!(
+                        "Context: ```\n{} # THIS LINE HAS A PROBLEM\n{}\n```",
+                        lines[start..=error_line].iter().join("\n"),
+                        lines[cont..=end].iter().join("\n"),
+                    )
+                );
+
+                Err(e)
+            },
+            ok => ok,
+        }
     }
 
     fn construct_command(&self) -> Command;
@@ -117,6 +145,8 @@ fn is_path_initfile(path: &Path) -> bool {
 pub(crate) struct PythonLibraryManifest {
     pub deps: SmallSet<Target>,
     pub srcs: SmallMap<ModuleName, Vec1<ModulePathBuf>>,
+    #[serde(default)]
+    pub relative_to: Option<PathBuf>,
     #[serde(flatten)]
     pub sys_info: SysInfo,
     pub buildfile_path: PathBuf,
@@ -140,15 +170,31 @@ impl PythonLibraryManifest {
     }
 
     fn rewrite_relative_to_root(&mut self, root: &Path) {
+        if let Some(relative_to) = &mut self.relative_to {
+            *relative_to = root.join(&relative_to);
+        }
+        let relative_to = self.relative_to.as_deref().unwrap_or(root);
         self.srcs.iter_mut().for_each(|(_, paths)| {
-            paths
-                .iter_mut()
-                .for_each(|p| *p = ModulePathBuf::new(root.join(&**p)))
+            paths.iter_mut().for_each(|p| {
+                let resolved = relative_to.join(&**p);
+                // canonicalize it, since VSCode will do it for us anyway and
+                // then path lookups won't work
+                // TODO(connernilsen): do we need to store canonicalized files and
+                // buck-provided files?
+                let file = resolved.canonicalize().unwrap_or(resolved);
+                *p = ModulePathBuf::new(file)
+            })
         });
         self.packages.iter_mut().for_each(|(_, paths)| {
-            paths
-                .iter_mut()
-                .for_each(|p| *p = ModulePathBuf::new(root.join(&**p)))
+            paths.iter_mut().for_each(|p| {
+                let resolved = relative_to.join(&**p);
+                // canonicalize it, since VSCode will do it for us anyway and
+                // then path lookups won't work
+                // TODO(connernilsen): do we need to store canonicalized files and
+                // buck-provided files?
+                let file = resolved.canonicalize().unwrap_or(resolved);
+                *p = ModulePathBuf::new(file)
+            })
         });
         self.buildfile_path = root.join(&self.buildfile_path);
     }
@@ -293,7 +339,7 @@ impl PythonLibraryManifest {
     /// Get all explicit and implicit dunder inits, preferring explicit. Produces
     /// dunder inits all the way up to the directory containing this manifest's build file.
     fn fill_implicit_packages(&mut self, all_dunder_inits: &SmallSet<ModulePathBuf>) {
-        let Some(target_root) = self.buildfile_path.parent() else {
+        let Some(target_root) = self.relative_to.as_deref().or(self.buildfile_path.parent()) else {
             return;
         };
         let start_packages =
@@ -382,19 +428,33 @@ mod tests {
         pub fn get_test_database() -> Self {
             TargetManifestDatabase::new(
                 smallmap! {
+                    Target::from_string("//colorama:py-stubs".to_owned()) => TargetManifest::lib(
+                        &[
+                        (
+                            "colorama",
+                            &[
+                            "colorama/__init__.pyi",
+                            ],
+                        ),
+                        ],
+                        &[],
+                        "colorama/BUCK",
+                        &[],
+                        None,
+                    ),
                     Target::from_string("//colorama:py".to_owned()) => TargetManifest::lib(
                         &[
                         (
                             "colorama",
                             &[
                             "colorama/__init__.py",
-                            "colorama/__init__.pyi",
                             ]
                         ),
                         ],
-                        &[],
+                        &["//colorama:py-stubs"],
                         "colorama/BUCK",
                         &[],
+                        None,
                     ),
                     Target::from_string("//colorama:colorama".to_owned()) => TargetManifest::alias(
                         "//colorama:py"
@@ -414,6 +474,7 @@ mod tests {
                         ],
                         "click/BUCK",
                         &[],
+                        None,
                     ),
                     Target::from_string("//click:click".to_owned()) => TargetManifest::alias(
                         "//click:py"
@@ -445,6 +506,7 @@ mod tests {
                         ],
                         "pyre/client/log/BUCK",
                         &[],
+                        None,
                     ),
                     Target::from_string("//pyre/client/log:log2".to_owned()) => TargetManifest::lib(
                         &[
@@ -473,6 +535,7 @@ mod tests {
                         ],
                         "pyre/client/log/BUCK",
                         &[],
+                        None,
                     ),
                     Target::from_string("//implicit_package/test:main".to_owned()) => TargetManifest::lib(
                             &[
@@ -488,6 +551,7 @@ mod tests {
                             ],
                             "implicit_package/test/BUCK",
                             &[],
+                            None,
                     ),
                     Target::from_string("//implicit_package/test:lib".to_owned()) => TargetManifest::lib(
                             &[
@@ -508,11 +572,60 @@ mod tests {
                                 &[
                                 "implicit_package/test/deeply/nested/package/file.py",
                                 ],
-                            )
+                            ),
                             ],
-                            &[],
+                            &["//external:package"],
                             "implicit_package/test/BUCK",
-                            &[]
+                            &[],
+                            None,
+                    ),
+                    Target::from_string("//external:package".to_owned()) => TargetManifest::lib(
+                        &[
+                        (
+                            "external_package.main",
+                            &[
+                            "/path/to/another/repository/package/external_package/main.py",
+                            ]
+                        ),
+                        (
+                            "external_package.non_python_file",
+                            &[
+                            "/path/to/another/repository/package/external_package/non_python_file.thrift",
+                            ],
+                        ),
+                        ],
+                        &[],
+                        "/path/to/another/repository/package/BUCK",
+                        &[],
+                        None,
+                    ),
+                    Target::from_string("//generated:main".to_owned()) => TargetManifest::lib(
+                        &[
+                        (
+                            "generated.main",
+                            &[
+                            "generated/main.py"
+                            ]
+                        ),
+                        ],
+                        &["//generated:lib"],
+                        "generated/BUCK",
+                        &[],
+                        None,
+                    ),
+                    Target::from_string("//generated:lib".to_owned()) => TargetManifest::lib(
+                        &[
+                        (
+                            "generated",
+                            &[
+                            "generated/__init__.py"
+                            ]
+                        ),
+                        ],
+                        &[],
+                        "generated/BUCK",
+                        &[],
+                        Some("build-out/materialized"),
                     ),
                 },
                 PathBuf::from("/path/to/this/repository"),
@@ -581,9 +694,11 @@ mod tests {
             deps: &[&str],
             buildfile: &str,
             implicit_packages: &[(&str, &[&str])],
+            relative_to: Option<&str>,
         ) -> Self {
             TargetManifest::Library(PythonLibraryManifest {
                 srcs: map_srcs(srcs, None),
+                relative_to: relative_to.map(PathBuf::from),
                 deps: map_deps(deps),
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
                 buildfile_path: PathBuf::from(buildfile),
@@ -598,10 +713,12 @@ mod tests {
             deps: &[&str],
             buildfile: &str,
             inits: &[(&str, &[&str])],
+            relative_to: Option<&str>,
         ) -> Self {
             let root = "/path/to/this/repository";
             Self {
                 srcs: map_srcs(srcs, Some(root)),
+                relative_to: relative_to.map(PathBuf::from),
                 deps: map_deps(deps),
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
                 buildfile_path: PathBuf::from(root).join(buildfile),
@@ -615,14 +732,24 @@ mod tests {
         const EXAMPLE_JSON: &str = r#"
 {
   "db": {
-    "//colorama:py": {
+    "//colorama:py-stubs": {
       "srcs": {
         "colorama": [
-          "colorama/__init__.py",
           "colorama/__init__.pyi"
         ]
       },
       "deps": [],
+      "buildfile_path": "colorama/BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//colorama:py": {
+      "srcs": {
+        "colorama": [
+          "colorama/__init__.py"
+        ]
+      },
+      "deps": ["//colorama:py-stubs"],
       "buildfile_path": "colorama/BUCK",
       "python_version": "3.12",
       "python_platform": "linux"
@@ -709,11 +836,48 @@ mod tests {
           "implicit_package.deeply.nested.package.file": [
               "implicit_package/test/deeply/nested/package/file.py"
           ]
-      },
-      "deps": [],
+      }, 
+      "deps": ["//external:package"],
       "buildfile_path": "implicit_package/test/BUCK",
       "python_version": "3.12",
       "python_platform": "linux"
+    },
+    "//external:package": {
+      "srcs": {
+          "external_package.main": [
+              "/path/to/another/repository/package/external_package/main.py"
+          ],
+          "external_package.non_python_file": [
+              "/path/to/another/repository/package/external_package/non_python_file.thrift"
+          ]
+      }, 
+      "deps": [],
+      "buildfile_path": "/path/to/another/repository/package/BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//generated:main": {
+      "srcs": {
+          "generated.main": [
+              "generated/main.py"
+          ]
+      },
+      "deps": ["//generated:lib"],
+      "buildfile_path": "generated/BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//generated:lib": {
+      "srcs": {
+          "generated": [
+              "generated/__init__.py"
+          ]
+      },
+      "deps": [],
+      "buildfile_path": "generated/BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux",
+      "relative_to": "build-out/materialized"
     }
   },
   "root": "/path/to/this/repository"
@@ -726,12 +890,11 @@ mod tests {
     #[test]
     fn test_produce_db() {
         let expected = smallmap! {
-            Target::from_string("//colorama:py".to_owned()) => PythonLibraryManifest::new(
+            Target::from_string("//colorama:py-stubs".to_owned()) => PythonLibraryManifest::new(
                 &[
                     (
                         "colorama",
                         &[
-                            "colorama/__init__.py",
                             "colorama/__init__.pyi",
                         ]
                     ),
@@ -740,10 +903,28 @@ mod tests {
                 "colorama/BUCK",
                 &[
                     ("colorama", &[
-                        "colorama/__init__.py",
                         "colorama/__init__.pyi",
                     ]),
                 ],
+                None,
+            ),
+            Target::from_string("//colorama:py".to_owned()) => PythonLibraryManifest::new(
+                &[
+                    (
+                        "colorama",
+                        &[
+                            "colorama/__init__.py",
+                        ]
+                    ),
+                ],
+                &["//colorama:py-stubs"],
+                "colorama/BUCK",
+                &[
+                    ("colorama", &[
+                        "colorama/__init__.py",
+                    ]),
+                ],
+                None,
             ),
             Target::from_string("//click:py".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -765,6 +946,7 @@ mod tests {
                         "click/__init__.py",
                     ]),
                 ],
+                None,
             ),
             Target::from_string("//pyre/client/log:log".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -797,6 +979,7 @@ mod tests {
                      "pyre/client/log/__init__.py",
                     ]),
                 ],
+                None,
             ),
             Target::from_string("//pyre/client/log:log2".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -829,6 +1012,7 @@ mod tests {
                         "pyre/client/log/__init__.py",
                     ]),
                 ],
+                None,
             ),
             Target::from_string("//implicit_package/test:main".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -848,6 +1032,7 @@ mod tests {
                     ],
                 )
                 ],
+                None,
             ),
             Target::from_string("//implicit_package/test:lib".to_owned()) => PythonLibraryManifest::new(
                 &[
@@ -865,9 +1050,9 @@ mod tests {
                     "implicit_package.deeply.nested.package.file", &[
                         "implicit_package/test/deeply/nested/package/file.py",
                     ],
-                )
+                ),
                 ],
-                &[],
+                &["//external:package"],
                 "implicit_package/test/BUCK",
                 &[
                 ("implicit_package", &[
@@ -891,6 +1076,63 @@ mod tests {
                     ],
                 ),
                 ],
+                None,
+            ),
+            Target::from_string("//external:package".to_owned()) => PythonLibraryManifest::new(
+                &[
+                ("external_package.main", &[
+                 "/path/to/another/repository/package/external_package/main.py"
+                    ]
+                ),
+                (
+                    "external_package.non_python_file", &[
+                        "/path/to/another/repository/package/external_package/non_python_file.thrift",
+                    ],
+                ),
+                ],
+                &[],
+                "/path/to/another/repository/package/BUCK",
+                &[
+                ("external_package", &[
+                 "/path/to/another/repository/package/external_package",
+                    ],
+                ),
+                ],
+                None,
+            ),
+            Target::from_string("//generated:main".to_owned()) => PythonLibraryManifest::new(
+                &[
+                ("generated.main", &[
+                    "/path/to/this/repository/generated/main.py"
+                    ],
+                ),
+                ],
+                &["//generated:lib"],
+                "/path/to/this/repository/generated/BUCK",
+                &[
+                ("generated", &[
+                    "/path/to/this/repository/generated",
+                    ],
+                ),
+                ],
+                None,
+            ),
+            Target::from_string("//generated:lib".to_owned()) => PythonLibraryManifest::new(
+                &[
+                ("generated", &[
+                    "/path/to/this/repository/build-out/materialized/generated/__init__.py"
+                    ],
+                ),
+                ],
+                &[],
+                "/path/to/this/repository/generated/BUCK",
+                &[
+                ("generated", &[
+                    "/path/to/this/repository/build-out/materialized/generated/__init__.py",
+                    ],
+                ),
+                ],
+                Some("/path/to/this/repository/build-out/materialized"),
             ),
         };
         assert_eq!(
@@ -901,27 +1143,36 @@ mod tests {
 
     #[test]
     fn test_package_finding() {
-        let db = TargetManifestDatabase::get_test_database();
+        let mut db = TargetManifestDatabase::get_test_database();
+        for manifest in db.db.values_mut() {
+            match manifest {
+                TargetManifest::Library(m) => {
+                    m.rewrite_relative_to_root(&db.root);
+                }
+                _ => (),
+            }
+        }
         let all_dunder_inits = [
             "colorama/__init__.pyi",
             "colorama/__init__.py",
             "click/__init__.pyi",
             "click/__init__.py",
             "pyre/client/log/__init__.py",
+            "build-out/materialized/generated/__init__.py",
         ]
         .iter()
-        .map(|p| ModulePathBuf::from_path(Path::new(p)))
+        .map(|p| ModulePathBuf::new(db.root.join(p)))
         .collect::<SmallSet<ModulePathBuf>>();
 
         let result: (
             SmallMap<
                 Target,
-                SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>>,
+                SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), PathBuf>>,
             >,
             SmallMap<Target, SmallMap<ModuleName, Vec1<ModulePathBuf>>>,
         ) = db
             .db
-            .iter()
+            .iter_mut()
             .filter_map(|(t, m)| match m {
                 TargetManifest::Library(lib) => Some((t, lib)),
                 TargetManifest::Alias { .. } => None,
@@ -929,10 +1180,28 @@ mod tests {
             .fold(
                 (SmallMap::new(), SmallMap::new()),
                 |(mut first, mut second), (t, l)| {
-                    let root = l.buildfile_path.parent().unwrap();
+                    let root = l
+                        .relative_to
+                        .as_deref()
+                        .or(l.buildfile_path.parent())
+                        .unwrap();
                     let base_packages =
                         l.get_explicit_and_basic_implicit_packages(root, &all_dunder_inits);
-                    first.insert(t.dupe(), base_packages.clone());
+                    first.insert(
+                        t.dupe(),
+                        base_packages
+                            .iter()
+                            .map(|(k, v)| {
+                                (
+                                    k.dupe(),
+                                    match v {
+                                        Err(v) => Err(v.to_path_buf()),
+                                        Ok(v) => Ok(v.clone()),
+                                    },
+                                )
+                            })
+                            .collect(),
+                    );
                     second.insert(
                         t.dupe(),
                         l.fill_ancestor_synthesized_packages(base_packages, root),
@@ -943,13 +1212,20 @@ mod tests {
 
         let expected_start_packages: SmallMap<
             Target,
-            SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), &Path>>,
+            SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), PathBuf>>,
         > = smallmap! {
+            "//colorama:py-stubs" => smallmap! {
+                "colorama" => Ok((
+                    vec1![
+                        "colorama/__init__.pyi",
+                    ],
+                    "",
+                )),
+            },
             "//colorama:py" => smallmap! {
                 "colorama" => Ok((
                     vec1![
                         "colorama/__init__.py",
-                        "colorama/__init__.pyi",
                     ],
                     "",
                 )),
@@ -992,6 +1268,24 @@ mod tests {
                     "implicit_package/test/deeply/nested/package",
                 ),
             },
+            "//external:package" => smallmap! {
+                "external_package" => Err(
+                    "/path/to/another/repository/package/external_package",
+                ),
+            },
+            "//generated:main" => smallmap! {
+                "generated" => Err(
+                    "generated",
+                ),
+            },
+            "//generated:lib" => smallmap! {
+                "generated" => Ok((
+                    vec1![
+                        "build-out/materialized/generated/__init__.py",
+                    ],
+                    "build-out/materialized",
+                )),
+            }
         }
         .into_iter()
         .map(|(t, m)| {
@@ -1003,10 +1297,10 @@ mod tests {
                             ModuleName::from_str(name),
                             match r {
                                 Ok((paths, next)) => Ok((
-                                    paths.mapped(|p| ModulePathBuf::from_path(Path::new(p))),
-                                    ModulePathBuf::from_path(Path::new(next)),
+                                    paths.mapped(|p| ModulePathBuf::new(db.root.join(p))),
+                                    ModulePathBuf::new(db.root.join(next)),
                                 )),
-                                Err(next) => Err(Path::new(next)),
+                                Err(next) => Err(db.root.join(next)),
                             },
                         )
                     })
@@ -1015,13 +1309,17 @@ mod tests {
         })
         .collect();
 
-        assert_eq!(result.0, expected_start_packages,);
+        assert_eq!(result.0, expected_start_packages);
 
         let expected_ancestor_synthesized_packages = smallmap! {
+            "//colorama:py-stubs" => smallmap! {
+                "colorama" => vec1![
+                        "colorama/__init__.pyi",
+                ],
+            },
             "//colorama:py" => smallmap! {
                 "colorama" => vec1![
                         "colorama/__init__.py",
-                        "colorama/__init__.pyi",
                 ],
             },
             "//click:py" => smallmap! {
@@ -1062,6 +1360,21 @@ mod tests {
                     "implicit_package/test",
                 ],
             },
+            "//external:package" => smallmap! {
+                "external_package" => vec1![
+                    "/path/to/another/repository/package/external_package",
+                ],
+            },
+            "//generated:main" => smallmap! {
+                "generated" => vec1![
+                    "generated",
+                ],
+            },
+            "//generated:lib" => smallmap! {
+                "generated" => vec1![
+                    "build-out/materialized/generated/__init__.py",
+                ],
+            }
         }
         .into_iter()
         .map(|(t, m)| {
@@ -1071,7 +1384,7 @@ mod tests {
                     .map(|(name, paths)| {
                         (
                             ModuleName::from_str(name),
-                            paths.mapped(|p| ModulePathBuf::from_path(Path::new(p))),
+                            paths.mapped(|p| ModulePathBuf::new(db.root.join(p))),
                         )
                     })
                     .collect(),
@@ -1079,6 +1392,6 @@ mod tests {
         })
         .collect();
 
-        assert_eq!(result.1, expected_ancestor_synthesized_packages,);
+        assert_eq!(result.1, expected_ancestor_synthesized_packages);
     }
 }

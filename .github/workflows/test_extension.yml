@@ -41,7 +41,7 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: alpine
             arch: arm64
-          - os: macos-13
+          - os: macos-14
             platform: darwin
             arch: x64
           - os: macos-14

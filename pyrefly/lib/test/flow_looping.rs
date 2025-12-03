@@ -71,6 +71,17 @@ def f(condition) -> None:
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1701
+testcase!(
+    test_while_condition_is_in_loop,
+    r#"
+def main():
+    q = 1
+    while q:
+        q -= 1
+    "#,
+);
+
 testcase!(
     bug = "A recursive redefinition in a loop produces a hard-to-follow error message + location",
     test_while_creates_recursive_type,
@@ -343,6 +354,18 @@ def test2(match: float) -> float:  # E: Function declared to return `float` but 
     "#,
 );
 
+testcase!(
+    test_for_with_reassign,
+    r#"
+from typing import assert_type, Literal
+for i in range((y := 10)):
+    assert_type(i, int)
+    assert_type(y, Literal[10] | str)
+    i = str()  # This doesn't actually flow back into the next iteration
+    y = str()  # But this does
+"#,
+);
+
 fn loop_export_env() -> TestEnv {
     TestEnv::one(
         "imported",
@@ -556,8 +579,8 @@ def f():
 "#,
 );
 
-// Regression test for https://github.com/facebook/pyrefly/issues/1234
 testcase!(
+    bug = "Single-shot analysis cannot handle this - see https://github.com/facebook/pyrefly/issues/1234",
     test_assign_result_of_call_back_to_argument,
     r#"
 class Cursor:
@@ -570,7 +593,7 @@ class Query:
 
 def test(q: Query) -> None:
     cursor = None
-    while not cursor or not cursor.finished():
+    while not cursor or not cursor.finished():  # E: `Cursor | None` is not assignable to `None` (caused by inconsistent types when breaking cycles)
         cursor = q.send(cursor)
 "#,
 );
@@ -591,20 +614,18 @@ else:
 
 // Test for https://github.com/facebook/pyrefly/issues/726
 testcase!(
-    bug = "Pyrefly currently pins the type too aggressively, resulting in a spurious error",
     test_reassign_literal_str_to_str_in_loop,
     r#"
 import os
 
 path = '/'
-for x in ['home', 'other']:  # E: `str` is not assignable to `LiteralString` (caused by inconsistent types when breaking cycles)
+for x in ['home', 'other']:
     path = os.path.join(path, x)
     "#,
 );
 
 // Test for https://github.com/facebook/pyrefly/issues/747
 testcase!(
-    bug = "Pyrefly currently fails to narrow a `Var` that is `LoopRecursive`",
     test_benign_reassign_and_narrow_in_loop,
     r#"
 from typing import assert_type
@@ -612,6 +633,66 @@ from typing import assert_type
 def test(x: int | None, i: int):
     for _ in []:
         x = x or i
-        assert_type(x, int)   # E: assert_type(int | None, int)
+        assert_type(x, int)
 "#,
+);
+
+testcase!(
+    test_expand_loop_recursive_and_match_generic,
+    r#"
+from typing import assert_type
+def f[T](x: list[T]) -> T: ...
+def condition() -> bool: ...
+
+good = [1]
+while condition():
+    good = [f(good)]
+assert_type(good, list[int])
+
+bad = [1]
+while condition():  # E: `list[int] | list[str]` is not assignable to `list[int]` (caused by inconsistent types when breaking cycles)
+    if condition():
+        bad = [f(bad)]  # E:  Argument `list[int] | list[str]` is not assignable to parameter `x` with type `list[int]` in function `f`
+    else:
+        bad = [""]
+"#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/1505
+testcase!(
+    test_dict_get_self_assignment,
+    r#"
+d: dict[str, str] = {}
+a: str | None = None
+for i in range(10):
+    a = d.get('x', a)
+    "#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/1453
+testcase!(
+    test_against_regression_on_1453,
+    r#"
+from math import gcd
+from typing import assert_type
+def remove_common(x: int, g: int) -> int:
+    while g > 1:
+        assert_type(g, int)
+        assert_type(x, int)
+        x //= g
+        g = gcd(g, x)
+        assert_type(g, int)
+    return x
+    "#,
+);
+
+// Test for https://github.com/facebook/pyrefly/issues/1453
+testcase!(
+    test_against_regression_on_1454,
+    r#"
+d: dict[str, str] = {}
+a: str | None = None
+for i in range(10):
+    a = d.get('x', a)
+    "#,
 );

@@ -59,7 +59,7 @@ class Medal(TextChoices):
 
 # Assertions for mixing multiple choices types with consistent base types - only `TextChoices`.
 x1 = (Medal, Gender)
-assert_type([member.label for choices in x1 for member in choices], list[str]) 
+assert_type([member.label for choices in x1 for member in choices], list[str])
 assert_type([member.value for choices in x1 for member in choices], list[str])
 "#,
 );
@@ -83,11 +83,11 @@ class VoidChoices(BaseEmptyChoices):
 
 assert_type(VoidChoices.names, list[str])
 assert_type(VoidChoices.labels, list[str])
-assert_type(VoidChoices.values, list[int | None]) 
-assert_type(VoidChoices.choices, list[tuple[int | None, str]]) 
+assert_type(VoidChoices.values, list[int | None])
+assert_type(VoidChoices.choices, list[tuple[int | None, str]])
 assert_type(VoidChoices.ABYSS, Literal[VoidChoices.ABYSS])
 assert_type(VoidChoices.ABYSS.name, Literal["ABYSS"])
-assert_type(VoidChoices.ABYSS.label, str) 
+assert_type(VoidChoices.ABYSS.label, str)
 assert_type(VoidChoices.ABYSS.value, int)
 assert_type(VoidChoices.ABYSS.do_not_call_in_templates, Literal[True])
 assert_type(VoidChoices.__empty__, str)
@@ -105,8 +105,12 @@ class Suit(Choices):
     DIAMOND = 1, _("Diamond")
     SPADE = "2", _("Spade")
 
-assert_type(Suit.DIAMOND._value_, tuple[Literal[1]] | tuple[Literal['2']])
-assert_type(Suit.DIAMOND.value, tuple[Literal[1]] | tuple[Literal['2']])
+def test(suit: Suit):
+    assert_type(suit._value_, tuple[Literal[1]] | tuple[Literal['2']])
+    assert_type(suit.value, tuple[Literal[1]] | tuple[Literal['2']])
+
+assert_type(Suit.DIAMOND._value_, tuple[Literal[1]])
+assert_type(Suit.DIAMOND.value, tuple[Literal[1]])
 assert_type(Suit.values, list[tuple[Literal[1]] | tuple[Literal['2']]])
 "#,
 );
@@ -200,8 +204,8 @@ class Medal(TextChoices):
     SILVER = enum.auto()
     BRONZE = enum.auto()
 
-assert_type(Medal.choices, list[tuple[str, str]]) 
-assert_type(Medal.GOLD.label, str) 
+assert_type(Medal.choices, list[tuple[str, str]])
+assert_type(Medal.GOLD.label, str)
 assert_type(Medal.GOLD.value, str)
 
 "#,
@@ -252,11 +256,11 @@ from django.utils.translation import gettext_lazy as _
 from typing_extensions import assert_type
 
 class VehicleWithEmpty(IntegerChoices):
-    CAR = 1, "Carriage"  
-    TRUCK = 2  
-    JET_SKI = 3  
+    CAR = 1, "Carriage"
+    TRUCK = 2
+    JET_SKI = 3
 
-    __empty__ = _("Unknown") 
+    __empty__ = _("Unknown")
 
 assert_type(VehicleWithEmpty.labels, list[_StrOrPromise])
 "#,
@@ -302,7 +306,7 @@ class Vehicle(IntegerChoices):
     CAR = 1
     __empty__ = _("Unknown")
 
-assert_type(Vehicle.__empty__, _StrPromise) 
+assert_type(Vehicle.__empty__, _StrPromise)
 "#,
 );
 

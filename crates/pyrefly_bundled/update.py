@@ -1,8 +1,14 @@
-#!/usr/bin/env python3
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
+
+# /// script
+# requires-python = "==3.12"
+# dependencies = [
+#   "docify",
+# ]
+# ///
 
 # pyre-strict
 
@@ -22,6 +28,8 @@ import shutil
 import tarfile
 import urllib.request
 from pathlib import Path
+
+from docify import run as run_docify
 
 LOG: logging.Logger = logging.getLogger(__name__)
 
@@ -169,6 +177,16 @@ def write_typeshed(output_path: Path, entries: list[TypeshedEntry]) -> None:
         file_path.write_bytes(entry.data)
 
 
+def add_docstrings(stubs_dir: Path) -> None:
+    LOG.info("Running `docify` for enriched docstrings...")
+    run_docify(
+        input_dirs=[str(stubs_dir)],
+        if_needed=True,
+        in_place=True,
+    )
+    pass
+
+
 def write_metadata(output_path: Path, metadata: FetchMetadata) -> None:
     output_path.write_text(
         json.dumps(
@@ -184,14 +202,18 @@ def write_metadata(output_path: Path, metadata: FetchMetadata) -> None:
     )
 
 
-def run(url: str, output_dir: Path) -> None:
+def run(url: str, output_dir: Path, enable_docify: bool) -> None:
     if not output_dir.exists():
         raise RuntimeError(f"Output path `{output_dir}` does not exist")
     if not output_dir.is_dir():
         raise RuntimeError(f"Output path `{output_dir}` is not a directory")
     typeshed_tarfile, metadata = fetch_as_tarfile(url)
     entries = trim_typeshed(typeshed_tarfile)
-    write_typeshed(output_dir / "typeshed", entries)
+    stubs_dir = output_dir / "typeshed"
+    write_typeshed(stubs_dir, entries)
+    if enable_docify:
+        # TODO(grievejia): Only docify stdlib for now
+        add_docstrings(stubs_dir / "stdlib")
     write_metadata(output_dir / "typeshed_metadata.json", metadata)
 
 
@@ -205,6 +227,12 @@ def main() -> None:
         help="The URL to download from. If not specified, the trunk files on the typeshed main branch will be used.",
     )
     parser.add_argument(
+        "--docify",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to run `docify` on the downloaded typeshed, which enriches the stub files with more docstrings. This flag is enabled by default.",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         type=Path,
@@ -213,10 +241,10 @@ def main() -> None:
     args = parser.parse_args()
     # @lint-ignore FIXIT1: OSS scripts cannot take on fb-internal dependency
     logging.basicConfig(
-        format="%(levelname)s %(asctime)s: %(message)s",
+        format="[%(levelname)-7s] [%(asctime)s] [%(name)s]: %(message)s",
         level=logging.INFO,
     )
-    run(get_typeshed_url(args.url), get_output_dir(args.output))
+    run(get_typeshed_url(args.url), get_output_dir(args.output), args.docify)
 
 
 if __name__ == "__main__":

@@ -6,11 +6,15 @@ from ctypes import Structure, Union
 class BigEndianStructure(Structure):
     __slots__ = ()
 
-class LittleEndianStructure(Structure): ...
+class LittleEndianStructure(Structure):
+    """Structure base class"""
+    ...
 
 # Same thing for these: one is an alias of Union at runtime
 if sys.version_info >= (3, 11):
     class BigEndianUnion(Union):
         __slots__ = ()
 
-    class LittleEndianUnion(Union): ...
+    class LittleEndianUnion(Union):
+        """Union base class"""
+        ...

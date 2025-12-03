@@ -11,6 +11,7 @@ use clap::Parser;
 use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::finder::ConfigFinder;
+use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
@@ -24,9 +25,9 @@ use crate::commands::files::FilesArgs;
 use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::ErrorKind;
+use crate::lsp::wasm::inlay_hints::ParameterAnnotation;
 use crate::state::ide::insert_import_edit_with_forced_import_format;
 use crate::state::lsp::AnnotationKind;
-use crate::state::lsp::ParameterAnnotation;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::types::class::Class;
@@ -197,7 +198,9 @@ fn hint_to_string(
     let hint = hint.promote_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
     let hint = match hint {
-        Type::Union(types) => unions_with_literals(types, stdlib, enum_members),
+        Type::Union(box Union { members: types, .. }) => {
+            unions_with_literals(types, stdlib, enum_members)
+        }
         _ => hint,
     };
     hint.to_string()
@@ -289,7 +292,7 @@ impl InferArgs {
                             if let Some(ast) = transaction.get_ast(&handle) {
                                 let error_range = error.range();
                                 let unknown_name = module_info.code_at(error_range);
-                                let imports: Vec<(TextSize, String)> = transaction
+                                let imports: Vec<(TextSize, String, String)> = transaction
                                     .search_exports_exact(unknown_name)
                                     .into_iter()
                                     .map(|handle_to_import_from| {
@@ -336,11 +339,11 @@ impl InferArgs {
 
     fn add_imports_to_file(
         file_path: &Path,
-        imports: Vec<(TextSize, String)>,
+        imports: Vec<(TextSize, String, String)>,
     ) -> anyhow::Result<()> {
         let file_content = fs_anyhow::read_to_string(file_path)?;
         let mut result = file_content;
-        for (position, import) in imports {
+        for (position, import, _) in imports {
             let offset = (position).into();
             if !result.contains(&import) {
                 result.insert_str(offset, &import);
@@ -609,12 +612,12 @@ def foo() -> str:
         assert_annotations(
             r#"
     def foo() -> None:
-        x = [] 
+        x = []
         x.append(1)
     "#,
             r#"
     def foo() -> None:
-        x: list[int] = [] 
+        x: list[int] = []
         x.append(1)
     "#,
             Some(flags),
@@ -733,7 +736,7 @@ def foo():
         "#;
         let file_two = r#"
         class ExampleA:
-            pass 
+            pass
         def get_a():
             return ExampleA()
         "#;
@@ -757,7 +760,7 @@ from file_two import get_a
         "#;
         let file_two = r#"
         class ExampleA:
-            pass 
+            pass
         class ExampleB:
             pass
         def get_a():

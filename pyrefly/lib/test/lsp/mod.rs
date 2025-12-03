@@ -9,14 +9,18 @@
 
 mod code_actions;
 mod completion;
+mod declaration;
 mod definition;
+mod diagnostic;
 mod document_symbols;
 mod folding_ranges;
 mod hover;
 mod hover_docstring;
 mod hover_type;
+mod implementation;
 mod inlay_hint;
 mod local_find_refs;
 mod lsp_interaction;
+mod rename;
 mod semantic_tokens;
 mod signature_help;

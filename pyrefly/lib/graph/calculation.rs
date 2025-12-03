@@ -140,20 +140,23 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
     /// the recursive placeholder, if this thread was the first to write and
     /// one was recorded (the caller, in some cases, may be responsible for
     /// recording a mapping between the placeholder and the final value).
-    pub fn record_value(&self, value: T) -> (T, Option<R>) {
+    pub fn record_value(&self, value: T, on_recursive: impl FnOnce(R, T) -> T) -> T {
         let mut lock = self.0.lock();
         match &mut *lock {
             Status::NotCalculated => {
                 unreachable!("Should not record a result before calculating")
             }
             Status::Calculating(box (rec, _)) => {
-                let rec = rec.take();
+                let value = match rec.take() {
+                    Some(r) => on_recursive(r, value),
+                    None => value,
+                };
                 *lock = Status::Calculated(value.dupe());
-                (value, rec)
+                value
             }
             Status::Calculated(v) => {
                 // The first thread to write a value wins
-                (v.dupe(), None)
+                v.dupe()
             }
         }
     }
@@ -169,7 +172,7 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
         match self.propose_calculation() {
             ProposalResult::Calculatable => {
                 let value = calculate();
-                let (value, _) = self.record_value(value);
+                let value = self.record_value(value, |_, v| v);
                 Some(value)
             }
             ProposalResult::Calculated(v) => Some(v.dupe()),

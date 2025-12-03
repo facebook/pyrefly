@@ -776,7 +776,6 @@ x2: Spam2[int, str] = int
 );
 
 testcase!(
-    bug = "there shouldn't be an error here",
     test_generic_typealias_of_scopedtypealias,
     r#"
 from typing import TypeAlias, TypeAliasType, TypeVar
@@ -788,7 +787,7 @@ type Spam1[T1, T2] = T2 | type[T1]
 Spam2: TypeAlias = Spam1[T1, T2]
 
 x1: Spam1[int, str] = int
-x2: Spam2[int, str] = int # E: `TypeAlias[Spam2, type[T2 | type[T1]]]` is not subscriptable
+x2: Spam2[int, str] = int
     "#,
 );
 
@@ -805,5 +804,73 @@ Spam2: TypeAlias = Spam1[T1, T2]
 
 x1: Spam1[int, str] = int
 x2: Spam2[int, str] = int
+    "#,
+);
+
+testcase!(
+    test_variable_in_function_is_not_type_alias,
+    r#"
+from typing import TypeVar, Generic
+class C:
+    @classmethod
+    def make(cls) -> C:
+        raise NotImplementedError()
+T = TypeVar("T", bound=C)
+class UseC(Generic[T]):
+    _class: type[T] | None
+    def use(self) -> None:
+        current = self._class # this is not a type alias
+        if current is not None:
+            current.make()
+    "#,
+);
+
+fn env_with_alias() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+type TA = int | str
+
+def f(x: TA) -> TA:
+  return x
+"#,
+    )
+}
+
+testcase!(
+    test_alias_union_name,
+    env_with_alias(),
+    r#"
+from foo import TA, f
+from typing import Callable
+
+val1: int | str = 1
+val2: TA = 1
+
+# Union names are only shown when nested in another type
+
+f(object())  # E: Argument `object` is not assignable to parameter `x` with type `int | str` in function `foo.f`
+f(val1)
+f(val2)
+x1: TA = object()  # E: `object` is not assignable to `int | str`
+x2: TA = val1
+x3: TA = val2
+c1: Callable[[int], int] = f  # E: `(x: TA) -> TA` is not assignable to `(int) -> int`
+
+# Union names are lost when flattened into another union
+
+class C: pass
+def f2(x: TA | C) -> TA | C:
+  return x
+
+f2(object())  # E: Argument `object` is not assignable to parameter `x` with type `C | int | str` in function `f2`
+f2(val1)
+f2(val2)
+f2(C())
+x4: TA | C = object()  # E: `object` is not assignable to `C | int | str`
+x5: TA | C = val1
+x6: TA | C = val2
+x7: TA | C = C()
+c2: Callable[[int], int] = f2  # E: `(x: C | int | str) -> C | int | str` is not assignable to `(int) -> int`
     "#,
 );

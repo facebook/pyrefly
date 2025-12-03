@@ -164,7 +164,12 @@ class Address:
     @property
     def domain(self) -> str: ...
     @property
-    def addr_spec(self) -> str: ...
+    def addr_spec(self) -> str:
+        """
+        The addr_spec (username@domain) portion of the address, quoted
+        according to RFC 5322 rules, but with no Content Transfer Encoding.
+        """
+        ...
     def __init__(
         self, display_name: str = "", username: str | None = "", domain: str | None = "", addr_spec: str | None = None
     ) -> None: ...

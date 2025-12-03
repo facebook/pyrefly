@@ -25,6 +25,41 @@ def baz(c: Coord) -> Mapping[str, str]:
 );
 
 testcase!(
+    bug = "Our handling of ClassVar and methods is fishy, and our error messages are not clear",
+    test_typed_dict_with_illegal_members,
+    r#"
+from typing import Any, TypedDict, ClassVar, assert_type
+# Although classmethods, classvars, and static methods do actually
+# work at runtime, type checkers seem to agree that these are not
+# permissible in typed dicts.
+class D(TypedDict):
+    cv: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict members
+    x: str = "x"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    z = "z"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    def f(self) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+        self.w = "w"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    @classmethod
+    def g(cls) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+        cls.u = "u"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    @staticmethod
+    def h(self) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+        ...
+def foo(d: D):
+    assert_type(d["cv"], int)
+    assert_type(d["x"], str)
+    assert_type(d["z"], Any)  # E: TypedDict `D` does not have key `z`
+    assert_type(d["f"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["g"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["h"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["w"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["u"], Any)  # E: TypedDict `D` does not have
+    assert_type(D.cv, int)
+    assert_type(D.g, Any)
+    assert_type(D.h, Any)
+    "#,
+);
+
+testcase!(
     test_typed_dict_kwargs_type,
     r#"
 from typing import assert_type, TypedDict, Unpack
@@ -43,8 +78,8 @@ testcase!(
     r#"
 from typing import TypedDict, Required, NotRequired, ReadOnly, ClassVar, Final
 class MyDict(TypedDict):
-    v: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict or NamedTuple members
-    w: Final[int]  # E: `Final` may not be used for TypedDict or NamedTuple members
+    v: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict members
+    w: Final[int]  # E: `Final` may not be used for TypedDict members
     x: NotRequired  # E: Expected a type argument for `NotRequired`
     y: Required  # E: Expected a type argument for `Required`
     z: ReadOnly  # E: Expected a type argument for `ReadOnly`
@@ -77,7 +112,7 @@ c4: Coord = {"x": 1, "y": "foo"}  # E: `Literal['foo']` is not assignable to Typ
 c5: Coord = {"x": 1}  # E: Missing required key `y` for TypedDict `Coord`
 c6: Coord = {"x": 1, **{"y": 2, **{"z": 3}}}
 d: dict[str, int] = {}
-c7: Coord = {"x": 1, **d}  # E: Unpacked `dict[str, int]` is not assignable to `Partial[Coord]`
+c7: Coord = {"x": 1, **d}  # E: Unpacked `dict[str, int]` is not assignable to `Coord`
 
 def foo(c: Coord) -> None:
     pass
@@ -250,16 +285,6 @@ class Coord[T](TypedDict):
 def foo(c: Coord[int]):
     x: int = c["x"]
     y: str = c["y"]  # E: `int` is not assignable to `str`
-    "#,
-);
-
-testcase!(
-    test_typed_dict_initialized_field,
-    r#"
-from typing import TypedDict
-class Coord(TypedDict):
-    x: int
-    y: int = 2  # E: TypedDict item `y` may not be initialized
     "#,
 );
 
@@ -469,7 +494,7 @@ td3 = TD3(a="str", f=5)
 td4 = TD4(a=42)
 td5 = TD5(a=100)
 
-td12 = td1 | td2 # E: `|` is not supported between `TypedDict[TD1]` and `TypedDict[TD2]`
+td12 = td1 | td2 # E: `|` is not supported between `TD1` and `TD2`
 td14 = td1 | td4
 assert_type(td14.get("a"), int)
 td13 = td1 | td3 # E:   No matching overload found for function `_typeshed._type_checker_internals.TypedDictFallback.__or__`
@@ -494,7 +519,7 @@ x |= y
 
 assert_type((x["a"]), int | str)
 
-x |= {} # E: Augmented assignment produces a value of type `dict[str, object]`, which is not assignable to `TypedDict[TD]`
+x |= {} # E: Augmented assignment produces a value of type `dict[str, object]`, which is not assignable to `TD`
 
 x: TD = {"a": 1, "b": 2}
 x.__ior__(y)
@@ -539,9 +564,9 @@ class Pair(TypedDict):
 
 def foo(a: Coord, b: Coord3D, c: Pair):
     coord: Coord = b
-    coord2: Coord3D = a  # E: `TypedDict[Coord]` is not assignable to `TypedDict[Coord3D]`
-    coord3: Coord = c  # E: `TypedDict[Pair]` is not assignable to `TypedDict[Coord]`
-    coord4: Pair = a  # E: `TypedDict[Coord]` is not assignable to `TypedDict[Pair]`
+    coord2: Coord3D = a  # E: `Coord` is not assignable to `Coord3D`
+    coord3: Coord = c  # E: `Pair` is not assignable to `Coord`
+    coord4: Pair = a  # E: `Coord` is not assignable to `Pair`
     "#,
 );
 
@@ -557,7 +582,7 @@ class TD2(TypedDict):
     a: ReadOnly[object]
 
 def foo(td: TD, td2: TD2) -> None:
-    td: TD = td2  # E: `TypedDict[TD2]` is not assignable to `TypedDict[TD]`
+    td: TD = td2  # E: `TD2` is not assignable to `TD`
     td2: TD2 = td
     "#,
 );
@@ -574,8 +599,8 @@ class CoordNotRequired(TypedDict):
     y: NotRequired[int]
 
 def foo(a: Coord, b: CoordNotRequired):
-    coord: Coord = b  # E: `TypedDict[CoordNotRequired]` is not assignable to `TypedDict[Coord]`
-    coord2: CoordNotRequired = a  # E: `TypedDict[Coord]` is not assignable to `TypedDict[CoordNotRequired]`
+    coord: Coord = b  # E: `CoordNotRequired` is not assignable to `Coord`
+    coord2: CoordNotRequired = a  # E: `Coord` is not assignable to `CoordNotRequired`
     "#,
 );
 
@@ -705,8 +730,8 @@ class TD3(TypedDict):
 
 def foo(td2: TD2, td3: TD3) -> None:
     t1: TD2 = td3  # OK
-    t2: TD = td2  # E: `TypedDict[TD2]` is not assignable to `TypedDict[TD]`
-    t3: TD = td3  # E: `TypedDict[TD3]` is not assignable to `TypedDict[TD]`
+    t2: TD = td2  # E: `TD2` is not assignable to `TD`
+    t3: TD = td3  # E: `TD3` is not assignable to `TD`
     "#,
 );
 
@@ -753,7 +778,7 @@ testcase!(
 from typing import TypedDict, NotRequired
 class D(TypedDict):
      x: int
-     y: int = 5  # E: TypedDict item `y` may not be initialized
+     y: int = 5  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
      z: NotRequired[int]
 # Default values are completely ignored in constructor behavior, so requiredness in `__init__` should be
 # determined entirely by whether the field is required in the resulting dict.
@@ -1411,7 +1436,7 @@ class C(TypedDict):
 a1: A = B()
 # Not allowed because `C` implicitly has extra_items `ReadOnly[object]`, and `object` is not
 # assignable to `int`.
-a2: A = C()  # E: `TypedDict[C]` is not assignable to `TypedDict[A]`
+a2: A = C()  # E: `C` is not assignable to `A`
     "#,
 );
 
@@ -1432,9 +1457,9 @@ class C(TypedDict, extra_items=int):
 
 td1: TDReadWrite = A(x=0)
 # not ok because `x` is required
-td2: TDReadWrite = B(x=0)  # E: `TypedDict[B]` is not assignable to `TypedDict[TDReadWrite]`
+td2: TDReadWrite = B(x=0)  # E: `B` is not assignable to `TDReadWrite`
 # not ok because `bool` is not consistent with `int`
-td3: TDReadWrite = C(x=True)  # E: `TypedDict[C]` is not assignable to `TypedDict[TDReadWrite]`
+td3: TDReadWrite = C(x=True)  # E: `C` is not assignable to `TDReadWrite`
 
 td4: TDReadOnly = A(x=0)
 td5: TDReadOnly = B(x=0)
@@ -1454,7 +1479,7 @@ class C(TypedDict, extra_items=str):
     pass
 a1: A = B()
 # Not ok because `str` is not assignable to `int`
-a2: A = C()  # E: `TypedDict[C]` is not assignable to `TypedDict[A]`
+a2: A = C()  # E: `C` is not assignable to `A`
     "#,
 );
 
@@ -1470,7 +1495,7 @@ class C(TypedDict, extra_items=bool):
     pass
 a1: A = B()
 # Not ok because `bool` is not consistent with `int`
-a2: A = C()  # E: `TypedDict[C]` is not assignable to `TypedDict[A]`
+a2: A = C()  # E: `C` is not assignable to `A`
     "#,
 );
 
@@ -1665,7 +1690,7 @@ from typing import Mapping, TypedDict
 class A(TypedDict, extra_items=int):
     x: str
 m1: Mapping[str, str | int] = A(x='')
-m2: Mapping[str, int] = A(x='')  # E: `TypedDict[A]` is not assignable to `Mapping[str, int]`
+m2: Mapping[str, int] = A(x='')  # E: `A` is not assignable to `Mapping[str, int]`
     "#,
 );
 
@@ -1689,7 +1714,7 @@ from typing import NotRequired, TypedDict
 class A(TypedDict, extra_items=bool):
     x: NotRequired[bool]
 d1: dict[str, bool] = A(x=True)
-d2: dict[str, int] = A(x=False)  # E: `TypedDict[A]` is not assignable to `dict[str, int]`
+d2: dict[str, int] = A(x=False)  # E: `A` is not assignable to `dict[str, int]`
     "#,
 );
 
@@ -1803,13 +1828,13 @@ testcase!(
     test_unpack_inherited_typeddict,
     r#"
 import typing_extensions as te
-    
+
 class InheritFromMe(te.TypedDict):
     foo: bool
-    
+
 class TestBadUnpackingError(InheritFromMe):
     bar: bool
-    
+
 unpack_this: InheritFromMe = {"foo": True}
 test1: TestBadUnpackingError = {"bar": True, **unpack_this}
 test2: TestBadUnpackingError = {"bar": True, "foo": True}
@@ -1833,11 +1858,11 @@ class B4(TypedDict, extra_items=str):
     x: int
 a: A = {'x': 0, 'y': ''}
 # not ok because B1 does not have key `y`
-b1: B1 = {'x': 0, **a}  # E: `TypedDict[A]` is not assignable to `Partial[B1]`
+b1: B1 = {'x': 0, **a}  # E: `A` is not assignable to `B1`
 # not ok because extra items in B2 must have type `int`, not `str`
-b2: B2 = {'x': 0, **a}  # E: `TypedDict[A]` is not assignable to `Partial[B2]`
+b2: B2 = {'x': 0, **a}  # E: `A` is not assignable to `B2`
 # not ok because extra items in B2 are read-only
-b3: B3 = {'x': 0, **a}  # E: `TypedDict[A]` is not assignable to `Partial[B3]`
+b3: B3 = {'x': 0, **a}  # E: `A` is not assignable to `B3`
 # ok, `y` in A and extra items in B2 both have type `str`
 b4: B4 = {'x': 0, **a}
     "#,
@@ -1877,7 +1902,7 @@ t2: Target = {'y': '', **closed}
 # Ok, `extra` has only extra items of the right type
 t3: Target = {'y': '', **extra}
 # Not ok, the extra items have the wrong type
-t4: Target = {'y': '', **extra_wrong_type}  # E: `TypedDict[ExtraWrongType]` is not assignable to `Partial[Target]`
+t4: Target = {'y': '', **extra_wrong_type}  # E: `ExtraWrongType` is not assignable to `Target`
     "#,
 );
 
@@ -1916,4 +1941,27 @@ def f(foo: Foo, k: Literal["bar", "baz"]):
     print(foo[k])
     foo[k] = 2
     "#,
+);
+
+testcase!(
+    test_recursive_functional_typeddict,
+    r#"
+from typing import NamedTuple, TypedDict, Optional
+ListNode = TypedDict('ListNode', {
+    'value': int,
+    'next': Optional['ListNode'],
+})
+"#,
+);
+
+testcase!(
+    test_defines_init,
+    r#"
+from typing import TypedDict, Any
+def any() -> Any: ...
+class D(TypedDict):
+    x: int
+    __init__ = any()  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+D(x=5)
+"#,
 );

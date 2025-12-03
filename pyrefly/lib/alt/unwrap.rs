@@ -23,7 +23,7 @@ use crate::types::types::Var;
 // Soft type hints are used for `e1 or e1` expressions.
 pub struct Hint<'a>(Type, Option<&'a ErrorCollector>);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct HintRef<'a, 'b>(&'b Type, Option<&'a ErrorCollector>);
 
 impl<'a> Hint<'a> {
@@ -352,11 +352,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Tuple::Unpacked(box (prefix, middle, suffix)) => {
                 let mut elements = prefix;
-                if let Type::Tuple(Tuple::Unbounded(unbounded_middle)) = middle {
-                    elements.push(*unbounded_middle);
-                } else {
-                    // We can't figure out the middle, fall back to `object`
-                    elements.push(self.stdlib.object().clone().to_type())
+                match middle {
+                    Type::Tuple(Tuple::Unbounded(unbounded_middle)) => {
+                        elements.push(*unbounded_middle);
+                    }
+                    Type::Quantified(q) if q.is_type_var_tuple() => {
+                        elements.push(Type::ElementOfTypeVarTuple(q))
+                    }
+                    _ => {
+                        // We can't figure out the middle, fall back to `object`
+                        elements.push(self.stdlib.object().clone().to_type())
+                    }
                 }
                 elements.extend(suffix);
                 self.stdlib.tuple(self.unions(elements))

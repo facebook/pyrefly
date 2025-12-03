@@ -33,6 +33,9 @@ from typing_extensions import Never, Self, TypeAlias, deprecated
 if sys.version_info >= (3, 13):
     from _ssl import HAS_PSK as HAS_PSK
 
+if sys.version_info >= (3, 14):
+    from _ssl import HAS_PHA as HAS_PHA
+
 if sys.version_info < (3, 12):
     from _ssl import RAND_pseudo_bytes as RAND_pseudo_bytes
 
@@ -301,7 +304,9 @@ class SSLSocket(socket.socket):
     server_hostname: str | None
     session: SSLSession | None
     @property
-    def session_reused(self) -> bool | None: ...
+    def session_reused(self) -> bool | None:
+        """Was the client session reused during handshake"""
+        ...
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
     def connect(self, addr: socket._Address) -> None: ...
     def connect_ex(self, addr: socket._Address) -> int: ...
@@ -395,11 +400,41 @@ class SSLContext(_SSLContext):
         cadata: str | ReadableBuffer | None = None,
     ) -> None: ...
     @overload
-    def get_ca_certs(self, binary_form: Literal[False] = False) -> list[_PeerCertRetDictType]: ...
+    def get_ca_certs(self, binary_form: Literal[False] = False) -> list[_PeerCertRetDictType]:
+        """
+        Returns a list of dicts with information of loaded CA certs.
+
+        If the optional argument is True, returns a DER-encoded copy of the CA
+        certificate.
+
+        NOTE: Certificates in a capath directory aren't loaded unless they have
+        been used at least once.
+        """
+        ...
     @overload
-    def get_ca_certs(self, binary_form: Literal[True]) -> list[bytes]: ...
+    def get_ca_certs(self, binary_form: Literal[True]) -> list[bytes]:
+        """
+        Returns a list of dicts with information of loaded CA certs.
+
+        If the optional argument is True, returns a DER-encoded copy of the CA
+        certificate.
+
+        NOTE: Certificates in a capath directory aren't loaded unless they have
+        been used at least once.
+        """
+        ...
     @overload
-    def get_ca_certs(self, binary_form: bool = False) -> Any: ...
+    def get_ca_certs(self, binary_form: bool = False) -> Any:
+        """
+        Returns a list of dicts with information of loaded CA certs.
+
+        If the optional argument is True, returns a DER-encoded copy of the CA
+        certificate.
+
+        NOTE: Certificates in a capath directory aren't loaded unless they have
+        been used at least once.
+        """
+        ...
     def get_ciphers(self) -> list[_Cipher]: ...
     def set_default_verify_paths(self) -> None: ...
     def set_ciphers(self, cipherlist: str, /) -> None: ...
@@ -472,12 +507,21 @@ _create_default_https_context = create_default_context
 class SSLObject:
     context: SSLContext
     @property
-    def server_side(self) -> bool: ...
+    def server_side(self) -> bool:
+        """Whether this is a server-side socket."""
+        ...
     @property
-    def server_hostname(self) -> str | None: ...
+    def server_hostname(self) -> str | None:
+        """
+        The currently set server hostname (for SNI), or ``None`` if no
+        server hostname is set.
+        """
+        ...
     session: SSLSession | None
     @property
-    def session_reused(self) -> bool: ...
+    def session_reused(self) -> bool:
+        """Was the client session reused during handshake"""
+        ...
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
     def read(self, len: int = 1024, buffer: bytearray | None = None) -> bytes: ...
     def write(self, data: ReadableBuffer) -> int: ...

@@ -142,7 +142,7 @@ impl ConfigFinder {
     /// Create a new ConfigFinder, but with a custom way to produce a result from a Python file.
     /// If the `before` function fails to produce a config, then the other methods will be used.
     /// The `before` function is not cached in any way.
-    fn new_custom(
+    pub fn new_custom(
         before: Box<
             dyn Fn(ModuleName, &ModulePath) -> anyhow::Result<Option<ArcId<ConfigFile>>>
                 + Send

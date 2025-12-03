@@ -45,7 +45,7 @@ export interface PyreflyState {
     setActiveFile: (filename: string) => void;
     getErrors: () => ReadonlyArray<PyreflyErrorMessage>;
     autoComplete: (line: number, column: number) => any;
-    gotoDefinition: (line: number, column: number) => any;
+    gotoDefinition: (line: number, column: number) => monaco.IRange[] | null;
     hover: (line: number, column: number) => any;
     inlayHint: () => any;
     semanticTokens: (range: any) => any;

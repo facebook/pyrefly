@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.0,!=1.10.0,!=1.10.1,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
@@ -20,7 +20,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 keywords = ["typechecker", "typechecking"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",

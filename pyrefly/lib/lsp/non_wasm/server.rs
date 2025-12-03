@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use dupe::Dupe;
 use dupe::OptionDupedExt;
@@ -24,6 +25,7 @@ use lsp_server::Message;
 use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
+use lsp_server::ResponseError;
 use lsp_types::CodeAction;
 use lsp_types::CodeActionKind;
 use lsp_types::CodeActionOptions;
@@ -37,6 +39,7 @@ use lsp_types::CompletionParams;
 use lsp_types::CompletionResponse;
 use lsp_types::ConfigurationItem;
 use lsp_types::ConfigurationParams;
+use lsp_types::DeclarationCapability;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticSeverity;
 use lsp_types::DiagnosticTag;
@@ -65,11 +68,16 @@ use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::HoverParams;
 use lsp_types::HoverProviderCapability;
+use lsp_types::ImplementationProviderCapability;
 use lsp_types::InitializeParams;
 use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
+use lsp_types::InlayHintLabelPart;
 use lsp_types::InlayHintParams;
 use lsp_types::Location;
+use lsp_types::NotebookCellSelector;
+use lsp_types::NotebookDocumentSyncOptions;
+use lsp_types::NotebookSelector;
 use lsp_types::NumberOrString;
 use lsp_types::OneOf;
 use lsp_types::Position;
@@ -93,6 +101,7 @@ use lsp_types::SemanticTokensRangeParams;
 use lsp_types::SemanticTokensRangeResult;
 use lsp_types::SemanticTokensResult;
 use lsp_types::SemanticTokensServerCapabilities;
+use lsp_types::ServerCapabilities;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
@@ -131,7 +140,11 @@ use lsp_types::request::DocumentDiagnosticRequest;
 use lsp_types::request::DocumentHighlightRequest;
 use lsp_types::request::DocumentSymbolRequest;
 use lsp_types::request::FoldingRangeRequest;
+use lsp_types::request::GotoDeclaration;
 use lsp_types::request::GotoDefinition;
+use lsp_types::request::GotoImplementation;
+use lsp_types::request::GotoImplementationParams;
+use lsp_types::request::GotoImplementationResponse;
 use lsp_types::request::GotoTypeDefinition;
 use lsp_types::request::GotoTypeDefinitionParams;
 use lsp_types::request::GotoTypeDefinitionResponse;
@@ -169,17 +182,19 @@ use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
-use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use tracing::error;
+use tracing::info;
 
 use crate::ModuleInfo;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::error::error::Error;
+use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::queue_source_db_rebuild_and_recheck;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
 use crate::lsp::non_wasm::lsp::apply_change_events;
@@ -191,11 +206,13 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
-use crate::lsp::non_wasm::module_helpers::to_real_path;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
+use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
+use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::unsaved_file_tracker::UnsavedFileTracker;
 use crate::lsp::non_wasm::will_rename_files::will_rename_files;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
@@ -206,10 +223,6 @@ use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocument;
 use crate::lsp::wasm::notebook::DidOpenNotebookDocument;
 use crate::lsp::wasm::notebook::DidSaveNotebookDocument;
-use crate::lsp::wasm::notebook::NotebookCellSelector;
-use crate::lsp::wasm::notebook::NotebookDocumentSelector;
-use crate::lsp::wasm::notebook::NotebookDocumentSyncOptions;
-use crate::lsp::wasm::notebook::NotebookDocumentSyncRegistrationOptions;
 use crate::lsp::wasm::provide_type::ProvideType;
 use crate::lsp::wasm::provide_type::ProvideTypeResponse;
 use crate::lsp::wasm::provide_type::provide_type;
@@ -217,17 +230,19 @@ use crate::state::load::LspFile;
 use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::ImportBehavior;
 use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::semantic_tokens::disabled_ranges_for_module;
+use crate::state::state::CancellableTransaction;
 use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum TypeErrorDisplayStatus {
+pub enum TypeErrorDisplayStatus {
     DisabledInIdeConfig,
     EnabledInIdeConfig,
     DisabledInConfigFile,
@@ -268,22 +283,6 @@ pub trait TspInterface {
     ) -> anyhow::Result<ProcessEvent>;
 }
 
-/// Until we upgrade lsp-types to 0.96 or newer, we'll need to patch in the notebook document
-/// sync capabilities
-#[derive(Debug, PartialEq, Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServerCapabilities {
-    #[serde(flatten)]
-    capabilities: lsp_types::ServerCapabilities,
-
-    /// Defines how notebook documents are synced.
-    ///
-    /// @since 3.17.0
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notebook_document_sync:
-        Option<OneOf<NotebookDocumentSyncOptions, NotebookDocumentSyncRegistrationOptions>>,
-}
-
 #[derive(Clone, Dupe)]
 struct ServerConnection(Arc<Connection>);
 
@@ -292,7 +291,7 @@ impl ServerConnection {
         if self.0.sender.send(msg).is_err() {
             // On error, we know the channel is closed.
             // https://docs.rs/crossbeam/latest/crossbeam/channel/struct.Sender.html#method.send
-            eprintln!("Connection closed.");
+            info!("Connection closed.");
         };
     }
 
@@ -342,6 +341,9 @@ pub struct Server {
     /// should be mapped through here in case they correspond to a cell.
     open_notebook_cells: Arc<RwLock<HashMap<Url, PathBuf>>>,
     open_files: Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
+    /// Tracks URIs (including virtual/untitled ones) to synthetic on-disk paths so we can
+    /// treat them like regular files throughout the server.
+    unsaved_file_tracker: UnsavedFileTracker,
     /// A set of configs where we have already indexed all the files within the config.
     indexed_configs: Mutex<HashSet<ArcId<ConfigFile>>>,
     /// A set of workspaces where we have already performed best-effort indexing.
@@ -377,8 +379,10 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
                             break;
                         }
                     }
-                    Err(_) => {
-                        return;
+                    Err(e) => {
+                        error!("Error handling shutdown: {:?}", e);
+                        // still exit in the case of error
+                        break;
                     }
                 }
                 if lsp_queue.send(LspEvent::LspRequest(x)).is_err() {
@@ -424,7 +428,7 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
                 } else if as_notification::<Exit>(&x).is_some() {
                     lsp_queue.send(LspEvent::Exit)
                 } else {
-                    eprintln!("Unhandled notification: {x:?}");
+                    info!("Unhandled notification: {x:?}");
                     Ok(())
                 };
                 if send_result.is_err() {
@@ -449,97 +453,95 @@ pub fn capabilities(
         .and_then(|c| c.augments_syntax_tokens)
         .unwrap_or(false);
     ServerCapabilities {
-        capabilities: lsp_types::ServerCapabilities {
-            position_encoding: Some(PositionEncodingKind::UTF16),
-            text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                TextDocumentSyncKind::INCREMENTAL,
-            )),
-            definition_provider: Some(OneOf::Left(true)),
-            type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
-            code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-                code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
-                ..Default::default()
-            })),
-            completion_provider: Some(CompletionOptions {
-                trigger_characters: Some(vec![".".to_owned()]),
-                ..Default::default()
-            }),
-            document_highlight_provider: Some(OneOf::Left(true)),
-            // Find references won't work properly if we don't know all the files.
-            references_provider: match indexing_mode {
-                IndexingMode::None => None,
-                IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
-                    Some(OneOf::Left(true))
-                }
-            },
-            rename_provider: match indexing_mode {
-                IndexingMode::None => None,
-                IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
-                    Some(OneOf::Right(RenameOptions {
-                        prepare_provider: Some(true),
-                        work_done_progress_options: Default::default(),
-                    }))
-                }
-            },
-            signature_help_provider: Some(SignatureHelpOptions {
-                trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
-                ..Default::default()
-            }),
-            hover_provider: Some(HoverProviderCapability::Simple(true)),
-            inlay_hint_provider: Some(OneOf::Left(true)),
-            document_symbol_provider: Some(OneOf::Left(true)),
-            workspace_symbol_provider: Some(OneOf::Left(true)),
-            folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
-            semantic_tokens_provider: if augments_syntax_tokens {
-                // We currently only return partial tokens (e.g. no tokens for keywords right now).
-                // If the client doesn't support `augments_syntax_tokens` to fallback baseline
-                // syntax highlighting for tokens we don't provide, it will be a regression
-                // (e.g. users might lose keyword highlighting).
-                // Therefore, we should not produce semantic tokens if the client doesn't support `augments_syntax_tokens`.
-                Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
-                    SemanticTokensOptions {
-                        legend: SemanticTokensLegends::lsp_semantic_token_legends(),
-                        full: Some(SemanticTokensFullOptions::Bool(true)),
-                        range: Some(true),
-                        ..Default::default()
-                    },
-                ))
-            } else {
-                None
-            },
-            workspace: Some(WorkspaceServerCapabilities {
-                workspace_folders: Some(WorkspaceFoldersServerCapabilities {
-                    supported: Some(true),
-                    change_notifications: Some(OneOf::Left(true)),
-                }),
-                file_operations: Some(lsp_types::WorkspaceFileOperationsServerCapabilities {
-                    will_rename: Some(lsp_types::FileOperationRegistrationOptions {
-                        filters: vec![lsp_types::FileOperationFilter {
-                            pattern: lsp_types::FileOperationPattern {
-                                glob: "**/*.{py,pyi}".to_owned(),
-
-                                matches: Some(lsp_types::FileOperationPatternKind::File),
-                                options: None,
-                            },
-                            scheme: Some("file".to_owned()),
-                        }],
-                    }),
-                    ..Default::default()
-                }),
-            }),
+        position_encoding: Some(PositionEncodingKind::UTF16),
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(
+            TextDocumentSyncKind::INCREMENTAL,
+        )),
+        definition_provider: Some(OneOf::Left(true)),
+        declaration_provider: Some(DeclarationCapability::Simple(true)),
+        type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
+        implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
             ..Default::default()
+        })),
+        completion_provider: Some(CompletionOptions {
+            trigger_characters: Some(vec![".".to_owned(), "'".to_owned(), "\"".to_owned()]),
+            ..Default::default()
+        }),
+        document_highlight_provider: Some(OneOf::Left(true)),
+        // Find references won't work properly if we don't know all the files.
+        references_provider: match indexing_mode {
+            IndexingMode::None => None,
+            IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
+                Some(OneOf::Left(true))
+            }
         },
+        rename_provider: match indexing_mode {
+            IndexingMode::None => None,
+            IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
+                Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                }))
+            }
+        },
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
+            ..Default::default()
+        }),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        inlay_hint_provider: Some(OneOf::Left(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        semantic_tokens_provider: if augments_syntax_tokens {
+            // We currently only return partial tokens (e.g. no tokens for keywords right now).
+            // If the client doesn't support `augments_syntax_tokens` to fallback baseline
+            // syntax highlighting for tokens we don't provide, it will be a regression
+            // (e.g. users might lose keyword highlighting).
+            // Therefore, we should not produce semantic tokens if the client doesn't support `augments_syntax_tokens`.
+            Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
+                SemanticTokensOptions {
+                    legend: SemanticTokensLegends::lsp_semantic_token_legends(),
+                    full: Some(SemanticTokensFullOptions::Bool(true)),
+                    range: Some(true),
+                    ..Default::default()
+                },
+            ))
+        } else {
+            None
+        },
+        workspace: Some(WorkspaceServerCapabilities {
+            workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                supported: Some(true),
+                change_notifications: Some(OneOf::Left(true)),
+            }),
+            file_operations: Some(lsp_types::WorkspaceFileOperationsServerCapabilities {
+                will_rename: Some(lsp_types::FileOperationRegistrationOptions {
+                    filters: vec![lsp_types::FileOperationFilter {
+                        pattern: lsp_types::FileOperationPattern {
+                            glob: "**/*.{py,pyi}".to_owned(),
+
+                            matches: Some(lsp_types::FileOperationPatternKind::File),
+                            options: None,
+                        },
+                        scheme: Some("file".to_owned()),
+                    }],
+                }),
+                ..Default::default()
+            }),
+        }),
         notebook_document_sync: Some(OneOf::Left(NotebookDocumentSyncOptions {
-            // If a selector provides no notebook document filter but only a cell selector,
-            // all notebook documents that contain at least one matching cell will be synced.
-            notebook_selector: vec![NotebookDocumentSelector {
+            notebook_selector: vec![NotebookSelector::ByCells {
                 notebook: None,
-                cells: Some(vec![NotebookCellSelector {
+                cells: vec![NotebookCellSelector {
                     language: "python".into(),
-                }]),
+                }],
             }],
             save: None,
         })),
+        ..Default::default()
     }
 }
 
@@ -556,7 +558,7 @@ pub fn lsp_loop(
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
 ) -> anyhow::Result<()> {
-    eprintln!("Reading messages");
+    info!("Reading messages");
     let connection_for_dispatcher = connection.dupe();
     let lsp_queue = LspQueue::new();
     let server = Server::new(
@@ -584,18 +586,31 @@ pub fn lsp_loop(
     });
     let mut ide_transaction_manager = TransactionManager::default();
     let mut canceled_requests = HashSet::new();
-    while let Ok((subsequent_mutation, event)) = lsp_queue.recv() {
+    while let Ok((subsequent_mutation, event, queue_time)) = lsp_queue.recv() {
+        let queue_duration = queue_time.elapsed().as_secs_f32();
+        let process_start = Instant::now();
+        let event_description = event.describe();
         match server.process_event(
             &mut ide_transaction_manager,
             &mut canceled_requests,
             subsequent_mutation,
             event,
-        )? {
-            ProcessEvent::Continue => {}
-            ProcessEvent::Exit => break,
+        ) {
+            Ok(ProcessEvent::Continue) => {
+                let process_duration = process_start.elapsed().as_secs_f32();
+                info!(
+                    "Language server processed event `{}` in {:.2}s ({:.2}s waiting)",
+                    event_description, process_duration, queue_duration
+                );
+            }
+            Ok(ProcessEvent::Exit) => break,
+            Err(e) => {
+                // Log the error and continue processing the next event
+                error!("Error processing event `{}`: {:?}", event_description, e);
+            }
         }
     }
-    eprintln!("waiting for connection to close");
+    info!("waiting for connection to close");
     server.recheck_queue.stop();
     server.find_reference_queue.stop();
     server.sourcedb_queue.stop();
@@ -605,6 +620,17 @@ pub fn lsp_loop(
 
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
+
+    fn path_for_uri(&self, uri: &Url) -> Option<PathBuf> {
+        if let Ok(path) = uri.to_file_path() {
+            return Some(path);
+        }
+        if let Some(path) = self.unsaved_file_tracker.path_for_uri(uri) {
+            return Some(path);
+        }
+        info!("Could not convert uri to filepath: {}", uri);
+        None
+    }
 
     fn extract_request_params_or_send_err_response<T>(
         &self,
@@ -646,7 +672,7 @@ impl Server {
                 self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
             }
             LspEvent::CancelRequest(id) => {
-                eprintln!("We should cancel request {id:?}");
+                info!("We should cancel request {id:?}");
                 if let Some(cancellation_handle) = self.cancellation_handles.lock().remove(&id) {
                     cancellation_handle.cancel();
                 }
@@ -664,12 +690,16 @@ impl Server {
                 }
             }
             LspEvent::DidOpenTextDocument(params) => {
-                let contents = Arc::new(LspFile::from_source(params.text_document.text));
+                let lsp_types::DidOpenTextDocumentParams { text_document } = params;
+                let lsp_types::TextDocumentItem {
+                    uri, version, text, ..
+                } = text_document;
+                let contents = Arc::new(LspFile::from_source(text));
                 self.did_open(
                     ide_transaction_manager,
                     subsequent_mutation,
-                    params.text_document.uri,
-                    params.text_document.version,
+                    uri,
+                    version,
                     contents,
                 )?;
             }
@@ -697,9 +727,12 @@ impl Server {
                     .collect();
                 let ruff_notebook = params.notebook_document.to_ruff_notebook(&cell_contents)?;
                 let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
-                let notebook_path = url
-                    .to_file_path()
-                    .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
+                let notebook_path = url.to_file_path().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Could not convert uri to filepath: {}, expected a notebook",
+                        url
+                    )
+                })?;
                 for cell_url in lsp_notebook.cell_urls() {
                     self.open_notebook_cells
                         .write()
@@ -743,7 +776,7 @@ impl Server {
                         self.workspace_configuration_response(&request, &response);
                     }
                 } else {
-                    eprintln!("Response for unknown request: {x:?}");
+                    info!("Response for unknown request: {x:?}");
                 }
             }
             LspEvent::LspRequest(x) => {
@@ -765,7 +798,7 @@ impl Server {
                             "subsequent mutation"
                         }
                     );
-                    eprintln!("{message}");
+                    info!("{message}");
                     self.send_response(Response::new_err(
                         x.id,
                         ErrorCode::RequestCanceled as i32,
@@ -774,18 +807,22 @@ impl Server {
                     return Ok(ProcessEvent::Continue);
                 }
 
-                if subsequent_mutation {
-                    // We probably didn't bother completing a previous check, but we are now answering a query that
-                    // really needs a previous check to be correct.
-                    // Validating sends out notifications, which isn't required, but this is the safest way.
-                    eprintln!(
-                        "Request {} ({}) has subsequent mutation, prepare to validate open files.",
-                        x.method, x.id,
-                    );
-                    self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
-                }
+                let mut transaction =
+                    ide_transaction_manager.non_committable_transaction(&self.state);
 
-                eprintln!("Handling non-canceled request {} ({})", x.method, &x.id);
+                // As an over-approximation, validate open files. This request might be based on a transaction where we
+                // skipped this step due to a subsequent mutation. We might also have a stale saved state, which we needed
+                // to throw away because the underlying state has since changed.
+                //
+                // Validating in-memory files is relatively cheap, since we only actually recheck open files which have
+                // changed file contents, so it's simpler to just always do it.
+                Self::validate_in_memory_for_transaction(
+                    &self.state,
+                    &self.open_files,
+                    &mut transaction,
+                );
+
+                info!("Handling non-canceled request {} ({})", x.method, &x.id);
                 if let Some(params) = as_request::<GotoDefinition>(&x) {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<GotoDefinition>(
@@ -793,15 +830,26 @@ impl Server {
                         )
                     {
                         let default_response = GotoDefinitionResponse::Array(Vec::new());
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self
                                 .goto_definition(&transaction, params)
                                 .unwrap_or(default_response)),
                         ));
-                        ide_transaction_manager.save(transaction);
+                    }
+                } else if let Some(params) = as_request::<GotoDeclaration>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<GotoDeclaration>(
+                            params, &x.id,
+                        )
+                    {
+                        let default_response = GotoDefinitionResponse::Array(Vec::new());
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self
+                                .goto_declaration(&transaction, params)
+                                .unwrap_or(default_response)),
+                        ));
                     }
                 } else if let Some(params) = as_request::<GotoTypeDefinition>(&x) {
                     if let Some(params) = self
@@ -810,15 +858,20 @@ impl Server {
                         )
                     {
                         let default_response = GotoTypeDefinitionResponse::Array(Vec::new());
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self
                                 .goto_type_definition(&transaction, params)
                                 .unwrap_or(default_response)),
                         ));
-                        ide_transaction_manager.save(transaction);
+                    }
+                } else if let Some(params) = as_request::<GotoImplementation>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<GotoImplementation>(
+                            params, &x.id,
+                        )
+                    {
+                        self.async_go_to_implementations(x.id, &transaction, params);
                     }
                 } else if let Some(params) = as_request::<CodeActionRequest>(&x) {
                     if let Some(params) = self
@@ -826,25 +879,19 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.code_action(&transaction, params).unwrap_or_default()),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<Completion>(&x) {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<Completion>(params, &x.id)
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             self.completion(&transaction, params),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<DocumentHighlightRequest>(&x) {
                     if let Some(params) = self
@@ -852,13 +899,10 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.document_highlight(&transaction, params)),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<References>(&x) {
                     if let Some(params) = self
@@ -868,8 +912,12 @@ impl Server {
                             .read()
                             .contains_key(&params.text_document_position.text_document.uri)
                     {
+                        self.references(x.id, &transaction, params);
+                    } else {
                         // TODO(yangdanny) handle notebooks
-                        self.references(x.id, ide_transaction_manager, params);
+                        let locations: Vec<Location> = Vec::new();
+                        self.connection
+                            .send(Message::Response(new_response(x.id, Ok(Some(locations)))));
                     }
                 } else if let Some(params) = as_request::<PrepareRenameRequest>(&x) {
                     if let Some(params) = self
@@ -877,13 +925,10 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.prepare_rename(&transaction, params)),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<Rename>(&x) {
                     if let Some(params) =
@@ -894,7 +939,23 @@ impl Server {
                             .contains_key(&params.text_document_position.text_document.uri)
                     {
                         // TODO(yangdanny) handle notebooks
-                        self.rename(x.id, ide_transaction_manager, params);
+                        // First check if rename is allowed via prepare_rename. If a rename is not allowed we
+                        // send back an error. Otherwise we continue with the rename operation.
+                        if let Some(_range) =
+                            self.prepare_rename(&transaction, params.text_document_position.clone())
+                        {
+                            self.rename(x.id, &transaction, params);
+                        } else {
+                            self.send_response(Response {
+                                id: x.id,
+                                result: None,
+                                error: Some(ResponseError {
+                                    code: ErrorCode::InvalidRequest as i32,
+                                    message: "Third-party symbols cannot be renamed".to_owned(),
+                                    data: None,
+                                }),
+                            });
+                        }
                     }
                 } else if let Some(params) = as_request::<SignatureHelpRequest>(&x) {
                     if let Some(params) = self
@@ -902,13 +963,10 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.signature_help(&transaction, params)),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<HoverRequest>(&x) {
                     if let Some(params) = self
@@ -918,13 +976,10 @@ impl Server {
                             contents: HoverContents::Array(Vec::new()),
                             range: None,
                         };
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.hover(&transaction, params).unwrap_or(default_response)),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<InlayHintRequest>(&x) {
                     if let Some(params) = self
@@ -932,13 +987,10 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.inlay_hints(&transaction, params).unwrap_or_default()),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<SemanticTokensFullRequest>(&x) {
                     if let Some(params) = self
@@ -950,15 +1002,12 @@ impl Server {
                             result_id: None,
                             data: Vec::new(),
                         });
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self
                                 .semantic_tokens_full(&transaction, params)
                                 .unwrap_or(default_response)),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<SemanticTokensRangeRequest>(&x) {
                     if let Some(params) = self
@@ -970,15 +1019,12 @@ impl Server {
                             result_id: None,
                             data: Vec::new(),
                         });
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self
                                 .semantic_tokens_ranged(&transaction, params)
                                 .unwrap_or(default_response)),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<DocumentSymbolRequest>(&x) {
                     if let Some(params) = self
@@ -986,8 +1032,6 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(DocumentSymbolResponse::Nested(
@@ -995,7 +1039,6 @@ impl Server {
                                     .unwrap_or_default(),
                             )),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<WorkspaceSymbolRequest>(&x) {
                     if let Some(params) = self
@@ -1003,15 +1046,12 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(WorkspaceSymbolResponse::Flat(
                                 self.workspace_symbols(&transaction, &params.query),
                             )),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<DocumentDiagnosticRequest>(&x) {
                     if let Some(params) = self
@@ -1019,30 +1059,19 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        eprintln!(
-                            "Received document diagnostic request {} ({}), prepare to validate open files.",
-                            x.method, x.id,
-                        );
-                        self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.document_diagnostics(&transaction, params)),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<ProvideType>(&x) {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<ProvideType>(params, &x.id)
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.provide_type(&transaction, params)),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<WillRenameFiles>(&x) {
                     if let Some(params) = self
@@ -1050,8 +1079,6 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         let supports_document_changes = self
                             .initialize_params
                             .capabilities
@@ -1068,7 +1095,6 @@ impl Server {
                                 supports_document_changes,
                             )),
                         ));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if let Some(params) = as_request::<FoldingRangeRequest>(&x) {
                     if let Some(params) = self
@@ -1076,36 +1102,34 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let transaction =
-                            ide_transaction_manager.non_committable_transaction(&self.state);
                         let result = self
                             .folding_ranges(&transaction, params)
                             .unwrap_or_default();
                         self.send_response(new_response(x.id, Ok(result)));
-                        ide_transaction_manager.save(transaction);
                     }
                 } else if &x.method == "pyrefly/textDocument/docstringRanges" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
-                    let transaction =
-                        ide_transaction_manager.non_committable_transaction(&self.state);
                     let ranges = self
                         .docstring_ranges(&transaction, &text_document)
                         .unwrap_or_default();
                     self.send_response(new_response(x.id, Ok(ranges)));
-                    ide_transaction_manager.save(transaction);
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
-                    if self
+                    if !self
                         .open_notebook_cells
                         .read()
                         .contains_key(&text_document.uri)
+                        && let Some(path) = self.path_for_uri(&text_document.uri)
                     {
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.type_error_display_status(path.as_path())),
+                        ));
+                    } else {
                         // TODO(yangdanny): handle notebooks
                         self.send_response(new_response(
                             x.id,
-                            Ok(self.type_error_display_status(
-                                text_document.uri.to_file_path().unwrap().as_path(),
-                            )),
+                            Ok(TypeErrorDisplayStatus::DisabledDueToMissingConfigFile),
                         ));
                     }
                 } else {
@@ -1114,8 +1138,9 @@ impl Server {
                         ErrorCode::MethodNotFound as i32,
                         format!("Unknown request: {}", x.method),
                     ));
-                    eprintln!("Unhandled request: {x:?}");
+                    info!("Unhandled request: {x:?}");
                 }
+                ide_transaction_manager.save(transaction);
             }
         }
         Ok(ProcessEvent::Continue)
@@ -1134,7 +1159,7 @@ impl Server {
         {
             folders
                 .iter()
-                .map(|x| x.uri.to_file_path().unwrap())
+                .filter_map(|x| x.uri.to_file_path().ok())
                 .collect()
         } else {
             Vec::new()
@@ -1146,9 +1171,9 @@ impl Server {
         let s = Self {
             connection: ServerConnection(connection),
             lsp_queue,
-            recheck_queue: HeavyTaskQueue::new(),
-            find_reference_queue: HeavyTaskQueue::new(),
-            sourcedb_queue: HeavyTaskQueue::new(),
+            recheck_queue: HeavyTaskQueue::new("recheck_queue"),
+            find_reference_queue: HeavyTaskQueue::new("find_reference_queue"),
+            sourcedb_queue: HeavyTaskQueue::new("sourcedb_queue"),
             invalidated_configs: Arc::new(Mutex::new(SmallSet::new())),
             initialize_params,
             indexing_mode,
@@ -1156,6 +1181,7 @@ impl Server {
             state: Arc::new(State::new(config_finder)),
             open_notebook_cells: Arc::new(RwLock::new(HashMap::new())),
             open_files: Arc::new(RwLock::new(HashMap::new())),
+            unsaved_file_tracker: UnsavedFileTracker::new(),
             indexed_configs: Mutex::new(HashSet::new()),
             indexed_workspaces: Mutex::new(HashSet::new()),
             cancellation_handles: Arc::new(Mutex::new(HashMap::new())),
@@ -1165,6 +1191,22 @@ impl Server {
             filewatcher_registered: AtomicBool::new(false),
             version_info: Mutex::new(HashMap::new()),
         };
+
+        if let Some(init_options) = &s.initialize_params.initialization_options {
+            let mut modified = false;
+            s.workspaces
+                .apply_client_configuration(&mut modified, &None, init_options.clone());
+            if let Some(workspace_folders) = &s.initialize_params.workspace_folders {
+                for folder in workspace_folders {
+                    s.workspaces.apply_client_configuration(
+                        &mut modified,
+                        &Some(folder.uri.clone()),
+                        init_options.clone(),
+                    );
+                }
+            }
+        }
+
         s.setup_file_watcher_if_necessary();
         s.request_settings_for_all_workspaces();
         s
@@ -1210,16 +1252,6 @@ impl Server {
         handles
     }
 
-    #[allow(dead_code)]
-    fn is_python_stdlib_file(&self, path: &Path, stdlib_paths: &[PathBuf]) -> bool {
-        for stdlib_path in stdlib_paths {
-            if path.starts_with(stdlib_path) {
-                return true;
-            }
-        }
-        false
-    }
-
     fn get_diag_if_shown(
         &self,
         e: &Error,
@@ -1233,12 +1265,20 @@ impl Server {
                 .state
                 .config_finder()
                 .python_file(ModuleName::unknown(), e.path());
+
+            let type_error_status = self.type_error_display_status(e.path().as_path());
+
+            let should_show_stdlib_error =
+                should_show_stdlib_error(&config, type_error_status, &path);
+
+            if is_python_stdlib_file(&path) && !should_show_stdlib_error {
+                return None;
+            }
+
             if let Some(lsp_file) = open_files.get(&path)
                 && config.project_includes.covers(&path)
                 && !config.project_excludes.covers(&path)
-                && self
-                    .type_error_display_status(e.path().as_path())
-                    .is_enabled()
+                && type_error_status.is_enabled()
             {
                 return match &**lsp_file {
                     LspFile::Notebook(notebook) => {
@@ -1328,6 +1368,29 @@ impl Server {
         );
     }
 
+    fn supports_completion_item_details(&self) -> bool {
+        self.initialize_params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|t| t.completion.as_ref())
+            .and_then(|c| c.completion_item.as_ref())
+            .and_then(|ci| ci.label_details_support)
+            .unwrap_or(false)
+    }
+
+    /// Helper to append all additional diagnostics (unreachable, unused parameters/imports/variables)
+    fn append_ide_specific_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        Self::append_unreachable_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_parameter_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_import_diagnostics(transaction, handle, diagnostics);
+        Self::append_unused_variable_diagnostics(transaction, handle, diagnostics);
+    }
+
     /// Validate open files and send errors to the LSP. In the case of an ongoing recheck
     /// (i.e., another transaction is already being committed or the state is locked for writing),
     /// we still update diagnostics using a non-committable transaction, which may have slightly stale
@@ -1368,7 +1431,7 @@ impl Server {
                     continue;
                 }
                 let handle = make_open_handle(&self.state, path);
-                Self::append_unreachable_diagnostics(transaction, &handle, diagnostics);
+                Self::append_ide_specific_diagnostics(transaction, &handle, diagnostics);
             }
             self.connection
                 .publish_diagnostics(diags, notebook_cell_urls);
@@ -1392,7 +1455,7 @@ impl Server {
                 // Therefore, we can compute errors from transactions freshly created from `State``.
                 let transaction = self.state.transaction();
                 publish(&transaction);
-                eprintln!("Validated open files and committed transaction.");
+                info!("Validated open files and committed transaction.");
             }
             Err(transaction) => {
                 // In the case where transaction cannot be committed because there is an ongoing
@@ -1402,7 +1465,7 @@ impl Server {
                 // Note: if this changes, update this function's docstring.
                 publish(&transaction);
                 ide_transaction_manager.save(transaction);
-                eprintln!("Validated open files and saved non-committable transaction.");
+                info!("Validated open files and saved non-committable transaction.");
             }
         }
         queue_source_db_rebuild_and_recheck(
@@ -1515,7 +1578,7 @@ impl Server {
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
-            eprintln!("Invalidated state, prepare to recheck open files.");
+            info!("Invalidated state, prepare to recheck open files.");
             let _ = lsp_queue.send(LspEvent::RecheckFinished);
         }));
     }
@@ -1531,7 +1594,7 @@ impl Server {
     ) {
         let unknown = ModuleName::unknown();
 
-        eprintln!("Populating all files in the config ({:?}).", config.source);
+        info!("Populating all files in the config ({:?}).", config.source);
         let mut transaction = state.new_committable_transaction(Require::indexing(), None);
 
         let project_path_blobs = config.get_filtered_globs(None);
@@ -1546,13 +1609,13 @@ impl Server {
             handles.push(handle_from_module_path(&state, module_path));
         }
 
-        eprintln!("Prepare to check {} files.", handles.len());
+        info!("Prepare to check {} files.", handles.len());
         transaction.as_mut().run(&handles, Require::indexing());
         state.commit_transaction(transaction);
         // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
         // the main event loop of the server. As a result, the server can do a revalidation of
         // all the in-memory files based on the fresh main State as soon as possible.
-        eprintln!("Populated all files in the project path, prepare to recheck open files.");
+        info!("Populated all files in the project path, prepare to recheck open files.");
         let _ = lsp_queue.send(LspEvent::RecheckFinished);
     }
 
@@ -1563,7 +1626,7 @@ impl Server {
         lsp_queue: LspQueue,
     ) {
         for workspace_root in workspace_roots {
-            eprintln!(
+            info!(
                 "Populating up to {workspace_indexing_limit} files in the workspace ({workspace_root:?}).",
             );
             let mut transaction = state.new_committable_transaction(Require::indexing(), None);
@@ -1582,20 +1645,21 @@ impl Server {
                 ));
             }
 
-            eprintln!("Prepare to check {} files.", handles.len());
+            info!("Prepare to check {} files.", handles.len());
             transaction.as_mut().run(&handles, Require::indexing());
             state.commit_transaction(transaction);
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
-            eprintln!("Populated all files in the workspace, prepare to recheck open files.");
+            info!("Populated all files in the workspace, prepare to recheck open files.");
             let _ = lsp_queue.send(LspEvent::RecheckFinished);
         }
     }
 
     fn did_save(&self, url: Url) {
-        let file = url.to_file_path().unwrap();
-        self.invalidate(move |t| t.invalidate_disk(&[file]));
+        if let Some(path) = self.path_for_uri(&url) {
+            self.invalidate(move |t| t.invalidate_disk(&[path]))
+        }
     }
 
     fn did_open<'a>(
@@ -1606,18 +1670,29 @@ impl Server {
         version: i32,
         contents: Arc<LspFile>,
     ) -> anyhow::Result<()> {
-        let uri = url
+        let path = url
             .to_file_path()
-            .map_err(|_| anyhow::anyhow!("Could not convert uri to filepath: {}", url))?;
+            .or_else(|_| {
+                if url.scheme() == "untitled" {
+                    Ok(self
+                        .unsaved_file_tracker
+                        .ensure_path_for_open(&url, "python"))
+                } else {
+                    Err(())
+                }
+            })
+            .map_err(|_| {
+                anyhow::anyhow!("Could not convert uri to filepath for didOpen: {}", url)
+            })?;
         let config_to_populate_files = if self.indexing_mode != IndexingMode::None
-            && let Some(directory) = uri.as_path().parent()
+            && let Some(directory) = path.as_path().parent()
         {
             self.state.config_finder().directory(directory)
         } else {
             None
         };
-        self.version_info.lock().insert(uri.clone(), version);
-        self.open_files.write().insert(uri.clone(), contents);
+        self.version_info.lock().insert(path.clone(), version);
+        self.open_files.write().insert(path.clone(), contents);
         if !subsequent_mutation {
             // In order to improve perceived startup perf, when a file is opened, we run a
             // non-committing transaction that indexes the file with default require level Exports.
@@ -1629,9 +1704,9 @@ impl Server {
             //
             // Note that this trick works only when a pyrefly config file is present. In the absence
             // of a config file, all features become available when background indexing completes.
-            eprintln!(
+            info!(
                 "File {} opened, prepare to validate open files.",
-                uri.display()
+                path.display()
             );
             self.validate_in_memory_without_committing(ide_transaction_manager);
         }
@@ -1649,7 +1724,11 @@ impl Server {
         params: DidChangeTextDocumentParams,
     ) -> anyhow::Result<()> {
         let VersionedTextDocumentIdentifier { uri, version } = params.text_document;
-        let file_path = uri.to_file_path().unwrap();
+        let Some(file_path) = self.path_for_uri(&uri) else {
+            return Err(anyhow::anyhow!(
+                "Received textDocument/didChange for unknown uri: {uri}"
+            ));
+        };
 
         let mut version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
@@ -1660,14 +1739,19 @@ impl Server {
         }
         version_info.insert(file_path.clone(), version);
         let mut lock = self.open_files.write();
-        let original = lock.get_mut(&file_path).unwrap();
+        let Some(original) = lock.get_mut(&file_path) else {
+            return Err(anyhow::anyhow!(
+                "File not found in open_files: {}",
+                file_path.display()
+            ));
+        };
         *original = Arc::new(LspFile::from_source(apply_change_events(
             original.get_string(),
             params.content_changes,
         )));
         drop(lock);
         if !subsequent_mutation {
-            eprintln!(
+            info!(
                 "File {} changed, prepare to validate open files.",
                 file_path.display()
             );
@@ -1684,7 +1768,11 @@ impl Server {
     ) -> anyhow::Result<()> {
         let uri = params.notebook_document.uri.clone();
         let version = params.notebook_document.version;
-        let file_path = uri.to_file_path().unwrap();
+        let Some(file_path) = self.path_for_uri(&uri) else {
+            return Err(anyhow::anyhow!(
+                "Received notebookDocument/didChange for unknown uri: {uri}"
+            ));
+        };
 
         let mut version_info = self.version_info.lock();
         let old_version = version_info.get(&file_path).unwrap_or(&0);
@@ -1695,7 +1783,12 @@ impl Server {
         }
 
         let mut lock = self.open_files.write();
-        let original = lock.get_mut(&file_path).unwrap();
+        let Some(original) = lock.get_mut(&file_path) else {
+            return Err(anyhow::anyhow!(
+                "File not found in open_files: {}",
+                file_path.display()
+            ));
+        };
 
         let original_notebook = match original.as_ref() {
             LspFile::Notebook(notebook) => notebook.clone(),
@@ -1792,7 +1885,7 @@ impl Server {
         drop(lock);
 
         if !subsequent_mutation {
-            eprintln!(
+            info!(
                 "Notebook {} changed, prepare to validate open files.",
                 file_path.display()
             );
@@ -1820,16 +1913,15 @@ impl Server {
     }
 
     fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
-        if params.changes.is_empty() {
+        let events = CategorizedEvents::new_lsp(params.changes);
+        if events.is_empty() {
             return;
         }
-
-        let events = CategorizedEvents::new_lsp(params.changes);
         let should_requery_build_system = should_requery_build_system(&events);
 
         // Rewatch files if necessary (config changed, files added/removed, etc.)
         if Self::should_rewatch(&events) {
-            eprintln!("[Pyrefly] Re-registering file watchers");
+            info!("[Pyrefly] Re-registering file watchers");
             self.setup_file_watcher_if_necessary();
         }
 
@@ -1850,10 +1942,12 @@ impl Server {
     }
 
     fn did_close(&self, url: Url) {
-        let uri = url.to_file_path().unwrap();
-        self.version_info.lock().remove(&uri);
+        let Some(path) = self.path_for_uri(&url) else {
+            return;
+        };
+        self.version_info.lock().remove(&path);
         let open_files = self.open_files.dupe();
-        if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&uri).as_deref() {
+        if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&path).as_deref() {
             for cell in notebook.cell_urls() {
                 self.connection
                     .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
@@ -1861,19 +1955,23 @@ impl Server {
             }
         } else {
             self.connection
-                .publish_diagnostics_for_uri(url, Vec::new(), None);
+                .publish_diagnostics_for_uri(url.clone(), Vec::new(), None);
         }
+        self.unsaved_file_tracker.forget_uri_path(&url);
         let state = self.state.dupe();
         let lsp_queue = self.lsp_queue.dupe();
         let open_files = self.open_files.dupe();
         let sourcedb_queue = self.sourcedb_queue.dupe();
         let invalidated_configs = self.invalidated_configs.dupe();
+        let path_for_task = path.clone();
         self.recheck_queue.queue_task(Box::new(move || {
             // Clear out the memory associated with this file.
             // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
             // Having the extra file hanging around doesn't harm anything, but does use extra memory.
             let mut transaction = state.new_committable_transaction(Require::indexing(), None);
-            transaction.as_mut().set_memory(vec![(uri, None)]);
+            transaction
+                .as_mut()
+                .set_memory(vec![(path_for_task.clone(), None)]);
             let _ =
                 Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
             state.commit_transaction(transaction);
@@ -1925,7 +2023,7 @@ impl Server {
                     &id.scope_uri,
                     value.clone(),
                 );
-                eprintln!(
+                info!(
                     "Client configuration applied to workspace: {:?}",
                     id.scope_uri
                 );
@@ -1946,26 +2044,24 @@ impl Server {
         uri: &Url,
         method: Option<&str>,
     ) -> Option<(Handle, Option<LspAnalysisConfig>)> {
-        let path = self
-            .open_notebook_cells
-            .read()
-            .get(uri)
-            .cloned()
-            .unwrap_or_else(|| uri.to_file_path().unwrap());
+        let path = if let Some(notebook_path) = self.open_notebook_cells.read().get(uri) {
+            notebook_path.clone()
+        } else {
+            self.path_for_uri(uri)?
+        };
         self.workspaces.get_with(path.clone(), |(_, workspace)| {
             // Check if all language services are disabled
             if workspace.disable_language_services {
-                eprintln!("Skipping request - language services disabled");
+                info!("Skipping request - language services disabled");
                 return None;
             }
 
             // Check if the specific service is disabled
-            if let Some(lsp_config) = workspace.lsp_analysis_config
-                && let Some(disabled_services) = lsp_config.disabled_language_services
+            if let Some(disabled_services) = workspace.disabled_language_services
                 && let Some(method) = method
                 && disabled_services.is_disabled(method)
             {
-                eprintln!("Skipping request - {} service disabled", method);
+                info!("Skipping request - {} service disabled", method);
                 return None;
             }
 
@@ -2013,6 +2109,30 @@ impl Server {
         }
     }
 
+    fn goto_declaration(
+        &self,
+        transaction: &Transaction<'_>,
+        params: GotoDefinitionParams,
+    ) -> Option<GotoDefinitionResponse> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, Some(GotoDeclaration::METHOD))?;
+        let info = transaction.get_module_info(&handle)?;
+        let range =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
+        let targets = transaction.goto_declaration(&handle, range);
+        let mut lsp_targets = targets
+            .iter()
+            .filter_map(|x| self.to_lsp_location(x))
+            .collect::<Vec<_>>();
+        if lsp_targets.is_empty() {
+            None
+        } else if lsp_targets.len() == 1 {
+            Some(GotoDefinitionResponse::Scalar(lsp_targets.pop().unwrap()))
+        } else {
+            Some(GotoDefinitionResponse::Array(lsp_targets))
+        }
+    }
+
     fn goto_type_definition(
         &self,
         transaction: &Transaction<'_>,
@@ -2042,19 +2162,91 @@ impl Server {
             Some(GotoTypeDefinitionResponse::Array(lsp_targets))
         }
     }
+
+    fn async_go_to_implementations<'a>(
+        &'a self,
+        request_id: RequestId,
+        transaction: &Transaction<'a>,
+        params: GotoImplementationParams,
+    ) {
+        let uri = &params.text_document_position_params.text_document.uri;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            // TODO(yangdanny) handle notebooks
+            return self.send_response(new_response::<Option<GotoImplementationResponse>>(
+                request_id,
+                Ok(None),
+            ));
+        }
+        let Some(handle) = self.make_handle_if_enabled(uri, Some(GotoImplementation::METHOD))
+        else {
+            return self.send_response(new_response::<Option<GotoImplementationResponse>>(
+                request_id,
+                Ok(None),
+            ));
+        };
+        self.async_find_from_definition_helper(
+            request_id,
+            transaction,
+            handle,
+            uri,
+            params.text_document_position_params.position,
+            move |transaction, handle, definition| {
+                let FindDefinitionItemWithDocstring {
+                    metadata: _,
+                    definition_range,
+                    module,
+                    docstring_range: _,
+                } = definition;
+                // find_global_implementations_from_definition returns Vec<TextRangeWithModule>
+                // but we need to return Vec<(ModuleInfo, Vec<TextRange>)> to match the helper's
+                // expected format. Group implementations by module while preserving order.
+                let implementations = transaction.find_global_implementations_from_definition(
+                    handle.sys_info(),
+                    TextRangeWithModule::new(module, definition_range),
+                )?;
+
+                // Group consecutive implementations by module, preserving the sorted order
+                let mut grouped: Vec<(ModuleInfo, Vec<TextRange>)> = Vec::new();
+                for impl_with_module in implementations {
+                    if let Some((last_module, ranges)) = grouped.last_mut()
+                        && last_module.path() == impl_with_module.module.path()
+                    {
+                        ranges.push(impl_with_module.range);
+                        continue;
+                    }
+                    grouped.push((impl_with_module.module, vec![impl_with_module.range]));
+                }
+                Ok(grouped)
+            },
+            move |results| {
+                let mut lsp_targets = Vec::new();
+                for (uri, ranges) in results {
+                    for range in ranges {
+                        lsp_targets.push(Location {
+                            uri: uri.clone(),
+                            range,
+                        });
+                    }
+                }
+                if lsp_targets.is_empty() {
+                    None
+                } else if lsp_targets.len() == 1 {
+                    Some(GotoImplementationResponse::Scalar(
+                        lsp_targets.pop().unwrap(),
+                    ))
+                } else {
+                    Some(GotoImplementationResponse::Array(lsp_targets))
+                }
+            },
+        );
+    }
+
     fn completion(
         &self,
         transaction: &Transaction<'_>,
         params: CompletionParams,
     ) -> anyhow::Result<CompletionResponse> {
         let uri = &params.text_document_position.text_document.uri;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            // TODO(yangdanny) handle notebooks
-            return Ok(CompletionResponse::List(CompletionList {
-                is_incomplete: false,
-                items: Vec::new(),
-            }));
-        }
         let (handle, import_format) = match self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(Completion::METHOD))
         {
@@ -2073,6 +2265,7 @@ impl Server {
                     &handle,
                     self.from_lsp_position(uri, &info, params.text_document_position.position),
                     import_format,
+                    self.supports_completion_item_details(),
                 )
             })
             .unwrap_or_default();
@@ -2145,37 +2338,39 @@ impl Server {
         )
     }
 
-    /// Compute references of a symbol at a given position. This is a non-blocking function, the
-    /// it will send a response to the LSP client once the results are found and transformed by
-    /// `map_result`.
-    fn async_find_references_helper<'a, V: serde::Serialize>(
+    /// Compute references or implementations of a symbol at a given position. This is a non-blocking
+    /// function that will send a response to the LSP client once the results are found and
+    /// transformed by `map_result`.
+    ///
+    /// The `find_fn` closure is called with the cancellable transaction, handle, and definition
+    /// information, and should return the results to be transformed into LSP locations.
+    fn async_find_from_definition_helper<'a, V: serde::Serialize>(
         &'a self,
         request_id: RequestId,
-        ide_transaction_manager: &mut TransactionManager<'a>,
+        transaction: &Transaction<'a>,
+        handle: Handle,
         uri: &Url,
         position: Position,
+        find_fn: impl FnOnce(
+            &mut CancellableTransaction,
+            &Handle,
+            FindDefinitionItemWithDocstring,
+        ) -> Result<Vec<(ModuleInfo, Vec<TextRange>)>, Cancelled>
+        + Send
+        + Sync
+        + 'static,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) {
-        let Some(handle) = self.make_handle_if_enabled(uri, Some(References::METHOD)) else {
-            return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
-        };
-        let transaction = ide_transaction_manager.non_committable_transaction(&self.state);
         let Some(info) = transaction.get_module_info(&handle) else {
-            ide_transaction_manager.save(transaction);
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
         let position = self.from_lsp_position(uri, &info, position);
-        let Some(FindDefinitionItemWithDocstring {
-            metadata,
-            definition_range,
-            module,
-            docstring_range: _,
-        }) = transaction
+        let Some(definition) = transaction
             .find_definition(
                 &handle,
                 position,
-                &FindPreference {
-                    jump_through_renamed_import: false,
+                FindPreference {
+                    import_behavior: ImportBehavior::StopAtRenamedImports,
                     ..Default::default()
                 },
             )
@@ -2183,10 +2378,8 @@ impl Server {
             .into_iter()
             .next()
         else {
-            ide_transaction_manager.save(transaction);
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
-        ide_transaction_manager.save(transaction);
         let state = self.state.dupe();
         let open_files = self.open_files.dupe();
         let cancellation_handles = self.cancellation_handles.dupe();
@@ -2198,14 +2391,10 @@ impl Server {
                 .lock()
                 .insert(request_id.clone(), transaction.get_cancellation_handle());
             Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
-            match transaction.find_global_references_from_definition(
-                handle.sys_info(),
-                metadata,
-                TextRangeWithModule::new(module, definition_range),
-            ) {
-                Ok(global_references) => {
+            match find_fn(&mut transaction, &handle, definition) {
+                Ok(results) => {
                     let mut locations = Vec::new();
-                    for (info, ranges) in global_references {
+                    for (info, ranges) in results {
                         if let Some(uri) = module_info_to_uri(&info) {
                             locations
                                 .push((uri, ranges.into_map(|range| info.to_lsp_range(range))));
@@ -2218,8 +2407,8 @@ impl Server {
                     )));
                 }
                 Err(Cancelled) => {
-                    let message = format!("Find reference request {request_id} is canceled");
-                    eprintln!("{message}");
+                    let message = format!("Request {request_id} is canceled");
+                    info!("{message}");
                     connection.send(Message::Response(Response::new_err(
                         request_id,
                         ErrorCode::RequestCanceled as i32,
@@ -2230,16 +2419,56 @@ impl Server {
         }));
     }
 
+    /// Compute references of a symbol at a given position using the standard find_global_references_from_definition
+    /// strategy. This is a convenience wrapper around async_find_from_definition_helper that handles
+    /// the common case of finding references.
+    fn async_find_references_helper<'a, V: serde::Serialize>(
+        &'a self,
+        request_id: RequestId,
+        transaction: &Transaction<'a>,
+        handle: Handle,
+        uri: &Url,
+        position: Position,
+        map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
+    ) {
+        self.async_find_from_definition_helper(
+            request_id,
+            transaction,
+            handle,
+            uri,
+            position,
+            move |transaction, handle, definition| {
+                let FindDefinitionItemWithDocstring {
+                    metadata,
+                    definition_range,
+                    module,
+                    docstring_range: _,
+                } = definition;
+                transaction.find_global_references_from_definition(
+                    handle.sys_info(),
+                    metadata,
+                    TextRangeWithModule::new(module, definition_range),
+                )
+            },
+            map_result,
+        )
+    }
+
     fn references<'a>(
         &'a self,
         request_id: RequestId,
-        ide_transaction_manager: &mut TransactionManager<'a>,
+        transaction: &Transaction<'a>,
         params: ReferenceParams,
     ) {
+        let uri = &params.text_document_position.text_document.uri;
+        let Some(handle) = self.make_handle_if_enabled(uri, Some(References::METHOD)) else {
+            return self.send_response(new_response::<Option<Vec<Location>>>(request_id, Ok(None)));
+        };
         self.async_find_references_helper(
             request_id,
-            ide_transaction_manager,
-            &params.text_document_position.text_document.uri,
+            transaction,
+            handle,
+            uri,
             params.text_document_position.position,
             move |results| {
                 let mut locations = Vec::new();
@@ -2259,13 +2488,18 @@ impl Server {
     fn rename<'a>(
         &'a self,
         request_id: RequestId,
-        ide_transaction_manager: &mut TransactionManager<'a>,
+        transaction: &Transaction<'a>,
         params: RenameParams,
     ) {
+        let uri = &params.text_document_position.text_document.uri;
+        let Some(handle) = self.make_handle_if_enabled(uri, Some(Rename::METHOD)) else {
+            return self.send_response(new_response::<Option<WorkspaceEdit>>(request_id, Ok(None)));
+        };
         self.async_find_references_helper(
             request_id,
-            ide_transaction_manager,
-            &params.text_document_position.text_document.uri,
+            transaction,
+            handle,
+            uri,
             params.text_document_position.position,
             move |results| {
                 let mut changes = HashMap::new();
@@ -2310,10 +2544,6 @@ impl Server {
         params: SignatureHelpParams,
     ) -> Option<SignatureHelp> {
         let uri = &params.text_document_position_params.text_document.uri;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            // TODO(yangdanny) handle notebooks
-            return None;
-        }
         let handle = self.make_handle_if_enabled(uri, Some(SignatureHelpRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position =
@@ -2323,11 +2553,15 @@ impl Server {
 
     fn hover(&self, transaction: &Transaction<'_>, params: HoverParams) -> Option<Hover> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(HoverRequest::METHOD))?;
+        let (handle, lsp_config) =
+            self.make_handle_with_lsp_analysis_config_if_enabled(uri, Some(HoverRequest::METHOD))?;
         let info = transaction.get_module_info(&handle)?;
         let position =
             self.from_lsp_position(uri, &info, params.text_document_position_params.position);
-        get_hover(transaction, &handle, position)
+        let show_go_to_links = lsp_config
+            .and_then(|c| c.show_hover_go_to_links)
+            .unwrap_or(true);
+        get_hover(transaction, &handle, position, show_go_to_links)
     }
 
     fn inlay_hints(
@@ -2349,21 +2583,39 @@ impl Server {
         )?;
         let res = t
             .into_iter()
-            .filter_map(|x| {
+            .filter_map(|(text_size, label_parts)| {
                 // If the url is a notebook cell, filter out inlay hints for other cells
-                if info.to_cell_for_lsp(x.0) != maybe_cell_idx {
+                if info.to_cell_for_lsp(text_size) != maybe_cell_idx {
                     return None;
                 }
-                let position = info.to_lsp_position(x.0);
+                let position = info.to_lsp_position(text_size);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
+                    let label = InlayHintLabel::LabelParts(
+                        label_parts
+                            .iter()
+                            .map(|(text, location_opt)| {
+                                let location = location_opt
+                                    .as_ref()
+                                    .and_then(|loc| self.to_lsp_location(loc));
+
+                                InlayHintLabelPart {
+                                    value: text.clone(),
+                                    tooltip: None,
+                                    location,
+                                    command: None,
+                                }
+                            })
+                            .collect(),
+                    );
+
                     Some(InlayHint {
                         position,
-                        label: InlayHintLabel::String(x.1.clone()),
+                        label,
                         kind: None,
                         text_edits: Some(vec![TextEdit {
                             range: Range::new(position, position),
-                            new_text: x.1,
+                            new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
                         }]),
                         tooltip: None,
                         padding_left: None,
@@ -2422,11 +2674,10 @@ impl Server {
             // TODO(yangdanny) handle notebooks
             return None;
         }
+        let path = self.path_for_uri(uri)?;
         if self
             .workspaces
-            .get_with(uri.to_file_path().unwrap(), |(_, workspace)| {
-                workspace.disable_language_services
-            })
+            .get_with(path, |(_, workspace)| workspace.disable_language_services)
             || !self
                 .initialize_params
                 .capabilities
@@ -2488,6 +2739,78 @@ impl Server {
                     source: Some("Pyrefly".to_owned()),
                     message: "This code is unreachable for the current configuration".to_owned(),
                     code: Some(NumberOrString::String("unreachable-code".to_owned())),
+                    code_description: None,
+                    related_information: None,
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    data: None,
+                });
+            }
+        }
+    }
+
+    fn append_unused_parameter_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_parameters() {
+                let lsp_range = module_info.to_lsp_range(unused.range);
+                items.push(Diagnostic {
+                    range: lsp_range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("Pyrefly".to_owned()),
+                    message: format!("Parameter `{}` is unused", unused.name.as_str()),
+                    code: Some(NumberOrString::String("unused-parameter".to_owned())),
+                    code_description: None,
+                    related_information: None,
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    data: None,
+                });
+            }
+        }
+    }
+
+    fn append_unused_import_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_imports() {
+                let lsp_range = module_info.to_lsp_range(unused.range);
+                items.push(Diagnostic {
+                    range: lsp_range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("Pyrefly".to_owned()),
+                    message: format!("Import `{}` is unused", unused.name.as_str()),
+                    code: Some(NumberOrString::String("unused-import".to_owned())),
+                    code_description: None,
+                    related_information: None,
+                    tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                    data: None,
+                });
+            }
+        }
+    }
+
+    fn append_unused_variable_diagnostics(
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        items: &mut Vec<Diagnostic>,
+    ) {
+        if let Some(bindings) = transaction.get_bindings(handle) {
+            let module_info = bindings.module();
+            for unused in bindings.unused_variables() {
+                let lsp_range = module_info.to_lsp_range(unused.range);
+                items.push(Diagnostic {
+                    range: lsp_range,
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("Pyrefly".to_owned()),
+                    message: format!("Variable `{}` is unused", unused.name.as_str()),
+                    code: Some(NumberOrString::String("unused-variable".to_owned())),
                     code_description: None,
                     related_information: None,
                     tags: Some(vec![DiagnosticTag::UNNECESSARY]),
@@ -2581,7 +2904,16 @@ impl Server {
             cell_uri = Some(uri);
             notebook_path.as_path().to_owned()
         } else {
-            uri.to_file_path().unwrap()
+            let Some(path) = self.path_for_uri(uri) else {
+                return DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                        items: Vec::new(),
+                        result_id: None,
+                    },
+                    related_documents: None,
+                });
+            };
+            path
         };
         let handle = make_open_handle(&self.state, &path);
         let mut items = Vec::new();
@@ -2591,7 +2923,7 @@ impl Server {
                 items.push(diag);
             }
         }
-        Self::append_unreachable_diagnostics(transaction, &handle, &mut items);
+        Self::append_ide_specific_diagnostics(transaction, &handle, &mut items);
         DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
             full_document_diagnostic_report: FullDocumentDiagnosticReport {
                 items,
@@ -2617,7 +2949,18 @@ impl Server {
                     pattern,
                 })
             }
+            WatchPattern::OwnedRoot(root, pattern)
+                if relative_pattern_support && let Ok(url) = Url::from_directory_path(&root) =>
+            {
+                GlobPattern::Relative(RelativePattern {
+                    base_uri: OneOf::Right(url),
+                    pattern,
+                })
+            }
             WatchPattern::Root(root, pattern) => {
+                GlobPattern::String(root.join(pattern).to_string_lossy().into_owned())
+            }
+            WatchPattern::OwnedRoot(root, pattern) => {
                 GlobPattern::String(root.join(pattern).to_string_lossy().into_owned())
             }
         }
@@ -2745,7 +3088,7 @@ impl Server {
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
-            eprintln!("Invalidated config, prepare to recheck open files.");
+            info!("Invalidated config, prepare to recheck open files.");
             let _ = lsp_queue.send(LspEvent::RecheckFinished);
         }));
     }
@@ -2842,74 +3185,5 @@ impl TspInterface for Server {
             subsequent_mutation,
             event,
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn create_test_server() -> Server {
-        let (connection, _receiver) = Connection::memory();
-        let lsp_queue = LspQueue::new();
-        let initialize_params = InitializeParams::default();
-        Server::new(
-            Arc::new(connection),
-            lsp_queue,
-            initialize_params,
-            IndexingMode::None,
-            0,
-        )
-    }
-
-    #[test]
-    fn test_stdlib_paths_for_mac_and_windows_paths() {
-        let server = create_test_server();
-
-        let stdlib_paths = vec![
-            PathBuf::from("/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12"),
-            PathBuf::from("/usr/local/Cellar/python@3.12/3.12.0/lib/python3.12"),
-        ];
-
-        assert!(server.is_python_stdlib_file(
-            &PathBuf::from(
-                "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/os.py"
-            ),
-            &stdlib_paths
-        ));
-        assert!(server.is_python_stdlib_file(
-            &PathBuf::from("/usr/local/Cellar/python@3.12/3.12.0/lib/python3.12/sys.py"),
-            &stdlib_paths
-        ));
-        assert!(!server.is_python_stdlib_file(
-            &PathBuf::from("/Users/user/my_project/main.py"),
-            &stdlib_paths
-        ));
-
-        if cfg!(windows) {
-            let stdlib_paths = vec![
-                PathBuf::from(r"C:\Python312\Lib"),
-                PathBuf::from(r"C:\Program Files\Python39\Lib"),
-            ];
-
-            assert!(
-                server.is_python_stdlib_file(
-                    &PathBuf::from(r"C:\Python312\Lib\os.py"),
-                    &stdlib_paths
-                )
-            );
-            assert!(server.is_python_stdlib_file(
-                &PathBuf::from(r"C:\Program Files\Python39\Lib\pathlib.py"),
-                &stdlib_paths
-            ));
-            assert!(!server.is_python_stdlib_file(
-                &PathBuf::from(r"C:\Python312\Scripts\pip.py"),
-                &stdlib_paths
-            ));
-            assert!(!server.is_python_stdlib_file(
-                &PathBuf::from(r"C:\Users\user\my_project\main.py"),
-                &stdlib_paths
-            ));
-        }
     }
 }

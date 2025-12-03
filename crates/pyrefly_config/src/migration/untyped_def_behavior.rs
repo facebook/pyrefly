@@ -23,19 +23,21 @@ impl ConfigOptionMigrater for UntypedDefBehaviorConfig {
     ) -> anyhow::Result<()> {
         // check_untyped_defs may be used as a global or per-module setting.
         // We handle this by only checking for the global config.
-        let value = mypy_cfg.getboolcoerce("mypy", "check_untyped_defs");
-        if !matches!(value, Ok(Some(_))) {
+        let Ok(Some(check_untyped_defs)) = mypy_cfg.getboolcoerce("mypy", "check_untyped_defs")
+        else {
             pyrefly_cfg.root.untyped_def_behavior = Some(UntypedDefBehavior::SkipAndInferReturnAny);
             return Err(anyhow::anyhow!(
                 "No check_untyped_defs found in mypy config, setting default to `skip-and-infer-return-any`"
             ));
-        }
+        };
 
         // If check_untyped_defs is True, set untyped_def_behavior to CheckAndInferReturnAny
         // This matches Pyrefly's untyped-def-behavior = "check-and-infer-return-any"
-        if value.unwrap().unwrap() {
+        if check_untyped_defs {
             pyrefly_cfg.root.untyped_def_behavior =
                 Some(UntypedDefBehavior::CheckAndInferReturnAny);
+        } else {
+            pyrefly_cfg.root.untyped_def_behavior = Some(UntypedDefBehavior::SkipAndInferReturnAny);
         }
 
         Ok(())
@@ -88,7 +90,10 @@ mod tests {
 
         assert!(result.is_ok());
         // When check_untyped_defs is False, we don't change the default behavior
-        assert_eq!(pyrefly_cfg.root.untyped_def_behavior, None);
+        assert_eq!(
+            pyrefly_cfg.root.untyped_def_behavior,
+            Some(UntypedDefBehavior::SkipAndInferReturnAny)
+        );
     }
 
     #[test]

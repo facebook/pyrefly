@@ -17,6 +17,7 @@ use dupe::IterDupedExt;
 use itertools::Either;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::recurser::Guard;
@@ -560,30 +561,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         let binding = self.bindings().get(idx);
-        let answer = K::solve(self, binding, self.base_errors);
-        let (v, rec) = calculation.record_value(answer);
-        // If this was the first write to a Calculation that had a recursive placeholder,
-        // we need to record the placeholder => final answer correspondence.
-        if let Some(r) = rec {
-            let k = self.bindings().idx_to_key(idx).range();
-            // Always force recursive Vars as soon as we produce the final answer. This limits
-            // nondeterminism by ensuring that nothing downstream of the cycle can pin the type
-            // once the cycle has finished (although there can still be data races where the
-            // Var escapes the cycle in another thread before it has finished computing).
-            //
-            // `Var::ZERO` is just a dummy value used by a few of the `K: Solve`
-            // implementations that doesn't actually use the Var, so we have to skip it.
-            K::record_recursive(self, k, &v, r, self.base_errors);
-            if r != Var::ZERO {
-                self.solver().force_var(r);
-            }
-        }
+
+        let answer = calculation
+            .record_value(K::solve(self, binding, self.base_errors), |var, answer| {
+                self.finalize_recursive_answer::<K>(idx, var, answer)
+            });
         // Handle cycle unwinding, if applicable.
         //
         // TODO(stroxler): we eventually need to use is-a-cycle-active information to isolate
         // placeholder values.
         self.cycles().on_calculation_finished(&current);
-        v
+        answer
+    }
+
+    /// Finalize a recursive answer. This takes the raw value produced by `K::solve` and calls
+    /// `K::record_recursive` in order to:
+    /// - ensure that the `Variables` map in `solver.rs` is updated
+    /// - possibly simplify the result; in particular a recursive solution that comes out to be
+    ///   a union that includes the recursive solution is simplified, which is important for
+    ///   some kinds of cycles, particularly those coming from LoopPhi
+    /// - force the recursive var if necessary; we skip Var::ZERO (which is an unforcable
+    ///   placeholder used by some kinds of bindings that aren't Types) in this step.
+    fn finalize_recursive_answer<K: Solve<Ans>>(
+        &self,
+        idx: Idx<K>,
+        var: Var,
+        answer: Arc<K::Answer>,
+    ) -> Arc<K::Answer>
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        let range = self.bindings().idx_to_key(idx).range();
+        let final_answer = K::record_recursive(self, range, answer, var, self.base_errors);
+        if var != Var::ZERO {
+            self.solver().force_var(var);
+        }
+        final_answer
     }
 
     /// Attempt to record a cycle placeholder result to unwind a cycle from here.
@@ -708,12 +722,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn record_recursive(
         &self,
         loc: TextRange,
-        answer: Type,
+        ty: Type,
         recursive: Var,
         errors: &ErrorCollector,
-    ) {
+    ) -> Type {
         self.solver()
-            .record_recursive::<Ans>(recursive, answer, self.type_order(), errors, loc);
+            .record_recursive::<Ans>(recursive, ty, self.type_order(), errors, loc)
     }
 
     /// Check if `got` matches `want`, returning `want` if the check fails.
@@ -797,12 +811,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fn go(&mut self, ty: &Type, in_type: bool) {
                 match ty {
                     Type::Never(_) if !in_type => (),
-                    Type::Union(tys) => {
+                    Type::Union(box Union { members, .. }) => {
                         self.seen_union = true;
-                        tys.iter().for_each(|ty| self.go(ty, in_type))
+                        members.iter().for_each(|ty| self.go(ty, in_type))
                     }
-                    Type::Type(box Type::Union(tys)) if !in_type => {
-                        tys.iter().for_each(|ty| self.go(ty, true))
+                    Type::Type(box Type::Union(box Union { members, .. })) if !in_type => {
+                        members.iter().for_each(|ty| self.go(ty, true))
                     }
                     Type::Var(v) if let Some(_guard) = self.me.recurse(*v) => {
                         self.go(&self.me.solver().force_var(*v), in_type)

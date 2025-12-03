@@ -22,6 +22,7 @@ use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::StmtReturn;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_set::SmallSet;
 
 use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationTarget;
@@ -34,12 +35,14 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::RaisedException;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
+use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::definitions::MutableCaptureKind;
@@ -68,7 +71,7 @@ impl<'a> BindingsBuilder<'a> {
             let negated_narrow_ops = narrow_ops.negate();
             self.bind_narrow_ops(
                 &negated_narrow_ops,
-                msg_expr.range(),
+                NarrowUseLocation::Span(msg_expr.range()),
                 &Usage::Narrowing(None),
             );
             let mut msg = self.declare_current_idx(Key::UsageLink(msg_expr.range()));
@@ -80,7 +83,11 @@ impl<'a> BindingsBuilder<'a> {
             self.insert_binding_current(msg, Binding::UsageLink(LinkedKey::Expect(idx)));
             self.scopes.swap_current_flow_with(&mut base);
         };
-        self.bind_narrow_ops(&narrow_ops, assert_range, &Usage::Narrowing(None));
+        self.bind_narrow_ops(
+            &narrow_ops,
+            NarrowUseLocation::Span(assert_range),
+            &Usage::Narrowing(None),
+        );
         if let Some(false) = static_test {
             self.scopes.mark_flow_termination();
         }
@@ -545,7 +552,7 @@ impl<'a> BindingsBuilder<'a> {
                     match x.value {
                         Some(value) => self.stmt(
                             Stmt::Assign(StmtAssign {
-                                node_index: AtomicNodeIndex::dummy(),
+                                node_index: AtomicNodeIndex::default(),
                                 range: x.range,
                                 targets: vec![target],
                                 value,
@@ -610,10 +617,14 @@ impl<'a> BindingsBuilder<'a> {
                     );
                 }
                 if let Expr::Name(name) = *x.name {
+                    // Create a new scope for the type alias type parameters
+                    self.scopes.push(Scope::type_alias(x.range));
                     if let Some(params) = &mut x.type_params {
                         self.type_params(params);
                     }
                     self.ensure_type(&mut x.value, &mut None);
+                    // Pop the type alias scope before binding the definition
+                    self.scopes.pop();
                     let binding = Binding::ScopedTypeAlias(
                         name.id.clone(),
                         x.type_params.map(|x| *x),
@@ -640,24 +651,34 @@ impl<'a> BindingsBuilder<'a> {
                         "`async for` can only be used inside an async function".to_owned(),
                     );
                 }
+                let mut loop_header_targets = SmallSet::new();
+                Ast::expr_lvalue(&x.target, &mut |name| {
+                    loop_header_targets.insert(name.id.clone());
+                });
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
                     Binding::IterableValue(ann, expr.clone(), IsAsync::new(x.is_async))
                 });
                 // Note that we set up the loop *after* the header is fully bound, because the
-                // loop iterator is only evaluated once before the loop begins.
-                self.setup_loop(x.range, &NarrowOps::new());
+                // loop iterator is only evaluated once before the loop begins. But the loop header
+                // targets - which get re-bound each iteration - are excluded from the loop Phi logic.
+                self.setup_loop(x.range, &loop_header_targets);
                 self.stmts(x.body, parent);
                 self.teardown_loop(x.range, &NarrowOps::new(), x.orelse, parent, false);
             }
             Stmt::While(mut x) => {
-                self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
-                let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
-                let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
-                self.setup_loop(x.range, &narrow_ops);
+                self.setup_loop(x.range, &SmallSet::new());
                 // Note that it is important we ensure *after* we set up the loop, so that both the
                 // narrowing and type checking are aware that the test might be impacted by changes
                 // made in the loop (e.g. if we reassign the test variable).
                 // Typecheck the test condition during solving.
+                self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
+                let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
+                self.bind_narrow_ops(
+                    &narrow_ops,
+                    NarrowUseLocation::Span(x.range),
+                    &Usage::Narrowing(None),
+                );
                 self.insert_binding(KeyExpect(x.test.range()), BindingExpect::Bool(*x.test));
                 self.stmts(x.body, parent);
                 self.teardown_loop(x.range, &narrow_ops, x.orelse, parent, is_while_true);
@@ -675,7 +696,11 @@ impl<'a> BindingsBuilder<'a> {
                 let mut negated_prev_ops = NarrowOps::new();
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
-                    self.bind_narrow_ops(&negated_prev_ops, range, &Usage::Narrowing(None));
+                    self.bind_narrow_ops(
+                        &negated_prev_ops,
+                        NarrowUseLocation::Start(range),
+                        &Usage::Narrowing(None),
+                    );
                     // If there is no test, it's an `else` clause and `this_branch_chosen` will be true.
                     let this_branch_chosen = match &test {
                         None => Some(true),
@@ -697,7 +722,11 @@ impl<'a> BindingsBuilder<'a> {
                             BindingExpect::Bool(test_expr),
                         );
                     }
-                    self.bind_narrow_ops(&new_narrow_ops, range, &Usage::Narrowing(None));
+                    self.bind_narrow_ops(
+                        &new_narrow_ops,
+                        NarrowUseLocation::Span(range),
+                        &Usage::Narrowing(None),
+                    );
                     negated_prev_ops.and_all(new_narrow_ops.negate());
                     self.stmts(body, parent);
                     self.finish_branch();
@@ -846,6 +875,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     match x.asname {
                         Some(asname) => {
+                            self.scopes.register_import(&asname);
                             self.bind_definition(
                                 &asname,
                                 Binding::Module(m, m.components(), None),
@@ -859,6 +889,13 @@ impl<'a> BindingsBuilder<'a> {
                                 Key::Import(first.clone(), x.name.range),
                                 Binding::Module(m, vec![first.clone()], module_key),
                             );
+                            // Register the import using the first component (e.g., "os" from "os.path")
+                            // since that's the name that gets bound and used in code
+                            self.scopes.register_import(&Identifier {
+                                node_index: x.name.node_index.clone(),
+                                id: first.clone(),
+                                range: x.name.range,
+                            });
                             self.bind_name(&first, key, FlowStyle::MergeableImport(m));
                         }
                     }
@@ -945,11 +982,11 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::Pass(_) => { /* no-op */ }
-            Stmt::Break(x) => {
-                self.add_loop_exitpoint(LoopExit::Break, x.range);
+            Stmt::Break(_) => {
+                self.add_loop_exitpoint(LoopExit::Break);
             }
-            Stmt::Continue(x) => {
-                self.add_loop_exitpoint(LoopExit::Continue, x.range);
+            Stmt::Continue(_) => {
+                self.add_loop_exitpoint(LoopExit::Continue);
             }
             Stmt::IpyEscapeCommand(x) => {
                 if self.module_info.is_notebook() {
@@ -971,16 +1008,6 @@ impl<'a> BindingsBuilder<'a> {
             if &x.name == "*" {
                 for name in module_exports.wildcard(self.lookup).iter_hashed() {
                     let key = Key::Import(name.into_key().clone(), x.range);
-                    if let Some(ExportLocation::ThisModule(Export { is_deprecated, .. })) =
-                        exported.get_hashed(name)
-                        && *is_deprecated
-                    {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::Deprecated),
-                            format!("`{name}` is deprecated"),
-                        );
-                    }
                     let val = if exported.contains_key_hashed(name) {
                         Binding::Import(m, name.into_key().clone(), None)
                     } else {
@@ -992,6 +1019,15 @@ impl<'a> BindingsBuilder<'a> {
                         Binding::Type(Type::any_error())
                     };
                     let key = self.insert_binding(key, val);
+                    // Register the imported name from wildcard imports
+                    self.scopes.register_import_with_star(
+                        &Identifier {
+                            node_index: AtomicNodeIndex::default(),
+                            id: name.into_key().clone(),
+                            range: x.range,
+                        },
+                        true,
+                    );
                     self.bind_name(
                         name.key(),
                         key,
@@ -1014,15 +1050,14 @@ impl<'a> BindingsBuilder<'a> {
                 // but there is an exception: if we are already looking at the
                 // `__init__` module of `x`, we always prefer the submodule.
                 let val = if (self.module_info.name() != m) && exported.contains_key(&x.name.id) {
-                    if let Some(ExportLocation::ThisModule(Export { is_deprecated, .. })) =
-                        exported.get(&x.name.id)
-                        && *is_deprecated
+                    if let Some(ExportLocation::ThisModule(Export {
+                        deprecation: Some(deprecation),
+                        ..
+                    })) = exported.get(&x.name.id)
                     {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::Deprecated),
-                            format!("`{}` is deprecated", x.name),
-                        );
+                        let msg =
+                            deprecation.as_error_message(format!("`{}` is deprecated", x.name));
+                        self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
                     Binding::Import(m, x.name.id.clone(), original_name_range)
                 } else {
@@ -1047,6 +1082,7 @@ impl<'a> BindingsBuilder<'a> {
                         Binding::Type(Type::any_explicit())
                     }
                 };
+                self.scopes.register_import(&asname);
                 self.bind_definition(&asname, val, FlowStyle::Import(m, x.name.id));
             }
         }

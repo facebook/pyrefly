@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::RequestId;
-use lsp_server::Response;
+use lsp_types::request::GotoDeclarationResponse;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -17,26 +17,29 @@ fn test_notebook_definition_import() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    // fake configuration so we never find system python
+    // todo(kylei): better solution for this
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{"pythonPath": "/fake/python/path"}]))),
+            ..Default::default()
+        })
+        .unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["from typing import List"]);
 
     // Jump to definition of "List"
-    interaction.definition_cell("notebook.ipynb", "cell1", 0, 20);
-
     // Check that the response uri ends with "typing.py"
-    interaction.client.expect_response_with(
-        |response| {
-            response.result.as_ref().is_some_and(|r| {
-                r.get("uri")
-                    .is_some_and(|uri| uri.as_str().is_some_and(|x| x.ends_with("typing.py")))
-            })
-        },
-        "expected definition in typing.pyi",
-    );
-    interaction.shutdown();
+    interaction
+        .definition_cell("notebook.ipynb", "cell1", 0, 20)
+        .expect_response_with(|response| match response {
+            Some(GotoDeclarationResponse::Scalar(loc)) => {
+                loc.uri.to_file_path().unwrap().ends_with("typing.pyi")
+            }
+            _ => false,
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -44,18 +47,20 @@ fn test_notebook_definition_cross_cell() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["x = 1", "y = x"]);
 
     // Jump to definition of "x" in the second cell
-    interaction.definition_cell("notebook.ipynb", "cell2", 0, 4);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "uri": interaction.cell_uri("notebook.ipynb", "cell1"),
+    let cell1_uri = interaction.cell_uri("notebook.ipynb", "cell1");
+    interaction
+        .definition_cell("notebook.ipynb", "cell2", 0, 4)
+        .expect_response(json!({
+            "uri": cell1_uri,
             "range": {
                 "start": {
                     "line": 0,
@@ -66,10 +71,9 @@ fn test_notebook_definition_cross_cell() {
                     "character": 1
                 }
             }
-        })),
-        error: None,
-    });
-    interaction.shutdown();
+        }))
+        .unwrap();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -77,18 +81,20 @@ fn test_notebook_definition_same_cell() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["x = 1\ny = x"]);
 
     // Jump to definition of "x" on the second line
-    interaction.definition_cell("notebook.ipynb", "cell1", 1, 4);
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
-            "uri": interaction.cell_uri("notebook.ipynb", "cell1"),
+    let cell1_uri = interaction.cell_uri("notebook.ipynb", "cell1");
+    interaction
+        .definition_cell("notebook.ipynb", "cell1", 1, 4)
+        .expect_response(json!({
+            "uri": cell1_uri,
             "range": {
                 "start": {
                     "line": 0,
@@ -99,8 +105,7 @@ fn test_notebook_definition_same_cell() {
                     "character": 1
                 }
             }
-        })),
-        error: None,
-    });
-    interaction.shutdown();
+        }))
+        .unwrap();
+    interaction.shutdown().unwrap();
 }

@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::RequestId;
-use lsp_server::Response;
+use pyrefly_config::environment::environment::PythonEnvironment;
+use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
@@ -17,24 +17,25 @@ fn test_cycle_class() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
-    interaction.server.did_open("cycle_class/foo.py");
-    interaction.server.diagnostic("cycle_class/foo.py");
+    interaction.client.did_open("cycle_class/foo.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .diagnostic("cycle_class/foo.py")
+        .expect_response(json!({
             "items": [],
             "kind": "full"
-        })),
-        error: None,
-    });
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -42,22 +43,27 @@ fn test_unexpected_keyword_range() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
 
-    interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
-    interaction.server.did_open("unexpected_keyword.py");
-    interaction.server.diagnostic("unexpected_keyword.py");
+    interaction.client.did_open("unexpected_keyword.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .diagnostic("unexpected_keyword.py")
+        .expect_response(json!({
             "items": [
                 {
                     "code": "unexpected-keyword",
@@ -74,11 +80,10 @@ fn test_unexpected_keyword_range() {
                 }
             ],
             "kind": "full"
-        })),
-        error: None,
-    });
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -86,22 +91,27 @@ fn test_error_documentation_links() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
 
-    interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(2, serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}, {"pyrefly": {"displayTypeErrors": "force-on"}}]));
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
-    interaction.server.did_open("error_docs_test.py");
-    interaction.server.diagnostic("error_docs_test.py");
+    interaction.client.did_open("error_docs_test.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .diagnostic("error_docs_test.py")
+        .expect_response(json!({
             "items": [
                 {
                     "code": "bad-assignment",
@@ -157,11 +167,9 @@ fn test_error_documentation_links() {
                 }
             ],
             "kind": "full"
-        })),
-        error: None,
-    });
+        })).unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
 
 #[test]
@@ -169,28 +177,29 @@ fn test_unreachable_branch_diagnostic() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
 
-    interaction.server.did_change_configuration();
+    interaction.client.did_change_configuration();
 
-    interaction.client.expect_configuration_request(2, None);
-    interaction.server.send_configuration_response(
-        2,
-        serde_json::json!([
-            {"pyrefly": {"displayTypeErrors": "force-on"}},
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
             {"pyrefly": {"displayTypeErrors": "force-on"}}
-        ]),
-    );
+        ]));
 
-    interaction.server.did_open("unreachable_branch.py");
-    interaction.server.diagnostic("unreachable_branch.py");
+    interaction.client.did_open("unreachable_branch.py");
 
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(serde_json::json!({
+    interaction
+        .client
+        .diagnostic("unreachable_branch.py")
+        .expect_response(json!({
             "items": [
                 {
                     "code": "unreachable-code",
@@ -205,11 +214,241 @@ fn test_unreachable_branch_diagnostic() {
                 }
             ],
             "kind": "full"
-        })),
-        error: None,
-    });
+        }))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_unused_parameter_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([
+                {"pyrefly": {"displayTypeErrors": "force-on"}}
+            ]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("unused_parameter/example.py");
+
+    interaction
+        .client
+        .diagnostic("unused_parameter/example.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "unused-parameter",
+                    "message": "Parameter `unused_arg` is unused",
+                    "range": {
+                        "start": {"line": 6, "character": 21},
+                        "end": {"line": 6, "character": 31}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_unused_parameter_no_report() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([
+                {"pyrefly": {"displayTypeErrors": "force-on"}}
+            ]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("unused_parameter/no_report.py");
+    interaction
+        .client
+        .diagnostic("unused_parameter/no_report.py")
+        .expect_response(json!({
+            "items": [],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_unused_import_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([
+                {"pyrefly": {"displayTypeErrors": "force-on"}}
+            ]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("unused_import/example.py");
+
+    interaction
+        .client
+        .diagnostic("unused_import/example.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "unused-import",
+                    "message": "Import `os` is unused",
+                    "range": {
+                        "start": {"line": 6, "character": 7},
+                        "end": {"line": 6, "character": 9}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_unused_from_import_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([
+                {"pyrefly": {"displayTypeErrors": "force-on"}}
+            ]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("unused_import/from_import.py");
+
+    interaction
+        .client
+        .diagnostic("unused_import/from_import.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "unused-import",
+                    "message": "Import `Dict` is unused",
+                    "range": {
+                        "start": {"line": 6, "character": 19},
+                        "end": {"line": 6, "character": 23}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_unused_variable_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([
+                {"pyrefly": {"displayTypeErrors": "force-on"}}
+            ]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("unused_variable/example.py");
+    interaction
+        .client
+        .diagnostic("unused_variable/example.py")
+        .expect_response(json!({
+                    "items": [
+                        {
+                            "code": "unused-variable",
+                            "message": "Variable `unused_var` is unused",
+                            "range": {
+                                "start": {"line": 7, "character": 4},
+                                "end": {"line": 7, "character": 14}
+                            },
+                            "severity": 4,
+                            "source": "Pyrefly",
+                            "tags": [1]
+                        }
+                    ],
+                    "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
 }
 
 #[cfg(unix)]
@@ -227,18 +466,328 @@ fn test_publish_diagnostics_preserves_symlink_uri() {
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(Some(
-            serde_json::json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
-        )),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
 
-    interaction.server.did_open(symlink_name);
-    interaction.client.expect_publish_diagnostics_exact_uri(
-        Url::from_file_path(&symlink_path).unwrap().as_str(),
-        1,
-    );
+    interaction.client.did_open(symlink_name);
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&Url::from_file_path(&symlink_path).unwrap(), 1)
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_shows_stdlib_type_errors_with_force_on() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    PythonEnvironment::get_interpreter_stdlib_path()
+        .write()
+        .insert(
+            test_files_root
+                .path()
+                .join("filtering_stdlib_errors/usr/lib/python3.12"),
+        );
+
+    interaction.client.did_change_configuration();
+
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
+
+    let stdlib_filepath = "filtering_stdlib_errors/usr/lib/python3.12/stdlib_file.py";
+
+    interaction.client.did_open(stdlib_filepath);
+
+    interaction
+        .client
+        .diagnostic(stdlib_filepath)
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "bad-assignment",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                    },
+                    "message": "`Literal['1']` is not assignable to `int`",
+                    "range": {
+                        "end": {"character": 12, "line": 5},
+                        "start": {"character": 9, "line": 5}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    PythonEnvironment::get_interpreter_stdlib_path()
+        .write()
+        .insert(
+            test_files_root
+                .path()
+                .join("filtering_stdlib_errors/usr/lib/python3.12"),
+        );
+
+    interaction.client.did_change_configuration();
+
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
+
+    interaction
+        .client
+        .did_open("filtering_stdlib_errors/usr/local/lib/python3.12/stdlib_file.py");
+
+    interaction
+        .client
+        .diagnostic("filtering_stdlib_errors/usr/local/lib/python3.12/stdlib_file.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "bad-assignment",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                    },
+                    "message": "`Literal['1']` is not assignable to `int`",
+                    "range": {
+                        "end": {"character": 12, "line": 5},
+                        "start": {"character": 9, "line": 5}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    PythonEnvironment::get_interpreter_stdlib_path()
+        .write()
+        .insert(
+            test_files_root
+                .path()
+                .join("filtering_stdlib_errors/usr/lib/python3.8"),
+        );
+
+    interaction
+        .client
+        .did_open("filtering_stdlib_errors/usr/local/lib/python3.8/stdlib_file.py");
+
+    interaction
+        .client
+        .diagnostic("filtering_stdlib_errors/usr/local/lib/python3.8/stdlib_file.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "bad-assignment",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                    },
+                    "message": "`Literal['1']` is not assignable to `int`",
+                    "range": {
+                        "end": {"character": 12, "line": 5},
+                        "start": {"character": 9, "line": 5}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("filtering_stdlib_errors/usr/lib/python3.12/stdlib_file.py");
+
+    interaction
+        .client
+        .diagnostic("filtering_stdlib_errors/usr/lib/python3.12/stdlib_file.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "bad-assignment",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                    },
+                    "message": "`Literal['1']` is not assignable to `int`",
+                    "range": {
+                        "end": {"character": 12, "line": 5},
+                        "start": {"character": 9, "line": 5}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    PythonEnvironment::get_interpreter_stdlib_path()
+        .write()
+        .insert(
+            test_files_root
+                .path()
+                .join("filtering_stdlib_errors/usr/lib64/python3.12"),
+        );
+
+    interaction
+        .client
+        .did_open("filtering_stdlib_errors/usr/lib64/python3.12/stdlib_file.py");
+
+    interaction
+        .client
+        .diagnostic("filtering_stdlib_errors/usr/lib64/python3.12/stdlib_file.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "bad-assignment",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                    },
+                    "message": "`Literal['1']` is not assignable to `int`",
+                    "range": {
+                        "end": {"character": 12, "line": 5},
+                        "start": {"character": 9, "line": 5}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_does_not_filter_out_stdlib_errors_with_default_displaytypeerrors() {
+    let test_files_root = get_test_files_root();
+
+    PythonEnvironment::get_interpreter_stdlib_path()
+        .write()
+        .insert(
+            test_files_root
+                .path()
+                .join("filtering_stdlib_errors_with_default/usr/lib/python3.12"),
+        );
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "default"}}]));
+
+    let stdlib_filepath = "filtering_stdlib_errors_with_default/usr/lib/python3.12/stdlib_file.py";
+
+    interaction.client.did_open(stdlib_filepath);
+
+    interaction
+        .client
+        .diagnostic(stdlib_filepath)
+        .expect_response(json!({
+            "items": [],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_shows_stdlib_errors_when_explicitly_included_in_project_includes() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "default"}}]));
+
+    let stdlib_filepath = "stdlib_with_explicit_includes/usr/lib/python3.12/stdlib_file.py";
+
+    interaction.client.did_open(stdlib_filepath);
+
+    interaction
+        .client
+        .diagnostic(stdlib_filepath)
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "bad-assignment",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                    },
+                    "message": "`Literal['1']` is not assignable to `int`",
+                    "range": {
+                        "end": {"character": 12, "line": 5},
+                        "start": {"character": 9, "line": 5}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
 }

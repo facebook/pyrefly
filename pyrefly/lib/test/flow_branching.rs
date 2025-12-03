@@ -160,8 +160,8 @@ assert_type(y, Generator[int, None, None])
 testcase!(
     test_bad_loop_command,
     r#"
-break  # E: Cannot `break` outside loop
-continue  # E: Cannot `continue` outside loop
+break  # E: `break` outside loop
+continue  # E: `continue` outside loop
     "#,
 );
 
@@ -285,7 +285,7 @@ assert_type(x, Literal[1, 2])
 testcase!(
     test_exception_handler,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 class Exception1(Exception): pass
 class Exception2(Exception): pass
@@ -296,21 +296,21 @@ x2 = (Exception1, Exception2)
 try:
     pass
 except int as e1:  # E: Invalid exception class: `int` does not inherit from `BaseException`
-    reveal_type(e1)  # E: revealed type: int
+    assert_type(e1, int)
 except int:  # E: Invalid exception class
     pass
 except Exception as e2:
-    reveal_type(e2)  # E: revealed type: Exception
+    assert_type(e2, Exception)
 except ExceptionGroup as e3:
-    reveal_type(e3)  # E: revealed type: ExceptionGroup[Exception]
+    assert_type(e3, ExceptionGroup[Exception])
 except (Exception1, Exception2) as e4:
-    reveal_type(e4)  # E: revealed type: Exception1 | Exception2
+    assert_type(e4, Exception1 | Exception2)
 except Exception1 as e5:
-    reveal_type(e5)  # E: revealed type: Exception1
+    assert_type(e5, Exception1)
 except x1 as e6:
-    reveal_type(e6)  # E: revealed type: Exception
+    assert_type(e6, Exception)
 except x2 as e7:
-    reveal_type(e7)  # E: revealed type: Exception1 | Exception2
+    assert_type(e7, Exception1 | Exception2)
 "#,
 );
 
@@ -711,7 +711,7 @@ x: list[int] = [1, 2, 3]
 match x:
     case [a] | a: # E: name capture `a` makes remaining patterns unreachable
         assert_type(a, list[int] | int)
-    case [b] | _:
+    case [b] | _:  # E: alternative patterns bind different names
         assert_type(b, int)  # E: `b` may be uninitialized
 
 match x:
@@ -1146,12 +1146,12 @@ def f(x: A):
 testcase!(
     test_join_with_unrelated_narrow,
     r#"
-from typing import assert_type
+from typing import assert_type, reveal_type
 class A: pass
 class B: pass
 def f(x: A):
     if isinstance(x, B):
-        assert_type(x, B)
+        reveal_type(x) # E: A & B
     assert_type(x, A)
 # (Illustrating that all code in the body of `f` is reachable)
 class C(A, B): pass
@@ -1163,7 +1163,7 @@ f(C())
 testcase!(
     test_boolean_op_narrowing_example,
     r#"
-from typing import Sequence, reveal_type
+from typing import Sequence, assert_type
 class A:
     def foo(self) -> bool:
         raise NotImplementedError()
@@ -1175,7 +1175,7 @@ class B:
 def f(a: A) -> tuple[int, bool]:
     return a.i(), (
         (isinstance(a, B) and a.bar()) or
-        reveal_type(a).foo()  # E: revealed type: A
+        assert_type(a, A).foo()
     )
 "#,
 );
@@ -1221,5 +1221,90 @@ def test(xs: list[int], ys: list[int], zs: list[int]) -> None:
                     break
             if True and len(results) >= 0:
                 break
+"#,
+);
+
+// These types (bool, bytearray, bytes, dict, float, frozenset, int, list, set, str, tuple)
+// bind the entire narrowed value to the single positional parameter instead of using __match_args__
+testcase!(
+    test_pattern_match_single_slot_builtins,
+    r#"
+from typing import assert_type
+
+def test_float(x: object) -> None:
+    match x:
+        case float(value):
+            assert_type(value, float)
+
+def test_int(x: object) -> None:
+    match x:
+        case int(value):
+            assert_type(value, int)
+
+def test_str(x: object) -> None:
+    match x:
+        case str(value):
+            assert_type(value, str)
+
+def test_bool(x: object) -> None:
+    match x:
+        case bool(value):
+            assert_type(value, bool)
+
+def test_bytes(x: object) -> None:
+    match x:
+        case bytes(value):
+            assert_type(value, bytes)
+
+def test_bytearray(x: object) -> None:
+    match x:
+        case bytearray(value):
+            assert_type(value, bytearray)
+
+def test_list(x: list[int]) -> None:
+    match x:
+        case list(value):
+            assert_type(value, list[int])
+
+def test_tuple(x: tuple[int, str]) -> None:
+    match x:
+        case tuple(value):
+            assert_type(value, tuple[int, str])
+
+def test_set(x: set[int]) -> None:
+    match x:
+        case set(value):
+            assert_type(value, set[int])
+
+def test_frozenset(x: frozenset[int]) -> None:
+    match x:
+        case frozenset(value):
+            assert_type(value, frozenset[int])
+
+def test_dict(x: dict[str, int]) -> None:
+    match x:
+        case dict(value):
+            assert_type(value, dict[str, int])
+
+def test_narrowing_with_union(x: int | str) -> None:
+    match x:
+        case int(value):
+            assert_type(value, int)
+            assert_type(x, int)
+        case str(value):
+            assert_type(value, str)
+            assert_type(x, str)
+
+# Test that multiple positional patterns error
+def test_multiple_positional_not_special(x: int) -> None:
+    match x:
+        case int(a, b):  # E: Cannot match positional sub-patterns in `int` # E: Object of class `int` has no attribute `__match_args__`
+            pass
+
+# Test that keyword patterns still work normally
+def test_keyword_pattern_not_special(x: float) -> None:
+    match x:
+        case float(real=r):
+            assert_type(r, float)
 "#,
 );

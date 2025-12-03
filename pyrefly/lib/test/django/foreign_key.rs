@@ -75,7 +75,7 @@ assert_type(article.reporter_id, int) # E: assert_type(Any, int) failed # E:  Ob
 );
 
 django_testcase!(
-    bug = "support self references; nullability of FK should be taken into account",
+    bug = "support self references",
     test_foreign_key_self_reference,
     r#"
 from typing import assert_type
@@ -87,7 +87,7 @@ class Person(models.Model):
     parent = models.ForeignKey('self', null=True, on_delete=models.CASCADE)
 
 person = Person()
-assert_type(person.parent, Person | None) # E: assert_type(Any, Person | None) failed 
+assert_type(person.parent, Person | None) # E: assert_type(Any | None, Person | None) failed 
 if person.parent:
     assert_type(person.parent.name, str) # E: assert_type(Any, str) failed
 
@@ -122,5 +122,19 @@ assert_type(article.reporter_id, UUID)
 b = B()
 assert_type(b.reporter, Reporter)
 assert_type(b.reporter_id, UUID)
+"#,
+);
+
+django_testcase!(
+    test_foreign_key_in_function,
+    r#"
+from django.db import models
+
+def test_through_db_table_mutually_exclusive(self):
+    class Child(models.Model):
+        pass
+
+    class Through(models.Model):
+        referred = models.ForeignKey(Child, on_delete=models.CASCADE)
 "#,
 );

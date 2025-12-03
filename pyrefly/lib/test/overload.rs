@@ -1230,3 +1230,16 @@ def h(kwargs: Any):
     assert_type(f2(**kwargs), int)
     "#,
 );
+
+testcase!(
+    test_unsolved_typevar,
+    r#"
+from typing import overload
+class Foo[T]:
+    @overload
+    def test(self, obj: None, cls: type[T]) -> str: ...
+    @overload
+    def test(self, obj: T, cls: type[T]) -> int: ...
+    def test(self, obj: T | None, cls: type[T]) -> str | int: ...
+    "#,
+);

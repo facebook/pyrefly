@@ -31,7 +31,6 @@ s: object = ""
 "#,
 );
 
-// T is bivariant in A since it's not used nor in a covariant nor contravariant position.
 testcase!(
     test_simple_generic_subtyping,
     r#"
@@ -42,8 +41,9 @@ class D[T]: pass
 
 b: A[int] = B[int]()
 c: A[int] = C()
-oops: A[int] = D[int]()  # E: `D[int]` is not assignable to `A[int]`
-ok: A[int] = A[str]()
+oops1: A[int] = D[int]()  # E: `D[int]` is not assignable to `A[int]`
+# Although T is bivariant in A, we follow mypy and pyright's lead in treating it as invariant.
+oops2: A[int] = A[str]()  # E: `A[str]` is not assignable to `A[int]`
 "#,
 );
 
@@ -287,8 +287,8 @@ class C(A, B): # E: Field `x` has inconsistent types inherited from multiple bas
 class D:
     x: int
 
-# Here we repeat the error on E, despite the error already being reported in C.
-class E(C, D): # E: Field `x` has inconsistent types inherited from multiple base classes
+# We do not report the error for E, since it has already been reported on C
+class E(C, D):
     pass
 "#,
 );
@@ -305,8 +305,8 @@ class C(A, B):
 class D:
     x: int
 
-# Here we still report the error on E, despite the field being overridden in C.
-class E(C, D): # E: Field `x` has inconsistent types inherited from multiple base classes
+# We do not report the error on E, since we already reported an error on C
+class E(C, D):
     pass
 "#,
 );
@@ -367,5 +367,32 @@ class Bar:
 # For read-write fields, the inherited type from each parent should be assignable to the intersection
 class Both(Foo, Bar):  # E: Field `x` is declared `float`
     ...
+"#,
+);
+
+testcase!(
+    test_multiple_inheritance_property,
+    r#"
+from typing import overload
+
+class A:
+    @property
+    def x(self, /) -> int: ...
+    @x.setter
+    def x(self, x: int, /) -> None: ...
+
+class B:
+    @property
+    def x(self, /) -> int: ...
+
+class C(A, B): ...
+
+class D:
+    @property
+    def x(self, /) -> str: ...
+    @x.setter
+    def x(self, x: str, /) -> None: ...
+
+class E(D, B): ...  # E: Field `x` has inconsistent types inherited from multiple base classes
 "#,
 );

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::simplify::unions_with_literals;
+use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::name::Name;
@@ -23,15 +24,19 @@ use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::class::class_field::ClassField;
+use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::unwrap::HintRef;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::solver::SubsetError;
+use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -41,7 +46,7 @@ use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
-use crate::types::tuple::Tuple;
+use crate::types::read_only::ReadOnlyReason;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
@@ -204,8 +209,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         is_total: bool,
     ) -> Option<TypedDictField> {
-        self.get_class_member(class, name).and_then(|member| {
-            Arc::unwrap_or_clone(member.value)
+        self.get_class_member(class, name).and_then(|field| {
+            Arc::unwrap_or_clone(field)
                 .as_typed_dict_field_info(is_total)
                 .map(|field| field.substitute_with(substitution))
         })
@@ -324,7 +329,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
 
         // ---- Overload: update(m: Iterable[tuple[Literal["key"], value]], /)
-        let get_tuple = |name, ty| Type::Tuple(Tuple::Concrete(vec![self.name_or_str(name), ty]));
+        let get_tuple = |name, ty| Type::concrete_tuple(vec![self.name_or_str(name), ty]);
         let mut tuple_types: Vec<Type> = self
             .names_to_fields(cls, fields)
             .filter(|(_, field)| !field.is_read_only()) // filter read-only fields
@@ -757,10 +762,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Function {
                 signature: Callable::list(
                     ParamList::new(vec![self.class_self_param(cls, true)]),
-                    Type::Tuple(Tuple::Concrete(vec![
+                    Type::concrete_tuple(vec![
                         self.stdlib.str().clone().to_type(),
                         self.get_typed_dict_value_type_from_fields(cls, fields),
-                    ])),
+                    ]),
                 ),
                 metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), POPITEM_METHOD),
             },
@@ -807,6 +812,132 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
             })
             .collect()
+    }
+
+    pub fn calculate_typed_dict_field(
+        &self,
+        metadata: &ClassMetadata,
+        name: &Name,
+        range: TextRange,
+        field_definition: &ClassFieldDefinition,
+        errors: &ErrorCollector,
+    ) -> ClassField {
+        let (annotation, is_legal_field_declaration) = match field_definition {
+            ClassFieldDefinition::DeclaredByAnnotation { annotation } => (Some(annotation), true),
+            ClassFieldDefinition::AssignedInBody {
+                value: _,
+                annotation,
+            } => (annotation.as_ref(), false),
+            _ => (None, false),
+        };
+        if !is_legal_field_declaration {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                "TypedDict members must be declared in the form `field: Annotation` with no assignment".to_owned(),
+            );
+        }
+
+        let annotation = match annotation {
+            None => {
+                return ClassField::invalid_typed_dict_field();
+            }
+            Some(idx) => self.get_idx(*idx).annotation.clone(),
+        };
+
+        for q in &[Qualifier::Final, Qualifier::ClassVar] {
+            if annotation.has_qualifier(q) {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    format!("`{q}` may not be used for TypedDict members",),
+                );
+            }
+        }
+        if let Some(td) = metadata.typed_dict_metadata()
+            && let Some(is_total) = td.fields.get(name)
+        {
+            // If this is a TypedDict field, make sure it is compatible with any inherited metadata
+            // restricting extra items.
+            let inherited_extra = metadata.base_class_objects().iter().find_map(|base| {
+                self.get_metadata_for_class(base)
+                    .typed_dict_metadata()
+                    .map(|m| (base, m.extra_items.clone()))
+            });
+            match inherited_extra {
+                Some((base, ExtraItems::Closed)) => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        format!(
+                            "Cannot extend closed TypedDict `{}` with extra item `{}`",
+                            base.name(),
+                            name
+                        ),
+                    );
+                }
+                Some((base, ExtraItems::Extra(ExtraItem { ty, read_only }))) => {
+                    let field_ty = annotation.get_type();
+                    if read_only {
+                        // The field type needs to be assignable to the extra_items type.
+                        if !self.is_subset_eq(field_ty, &ty) {
+                            self.error(
+                                errors, range, ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                            format!(
+                                "`{}` is not assignable to `extra_items` type `{}` of TypedDict `{}`",
+                                self.for_display(field_ty.clone()), self.for_display(ty), base.name()));
+                        }
+                    } else {
+                        // The field needs to be non-required and its type consistent with the extra_items type.
+                        let required = annotation.has_qualifier(&Qualifier::Required)
+                            || (*is_total && !annotation.has_qualifier(&Qualifier::NotRequired));
+                        if required {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                format!("TypedDict `{}` with non-read-only `extra_items` cannot be extended with required extra item `{}`", base.name(), name),
+                            );
+                        } else if !self.is_equal(field_ty, &ty) {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                format!(
+                                    "`{}` is not consistent with `extra_items` type `{}` of TypedDict `{}`",
+                                    self.for_display(field_ty.clone()), self.for_display(ty), base.name()),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let read_only_reason = if annotation.has_qualifier(&Qualifier::ReadOnly) {
+            Some(ReadOnlyReason::ReadOnlyQualifier)
+        } else {
+            None
+        };
+
+        // Types provided in annotations shadow inferred types
+        //
+        // TODO(stroxler): Should this be an error? An qualifier-only annotation on a typed dict field
+        // is an implicit Any; I think in most cases it's probably illegal anyway so there's already
+        // a type error, but we probably should check.
+        let ty = match &annotation.ty {
+            Some(ty) => ty.clone(),
+            None => Type::any_implicit(),
+        };
+
+        // Pin any vars in the type: leaking a var in a class field is particularly
+        // likely to lead to data races where downstream uses can pin inconsistently.
+        let ty = self.solver().deep_force(ty);
+
+        ClassField::typed_dict_field(ty, annotation, read_only_reason)
     }
 }
 

@@ -159,7 +159,7 @@ impl ErrorCollector {
         let mut errors = self.errors.lock();
         if !(self.module_info.is_generated() && error_config.ignore_errors_in_generated_code) {
             for err in errors.iter() {
-                if err.is_ignored(error_config.permissive_ignores) {
+                if err.is_ignored(&error_config.enabled_ignores) {
                     result.suppressed.push(err.clone());
                 } else {
                     let kind = err.error_kind();
@@ -198,6 +198,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use pyrefly_python::ignore::Tool;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::prelude::SliceExt;
@@ -257,7 +258,7 @@ mod tests {
                 .collect(&ErrorConfig::new(
                     &ErrorDisplayConfig::default(),
                     false,
-                    false,
+                    Tool::default_enabled(),
                     true,
                 ))
                 .shown
@@ -310,7 +311,7 @@ mod tests {
             (ErrorKind::BadAssignment, Severity::Ignore),
             (ErrorKind::NotIterable, Severity::Ignore),
         ]));
-        let config = ErrorConfig::new(&display_config, false, false, true);
+        let config = ErrorConfig::new(&display_config, false, Tool::default_enabled(), true);
 
         assert_eq!(
             errors.collect(&config).shown.map(|x| x.msg()),
@@ -334,10 +335,10 @@ mod tests {
         );
 
         let display_config = ErrorDisplayConfig::default();
-        let config0 = ErrorConfig::new(&display_config, false, false, true);
+        let config0 = ErrorConfig::new(&display_config, false, Tool::default_enabled(), true);
         assert_eq!(errors.collect(&config0).shown.map(|x| x.msg()), vec!["a"]);
 
-        let config1 = ErrorConfig::new(&display_config, true, false, true);
+        let config1 = ErrorConfig::new(&display_config, true, Tool::default_enabled(), true);
         assert!(errors.collect(&config1).shown.map(|x| x.msg()).is_empty());
     }
 
@@ -366,7 +367,7 @@ mod tests {
                 .collect(&ErrorConfig::new(
                     &ErrorDisplayConfig::default(),
                     false,
-                    false,
+                    Tool::default_enabled(),
                     true,
                 ))
                 .shown

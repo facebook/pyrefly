@@ -34,6 +34,7 @@ pub struct Stdlib {
     bytes: StdlibResult<ClassType>,
     float: StdlibResult<ClassType>,
     complex: StdlibResult<ClassType>,
+    decimal: StdlibResult<ClassType>,
     slice: StdlibResult<(Class, Arc<TParams>)>,
     base_exception: StdlibResult<ClassType>,
     /// Introduced in Python 3.11.
@@ -156,6 +157,7 @@ impl Stdlib {
             bytes: lookup_concrete(builtins, "bytes"),
             float: lookup_concrete(builtins, "float"),
             complex: lookup_concrete(builtins, "complex"),
+            decimal: lookup_concrete(ModuleName::from_str("decimal"), "Decimal"),
             slice: lookup_generic(builtins, "slice", 3),
             base_exception: lookup_concrete(builtins, "BaseException"),
             base_exception_group: version
@@ -288,6 +290,10 @@ impl Stdlib {
 
     pub fn complex(&self) -> &ClassType {
         Self::primitive(&self.complex)
+    }
+
+    pub fn decimal(&self) -> &ClassType {
+        Self::primitive(&self.decimal)
     }
 
     pub fn bytes(&self) -> &ClassType {

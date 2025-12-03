@@ -15,6 +15,8 @@ use compact_str::CompactString;
 use const_str;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
+use starlark_map::ordered_map::OrderedMap;
+use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
 
 use crate::uniques::Unique;
@@ -322,6 +324,54 @@ impl<To: 'static, T0: VisitMut<To>, T1: VisitMut<To>, T2: VisitMut<To>, T3: Visi
         self.1.visit_mut(f);
         self.2.visit_mut(f);
         self.3.visit_mut(f);
+    }
+}
+
+impl<To: 'static, K: Visit<To>, V: Visit<To>> Visit<To> for SmallMap<K, V> {
+    const RECURSE_CONTAINS: bool =
+        <K as Visit<To>>::VISIT_CONTAINS || <V as Visit<To>>::VISIT_CONTAINS;
+
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
+        for (key, value) in self.iter() {
+            key.visit(f);
+            value.visit(f);
+        }
+    }
+}
+
+/// We don't implement this for a general K because we can't call visit_mut on the keys.
+/// Note that trying to Visit the Name will fail.
+impl<To: 'static, V: VisitMut<To>> VisitMut<To> for SmallMap<Name, V> {
+    const RECURSE_CONTAINS: bool = <V as VisitMut<To>>::VISIT_CONTAINS;
+
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
+        for value in self.values_mut() {
+            value.visit_mut(f);
+        }
+    }
+}
+
+impl<To: 'static, K: Visit<To>, V: Visit<To>> Visit<To> for OrderedMap<K, V> {
+    const RECURSE_CONTAINS: bool =
+        <K as Visit<To>>::VISIT_CONTAINS || <V as Visit<To>>::VISIT_CONTAINS;
+
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
+        for (key, value) in self.iter() {
+            key.visit(f);
+            value.visit(f);
+        }
+    }
+}
+
+/// We don't implement this for a general K because we can't call visit_mut on the keys.
+/// Note that trying to Visit the Name will fail.
+impl<To: 'static, V: VisitMut<To>> VisitMut<To> for OrderedMap<Name, V> {
+    const RECURSE_CONTAINS: bool = <V as VisitMut<To>>::VISIT_CONTAINS;
+
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
+        for value in self.values_mut() {
+            value.visit_mut(f);
+        }
     }
 }
 
