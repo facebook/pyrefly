@@ -374,15 +374,24 @@ impl<'a> BindingsBuilder<'a> {
         range: TextRange,
         comprehensions: &mut [Comprehension],
         usage: &mut Usage,
+        is_generator: bool,
     ) {
-        let is_async = comprehensions.iter().any(|comp| comp.is_async);
         for (i, comp) in comprehensions.iter_mut().enumerate() {
             // Resolve the type of the iteration value *before* binding the target of the iteration.
             // This is necessary so that, e.g. `[x for x in x]` correctly uses the outer scope for
             // the `in x` lookup.
             self.ensure_expr(&mut comp.iter, usage);
             if i == 0 {
-                self.scopes.push(Scope::comprehension(range, is_async));
+                // Async list/set/dict comprehensions must be inside an async def. Async generator
+                // expressions are allowed to stand alone because they produce an async generator.
+                if comp.is_async && !is_generator && !self.scopes.is_in_async_def() {
+                    self.error(
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "asynchronous comprehension outside of an async function".to_owned(),
+                    );
+                }
+                self.scopes.push(Scope::comprehension(range, is_generator));
             }
             // Incomplete nested comprehensions can have identical iterators
             // for inner and outer loops. It is safe to overwrite it because it literally the same.
@@ -702,23 +711,23 @@ impl<'a> BindingsBuilder<'a> {
                 self.bind_lambda(x, usage);
             }
             Expr::ListComp(x) => {
-                self.bind_comprehensions(x.range, &mut x.generators, usage);
+                self.bind_comprehensions(x.range, &mut x.generators, usage, false);
                 self.ensure_expr(&mut x.elt, usage);
                 self.scopes.pop();
             }
             Expr::SetComp(x) => {
-                self.bind_comprehensions(x.range, &mut x.generators, usage);
+                self.bind_comprehensions(x.range, &mut x.generators, usage, false);
                 self.ensure_expr(&mut x.elt, usage);
                 self.scopes.pop();
             }
             Expr::DictComp(x) => {
-                self.bind_comprehensions(x.range, &mut x.generators, usage);
+                self.bind_comprehensions(x.range, &mut x.generators, usage, false);
                 self.ensure_expr(&mut x.key, usage);
                 self.ensure_expr(&mut x.value, usage);
                 self.scopes.pop();
             }
             Expr::Generator(x) => {
-                self.bind_comprehensions(x.range, &mut x.generators, usage);
+                self.bind_comprehensions(x.range, &mut x.generators, usage, true);
                 self.ensure_expr(&mut x.elt, usage);
                 self.scopes.pop();
             }

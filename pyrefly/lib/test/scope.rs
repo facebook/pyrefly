@@ -112,6 +112,78 @@ async def main():
 );
 
 testcase!(
+    test_await_inside_generator_expression_ok,
+    r#"
+import asyncio
+
+async def coro():
+    return 1
+
+g = (await coro() for _ in range(3))
+
+async def consume():
+    async for value in g:
+        print(value)
+"#,
+);
+
+testcase!(
+    test_await_inside_list_comprehension_errors,
+    r#"
+import asyncio
+
+async def coro():
+    return 1
+
+xs = [await coro() for _ in range(3)]  # E: `await` can only be used inside an async function
+"#,
+);
+
+testcase!(
+    test_async_comprehensions_require_async_def,
+    r#"
+async def agen():
+    yield 1
+
+xs = [x async for x in agen()]  # E: asynchronous comprehension outside of an async function
+ys = {x async for x in agen()}  # E: asynchronous comprehension outside of an async function
+zs = {x: 0 async for x in agen()}  # E: asynchronous comprehension outside of an async function
+
+def f():
+    return [x async for x in agen()]  # E: asynchronous comprehension outside of an async function
+"#,
+);
+
+testcase!(
+    test_async_comprehension_nested_in_async_def_ok,
+    r#"
+async def agen():
+    yield 1
+
+async def outer():
+    xs = [x async for x in agen()]  # ok
+    ys = {x async for x in agen()}  # ok
+    zs = {x: x async for x in agen()}  # ok
+    inner_gen = ([x async for x in agen()] for _ in range(2))  # ok (outer gen wraps async def)
+    return xs, ys, zs, inner_gen
+"#,
+);
+
+testcase!(
+    test_async_comprehension_nested_in_sync_def_errors,
+    r#"
+async def agen():
+    yield 1
+
+def outer():
+    xs = [x async for x in agen()]  # E: asynchronous comprehension outside of an async function
+    ys = {x async for x in agen()}  # E: asynchronous comprehension outside of an async function
+    zs = {x: x async for x in agen()}  # E: asynchronous comprehension outside of an async function
+    return xs, ys, zs
+"#,
+);
+
+testcase!(
     test_global_simple,
     r#"
 x: str = ""

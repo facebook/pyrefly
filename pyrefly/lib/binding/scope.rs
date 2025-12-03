@@ -863,7 +863,7 @@ impl ScopeMethod {
 enum ScopeKind {
     Annotation,
     Class(ScopeClass),
-    Comprehension { is_async: bool },
+    Comprehension { is_generator: bool },
     Function(ScopeFunction),
     Method(ScopeMethod),
     Module,
@@ -986,11 +986,11 @@ impl Scope {
         )
     }
 
-    pub fn comprehension(range: TextRange, is_async: bool) -> Self {
+    pub fn comprehension(range: TextRange, is_generator: bool) -> Self {
         Self::new(
             range,
             FlowBarrier::AllowFlowChecked,
-            ScopeKind::Comprehension { is_async },
+            ScopeKind::Comprehension { is_generator },
         )
     }
 
@@ -1166,8 +1166,8 @@ impl Scopes {
                 ScopeKind::Method(method_scope) => {
                     return method_scope.is_async;
                 }
-                ScopeKind::Comprehension { is_async } => {
-                    if *is_async {
+                ScopeKind::Comprehension { is_generator } => {
+                    if *is_generator {
                         return true;
                     }
                 }
