@@ -9,7 +9,10 @@ use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::util::ExpectedInlayHint;
+use crate::test::lsp::lsp_interaction::util::ExpectedTextEdit;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::inlay_hints_match_expected;
 
 #[test]
 fn test_inlay_hint_default_config() {
@@ -25,69 +28,44 @@ fn test_inlay_hint_default_config() {
 
     interaction.client.did_open("inlay_hint_test.py");
 
+    let expected = [
+        ExpectedInlayHint {
+            labels: &[
+                " -> ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]", "]",
+            ],
+            position: (6, 21),
+            text_edit: ExpectedTextEdit {
+                new_text: " -> tuple[Literal[1], Literal[2]]",
+                range_start: (6, 21),
+                range_end: (6, 21),
+            },
+        },
+        ExpectedInlayHint {
+            labels: &[
+                ": ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]", "]",
+            ],
+            position: (11, 6),
+            text_edit: ExpectedTextEdit {
+                new_text: ": tuple[Literal[1], Literal[2]]",
+                range_start: (11, 6),
+                range_end: (11, 6),
+            },
+        },
+        ExpectedInlayHint {
+            labels: &[" -> ", "Literal", "[", "0", "]"],
+            position: (14, 15),
+            text_edit: ExpectedTextEdit {
+                new_text: " -> Literal[0]",
+                range_start: (14, 15),
+                range_end: (14, 15),
+            },
+        },
+    ];
+
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([
-            {
-                "label":[
-                    {"value":" -> "},
-                    {"value":"tuple"},
-                    {"value":"["},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"1"},
-                    {"value":"]"},
-                    {"value":", "},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"2"},
-                    {"value":"]"},
-                    {"value":"]"}
-                ],
-                "position":{"character":21,"line":6},
-                "textEdits":[{
-                    "newText":" -> tuple[Literal[1], Literal[2]]",
-                    "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
-                }]
-            },
-            {
-                "label":[
-                    {"value":": "},
-                    {"value":"tuple"},
-                    {"value":"["},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"1"},
-                    {"value":"]"},
-                    {"value":", "},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"2"},
-                    {"value":"]"},
-                    {"value":"]"}
-                ],
-                "position":{"character":6,"line":11},
-                "textEdits":[{
-                    "newText":": tuple[Literal[1], Literal[2]]",
-                    "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
-                }]
-            },
-            {
-                "label":[
-                    {"value":" -> "},
-                    {"value":"Literal"},
-                    {"value":"["},
-                    {"value":"0"},
-                    {"value":"]"}
-                ],
-                "position":{"character":15,"line":14},
-                "textEdits":[{
-                    "newText":" -> Literal[0]",
-                    "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
-                }]
-            }
-        ]))
+        .expect_response_with(|result| inlay_hints_match_expected(result, &expected))
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -181,42 +159,32 @@ fn test_inlay_hint_disable_variables() {
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([{
-            "label":[
-                {"value":" -> "},
-                {"value":"tuple"},
-                {"value":"["},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"1"},
-                {"value":"]"},
-                {"value":", "},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"2"},
-                {"value":"]"},
-                {"value":"]"}
-            ],
-            "position":{"character":21,"line":6},
-            "textEdits":[{
-                "newText":" -> tuple[Literal[1], Literal[2]]",
-                "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
-            }]
-        },
-        {
-            "label":[
-                {"value":" -> "},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"0"},
-                {"value":"]"}
-            ],
-            "position":{"character":15,"line":14},
-            "textEdits":[{
-                "newText":" -> Literal[0]",
-                "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
-            }]
-        }]))
+        .expect_response_with(|result| {
+            let expected = [
+                ExpectedInlayHint {
+                    labels: &[
+                        " -> ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2",
+                        "]", "]",
+                    ],
+                    position: (6, 21),
+                    text_edit: ExpectedTextEdit {
+                        new_text: " -> tuple[Literal[1], Literal[2]]",
+                        range_start: (6, 21),
+                        range_end: (6, 21),
+                    },
+                },
+                ExpectedInlayHint {
+                    labels: &[" -> ", "Literal", "[", "0", "]"],
+                    position: (14, 15),
+                    text_edit: ExpectedTextEdit {
+                        new_text: " -> Literal[0]",
+                        range_start: (14, 15),
+                        range_end: (14, 15),
+                    },
+                },
+            ];
+            inlay_hints_match_expected(result, &expected)
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -245,28 +213,21 @@ fn test_inlay_hint_disable_returns() {
     interaction
         .client
         .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
-        .expect_response(json!([{
-            "label":[
-                {"value":": "},
-                {"value":"tuple"},
-                {"value":"["},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"1"},
-                {"value":"]"},
-                {"value":", "},
-                {"value":"Literal"},
-                {"value":"["},
-                {"value":"2"},
-                {"value":"]"},
-                {"value":"]"}
-            ],
-            "position":{"character":6,"line":11},
-            "textEdits":[{
-                "newText":": tuple[Literal[1], Literal[2]]",
-                "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
-            }]
-        }]))
+        .expect_response_with(|result| {
+            let expected = [ExpectedInlayHint {
+                labels: &[
+                    ": ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]",
+                    "]",
+                ],
+                position: (11, 6),
+                text_edit: ExpectedTextEdit {
+                    new_text: ": tuple[Literal[1], Literal[2]]",
+                    range_start: (11, 6),
+                    range_end: (11, 6),
+                },
+            }];
+            inlay_hints_match_expected(result, &expected)
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -320,6 +281,46 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
                 }
             }
             true
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_typing_literals_have_locations() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+
+            hints.iter().any(|hint| match &hint.label {
+                lsp_types::InlayHintLabel::LabelParts(parts) => parts.iter().any(|part| {
+                    part.value == "Literal"
+                        && part
+                            .location
+                            .as_ref()
+                            .map(|loc| loc.uri.path().contains("typing.pyi"))
+                            .unwrap_or(false)
+                }),
+                _ => false,
+            })
         })
         .unwrap();
 

@@ -5,11 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use serde_json::json;
-
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::util::ExpectedInlayHint;
+use crate::test::lsp::lsp_interaction::util::ExpectedTextEdit;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::inlay_hints_match_expected;
 
 #[test]
 fn test_inlay_hints() {
@@ -33,72 +34,56 @@ fn test_inlay_hints() {
 
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0)
-        .expect_response(json!([{
-            "label": [
-                {"value": " -> "},
-                {"value": "tuple"},
-                {"value": "["},
-                {"value": "Literal"},
-                {"value": "["},
-                {"value": "1"},
-                {"value": "]"},
-                {"value": ", "},
-                {"value": "Literal"},
-                {"value": "["},
-                {"value": "2"},
-                {"value": "]"},
-                {"value": "]"}
-            ],
-            "position": {"character": 21, "line": 0},
-            "textEdits": [{
-                "newText": " -> tuple[Literal[1], Literal[2]]",
-                "range": {"end": {"character": 21, "line": 0}, "start": {"character": 21, "line": 0}}
-            }]
-        }]))
+        .expect_response_with(|result| {
+            let expected = [ExpectedInlayHint {
+                labels: &[
+                    " -> ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]",
+                    "]",
+                ],
+                position: (0, 21),
+                text_edit: ExpectedTextEdit {
+                    new_text: " -> tuple[Literal[1], Literal[2]]",
+                    range_start: (0, 21),
+                    range_end: (0, 21),
+                },
+            }];
+            inlay_hints_match_expected(result, &expected)
+        })
         .unwrap();
 
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0)
-        .expect_response(json!([{
-            "label": [
-                {"value": ": "},
-                {"value": "tuple"},
-                {"value": "["},
-                {"value": "Literal"},
-                {"value": "["},
-                {"value": "1"},
-                {"value": "]"},
-                {"value": ", "},
-                {"value": "Literal"},
-                {"value": "["},
-                {"value": "2"},
-                {"value": "]"},
-                {"value": "]"}
-            ],
-            "position": {"character": 6, "line": 0},
-            "textEdits": [{
-                "newText": ": tuple[Literal[1], Literal[2]]",
-                "range": {"end": {"character": 6, "line": 0}, "start": {"character": 6, "line": 0}}
-            }]
-        }]))
+        .expect_response_with(|result| {
+            let expected = [ExpectedInlayHint {
+                labels: &[
+                    ": ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]",
+                    "]",
+                ],
+                position: (0, 6),
+                text_edit: ExpectedTextEdit {
+                    new_text: ": tuple[Literal[1], Literal[2]]",
+                    range_start: (0, 6),
+                    range_end: (0, 6),
+                },
+            }];
+            inlay_hints_match_expected(result, &expected)
+        })
         .unwrap();
 
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0)
-        .expect_response(json!([{
-            "label": [
-                {"value": " -> "},
-                {"value": "Literal"},
-                {"value": "["},
-                {"value": "0"},
-                {"value": "]"}
-            ],
-            "position": {"character": 15, "line": 0},
-            "textEdits": [{
-                "newText": " -> Literal[0]",
-                "range": {"end": {"character": 15, "line": 0}, "start": {"character": 15, "line": 0}}
-            }]
-        }]))
+        .expect_response_with(|result| {
+            let expected = [ExpectedInlayHint {
+                labels: &[" -> ", "Literal", "[", "0", "]"],
+                position: (0, 15),
+                text_edit: ExpectedTextEdit {
+                    new_text: " -> Literal[0]",
+                    range_start: (0, 15),
+                    range_end: (0, 15),
+                },
+            }];
+            inlay_hints_match_expected(result, &expected)
+        })
         .unwrap();
     interaction.shutdown().unwrap();
 }
