@@ -343,21 +343,7 @@ fn test_interpreter_change_removes_type_errors() {
             }
         ]));
 
-    // BUG: Expecting 1 error demonstrates incorrect behavior.
     // After switching to good interpreter, the error should be resolved to 0.
-    interaction
-        .client
-        .expect_publish_diagnostics_error_count(
-            test_files_root.path().join("custom_interpreter/src/foo.py"),
-            1,
-        )
-        .unwrap();
-
-    // BUG: it works after a did_close -> did_open
-    interaction
-        .client
-        .did_close("custom_interpreter/src/foo.py");
-    interaction.client.did_open("custom_interpreter/src/foo.py");
     interaction
         .client
         .expect_publish_diagnostics_error_count(

@@ -96,6 +96,8 @@ use crate::state::epoch::Epochs;
 use crate::state::errors::Errors;
 use crate::state::load::FileContents;
 use crate::state::load::Load;
+use crate::state::loader::FindError;
+use crate::state::loader::Finding;
 use crate::state::loader::FindingOrError;
 use crate::state::loader::LoaderFindCache;
 use crate::state::memory::MemoryFiles;
@@ -111,6 +113,16 @@ use crate::types::stdlib::Stdlib;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
+/// Result of attempting to import a module - either successfully resolved handles or an error.
+#[derive(Debug, Clone)]
+enum ImportResult {
+    /// Successfully resolved import(s). Most modules resolve to one handle,
+    /// but some can resolve to multiple paths.
+    Success(SmallSet1<Handle>),
+    /// Import failed with this error.
+    Error(FindError),
+}
+
 /// `ModuleData` is a snapshot of `ArcId<ModuleDataMut>` in the main state.
 /// The snapshot is readonly most of the times. It will only be overwritten with updated information
 /// from `Transaction` when we decide to commit a `Transaction` into the main state.
@@ -119,9 +131,10 @@ struct ModuleData {
     handle: Handle,
     config: ArcId<ConfigFile>,
     state: ModuleDataInner,
-    /// The dependencies of this module.
-    /// Most modules exist in exactly one place, but it can be possible to load the same module multiple times with different paths.
-    deps: HashMap<ModuleName, SmallSet1<Handle>, BuildNoHash>,
+    /// The dependencies of this module. Contains both successful imports (as handles)
+    /// and failed imports (as errors). Most modules exist in exactly one place, but it can be
+    /// possible to load the same module multiple times with different paths.
+    deps: HashMap<ModuleName, ImportResult, BuildNoHash>,
     rdeps: HashSet<Handle>,
 }
 
@@ -131,11 +144,11 @@ struct ModuleDataMut {
     config: RwLock<ArcId<ConfigFile>>,
     state: UpgradeLock<Step, ModuleDataInner>,
     /// Invariant: If `h1` depends on `h2` then we must have both of:
-    /// data[h1].deps[h2.module].contains(h2)
+    /// data[h1].deps[h2.module] == Success(set) where set.contains(h2)
     /// data[h2].rdeps.contains(h1)
     ///
     /// To ensure that is atomic, we always modify the rdeps while holding the deps write lock.
-    deps: RwLock<HashMap<ModuleName, SmallSet1<Handle>, BuildNoHash>>,
+    deps: RwLock<HashMap<ModuleName, ImportResult, BuildNoHash>>,
     /// The reverse dependencies of this module. This is used to invalidate on change.
     /// Note that if we are only running once, e.g. on the command line, this isn't valuable.
     /// But we create it anyway for simplicity, since it doesn't seem to add much overhead.
@@ -612,7 +625,14 @@ impl<'a> Transaction<'a> {
                 // Downgrade to exclusive, so other people can read from us, or we lock up.
                 // But don't give up the lock entirely, so we don't recompute anything
                 let _exclusive = w.exclusive();
-                for dep_handle in deps.values().flatten() {
+                for dep_handle in deps
+                    .values()
+                    .filter_map(|r| match r {
+                        ImportResult::Success(handles) => Some(handles),
+                        ImportResult::Error(_) => None,
+                    })
+                    .flatten()
+                {
                     let removed = self
                         .get_module(dep_handle)
                         .rdeps
@@ -686,19 +706,59 @@ impl<'a> Transaction<'a> {
         if exclusive.dirty.find {
             let loader = self.get_cached_loader(&module_data.config.read());
             let mut is_dirty = false;
-            for dependency_handle in module_data.deps.read().values().flatten() {
-                match loader
-                    .find_import(dependency_handle.module(), Some(module_data.handle.path()))
-                {
-                    FindingOrError::Finding(path) if &path.finding == dependency_handle.path() => {}
-                    _ => {
-                        is_dirty = true;
-                        break;
+
+            // Check if any imports have changed (either successful imports moved or failed imports changed)
+            for (module, import_result) in module_data.deps.read().iter() {
+                match import_result {
+                    ImportResult::Success(handles) => {
+                        // Check if previously successful imports have moved
+                        for dependency_handle in handles {
+                            match loader.find_import(
+                                dependency_handle.module(),
+                                Some(module_data.handle.path()),
+                            ) {
+                                FindingOrError::Finding(path)
+                                    if &path.finding == dependency_handle.path() => {}
+                                _ => {
+                                    is_dirty = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    ImportResult::Error(old_error) => {
+                        // Check if previously failed imports might now succeed or have a different error
+                        match loader.find_import(*module, Some(module_data.handle.path())) {
+                            FindingOrError::Finding(_) => {
+                                // Previously failed import can now be resolved
+                                is_dirty = true;
+                            }
+                            FindingOrError::Error(new_error) => {
+                                // Only mark dirty if the error message changed
+                                if &new_error != old_error {
+                                    is_dirty = true;
+                                }
+                            }
+                        }
                     }
                 }
+                if is_dirty {
+                    break;
+                }
             }
+
             if is_dirty {
-                let write = exclusive.write();
+                let mut write = exclusive.write();
+                // Create new ErrorCollector to clear old errors from the previous config
+                if let Some(old_load) = write.steps.load.dupe() {
+                    write.steps.load = Some(Arc::new(Load {
+                        errors: ErrorCollector::new(
+                            old_load.module_info.dupe(),
+                            old_load.errors.style(),
+                        ),
+                        module_info: old_load.module_info.clone(),
+                    }));
+                }
                 rebuild(write, false);
                 return;
             }
@@ -1544,33 +1604,59 @@ impl<'a> TransactionHandle<'a> {
         path: Option<&ModulePath>,
     ) -> FindingOrError<ArcId<ModuleDataMut>> {
         let require = self.module_data.state.read().require;
-        if let Some(res) = self.module_data.deps.read().get(&module).map(|x| x.first())
-            && path.is_none_or(|path| path == res.path())
-        {
-            return FindingOrError::new_finding(self.transaction.get_imported_module(res, require));
+        if let Some(ImportResult::Success(handles)) = self.module_data.deps.read().get(&module) {
+            let res = handles.first();
+            if path.is_none_or(|path| path == res.path()) {
+                return FindingOrError::new_finding(
+                    self.transaction.get_imported_module(res, require),
+                );
+            }
         }
 
         let handle = self
             .transaction
             .import_handle(&self.module_data.handle, module, path);
-        handle.map(|handle| {
-            let res = self.transaction.get_imported_module(&handle, require);
-            let mut write = self.module_data.deps.write();
-            let did_insert = match write.entry(module) {
-                Entry::Vacant(e) => {
-                    e.insert(SmallSet1::new(handle));
-                    true
+
+        match handle {
+            FindingOrError::Finding(finding) => {
+                let handle = finding.finding;
+                let error = finding.error;
+                let res = self.transaction.get_imported_module(&handle, require);
+                let mut write = self.module_data.deps.write();
+                let did_insert = match write.entry(module) {
+                    Entry::Vacant(e) => {
+                        e.insert(ImportResult::Success(SmallSet1::new(handle)));
+                        true
+                    }
+                    Entry::Occupied(mut e) => match e.get_mut() {
+                        ImportResult::Success(handles) => handles.insert(handle),
+                        ImportResult::Error(_) => {
+                            // Previously failed, now succeeds - replace with success
+                            *e.get_mut() = ImportResult::Success(SmallSet1::new(handle));
+                            true
+                        }
+                    },
+                };
+                if did_insert {
+                    let inserted = res.rdeps.lock().insert(self.module_data.handle.dupe());
+                    assert!(inserted);
                 }
-                Entry::Occupied(mut e) => e.get_mut().insert(handle),
-            };
-            if did_insert {
-                let inserted = res.rdeps.lock().insert(self.module_data.handle.dupe());
-                assert!(inserted);
+                // Make sure we hold the deps write lock until after we insert into rdeps.
+                drop(write);
+                FindingOrError::Finding(Finding {
+                    finding: res,
+                    error,
+                })
             }
-            // Make sure we hold the deps write lock until after we insert into rdeps.
-            drop(write);
-            res
-        })
+            FindingOrError::Error(err) => {
+                // Store the failed import and its error so we can detect when it changes
+                self.module_data
+                    .deps
+                    .write()
+                    .insert(module, ImportResult::Error(err.clone()));
+                FindingOrError::Error(err)
+            }
+        }
     }
 }
 
