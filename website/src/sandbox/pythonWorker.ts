@@ -82,6 +82,18 @@ const initPyodide = async () => {
         },
     });
 
+    // Load python-dateutil package for sandbox use
+    // See: https://github.com/facebook/pyrefly/issues/1699
+    try {
+        await py.loadPackage('micropip');
+        await py.runPythonAsync(`
+import micropip
+await micropip.install('python-dateutil')
+        `);
+    } catch (error) {
+        console.error('[Pyodide] Failed to install python-dateutil:', error);
+    }
+
     return py;
 };
 
