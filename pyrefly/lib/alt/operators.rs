@@ -129,38 +129,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (Tuple::Concrete(l), Tuple::Concrete(r)) => {
                 let mut elements = l.clone();
                 elements.extend(r.clone());
-                Type::Tuple(Tuple::Concrete(elements))
+                Type::concrete_tuple(elements)
             }
             (Tuple::Unbounded(l), Tuple::Unbounded(r)) => {
-                Type::Tuple(Tuple::unbounded(self.union((**l).clone(), (**r).clone())))
+                Type::unbounded_tuple(self.union((**l).clone(), (**r).clone()))
             }
-            (Tuple::Concrete(l), r @ Tuple::Unbounded(_)) => Type::Tuple(Tuple::unpacked(
-                l.clone(),
-                Type::Tuple(r.clone()),
-                Vec::new(),
-            )),
-            (l @ Tuple::Unbounded(_), Tuple::Concrete(r)) => Type::Tuple(Tuple::unpacked(
-                Vec::new(),
-                Type::Tuple(l.clone()),
-                r.clone(),
-            )),
+            (Tuple::Concrete(l), r @ Tuple::Unbounded(_)) => {
+                Type::unpacked_tuple(l.clone(), Type::Tuple(r.clone()), Vec::new())
+            }
+            (l @ Tuple::Unbounded(_), Tuple::Concrete(r)) => {
+                Type::unpacked_tuple(Vec::new(), Type::Tuple(l.clone()), r.clone())
+            }
             (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Concrete(r)) => {
                 let mut new_suffix = l_suffix.clone();
                 new_suffix.extend(r.clone());
-                Type::Tuple(Tuple::unpacked(
-                    l_prefix.clone(),
-                    l_middle.clone(),
-                    new_suffix,
-                ))
+                Type::unpacked_tuple(l_prefix.clone(), l_middle.clone(), new_suffix)
             }
             (Tuple::Concrete(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
                 let mut new_prefix = l.clone();
                 new_prefix.extend(r_prefix.clone());
-                Type::Tuple(Tuple::unpacked(
-                    new_prefix,
-                    r_middle.clone(),
-                    r_suffix.clone(),
-                ))
+                Type::unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.clone())
             }
             (Tuple::Unbounded(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
                 let mut middle = r_prefix.clone();
@@ -169,11 +157,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.unwrap_iterable(r_middle)
                         .unwrap_or(Type::any_implicit()),
                 );
-                Type::Tuple(Tuple::unpacked(
+                Type::unpacked_tuple(
                     Vec::new(),
-                    Type::Tuple(Tuple::unbounded(self.unions(middle))),
+                    Type::unbounded_tuple(self.unions(middle)),
                     r_suffix.clone(),
-                ))
+                )
             }
             (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Unbounded(r)) => {
                 let mut middle = l_suffix.clone();
@@ -182,11 +170,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.unwrap_iterable(l_middle)
                         .unwrap_or(Type::any_implicit()),
                 );
-                Type::Tuple(Tuple::unpacked(
+                Type::unpacked_tuple(
                     l_prefix.clone(),
-                    Type::Tuple(Tuple::unbounded(self.unions(middle))),
+                    Type::unbounded_tuple(self.unions(middle)),
                     Vec::new(),
-                ))
+                )
             }
             (
                 Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)),
@@ -202,11 +190,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.unwrap_iterable(r_middle)
                         .unwrap_or(Type::any_implicit()),
                 );
-                Type::Tuple(Tuple::unpacked(
+                Type::unpacked_tuple(
                     l_prefix.clone(),
-                    Type::Tuple(Tuple::unbounded(self.unions(middle))),
+                    Type::unbounded_tuple(self.unions(middle)),
                     r_suffix.clone(),
-                ))
+                )
             }
         }
     }
@@ -353,100 +341,88 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn compare_infer(&self, x: &ExprCompare, errors: &ErrorCollector) -> Type {
-        let left = self.expr_infer(&x.left, errors);
-        let comparisons = x.ops.iter().zip(x.comparators.iter());
-        self.unions(
-            comparisons
-                .map(|(op, comparator)| {
-                    let right = self.expr_infer(comparator, errors);
-                    self.distribute_over_union(&left, |left| {
-                        self.distribute_over_union(&right, |right| {
-                            let context = || {
-                                ErrorContext::BinaryOp(
-                                    op.as_str().to_owned(),
-                                    self.for_display(left.clone()),
-                                    self.for_display(right.clone()),
-                                )
-                            };
-                            match op {
-                                CmpOp::Is | CmpOp::IsNot => {
-                                    // These comparisons never error.
-                                    self.stdlib.bool().clone().to_type()
-                                }
-                                CmpOp::In | CmpOp::NotIn => {
-                                    // See https://docs.python.org/3/reference/expressions.html#membership-test-operations.
-                                    // `x in y` first tries `y.__contains__(x)`, then checks if `x` matches an element
-                                    // obtained by iterating over `y`.
-                                    if let Some(ret) = self.call_magic_dunder_method(
-                                        right,
-                                        &dunder::CONTAINS,
-                                        x.range,
-                                        &[CallArg::ty(left, x.left.range())],
-                                        &[],
-                                        errors,
-                                        Some(&context),
-                                    ) {
-                                        // Comparison method called.
-                                        ret
-                                    } else {
-                                        let iteration_errors = self.error_collector();
-                                        let iterables = self.iterate(
-                                            right,
-                                            x.range,
-                                            &iteration_errors,
-                                            Some(&context),
-                                        );
-                                        if iteration_errors.is_empty() {
-                                            // Make sure `x` matches the produced type.
-                                            self.check_type(
-                                                left,
-                                                &self.get_produced_type(iterables),
-                                                x.range,
-                                                errors,
-                                                &|| TypeCheckContext {
-                                                    kind: TypeCheckKind::Container,
-                                                    context: Some(context()),
-                                                },
-                                            );
-                                        } else {
-                                            // Iterating `y` failed.
-                                            errors.extend(iteration_errors);
-                                        }
-                                        self.stdlib.bool().clone().to_type()
-                                    }
-                                }
-                                _ => {
-                                    // We've handled the other cases above, so we know we have a rich comparison op.
-                                    let calls_to_try = [
-                                        (
-                                            &dunder::rich_comparison_dunder(*op).unwrap(),
-                                            left,
-                                            right,
-                                        ),
-                                        (
-                                            &dunder::rich_comparison_fallback(*op).unwrap(),
-                                            right,
-                                            left,
-                                        ),
-                                    ];
-                                    let ret = self.try_binop_calls(
-                                        &calls_to_try,
+        // For chained comparisons like `a < b < c`, Python evaluates as `(a < b) and (b < c)`.
+        // We need to track the current left operand as we iterate through the chain.
+        let mut current_left = self.expr_infer(&x.left, errors);
+        let mut current_left_range = x.left.range();
+        let mut results = Vec::new();
+        for (op, comparator) in x.ops.iter().zip(x.comparators.iter()) {
+            let right = self.expr_infer(comparator, errors);
+            let result = self.distribute_over_union(&current_left, |left| {
+                self.distribute_over_union(&right, |right| {
+                    let context = || {
+                        ErrorContext::BinaryOp(
+                            op.as_str().to_owned(),
+                            self.for_display(left.clone()),
+                            self.for_display(right.clone()),
+                        )
+                    };
+                    match op {
+                        CmpOp::Is | CmpOp::IsNot => {
+                            // These comparisons never error.
+                            self.stdlib.bool().clone().to_type()
+                        }
+                        CmpOp::In | CmpOp::NotIn => {
+                            // See https://docs.python.org/3/reference/expressions.html#membership-test-operations.
+                            // `x in y` first tries `y.__contains__(x)`, then checks if `x` matches an element
+                            // obtained by iterating over `y`.
+                            if let Some(ret) = self.call_magic_dunder_method(
+                                right,
+                                &dunder::CONTAINS,
+                                x.range,
+                                &[CallArg::ty(left, current_left_range)],
+                                &[],
+                                errors,
+                                Some(&context),
+                            ) {
+                                // Comparison method called.
+                                ret
+                            } else {
+                                let iteration_errors = self.error_collector();
+                                let iterables =
+                                    self.iterate(right, x.range, &iteration_errors, Some(&context));
+                                if iteration_errors.is_empty() {
+                                    // Make sure `x` matches the produced type.
+                                    self.check_type(
+                                        left,
+                                        &self.get_produced_type(iterables),
                                         x.range,
                                         errors,
-                                        &context,
+                                        &|| TypeCheckContext {
+                                            kind: TypeCheckKind::Container,
+                                            context: Some(context()),
+                                        },
                                     );
-                                    if ret.is_error() {
-                                        self.stdlib.bool().clone().to_type()
-                                    } else {
-                                        ret
-                                    }
+                                } else {
+                                    // Iterating `y` failed.
+                                    errors.extend(iteration_errors);
                                 }
+                                self.stdlib.bool().clone().to_type()
                             }
-                        })
-                    })
+                        }
+                        _ => {
+                            // We've handled the other cases above, so we know we have a rich comparison op.
+                            let calls_to_try = [
+                                (&dunder::rich_comparison_dunder(*op).unwrap(), left, right),
+                                (&dunder::rich_comparison_fallback(*op).unwrap(), right, left),
+                            ];
+                            let ret =
+                                self.try_binop_calls(&calls_to_try, x.range, errors, &context);
+                            if ret.is_error() {
+                                self.stdlib.bool().clone().to_type()
+                            } else {
+                                ret
+                            }
+                        }
+                    }
                 })
-                .collect(),
-        )
+            });
+            results.push(result);
+            // For next comparison, the current right becomes the new left
+            current_left = right;
+            current_left_range = comparator.range();
+        }
+        self.unions(results)
     }
 
     pub fn unop_infer(&self, x: &ExprUnaryOp, errors: &ErrorCollector) -> Type {

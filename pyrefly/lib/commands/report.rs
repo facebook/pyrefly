@@ -10,14 +10,18 @@ use std::collections::HashMap;
 use clap::Parser;
 use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
+use pyrefly_config::finder::ConfigFinder;
+use pyrefly_python::module::Module;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
 use regex::Regex;
 use ruff_python_ast::Parameters;
 use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 use serde::Serialize;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingClass;
 use crate::binding::binding::Key;
 use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::Bindings;
@@ -110,10 +114,7 @@ impl ReportArgs {
     }
 
     /// Helper to convert byte offset to line and column position
-    fn offset_to_position(
-        module: &pyrefly_python::module::Module,
-        offset: ruff_text_size::TextSize,
-    ) -> Position {
+    fn offset_to_position(module: &Module, offset: ruff_text_size::TextSize) -> Position {
         let location = module.lined_buffer().line_index().source_location(
             offset,
             module.lined_buffer().contents(),
@@ -126,10 +127,7 @@ impl ReportArgs {
     }
 
     /// Helper to convert a text range to a Location
-    fn range_to_location(
-        module: &pyrefly_python::module::Module,
-        range: ruff_text_size::TextRange,
-    ) -> Location {
+    fn range_to_location(module: &Module, range: TextRange) -> Location {
         Location {
             start: Self::offset_to_position(module, range.start()),
             end: Self::offset_to_position(module, range.end()),
@@ -137,7 +135,7 @@ impl ReportArgs {
     }
 
     /// Helper to parse suppression comments from source code
-    fn parse_suppressions(module: &pyrefly_python::module::Module) -> Vec<Suppression> {
+    fn parse_suppressions(module: &Module) -> Vec<Suppression> {
         let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[([^\]]*)\]").unwrap();
         let source = module.lined_buffer().contents();
         let lines: Vec<&str> = source.lines().collect();
@@ -183,19 +181,26 @@ impl ReportArgs {
         suppressions
     }
 
-    fn parse_functions(
-        module: &pyrefly_python::module::Module,
-        bindings: Bindings,
-    ) -> Vec<Function> {
+    fn parse_functions(module: &Module, bindings: Bindings) -> Vec<Function> {
         let mut functions = Vec::new();
         for idx in bindings.keys::<Key>() {
             if let Key::Definition(id) = bindings.idx_to_key(idx)
                 && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
             {
                 let fun = bindings.get(bindings.get(*x).undecorated_idx);
-                let func_name = module.code_at(id.range());
                 let location = Self::range_to_location(module, fun.def.range);
-
+                let func_name = if let Some(class_key) = fun.class_key {
+                    match bindings.get(class_key) {
+                        BindingClass::ClassDef(cls) => {
+                            format!("{}.{}.{}", module.name(), cls.def.name, fun.def.name)
+                        }
+                        BindingClass::FunctionalClassDef(..) => {
+                            continue;
+                        }
+                    }
+                } else {
+                    format!("{}.{}", module.name(), fun.def.name)
+                };
                 // Get return annotation from ReturnTypeKind
                 let return_annotation = {
                     let return_key = Key::ReturnType(*id);
@@ -224,7 +229,7 @@ impl ReportArgs {
                 let all_params = Self::extract_parameters(&fun.def.parameters);
 
                 for param in all_params {
-                    let param_name = module.code_at(param.name.range());
+                    let param_name = param.name.as_str();
                     let param_annotation = param
                         .annotation
                         .as_ref()
@@ -237,7 +242,7 @@ impl ReportArgs {
                     });
                 }
                 functions.push(Function {
-                    name: func_name.to_owned(),
+                    name: func_name,
                     return_annotation,
                     parameters,
                     location,
@@ -249,7 +254,7 @@ impl ReportArgs {
 
     fn run_inner(
         files_to_check: Box<dyn Includes>,
-        config_finder: pyrefly_config::finder::ConfigFinder,
+        config_finder: ConfigFinder,
     ) -> anyhow::Result<CommandExitStatus> {
         let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
         let state = State::new(config_finder);

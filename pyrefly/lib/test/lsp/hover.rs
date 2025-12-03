@@ -16,7 +16,7 @@ use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
-    match get_hover(&state.transaction(), handle, position) {
+    match get_hover(&state.transaction(), handle, position, true) {
         Some(Hover {
             contents: HoverContents::Markup(markup),
             ..
@@ -116,7 +116,7 @@ takes(foo=1, bar="x", baz=None)
     foo: int,
     bar: str,
     baz: bool | None,
-    **kwargs: Unpack[TypedDict[Payload]]
+    **kwargs: Unpack[Payload]
 ) -> None: ...
 ```
 "#
@@ -202,6 +202,137 @@ x: int = 5  # pyrefly: ignore[bad-return]
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
     assert!(report.contains("No errors suppressed"));
+}
+
+#[test]
+fn hover_shows_parameter_doc_for_keyword_argument() {
+    let code = r#"
+def foo(x: int, y: int) -> None:
+    """
+    Args:
+        x: documentation for x
+        y: documentation for y
+    """
+    ...
+
+foo(x=1, y=2)
+#   ^
+foo(x=1, y=2)
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("**Parameter `x`**"),
+        "Expected parameter documentation for x, got: {report}"
+    );
+    assert!(report.contains("documentation for x"));
+    assert!(report.contains("**Parameter `y`**"));
+    assert!(report.contains("documentation for y"));
+}
+
+#[test]
+fn hover_returns_none_for_docstring_literals() {
+    let code = r#"
+def foo():
+    """Function docstring."""
+#    ^
+    return 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     """Function docstring."""
+         ^
+None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_shows_parameter_doc_with_multiline_description() {
+    let code = r#"
+def foo(param: int) -> None:
+    """
+    Args:
+        param: This is a long parameter description
+            that spans multiple lines
+            with detailed information
+    """
+    ...
+
+foo(param=1)
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(report.contains("**Parameter `param`**"));
+    assert!(report.contains("This is a long parameter description"));
+    assert!(report.contains("that spans multiple lines"));
+    assert!(report.contains("with detailed information"));
+}
+
+#[test]
+fn hover_on_parameter_definition_shows_doc() {
+    let code = r#"
+def foo(param: int) -> None:
+    """
+    Args:
+        param: documentation for param
+    """
+    print(param)
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("**Parameter `param`**"),
+        "Expected parameter doc when hovering on parameter usage, got: {report}"
+    );
+    assert!(report.contains("documentation for param"));
+}
+
+#[test]
+fn hover_parameter_doc_with_type_annotations_in_docstring() {
+    let code = r#"
+def foo(x, y):
+    """
+    Args:
+        x (int): an integer parameter
+        y (str): a string parameter
+    """
+    ...
+
+foo(x=1, y="hello")
+#   ^
+foo(x=1, y="hello")
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(report.contains("**Parameter `x`**"));
+    assert!(report.contains("an integer parameter"));
+    assert!(report.contains("**Parameter `y`**"));
+    assert!(report.contains("a string parameter"));
+}
+
+#[test]
+fn hover_parameter_doc_with_complex_types() {
+    let code = r#"
+from typing import Optional, List, Dict
+
+def foo(data: Optional[List[Dict[str, int]]]) -> None:
+    """
+    Args:
+        data: complex nested type parameter
+    """
+    ...
+
+foo(data=[])
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(report.contains("**Parameter `data`**"));
+    assert!(report.contains("complex nested type parameter"));
 }
 
 #[test]

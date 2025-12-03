@@ -12,7 +12,11 @@ use pyrefly_util::arc_id::ArcId;
 
 use crate::lsp::non_wasm::server::TypeErrorDisplayStatus;
 
-#[allow(dead_code)]
+/// Determines whether a file path belongs to the Python standard library.
+///
+/// This function checks if the given path is located within any of the configured
+/// Python interpreter's standard library directories. It canonicalizes both the input
+/// path and the stdlib paths for comparison to handle symlinks correctly.
 pub fn is_python_stdlib_file(path: &Path) -> bool {
     let stdlib_paths =
         pyrefly_config::environment::environment::PythonEnvironment::get_interpreter_stdlib_path()

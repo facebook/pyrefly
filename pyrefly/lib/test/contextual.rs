@@ -459,7 +459,7 @@ class TD[T](TypedDict):
 
 def test(x: TD[int | str]):
     x = TD(x = 0)
-    assert_type(x, TD[int]) # E: assert_type(TypedDict[TD[int | str]], TypedDict[TD[int]]) failed
+    assert_type(x, TD[int]) # E: assert_type(TD[int | str], TD[int]) failed
 "#,
 );
 
@@ -589,7 +589,7 @@ def f[T]() -> Callable[[T], T]:
 testcase!(
     test_assign_lambda_to_protocol,
     r#"
-from typing import Protocol, reveal_type
+from typing import Protocol
 class Identity(Protocol):
     def __call__[T](self, x: T) -> T:
         return x
@@ -657,6 +657,6 @@ class TD2(TypedDict):
 x1: tuple[TD1] | tuple[TD2, ...] = ({"x": 0},)
 x2: tuple[TD1] | tuple[TD2, ...] = ({"y": "a"}, {"y": "b"})
 x3: tuple[TD1] | tuple[TD2] = ({"y": "a"},)
-x4: tuple[TD1] | tuple[TD2, ...] = ({"x": 0}, {"y": "a"})  # E: `tuple[TypedDict[TD1], TypedDict[TD2]]` is not assignable to `tuple[TypedDict[TD1]] | tuple[TypedDict[TD2], ...]`
+x4: tuple[TD1] | tuple[TD2, ...] = ({"x": 0}, {"y": "a"})  # E: `tuple[TD1, TD2]` is not assignable to `tuple[TD1] | tuple[TD2, ...]`
     "#,
 );

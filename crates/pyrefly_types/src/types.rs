@@ -9,6 +9,8 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -29,16 +31,18 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
+use crate::callable::Deprecation;
 use crate::callable::FuncMetadata;
 use crate::callable::Function;
 use crate::callable::FunctionKind;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
+use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
-use crate::keywords::DataclassTransformKeywords;
+use crate::keywords::DataclassTransformMetadata;
 use crate::keywords::KwCall;
 use crate::literal::Lit;
 use crate::module::ModuleType;
@@ -49,6 +53,7 @@ use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
+use crate::type_output::TypeOutput;
 use crate::type_var::PreInferenceVariance;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
@@ -360,27 +365,30 @@ impl TypeAlias {
         *self.ty.clone()
     }
 
-    pub fn fmt_with_type<'a, D: Display + 'a>(
-        &'a self,
-        f: &mut fmt::Formatter<'_>,
-        wrap: &'a impl Fn(&'a Type) -> D,
+    pub fn fmt_with_type<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
         tparams: Option<&TParams>,
     ) -> fmt::Result {
+        use pyrefly_util::display::commas_iter;
         match (&self.style, tparams) {
-            (TypeAliasStyle::LegacyImplicit, _) => {
-                write!(f, "{}", wrap(&self.ty))
-            }
+            (TypeAliasStyle::LegacyImplicit, _) => write_type(&self.ty, output),
             (_, None) => {
-                write!(f, "TypeAlias[{}, {}]", self.name, wrap(&self.ty))
+                output.write_str("TypeAlias[")?;
+                output.write_str(self.name.as_str())?;
+                output.write_str(", ")?;
+                write_type(&self.ty, output)?;
+                output.write_str("]")
             }
             (_, Some(tparams)) => {
-                write!(
-                    f,
-                    "TypeAlias[{}[{}], {}]",
-                    self.name,
-                    commas_iter(|| tparams.iter()),
-                    wrap(&self.ty)
-                )
+                output.write_str("TypeAlias[")?;
+                output.write_str(self.name.as_str())?;
+                output.write_str("[")?;
+                output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                output.write_str("], ")?;
+                write_type(&self.ty, output)?;
+                output.write_str("]")
             }
         }
     }
@@ -605,6 +613,40 @@ pub enum SuperObj {
     Class(ClassType),
 }
 
+#[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
+pub struct Union {
+    pub members: Vec<Type>,
+    pub display_name: Option<String>,
+}
+
+impl PartialEq for Union {
+    fn eq(&self, other: &Self) -> bool {
+        self.members == other.members
+    }
+}
+
+impl Hash for Union {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.members.hash(state)
+    }
+}
+
+impl Visit<Type> for Union {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        for member in &self.members {
+            member.visit(f);
+        }
+    }
+}
+
+impl VisitMut<Type> for Union {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        for member in &mut self.members {
+            member.visit_mut(f);
+        }
+    }
+}
+
 // Note: The fact that Literal and LiteralString are at the front is important for
 // optimisations in `unions_with_literals`.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
@@ -620,7 +662,8 @@ pub enum Type {
     BoundMethod(Box<BoundMethod>),
     /// An overloaded function.
     Overload(Overload),
-    Union(Vec<Type>),
+    /// Unions will hold an optional name to use when displaying the type
+    Union(Box<Union>),
     /// Our intersection support is partial, so we store a fallback type that we use for operations
     /// that are not yet supported on intersections.
     Intersect(Box<(Vec<Type>, Type)>),
@@ -657,6 +700,8 @@ pub enum Type {
     /// This is equivalent to Type::TypeVar/ParamSpec/TypeVarTuple as a value, but when used
     /// in a type annotation, it becomes Type::Quantified.
     QuantifiedValue(Box<Quantified>),
+    /// When we unpack a Type::Quantified TypeVarTuple, this is what we get
+    ElementOfTypeVarTuple(Box<Quantified>),
     TypeGuard(Box<Type>),
     TypeIs(Box<Type>),
     Unpack(Box<Type>),
@@ -664,7 +709,7 @@ pub enum Type {
     ParamSpec(ParamSpec),
     TypeVarTuple(TypeVarTuple),
     SpecialForm(SpecialForm),
-    Concatenate(Box<[Type]>, Box<Type>),
+    Concatenate(Box<[(Type, Required)]>, Box<Type>),
     ParamSpecValue(ParamList),
     /// The type of a value which is annotated with `P.args`.
     Args(Box<Quantified>),
@@ -734,6 +779,7 @@ impl Visit for Type {
             Type::Var(x) => x.visit(f),
             Type::Quantified(x) => x.visit(f),
             Type::QuantifiedValue(x) => x.visit(f),
+            Type::ElementOfTypeVarTuple(x) => x.visit(f),
             Type::TypeGuard(x) => x.visit(f),
             Type::TypeIs(x) => x.visit(f),
             Type::Unpack(x) => x.visit(f),
@@ -781,6 +827,7 @@ impl VisitMut for Type {
             Type::Var(x) => x.visit_mut(f),
             Type::Quantified(x) => x.visit_mut(f),
             Type::QuantifiedValue(x) => x.visit_mut(f),
+            Type::ElementOfTypeVarTuple(x) => x.visit_mut(f),
             Type::TypeGuard(x) => x.visit_mut(f),
             Type::TypeIs(x) => x.visit_mut(f),
             Type::Unpack(x) => x.visit_mut(f),
@@ -869,7 +916,11 @@ impl Type {
         matches!(self, Type::Unpack(_))
     }
 
-    pub fn callable_concatenate(args: Box<[Type]>, param_spec: Type, ret: Type) -> Self {
+    pub fn callable_concatenate(
+        args: Box<[(Type, Required)]>,
+        param_spec: Type,
+        ret: Type,
+    ) -> Self {
         Type::Callable(Box::new(Callable::concatenate(args, param_spec, ret)))
     }
 
@@ -877,12 +928,24 @@ impl Type {
         Type::Type(Box::new(inner))
     }
 
-    pub fn tuple(elts: Vec<Type>) -> Self {
-        Type::Tuple(Tuple::concrete(elts))
+    pub fn concrete_tuple(elts: Vec<Type>) -> Self {
+        Type::Tuple(Tuple::Concrete(elts))
+    }
+
+    pub fn unbounded_tuple(elt: Type) -> Self {
+        if let Type::ElementOfTypeVarTuple(x) = elt {
+            Self::unpacked_tuple(Vec::new(), Type::Quantified(x), Vec::new())
+        } else {
+            Type::Tuple(Tuple::Unbounded(Box::new(elt)))
+        }
+    }
+
+    pub fn unpacked_tuple(prefix: Vec<Type>, middle: Type, suffix: Vec<Type>) -> Self {
+        Type::Tuple(Tuple::unpacked(prefix, middle, suffix))
     }
 
     pub fn any_tuple() -> Self {
-        Type::Tuple(Tuple::unbounded(Type::Any(AnyStyle::Implicit)))
+        Self::unbounded_tuple(Type::Any(AnyStyle::Implicit))
     }
 
     pub fn is_any(&self) -> bool {
@@ -1099,15 +1162,15 @@ impl Type {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_overload)
     }
 
-    pub fn is_deprecated_function(&self) -> bool {
-        self.check_toplevel_func_metadata(&|meta| meta.flags.is_deprecated)
+    pub fn function_deprecation(&self) -> Option<Deprecation> {
+        self.check_toplevel_func_metadata(&|meta| meta.flags.deprecation.clone())
     }
 
     pub fn has_final_decoration(&self) -> bool {
         self.check_toplevel_func_metadata(&|meta| meta.flags.has_final_decoration)
     }
 
-    pub fn dataclass_transform_metadata(&self) -> Option<DataclassTransformKeywords> {
+    pub fn dataclass_transform_metadata(&self) -> Option<DataclassTransformMetadata> {
         self.check_toplevel_func_metadata(&|meta| meta.flags.dataclass_transform_metadata.clone())
     }
 
@@ -1128,10 +1191,19 @@ impl Type {
                 body: Forallable::Function(func),
             })
             | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Function(func),
+                func:
+                    BoundMethodType::Function(func)
+                    | BoundMethodType::Forall(Forall {
+                        tparams: _,
+                        body: func,
+                    }),
                 ..
             }) => f(&mut func.metadata),
-            Type::Overload(overload) => f(&mut overload.metadata),
+            Type::Overload(overload)
+            | Type::BoundMethod(box BoundMethod {
+                func: BoundMethodType::Overload(overload),
+                ..
+            }) => f(&mut overload.metadata),
             _ => {}
         }
     }
@@ -1357,7 +1429,7 @@ impl Type {
     /// type[a | b] -> type[a] | type[b]
     pub fn distribute_type_over_union(self) -> Self {
         self.transform(&mut |ty| {
-            if let Type::Type(box Type::Union(members)) = ty {
+            if let Type::Type(box Type::Union(box Union { members, .. })) = ty {
                 *ty = unions(members.drain(..).map(Type::type_form).collect());
             }
         })
@@ -1400,10 +1472,15 @@ impl Type {
         })
     }
 
-    pub fn sort_unions(self) -> Self {
+    pub fn sort_unions_and_drop_names(self) -> Self {
         self.transform(&mut |ty| {
-            if let Type::Union(ts) = ty {
+            if let Type::Union(box Union {
+                members: ts,
+                display_name,
+            }) = ty
+            {
                 ts.sort();
+                *display_name = None;
             }
         })
     }
@@ -1453,7 +1530,7 @@ impl Type {
 
     pub fn into_unions(self) -> Vec<Type> {
         match self {
-            Type::Union(types) => types,
+            Type::Union(box Union { members: types, .. }) => types,
             _ => vec![self],
         }
     }
@@ -1461,19 +1538,22 @@ impl Type {
     /// Create an optional type (union with None).
     pub fn optional(x: Self) -> Self {
         // We would like the resulting type not nested, and well sorted.
-        if let Type::Union(mut xs) = x {
+        if let Type::Union(box Union {
+            members: mut xs, ..
+        }) = x
+        {
             match xs.binary_search(&Type::None) {
-                Ok(_) => Type::Union(xs),
+                Ok(_) => Type::union(xs),
                 Err(i) => {
                     xs.insert(i, Type::None);
-                    Type::Union(xs)
+                    Type::union(xs)
                 }
             }
         } else {
             match x.cmp(&Type::None) {
                 Ordering::Equal => Type::None,
-                Ordering::Less => Type::Union(vec![x, Type::None]),
-                Ordering::Greater => Type::Union(vec![Type::None, x]),
+                Ordering::Less => Type::union(vec![x, Type::None]),
+                Ordering::Greater => Type::union(vec![Type::None, x]),
             }
         }
     }
@@ -1503,9 +1583,9 @@ impl Type {
             Type::Literal(Lit::Str(x)) => Some(!x.is_empty()),
             Type::None => Some(false),
             Type::Tuple(Tuple::Concrete(elements)) => Some(!elements.is_empty()),
-            Type::Union(options) => {
+            Type::Union(box Union { members, .. }) => {
                 let mut answer = None;
-                for option in options {
+                for option in members {
                     let option_bool = option.as_bool();
                     option_bool?;
                     if answer.is_none() {
@@ -1556,12 +1636,12 @@ impl Type {
         })
     }
 
-    /// Is this an instance of `warnings.deprecated` or its backport `typing_extensions.deprecated`?
-    pub fn is_deprecation_marker(&self) -> bool {
-        let Type::ClassType(cls) = self else {
-            return false;
-        };
-        cls.has_qname("warnings", "deprecated") || cls.has_qname("typing_extensions", "deprecated")
+    /// Creates a union from the provided types without simplifying
+    pub fn union(members: Vec<Type>) -> Self {
+        Type::Union(Box::new(Union {
+            members,
+            display_name: None,
+        }))
     }
 }
 
@@ -1589,8 +1669,8 @@ mod tests {
         let false_lit = Type::Literal(Lit::Bool(false));
         let none = Type::None;
 
-        let str_opt = Type::Union(vec![s, none.clone()]);
-        let false_opt = Type::Union(vec![false_lit, none]);
+        let str_opt = Type::union(vec![s, none.clone()]);
+        let false_opt = Type::union(vec![false_lit, none]);
 
         assert_eq!(str_opt.as_bool(), None);
         assert_eq!(false_opt.as_bool(), Some(false));

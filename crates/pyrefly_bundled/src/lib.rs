@@ -16,6 +16,9 @@ use zstd::stream::read::Decoder;
 
 const BUNDLED_TYPESHED_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.tar.zst"));
 
+pub const BUNDLED_TYPESHED_DIGEST: &[u8; 32] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/typeshed.sha256"));
+
 #[derive(PartialEq)]
 enum PathFilter {
     /// Filter for stdlib files (typeshed/stdlib/...)

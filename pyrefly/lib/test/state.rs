@@ -102,7 +102,7 @@ fn test_multiple_path() {
             ModulePath::memory(PathBuf::from(path)),
         );
     }
-    config.source_db = Some(Arc::new(Box::new(sourcedb)));
+    config.source_db = Some(ArcId::new(Box::new(sourcedb)));
     config.configure();
     let config = ArcId::new(config);
 

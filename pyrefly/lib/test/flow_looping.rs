@@ -71,6 +71,17 @@ def f(condition) -> None:
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1701
+testcase!(
+    test_while_condition_is_in_loop,
+    r#"
+def main():
+    q = 1
+    while q:
+        q -= 1
+    "#,
+);
+
 testcase!(
     bug = "A recursive redefinition in a loop produces a hard-to-follow error message + location",
     test_while_creates_recursive_type,
@@ -568,8 +579,8 @@ def f():
 "#,
 );
 
-// Regression test for https://github.com/facebook/pyrefly/issues/1234
 testcase!(
+    bug = "Single-shot analysis cannot handle this - see https://github.com/facebook/pyrefly/issues/1234",
     test_assign_result_of_call_back_to_argument,
     r#"
 class Cursor:
@@ -582,7 +593,7 @@ class Query:
 
 def test(q: Query) -> None:
     cursor = None
-    while not cursor or not cursor.finished():
+    while not cursor or not cursor.finished():  # E: `Cursor | None` is not assignable to `None` (caused by inconsistent types when breaking cycles)
         cursor = q.send(cursor)
 "#,
 );

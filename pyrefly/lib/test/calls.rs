@@ -197,10 +197,31 @@ f("foo") # No error
 );
 
 testcase!(
-    test_deprecated_overload_shutil,
+    test_nondeprecated_overload_shutil,
     r#"
 import shutil
 shutil.rmtree("/tmp")
+    "#,
+);
+
+testcase!(
+    test_deprecated_message,
+    r#"
+from warnings import deprecated
+@deprecated("I am a special super-important message about the extended warranty on your car")
+def f(): ...
+
+f()  # E: I am a special super-important message about the extended warranty on your car
+    "#,
+);
+
+testcase!(
+    test_deprecated_fqn,
+    r#"
+import warnings
+@warnings.deprecated("Deprecated")
+def f(): ...
+f()  # E: Deprecated
     "#,
 );
 

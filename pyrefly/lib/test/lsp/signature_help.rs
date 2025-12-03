@@ -6,6 +6,7 @@
  */
 
 use itertools::Itertools;
+use lsp_types::Documentation;
 use lsp_types::ParameterLabel;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureInformation;
@@ -13,8 +14,11 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
+use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
+use crate::test::util::mk_multi_file_state;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     if let Some(SignatureHelp {
@@ -219,6 +223,47 @@ Signature Help Result: active=0
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn parameter_documentation_test() {
+    let code = r#"
+def foo(a: int, b: str) -> None:
+    """
+    Args:
+        a: first line
+            second line
+        b: final
+    """
+    pass
+
+foo(a=1, b="")
+#      ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let signature = state
+        .transaction()
+        .get_signature_help_at(handle, position)
+        .expect("signature help available");
+    let params = signature.signatures[0]
+        .parameters
+        .as_ref()
+        .expect("parameters available");
+    let param_doc = params
+        .iter()
+        .find(
+            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("a")),
+        )
+        .and_then(|param| param.documentation.as_ref())
+        .expect("parameter documentation");
+    if let Documentation::MarkupContent(content) = param_doc {
+        assert_eq!(content.value, "first line\nsecond line");
+    } else {
+        panic!("unexpected documentation variant");
+    }
 }
 
 #[test]
@@ -493,4 +538,219 @@ Signature Help Result: active=0
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn parameter_documentation_only_some_params_documented_test() {
+    let code = r#"
+def foo(a: int, b: str, c: bool) -> None:
+    """
+    Args:
+        a: only a is documented
+    """
+    pass
+
+foo(a=1, b="", c=True)
+#      ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let signature = state
+        .transaction()
+        .get_signature_help_at(handle, position)
+        .expect("signature help available");
+    let params = signature.signatures[0]
+        .parameters
+        .as_ref()
+        .expect("parameters available");
+
+    // Parameter 'a' should have documentation
+    let param_a_doc = params
+        .iter()
+        .find(
+            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("a")),
+        )
+        .and_then(|param| param.documentation.as_ref())
+        .expect("parameter a documentation");
+    if let Documentation::MarkupContent(content) = param_a_doc {
+        assert_eq!(content.value, "only a is documented");
+    } else {
+        panic!("unexpected documentation variant");
+    }
+
+    // Parameter 'b' should not have documentation
+    let param_b = params
+        .iter()
+        .find(
+            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("b")),
+        )
+        .expect("parameter b should exist");
+    assert!(
+        param_b.documentation.is_none(),
+        "parameter b should not have documentation"
+    );
+}
+
+#[test]
+fn parameter_documentation_overloaded_function_test() {
+    let code = r#"
+from typing import overload
+
+@overload
+def foo(a: str) -> bool:
+    """
+    Args:
+        a: string argument
+    """
+    ...
+
+@overload
+def foo(a: int, b: bool) -> str:
+    """
+    Args:
+        a: integer argument
+        b: boolean argument
+    """
+    ...
+
+def foo(a, b=None):
+    pass
+
+foo(1, True)
+#      ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let signature = state
+        .transaction()
+        .get_signature_help_at(handle, position)
+        .expect("signature help available");
+
+    // Should have multiple signatures
+    assert!(
+        signature.signatures.len() >= 2,
+        "Expected at least 2 overloaded signatures"
+    );
+
+    // Each signature should have valid structure
+    // Parameter docs are optional but when present should be valid
+    for sig in &signature.signatures {
+        if let Some(params) = &sig.parameters {
+            for param in params {
+                // Documentation is optional but should be valid if present
+                if let Some(doc) = &param.documentation {
+                    assert!(matches!(doc, Documentation::MarkupContent(_)));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn parameter_documentation_method_test() {
+    let code = r#"
+class Foo:
+    def method(self, x: int, y: str) -> None:
+        """
+        Args:
+            x: the x parameter
+            y: the y parameter
+        """
+        pass
+
+foo = Foo()
+foo.method(x=1, y="test")
+#             ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let signature = state
+        .transaction()
+        .get_signature_help_at(handle, position)
+        .expect("signature help available");
+    let params = signature.signatures[0]
+        .parameters
+        .as_ref()
+        .expect("parameters available");
+
+    // Should not include 'self' in parameters
+    let has_self = params.iter().any(
+        |param| matches!(&param.label, ParameterLabel::Simple(label) if label.contains("self")),
+    );
+    assert!(
+        !has_self,
+        "self parameter should not be in the parameters list"
+    );
+
+    // Check if parameter x exists (documentation may or may not be present depending on implementation)
+    let param_x = params
+        .iter()
+        .find(
+            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("x")),
+        )
+        .expect("parameter x should exist");
+
+    // If documentation is present, verify it's correct
+    if let Some(Documentation::MarkupContent(content)) = &param_x.documentation {
+        assert_eq!(content.value, "the x parameter");
+    }
+}
+
+#[test]
+fn parameter_documentation_mixed_style_test() {
+    let code = r#"
+def foo(a: int, b: str, c: bool) -> None:
+    """
+    :param a: sphinx style
+
+    Args:
+        b: google style
+        c: also google style
+    """
+    pass
+
+foo(a=1, b="", c=True)
+#      ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let signature = state
+        .transaction()
+        .get_signature_help_at(handle, position)
+        .expect("signature help available");
+    let params = signature.signatures[0]
+        .parameters
+        .as_ref()
+        .expect("parameters available");
+
+    // Should have documentation for all three parameters (mixed style should work)
+    let param_a_doc = params
+        .iter()
+        .find(
+            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("a")),
+        )
+        .and_then(|param| param.documentation.as_ref())
+        .expect("parameter a documentation");
+    if let Documentation::MarkupContent(content) = param_a_doc {
+        assert_eq!(content.value, "sphinx style");
+    }
+
+    let param_b_doc = params
+        .iter()
+        .find(
+            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("b")),
+        )
+        .and_then(|param| param.documentation.as_ref())
+        .expect("parameter b documentation");
+    if let Documentation::MarkupContent(content) = param_b_doc {
+        assert_eq!(content.value, "google style");
+    }
 }

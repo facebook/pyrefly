@@ -18,7 +18,10 @@ use pyrefly_types::callable::Function;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
+use pyrefly_types::keywords::DataclassFieldKeywords;
+use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::Lit;
+use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 
@@ -135,6 +138,53 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .find_map(|(_, metadata)| metadata.dataclass_metadata().map(&extractor))
     }
 
+    /// Check if a type is a RootModel or subclass of RootModel, and if so, recursively extract all inner types.
+    /// Returns Some(root_type) if the type is a RootModel, None otherwise.
+    /// For unions containing multiple RootModels, extracts and returns a union of all their inner types.
+    /// Recursively expands nested RootModels (e.g., RootModel[RootModel[int]] expands to RootModel[int] | int).
+    pub fn extract_root_model_inner_type(&self, ty: &Type) -> Option<Type> {
+        match ty {
+            Type::Union(box Union { members: types, .. }) => {
+                let root_types: Vec<Type> = types
+                    .iter()
+                    .filter_map(|t| self.extract_root_model_inner_type(t))
+                    .collect();
+
+                if root_types.is_empty() {
+                    None
+                } else {
+                    Some(self.unions(root_types))
+                }
+            }
+            Type::ClassType(cls) => {
+                if cls.has_qname(ModuleName::pydantic_root_model().as_str(), "RootModel") {
+                    let targs = cls.targs().as_slice();
+                    let root_type = targs.last().cloned().unwrap_or_else(Type::any_implicit);
+                    if let Some(nested_root_type) = self.extract_root_model_inner_type(&root_type) {
+                        return Some(self.union(root_type.clone(), nested_root_type));
+                    }
+                    return Some(root_type);
+                }
+
+                let metadata = self.get_metadata_for_class(cls.class_object());
+                if matches!(metadata.pydantic_model_kind(), Some(RootModel))
+                    && let Some((root_type, _)) =
+                        self.get_pydantic_root_model_type_via_mro(cls.class_object(), &metadata)
+                {
+                    // Recursively expand if the inner type is also a RootModel
+                    // Return union of immediate inner type AND recursive expansion
+                    if let Some(nested_root_type) = self.extract_root_model_inner_type(&root_type) {
+                        return Some(self.union(root_type.clone(), nested_root_type));
+                    }
+                    Some(root_type)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn pydantic_config(
         &self,
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
@@ -146,6 +196,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let has_pydantic_base_model_base_class =
             bases_with_metadata.iter().any(|(base_class_object, _)| {
                 base_class_object.has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
+            });
+
+        let has_pydantic_base_settings_base_class =
+            bases_with_metadata.iter().any(|(base_class_object, _)| {
+                base_class_object
+                    .has_toplevel_qname(ModuleName::pydantic_settings().as_str(), "BaseSettings")
             });
 
         let is_pydantic_base_model = has_pydantic_base_model_base_class
@@ -163,6 +219,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .has_toplevel_qname(ModuleName::pydantic_root_model().as_str(), "RootModel")
             });
 
+        let has_base_settings_kind = bases_with_metadata.iter().any(|(_, metadata)| {
+            matches!(
+                metadata.pydantic_model_kind(),
+                Some(PydanticModelKind::BaseSettings)
+            )
+        });
+
         let has_root_model_kind = bases_with_metadata.iter().any(|(_, metadata)| {
             matches!(
                 metadata.pydantic_model_kind(),
@@ -172,6 +235,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let pydantic_model_kind = if has_pydantic_root_model_base_class || has_root_model_kind {
             PydanticModelKind::RootModel
+        } else if has_pydantic_base_settings_base_class || has_base_settings_kind {
+            PydanticModelKind::BaseSettings
         } else {
             PydanticModelKind::BaseModel
         };
@@ -301,5 +366,102 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .find(|(name, _)| name == key)
             .and_then(|(_, ann)| ann.get_type().as_bool())
+    }
+
+    pub fn check_pydantic_range_constraints(
+        &self,
+        field_name: &Name,
+        field_ty: &Type,
+        keywords: &DataclassFieldKeywords,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        // Note: the subset check here is too conservative when it comes to modeling runtime behavior
+        // we want to check if the bound_val is coercible to the annotation type at runtime.
+        // statically, this could be a challenge, which is why we go with this more conservative approach for now.
+        for (bound_val, label) in [
+            (&keywords.gt, "gt"),
+            (&keywords.lt, "lt"),
+            (&keywords.ge, "ge"),
+            (&keywords.le, "le"),
+        ] {
+            let Some(val) = bound_val else { continue };
+            if !self.is_subset_eq(val, field_ty) {
+                self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                        format!(
+                            "Pydantic `{label}` value is of type `{}` but the field is annotated with `{}`",
+                            self.for_display(val.clone()),
+                            self.for_display(field_ty.clone())
+                        ),
+                    );
+            }
+        }
+        self.check_pydantic_range_default(field_name, keywords, range, errors);
+    }
+
+    fn check_pydantic_range_default(
+        &self,
+        field_name: &Name,
+        keywords: &DataclassFieldKeywords,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        fn int_literal_from_type(ty: &Type) -> Option<&LitInt> {
+            // We only currently enforce range constraints for literal defaults, so carve out
+            // the `Literal[int]` case and ignore everything else.
+            match ty {
+                Type::Literal(Lit::Int(lit)) => Some(lit),
+                _ => None,
+            }
+        }
+        let Some(default_ty) = &keywords.default else {
+            return;
+        };
+        let Some(value_lit) = int_literal_from_type(default_ty) else {
+            return;
+        };
+        let emit_violation = |label: &str, constraint_ty: &Type| {
+            let Some(constraint_lit) = int_literal_from_type(constraint_ty) else {
+                return;
+            };
+            let comparison = value_lit.cmp(constraint_lit);
+            let violates = match label {
+                "gt" => !matches!(comparison, std::cmp::Ordering::Greater),
+                "ge" => matches!(comparison, std::cmp::Ordering::Less),
+                "lt" => !matches!(comparison, std::cmp::Ordering::Less),
+                "le" => matches!(comparison, std::cmp::Ordering::Greater),
+                _ => false,
+            };
+            if violates {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    format!(
+                        "Default value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
+                        self.for_display(default_ty.clone()),
+                        label,
+                        self.for_display(constraint_ty.clone()),
+                        field_name
+                    ),
+                );
+            }
+        };
+
+        if let Some(gt) = &keywords.gt {
+            emit_violation("gt", gt);
+        }
+        if let Some(ge) = &keywords.ge {
+            emit_violation("ge", ge);
+        }
+        if let Some(lt) = &keywords.lt {
+            emit_violation("lt", lt);
+        }
+        if let Some(le) = &keywords.le {
+            emit_violation("le", le);
+        }
     }
 }

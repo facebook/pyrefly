@@ -242,6 +242,8 @@ pub(crate) struct TransactionData<'a> {
     updated_loaders: LockedMap<ArcId<ConfigFile>, Arc<LoaderFindCache>>,
     memory_overlay: MemoryFilesOverlay,
     default_require: Require,
+    /// The epoch when this transaction was created
+    base: Epoch,
     /// The current epoch, gets incremented every time we recompute
     now: Epoch,
     /// Items we still need to process. Stored in a max heap, so that
@@ -257,11 +259,18 @@ pub(crate) struct TransactionData<'a> {
 }
 
 impl<'a> TransactionData<'a> {
-    pub(crate) fn into_transaction(self) -> Transaction<'a> {
+    /// Convert saved transaction data back into a full transaction. We can only restore if the
+    /// underlying state is unchanged, otherwise the transaction data might make inconsistent
+    /// assumptions, in particular about deps/rdeps.
+    pub(crate) fn restore(self) -> Option<Transaction<'a>> {
         let readable = self.state.state.read();
-        Transaction {
-            data: self,
-            readable,
+        if self.base == readable.now {
+            Some(Transaction {
+                data: self,
+                readable,
+            })
+        } else {
+            None
         }
     }
 }
@@ -278,7 +287,7 @@ pub struct Transaction<'a> {
 
 impl<'a> Transaction<'a> {
     /// Drops the lock and retains just the underlying data.
-    pub(crate) fn into_data(self) -> TransactionData<'a> {
+    pub(crate) fn save(self) -> TransactionData<'a> {
         let Transaction { data, readable } = self;
         drop(readable);
         data
@@ -1225,7 +1234,7 @@ impl<'a> Transaction<'a> {
         let _ = self.run_internal(handles, require);
     }
 
-    pub fn ad_hoc_solve<R: Sized, F: FnOnce(AnswersSolver<TransactionHandle>) -> R>(
+    pub(crate) fn ad_hoc_solve<R: Sized, F: FnOnce(AnswersSolver<TransactionHandle>) -> R>(
         &self,
         handle: &Handle,
         solve: F,
@@ -1724,6 +1733,7 @@ impl State {
                 updated_modules: Default::default(),
                 updated_loaders: Default::default(),
                 memory_overlay: Default::default(),
+                base: now,
                 now,
                 default_require,
                 todo: Default::default(),
@@ -1786,6 +1796,7 @@ impl State {
                             updated_modules,
                             updated_loaders,
                             memory_overlay,
+                            base,
                             now,
                             default_require: _,
                             state: _,
@@ -1807,6 +1818,11 @@ impl State {
         assert!(dirty.into_inner().is_empty(), "Transaction is dirty");
 
         let mut state = self.state.write();
+        assert_eq!(
+            state.now, base,
+            "Attempted to commit a stale transaction from epoch {:?} into state at epoch {:?}",
+            base, state.now
+        );
         state.stdlib = stdlib;
         state.now = now;
         for (handle, new_module_data) in updated_modules.iter_unordered() {

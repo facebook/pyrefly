@@ -5,11 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Request;
-use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
+use lsp_types::request::WorkspaceSymbolRequest;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -23,25 +20,24 @@ fn test_workspace_symbol() {
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
-    interaction.initialize(InitializeSettings {
-        workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
-        configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
+            ..Default::default()
+        })
+        .unwrap();
 
-    interaction.server.did_open("autoimport_provider.py");
+    interaction.client.did_open("autoimport_provider.py");
 
-    interaction.server.send_message(Message::Request(Request {
-        id: RequestId::from(2),
-        method: "workspace/symbol".to_owned(),
-        params: json!({
-            "query": "this_is_a_very_long_function_name_so_we_can"
-        }),
-    }));
-
-    interaction.client.expect_response(Response {
-        id: RequestId::from(2),
-        result: Some(json!([
+    interaction
+        .client
+        .send_request::<WorkspaceSymbolRequest>(
+            json!({
+                "query": "this_is_a_very_long_function_name_so_we_can"
+            }),
+        )
+        .expect_response(json!([
             {
                 "kind": 12,
                 "location": {
@@ -53,9 +49,8 @@ fn test_workspace_symbol() {
                 },
                 "name": "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
             }
-        ])),
-        error: None,
-    });
+        ]))
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }

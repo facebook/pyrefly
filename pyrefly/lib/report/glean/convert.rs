@@ -19,6 +19,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::types::Union;
 use pyrefly_util::visit::Visit;
 use regex::RegexBuilder;
 use ruff_python_ast::Decorator;
@@ -575,15 +576,16 @@ impl GleanState<'_> {
         {
             self.transaction
                 .ad_hoc_solve(self.handle, |solver| match base_type {
-                    Type::Union(tys) | Type::Intersect(box (tys, _)) => tys
-                        .into_iter()
-                        .filter(|ty: &Type| {
-                            solver
-                                .completions(ty.clone(), Some(name.id()), false)
-                                .into_iter()
-                                .any(|attr| &attr.name == name.id())
-                        })
-                        .collect(),
+                    Type::Union(box Union { members: tys, .. }) | Type::Intersect(box (tys, _)) => {
+                        tys.into_iter()
+                            .filter(|ty: &Type| {
+                                solver
+                                    .completions(ty.clone(), Some(name.id()), false)
+                                    .into_iter()
+                                    .any(|attr| &attr.name == name.id())
+                            })
+                            .collect()
+                    }
                     ty => vec![ty],
                 })
                 .unwrap_or_default()

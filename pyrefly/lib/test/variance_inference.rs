@@ -78,7 +78,8 @@ class B[U]:
 a = A[int]()
 b = B[int]()
 
-x : A[float] = b.g(a)
+# We follow mypy and pyright's lead in treating bivariant type parameters as invariant.
+x: A[float] = b.g(a)  # E: `A[int]` is not assignable to `A[float]`
 "#,
 );
 

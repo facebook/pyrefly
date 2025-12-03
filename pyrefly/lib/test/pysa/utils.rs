@@ -82,6 +82,7 @@ pub fn get_function_ref(
 
     // This is slow, but we don't care in tests.
     get_all_functions(&context)
+        .filter(|function| function.should_export(&context))
         .find(|function| function.name().as_str() == function_name)
         .expect("valid function name")
         .as_function_ref(&context)
@@ -98,6 +99,7 @@ pub fn get_method_ref(
 
     // This is slow, but we don't care in tests.
     get_all_functions(&context)
+        .filter(|function| function.should_export(&context))
         .find(|function| match function {
             FunctionNode::DecoratedFunction(decorated_function) => {
                 function.name().as_str() == function_name

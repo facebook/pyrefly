@@ -15,6 +15,7 @@ use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
+use pyrefly_types::types::Union;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::name::Name;
@@ -67,7 +68,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassDef(cls) => {
                 self.get_django_field_type_from_class(cls, class, field_name, initial_value_expr)
             }
-            Type::Union(union) => {
+            Type::Union(box Union { members: union, .. }) => {
                 let transformed: Vec<_> = union
                     .iter()
                     .map(|variant| {
@@ -121,8 +122,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         // Default: use _pyi_private_get_type from the field class
-        self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
-            .map(|field| field.ty())
+        let base_type = self
+            .get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
+            .map(|field| field.ty())?;
+
+        // Check if the field is nullable (applies to all Django fields)
+        if let Some(e) = initial_value_expr
+            && let Some(call_expr) = e.as_call_expr()
+            && self.is_django_field_nullable(call_expr)
+        {
+            Some(self.union(base_type, Type::None))
+        } else {
+            Some(base_type)
+        }
     }
 
     /// Check if a class inherits from Django's Field class
@@ -288,7 +300,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (
                 CHOICES,
                 self.stdlib
-                    .list(Type::Tuple(Tuple::Concrete(vec![values_type, label_type])))
+                    .list(Type::concrete_tuple(vec![values_type, label_type]))
                     .to_type(),
             ),
         ];
@@ -365,7 +377,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Get the related model type from the field
         let ty = class_field.ty();
         let (related_cls, is_foreign_key_nullable) = match ty {
-            Type::Union(union) => {
+            Type::Union(box Union { members: union, .. }) => {
                 // Nullable foreign key: extract the class type from the union
                 let cls = union.iter().find_map(|variant| match variant {
                     Type::ClassType(cls) => Some(cls.clone()),

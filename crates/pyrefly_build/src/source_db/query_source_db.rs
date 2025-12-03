@@ -33,6 +33,25 @@ use crate::source_db::ModulePathCache;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
 
+/// The result from a `[ModuleName`] lookup on a source db.
+#[derive(Debug)]
+enum ManifestLookupResult {
+    /// We found a result matching the module name we want to find with
+    /// the preferred [`ModuleStyle`].
+    ExactMatch(ModulePath),
+    /// We found a result matching the module name we want to find, but
+    /// the [`ModuleStyle`] differs.
+    StyleMismatch(ModulePath),
+}
+
+impl ManifestLookupResult {
+    fn path(self) -> ModulePath {
+        match self {
+            Self::ExactMatch(path) | Self::StyleMismatch(path) => path,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Inner {
     /// The mapping from targets to their manifests, including sources, dependencies,
@@ -130,36 +149,33 @@ impl QuerySourceDatabase {
 
     /// Attempts to search in the given [`PythonLibraryManifest`] for the import,
     /// checking `srcs` and `package_lookup`.
-    /// Returns the module path, if one can be found as [`Ok`], otherwise,
-    /// if a synthesized dunder init is found, returns that value as [`Err`].
+    /// If a synthesized dunder init is found, the init is added to `namespace_candidates`,
+    /// and `None` is returned.
     fn find_in_manifest<'a>(
         &'a self,
         module: ModuleName,
         manifest: &'a PythonLibraryManifest,
         style_filter: Option<ModuleStyle>,
-    ) -> Option<Result<ModulePath, ModulePath>> {
-        let try_get_filtered = |paths: &Vec1<ModulePathBuf>| {
-            // Since the sourcedb contains the full set of reachable files, if we find a
-            // result, we know a module path matching the style filter would exist in `paths`.
-            // Therefore, if it's not there, we can immediately fall back to whatever's
-            // available instead of re-performing the search like we normally do in module
-            // finding.
+        namespace_candidates: &mut SmallSet<ModulePath>,
+    ) -> Option<ManifestLookupResult> {
+        let get_lookup_result = |paths: &Vec1<ModulePathBuf>| {
             let style = style_filter.unwrap_or(ModuleStyle::Interface);
             if let Some(result) = paths.iter().find(|p| ModuleStyle::of_path(p) == style) {
-                return self.cached_modules.get(result);
+                return ManifestLookupResult::ExactMatch(self.cached_modules.get(result));
             }
-            self.cached_modules.get(paths.first())
+            ManifestLookupResult::StyleMismatch(self.cached_modules.get(paths.first()))
         };
         if let Some(paths) = manifest.srcs.get(&module) {
-            return Some(Ok(try_get_filtered(paths)));
+            return Some(get_lookup_result(paths));
         }
 
         // Take the first dunder init package we see, since it will have an `__init__.py` file
         // output on disk during actual build system building.
-        manifest
-            .packages
-            .get(&module)
-            .map(|p| Err(try_get_filtered(p)))
+        if let Some(packages) = manifest.packages.get(&module) {
+            // we don't care about the filter as much here, this is more of a preference.
+            namespace_candidates.insert(get_lookup_result(packages).path());
+        }
+        None
     }
 
     /// Perform a lookup, starting from the given target, and searching through all of
@@ -174,6 +190,8 @@ impl QuerySourceDatabase {
     ) -> Option<ModulePath> {
         let mut queue = VecDeque::new();
         let mut visited = SmallSet::new();
+        let mut namespace_candidates: SmallSet<ModulePath> = SmallSet::new();
+        let mut filter_candidate = None;
         queue.push_front(target);
 
         while let Some(current_target) = queue.pop_front() {
@@ -184,19 +202,28 @@ impl QuerySourceDatabase {
                 continue;
             };
 
-            match self.find_in_manifest(module, manifest, style_filter) {
-                // Return the value immediately. It's safe to return
-                // a implicit package here instead of continuing to search
-                // because during build system building, an __init__.py file will
-                // be output.
-                Some(Ok(result) | Err(result)) => return Some(result),
+            match self.find_in_manifest(module, manifest, style_filter, &mut namespace_candidates) {
+                Some(ManifestLookupResult::ExactMatch(result)) => return Some(result),
+                // Only take the first `StyleMismatch`, since, in theory, there should be at most
+                // one distinct valid result. The result here should be the opposite `ModuleStyle`
+                // from the `style_filter` or default we apply in `Self::find_in_manifest`. The
+                // only time we'd have multiple unique results is if the same module name maps
+                // to multiple distinct files, which is kind of undefined behavior and more of a
+                // build system problem to solve.
+                Some(ManifestLookupResult::StyleMismatch(result)) if filter_candidate.is_none() => {
+                    filter_candidate = Some(result);
+                }
                 _ => (),
             }
 
             manifest.deps.iter().for_each(|t| queue.push_back(t.dupe()));
         }
 
-        None
+        if let Some(filtered_candidate) = filter_candidate {
+            return Some(filtered_candidate);
+        }
+
+        namespace_candidates.into_iter().min()
     }
 }
 
@@ -208,7 +235,7 @@ impl SourceDatabase for QuerySourceDatabase {
 
     fn lookup(
         &self,
-        module: &ModuleName,
+        module: ModuleName,
         origin: Option<&Path>,
         style_filter: Option<ModuleStyle>,
     ) -> Option<ModulePath> {
@@ -216,7 +243,7 @@ impl SourceDatabase for QuerySourceDatabase {
         let read = self.inner.read();
         if let Some(start_target) = read.path_lookup.get(&origin)
             && let Some(result) =
-                self.lookup_from_target(&read, *module, *start_target, style_filter)
+                self.lookup_from_target(&read, module, *start_target, style_filter)
         {
             return Some(result);
         } else if let Some(package_targets) = read.package_lookup.get(&origin) {
@@ -250,21 +277,19 @@ impl SourceDatabase for QuerySourceDatabase {
                 //    directory. In this case, the dependencies don't really matter, because
                 //    what we're looking for is a relative import within *this* target
                 //    or another target that has a package at the origin's location.
-                match self.find_in_manifest(*module, manifest, style_filter) {
-                    Some(Ok(result)) => return Some(result),
-                    Some(Err(implicit_package)) => {
-                        package_matches.insert(implicit_package);
-                    }
+                match self.find_in_manifest(module, manifest, style_filter, &mut package_matches) {
+                    Some(result) => return Some(result.path()),
                     _ => (),
                 }
             }
-            return package_matches.into_iter().min();
+            // just take the first namespace package we found
+            return package_matches.into_iter().next();
         }
 
         None
     }
 
-    fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle> {
+    fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle> {
         let read = self.inner.read();
         let target = read.path_lookup.get(&module_path.module_path_buf())?;
 
@@ -351,6 +376,29 @@ impl SourceDatabase for QuerySourceDatabase {
         let read = self.inner.read();
         read.path_lookup.get(&origin).copied()
     }
+
+    fn get_generated_files(&self) -> SmallSet<ModulePathBuf> {
+        let read = self.inner.read();
+        read.db
+            .values()
+            .filter_map(|x| -> Option<Box<dyn Iterator<Item = ModulePathBuf>>> {
+                if x.relative_to.is_some() {
+                    Some(Box::new(x.srcs.values().flatten().copied()))
+                } else if let Some(build_root) = x.buildfile_path.parent() {
+                    Some(Box::new(
+                        x.srcs
+                            .values()
+                            .flatten()
+                            .filter(move |p| !p.starts_with(build_root))
+                            .copied(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -428,7 +476,7 @@ mod tests {
             ModulePathBuf::new(root.join("colorama/__init__.py")) =>
                 Target::from_string("//colorama:py".to_owned()),
             ModulePathBuf::new(root.join("colorama/__init__.pyi")) =>
-                Target::from_string("//colorama:py".to_owned()),
+                Target::from_string("//colorama:py-stubs".to_owned()),
             ModulePathBuf::new(root.join("click/__init__.pyi")) =>
                 Target::from_string("//click:py".to_owned()),
             ModulePathBuf::new(root.join("click/__init__.py")) =>
@@ -453,6 +501,8 @@ mod tests {
                 Target::from_string("//external:package".to_owned()),
             ModulePathBuf::new(PathBuf::from("/path/to/another/repository/package/external_package/non_python_file.thrift")) =>
                 Target::from_string("//external:package".to_owned()),
+            ModulePathBuf::new(root.join("generated/main.py")) => Target::from_string("//generated:main".to_owned()),
+            ModulePathBuf::new(root.join("build-out/materialized/generated/__init__.py")) => Target::from_string("//generated:lib".to_owned()),
         };
 
         assert_eq!(expected, path_lookup);
@@ -473,7 +523,7 @@ mod tests {
                 Target::from_string("//colorama:py".to_owned()),
             },
             ModulePathBuf::new(root.join("colorama/__init__.pyi")) => smallset! {
-                Target::from_string("//colorama:py".to_owned()),
+                Target::from_string("//colorama:py-stubs".to_owned()),
             },
             ModulePathBuf::new(root.join("pyre/client/log/__init__.py")) => smallset! {
                 Target::from_string("//pyre/client/log:log".to_owned()),
@@ -497,7 +547,13 @@ mod tests {
             },
             ModulePathBuf::new(PathBuf::from("/path/to/another/repository/package/external_package")) => smallset! {
                 Target::from_string("//external:package".to_owned()),
-            }
+            },
+            ModulePathBuf::new(root.join("generated")) => smallset! {
+                Target::from_string("//generated:main".to_owned()),
+            },
+            ModulePathBuf::new(root.join("build-out/materialized/generated/__init__.py")) => smallset! {
+                Target::from_string("//generated:lib".to_owned()),
+            },
         };
         assert_eq!(path_lookup, expected);
     }
@@ -509,7 +565,7 @@ mod tests {
         let assert_lookup = |name, path, style_filter, expected: Option<&str>| {
             assert_eq!(
                 db.lookup(
-                    &ModuleName::from_str(name),
+                    ModuleName::from_str(name),
                     Some(&root.join(path)),
                     style_filter
                 ),
@@ -518,10 +574,7 @@ mod tests {
             );
         };
 
-        assert_eq!(
-            db.lookup(&ModuleName::from_str("log.log"), None, None),
-            None
-        );
+        assert_eq!(db.lookup(ModuleName::from_str("log.log"), None, None), None);
         assert_lookup("does_not_exist", "pyre/client/log/__init__.py", None, None);
         // can be found, since we do an `init_lookup` and can find a result.
         assert_lookup(
@@ -593,6 +646,31 @@ mod tests {
             None,
             Some("colorama/__init__.pyi"),
         );
+        assert_lookup(
+            "colorama",
+            "click/__init__.pyi",
+            Some(ModuleStyle::Interface),
+            Some("colorama/__init__.pyi"),
+        );
+        assert_lookup(
+            "colorama",
+            "click/__init__.pyi",
+            Some(ModuleStyle::Executable),
+            Some("colorama/__init__.py"),
+        );
+        assert_lookup(
+            "colorama",
+            "colorama/__init__.pyi",
+            Some(ModuleStyle::Executable),
+            // we get .pyi here, even when requesting .py, since we've gone too far
+            Some("colorama/__init__.pyi"),
+        );
+        assert_lookup(
+            "colorama",
+            "colorama/__init__.py",
+            Some(ModuleStyle::Interface),
+            Some("colorama/__init__.pyi"),
+        );
         assert_lookup("log.log", "click/__init__.pyi", None, None);
         assert_lookup("log.log", "colorama/__init__.pyi", None, None);
         assert_lookup("pyre.client.log.log", "click/__init__.py", None, None);
@@ -657,6 +735,13 @@ mod tests {
             None,
             None,
         );
+
+        assert_lookup(
+            "generated",
+            "generated/main.py",
+            None,
+            Some("build-out/materialized/generated/__init__.py"),
+        );
     }
 
     #[test]
@@ -668,14 +753,14 @@ mod tests {
             let name = ModuleName::from_str(name);
             let module_path = ModulePath::filesystem(root.join(path));
             assert_eq!(
-                db.handle_from_module_path(module_path.dupe()),
+                db.handle_from_module_path(&module_path),
                 Some(Handle::new(name, module_path, sys_info.dupe())),
                 "got result for {path}, expected {name}",
             );
         };
 
         assert_eq!(
-            db.handle_from_module_path(ModulePath::filesystem(root.join("does_not_exist"))),
+            db.handle_from_module_path(&ModulePath::filesystem(root.join("does_not_exist"))),
             None,
         );
         assert_handle("pyre/client/log/__init__.py", "pyre.client.log");
@@ -710,6 +795,7 @@ mod tests {
                         &[],
                         "colorama/BUCK",
                         &[],
+                        None,
                     ),
                     Target::from_string("//pyre/client/log:log".to_owned()) => TargetManifest::lib(
                         &[
@@ -730,6 +816,7 @@ mod tests {
                         &[],
                         "pyre/client/log/BUCK",
                         &[],
+                        None,
                     ),
                     Target::from_string("//implicit_package/test:lib".to_owned()) => TargetManifest::lib(
                         &[
@@ -745,6 +832,7 @@ mod tests {
                         ("implicit_package", &["implicit_package/test"]),
                         ("implicit_package/lib", &["implicit_package/test/lib"]),
                         ],
+                        None,
                     ),
             },
             root.clone(),

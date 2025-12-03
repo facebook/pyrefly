@@ -136,7 +136,7 @@ Definition Result:
 4 | def f(x: list[int], y: str, z: Literal[42]):
                                     ^
 Definition Result:
-253 | Literal: _SpecialForm
+249 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | yyy = f([1, 2, 3], "test", 42)
@@ -591,7 +591,7 @@ Definition Result:
 6 | foo: Literal[1] = 1
              ^
 Definition Result:
-253 | Literal: _SpecialForm
+249 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | bar = f([1], "", 42)
@@ -1186,6 +1186,45 @@ Definition Result: None
 27 | dict["bar"]
             ^
 Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn import_module_test() {
+    let code_x_init = r#"# x/__init__.py
+def f():
+    pass
+"#;
+    let code_x_y = r#"# x/y.py
+def g():
+    pass
+"#;
+    let code = r#"
+import x.y
+def test():
+    x.f()
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("x", code_x_init), ("x.y", code_x_y)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+4 |     x.f()
+        ^
+Definition Result:
+1 | # x/__init__.py
+    ^
+
+
+# x.py
+
+# x.y.py
 "#
         .trim(),
         report.trim(),
