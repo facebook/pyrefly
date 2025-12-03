@@ -14,6 +14,8 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 use crate::test::lsp::lsp_interaction::util::inlay_hints_match_expected;
 use crate::test::lsp::lsp_interaction::util::ExpectedInlayHint;
 use crate::test::lsp::lsp_interaction::util::ExpectedTextEdit;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::inlay_hints_match_expected;
 
 #[test]
 fn test_inlay_hint_default_config() {
@@ -32,19 +34,7 @@ fn test_inlay_hint_default_config() {
     let expected = [
         ExpectedInlayHint {
             labels: &[
-                " -> ",
-                "tuple",
-                "[",
-                "Literal",
-                "[",
-                "1",
-                "]",
-                ", ",
-                "Literal",
-                "[",
-                "2",
-                "]",
-                "]",
+                " -> ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]", "]",
             ],
             position: (6, 21),
             text_edit: ExpectedTextEdit {
@@ -55,19 +45,7 @@ fn test_inlay_hint_default_config() {
         },
         ExpectedInlayHint {
             labels: &[
-                ": ",
-                "tuple",
-                "[",
-                "Literal",
-                "[",
-                "1",
-                "]",
-                ", ",
-                "Literal",
-                "[",
-                "2",
-                "]",
-                "]",
+                ": ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]", "]",
             ],
             position: (11, 6),
             text_edit: ExpectedTextEdit {
