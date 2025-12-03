@@ -1191,7 +1191,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|p| matches!(p, Param::Pos(..) | Param::PosOnly(..)))
             .count()
-            - (if defining_cls.is_some() && !is_staticmethod {
+            .saturating_sub(if defining_cls.is_some() && !is_staticmethod {
                 1 // Subtract the "self" or "cls" parameter
             } else {
                 0

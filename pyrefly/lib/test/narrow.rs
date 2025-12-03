@@ -1592,6 +1592,10 @@ class C:
     @staticmethod
     def guard_kw_arg_static(*, x) -> TypeGuard[int]: # E: Type guard functions must accept at least one positional argument
         return True
+
+class D:
+    def guard_missing_self() -> TypeGuard[int]: # E: Type guard functions must accept at least one positional argument
+        return True
 "#,
 );
 
@@ -1655,6 +1659,10 @@ class C:
 
     @staticmethod
     def guard_kw_arg_static(*, x) -> TypeIs[int]: # E: Type guard functions must accept at least one positional argument
+        return True
+
+class D:
+    def guard_missing_self() -> TypeIs[int]: # E: Type guard functions must accept at least one positional argument
         return True
 "#,
 );
