@@ -326,8 +326,6 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_targs(class_type.targs())
             }
             Type::TypedDict(typed_dict) => {
-                self.maybe_fmt_with_module("typing", "TypedDict", output)?;
-                output.write_str("[")?;
                 output.write_qname(typed_dict.qname())?;
                 output.write_targs(typed_dict.targs())
             }
