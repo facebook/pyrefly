@@ -1333,17 +1333,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.lookup_attr_from_attribute_base1((**protocol_base).clone(), attr_name, acc)
                 }
             }
-            AttributeBase1::Quantified(quantified, class) => {
-                if let Some(attr) = self.get_bounded_quantified_class_attribute(
-                    quantified.clone(),
-                    class,
-                    attr_name,
-                ) {
-                    acc.found_class_attribute(attr, base);
-                } else {
-                    acc.not_found(NotFoundOn::ClassObject(class.class_object().dupe(), base));
-                }
-            }
             AttributeBase1::BoundMethod(bound_func) => {
                 let method_type_base =
                     AttributeBase1::ClassInstance(self.stdlib.method_type().clone());
@@ -2383,9 +2372,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.completions_class_type(q.class_type(self.stdlib), expected_attribute_name, res)
             }
             AttributeBase1::ClassObject(class) => {
-                self.completions_class(class.class_object(), expected_attribute_name, res)
-            }
-            AttributeBase1::Quantified(_, class) => {
                 self.completions_class(class.class_object(), expected_attribute_name, res)
             }
             AttributeBase1::BoundMethod(bound_func) => {
