@@ -170,6 +170,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (lower, Some(upper)) if lower >= 0 && upper >= 0 => {
                 let lower_usize = lower as usize;
                 let upper_usize = upper as usize;
+                if lower_usize >= upper_usize {
+                    return Some(Type::concrete_tuple(Vec::new()));
+                }
                 if upper_usize <= prefix.len() {
                     // Slice is entirely within prefix
                     Some(Type::concrete_tuple(
