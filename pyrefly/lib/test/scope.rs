@@ -128,6 +128,30 @@ async def consume():
 );
 
 testcase!(
+    test_await_inside_generator_filter_errors,
+    r#"
+import asyncio
+
+async def coro():
+    return True
+
+g = (i for i in range(3) if await coro())  # E: `await` can only be used inside an async function
+"#,
+);
+
+testcase!(
+    test_await_inside_generator_iterable_errors,
+    r#"
+import asyncio
+
+async def make_items():
+    return [1, 2, 3]
+
+g = (i for i in await make_items())  # E: `await` can only be used inside an async function
+"#,
+);
+
+testcase!(
     test_await_inside_list_comprehension_errors,
     r#"
 import asyncio
@@ -145,12 +169,12 @@ testcase!(
 async def agen():
     yield 1
 
-xs = [x async for x in agen()]  # E: asynchronous comprehension outside of an async function
-ys = {x async for x in agen()}  # E: asynchronous comprehension outside of an async function
-zs = {x: 0 async for x in agen()}  # E: asynchronous comprehension outside of an async function
+xs = [x async for x in agen()]  # E: async outside of an async function
+ys = {x async for x in agen()}  # E: async outside of an async function
+zs = {x: 0 async for x in agen()}  # E: async outside of an async function
 
 def f():
-    return [x async for x in agen()]  # E: asynchronous comprehension outside of an async function
+    return [x async for x in agen()]  # E: async outside of an async function
 "#,
 );
 
@@ -176,9 +200,9 @@ async def agen():
     yield 1
 
 def outer():
-    xs = [x async for x in agen()]  # E: asynchronous comprehension outside of an async function
-    ys = {x async for x in agen()}  # E: asynchronous comprehension outside of an async function
-    zs = {x: x async for x in agen()}  # E: asynchronous comprehension outside of an async function
+    xs = [x async for x in agen()]  # E: async outside of an async function
+    ys = {x async for x in agen()}  # E: async outside of an async function
+    zs = {x: x async for x in agen()}  # E: async outside of an async function
     return xs, ys, zs
 "#,
 );

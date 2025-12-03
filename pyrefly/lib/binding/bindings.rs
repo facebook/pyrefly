@@ -186,6 +186,7 @@ pub struct BindingsBuilder<'a> {
     pub lookup: &'a dyn LookupExport,
     pub sys_info: &'a SysInfo,
     pub class_count: u32,
+    await_context: AwaitContext,
     errors: &'a ErrorCollector,
     solver: &'a Solver,
     uniques: &'a UniqueFactory,
@@ -196,6 +197,13 @@ pub struct BindingsBuilder<'a> {
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AwaitContext {
+    #[default]
+    General,
+    GeneratorElement,
 }
 
 impl Bindings {
@@ -377,6 +385,7 @@ impl Bindings {
             solver,
             uniques,
             class_count: 0,
+            await_context: AwaitContext::General,
             has_docstring: Ast::has_docstring(&x),
             scopes: Scopes::module(x.range, enable_trace),
             table: Default::default(),
@@ -587,6 +596,22 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn record_unused_variables(&mut self, unused: Vec<UnusedVariable>) {
         self.unused_variables.extend(unused);
+    }
+
+    pub(crate) fn with_await_context<R>(
+        &mut self,
+        ctx: AwaitContext,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let prev = self.await_context;
+        self.await_context = ctx;
+        let result = f(self);
+        self.await_context = prev;
+        result
+    }
+
+    pub(crate) fn in_generator_await_context(&self) -> bool {
+        matches!(self.await_context, AwaitContext::GeneratorElement)
     }
 
     /// Insert a binding into the bindings table, given a `Usage`. This will panic if the usage
