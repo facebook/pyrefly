@@ -47,6 +47,7 @@ use crate::solver::solver::SubsetError;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
+use crate::types::callable::PropertyPayload;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
@@ -409,6 +410,12 @@ impl InternalError {
 #[derive(Clone, Debug)]
 struct AttributeBase(Vec1<AttributeBase1>);
 
+#[derive(Clone, Debug)]
+struct PropertyAttr {
+    getter: Type,
+    setter: Option<Type>,
+}
+
 /// A single, "atomic" attribute base, not coming from a union or an intersection.
 /// An attribute is either found or not found by a search on this.
 #[derive(Clone, Debug)]
@@ -435,8 +442,8 @@ enum AttributeBase1 {
     /// before falling back to `Never`.
     TypeNever,
     /// Properties are handled via a special case so that we can understand
-    /// setter decorators.
-    Property(Type),
+    /// setter/deleter decorators.
+    Property(PropertyAttr),
     /// Attribute access on `Self` from inside a class
     SelfType(ClassType),
     /// Result of a super() call. See Type::SuperInstance for details on what these fields are.
@@ -1385,7 +1392,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             }
-            AttributeBase1::Property(getter) => {
+            AttributeBase1::Property(property) => {
                 if attr_name == "setter" {
                     // When given a decorator `@some_property.setter`, instead of modeling the setter
                     // directly at the type level we just return the getter (the raw `some_property`)
@@ -1400,7 +1407,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     //
                     // TODO(stroxler): it is probably possible to synthesize a forall type here
                     // that uses a type var to propagate the setter. Investigate this option later.
-                    let mut getter = getter.clone();
+                    let mut getter = property.getter.clone();
                     getter.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {
                         meta.flags.is_property_setter_decorator = true;
                     });
@@ -1408,6 +1415,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // TODO(samzhou19815): Support go-to-definition for @property applied symbols
                         getter, base,
                     )
+                } else if attr_name == "deleter" {
+                    let mut getter = property.getter.clone();
+                    let payload = PropertyPayload {
+                        getter: property.getter.clone(),
+                        setter: property.setter.clone(),
+                    };
+                    getter.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {
+                        meta.flags.property_deleter_payload = Some(payload.clone());
+                    });
+                    acc.found_type(getter, base)
                 } else {
                     let class = self.stdlib.property();
                     match self.get_instance_attribute(class, attr_name) {
@@ -1845,7 +1862,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ClassBase::ClassType(self.stdlib.method_type().clone()),
             )),
             Type::Never(_) => acc.push(AttributeBase1::Never),
-            _ if ty.is_property_getter() => acc.push(AttributeBase1::Property(ty)),
+            _ if ty.is_property_getter() => acc.push(AttributeBase1::Property(PropertyAttr {
+                getter: ty.clone(),
+                setter: None,
+            })),
+            _ if let Some(getter) = ty.is_property_setter_with_getter() => {
+                acc.push(AttributeBase1::Property(PropertyAttr {
+                    getter,
+                    setter: Some(ty.clone()),
+                }))
+            }
             Type::Callable(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.function_type().clone(),
             )),

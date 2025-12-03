@@ -317,6 +317,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
+        if let Some(payload) = def.metadata().flags.property_deleter_payload.clone() {
+            ty = payload.setter.unwrap_or(payload.getter);
+        }
+
         if def.is_stub()
             && self.module().path().style() != ModuleStyle::Interface
             && let Some(cls) = def.defining_cls()
@@ -549,6 +553,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &'a self,
         decorator: &'a Decorator,
     ) -> Option<SpecialDecorator<'a>> {
+        if decorator.ty.property_deleter_payload().is_some() {
+            return Some(SpecialDecorator::PropertyDeleter(&decorator.ty));
+        }
         match decorator.ty.callee_kind() {
             Some(CalleeKind::Function(FunctionKind::Overload)) => Some(SpecialDecorator::Overload),
             Some(CalleeKind::Class(ClassKind::StaticMethod(name))) => {
@@ -642,6 +649,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // See AnswersSolver::lookup_attr_from_attribute_base
                 // for details.
                 flags.is_property_setter_with_getter = Some((*decorator).clone());
+                true
+            }
+            SpecialDecorator::PropertyDeleter(decorator) => {
+                flags.property_deleter_payload = decorator.property_deleter_payload();
                 true
             }
             SpecialDecorator::DataclassTransformCall(kws) => {
