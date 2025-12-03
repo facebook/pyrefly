@@ -92,6 +92,26 @@ async def test_async():
 );
 
 testcase!(
+    test_await_inside_async_comprehension_ok,
+    r#"
+import asyncio
+
+async def test2():
+    return "test"
+
+async def a_gen():
+    for _ in range(3):
+        yield test2()
+
+a = (await cor async for cor in a_gen())
+
+async def main():
+    async for i in a:
+        print(i)
+"#,
+);
+
+testcase!(
     test_global_simple,
     r#"
 x: str = ""

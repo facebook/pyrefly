@@ -375,13 +375,14 @@ impl<'a> BindingsBuilder<'a> {
         comprehensions: &mut [Comprehension],
         usage: &mut Usage,
     ) {
+        let is_async = comprehensions.iter().any(|comp| comp.is_async);
         for (i, comp) in comprehensions.iter_mut().enumerate() {
             // Resolve the type of the iteration value *before* binding the target of the iteration.
             // This is necessary so that, e.g. `[x for x in x]` correctly uses the outer scope for
             // the `in x` lookup.
             self.ensure_expr(&mut comp.iter, usage);
             if i == 0 {
-                self.scopes.push(Scope::comprehension(range));
+                self.scopes.push(Scope::comprehension(range, is_async));
             }
             // Incomplete nested comprehensions can have identical iterators
             // for inner and outer loops. It is safe to overwrite it because it literally the same.
