@@ -1133,6 +1133,9 @@ impl ConfigFile {
         if let Some(import_root) = &self.import_root {
             self.import_root = Some(import_root.absolutize_from(config_root));
         }
+        if let Some(typeshed_path) = &self.typeshed_path {
+            self.typeshed_path = Some(typeshed_path.absolutize_from(config_root));
+        }
         self.python_environment
             .site_package_path
             .iter_mut()
@@ -1600,6 +1603,7 @@ mod tests {
         fn with_sep(s: &str) -> String {
             s.replace("/", path::MAIN_SEPARATOR_STR)
         }
+        let typeshed = "path/to/typeshed";
         let mut python_environment = PythonEnvironment {
             site_package_path: Some(vec![PathBuf::from("venv/lib/python1.2.3/site-packages")]),
             ..PythonEnvironment::default()
@@ -1634,7 +1638,7 @@ mod tests {
                 settings: Default::default(),
             }],
             ignore_missing_source: false,
-            typeshed_path: None,
+            typeshed_path: Some(PathBuf::from(typeshed)),
             skip_lsp_config_indexing: false,
         };
 
@@ -1653,6 +1657,7 @@ mod tests {
                 .into_owned(),
         ];
         let search_path = vec![test_path.parent().unwrap().parent().unwrap().to_path_buf()];
+        let expected_typeshed = test_path.join(typeshed);
         python_environment.site_package_path =
             Some(vec![test_path.join("venv/lib/python1.2.3/site-packages")]);
 
@@ -1692,7 +1697,7 @@ mod tests {
                 settings: Default::default(),
             }],
             ignore_missing_source: false,
-            typeshed_path: None,
+            typeshed_path: Some(expected_typeshed),
             skip_lsp_config_indexing: false,
         };
         assert_eq!(config, expected_config);
