@@ -91,6 +91,7 @@ pub enum SpecialDecorator<'a> {
     Final,
     Deprecated(&'a Deprecation),
     PropertySetter(&'a Type),
+    PropertyDeleter(&'a Type),
     DataclassTransformCall(&'a TypeMap),
     EnumNonmember,
     AbstractMethod,
