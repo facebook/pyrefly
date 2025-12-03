@@ -1333,7 +1333,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.lookup_attr_from_attribute_base1((**protocol_base).clone(), attr_name, acc)
                 }
             }
-            AttributeBase1::TypeQuantified(quantified, class) => {
+            AttributeBase1::Quantified(quantified, class) => {
                 if let Some(attr) = self.get_bounded_quantified_class_attribute(
                     quantified.clone(),
                     class,
@@ -2385,7 +2385,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase1::ClassObject(class) => {
                 self.completions_class(class.class_object(), expected_attribute_name, res)
             }
-            AttributeBase1::TypeQuantified(_, class) => {
+            AttributeBase1::Quantified(_, class) => {
                 self.completions_class(class.class_object(), expected_attribute_name, res)
             }
             AttributeBase1::BoundMethod(bound_func) => {
