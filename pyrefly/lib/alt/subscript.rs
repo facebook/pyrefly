@@ -115,14 +115,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .parse_slice_literal(upper_expr)
             .ok()?
             .unwrap_or(elts.len() as i64);
-        if lower_literal <= upper_literal
-            && lower_literal >= 0
-            && upper_literal >= 0
-            && upper_literal <= elts.len() as i64
-        {
-            Some(Type::concrete_tuple(
-                elts[lower_literal as usize..upper_literal as usize].to_vec(),
-            ))
+        if lower_literal >= 0 && upper_literal >= 0 && upper_literal <= elts.len() as i64 {
+            if lower_literal >= upper_literal {
+                Some(Type::concrete_tuple(Vec::new()))
+            } else {
+                Some(Type::concrete_tuple(
+                    elts[lower_literal as usize..upper_literal as usize].to_vec(),
+                ))
+            }
         } else {
             None
         }
