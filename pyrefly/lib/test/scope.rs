@@ -736,3 +736,8 @@ class C:
             pass
     "#,
 );
+
+testcase!(test_await_in_async_generator, r#"
+async def a_gen():
+    yield await test2()
+"#,);
