@@ -15,6 +15,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
@@ -2665,14 +2666,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         metaclass: &ClassType,
         name: &Name,
     ) -> Option<ClassAttribute> {
-        self.get_class_member(metaclass.class_object(), name)
-            .map(|field| {
-                self.as_instance_attribute(
-                    name,
-                    &field,
-                    &Instance::of_metaclass(cls.clone(), metaclass),
-                )
-            })
+        let attr = self.get_class_member(metaclass.class_object(), name)?;
+        let attr = self.as_instance_attribute(
+            name,
+            &attr,
+            &Instance::of_metaclass(cls.clone(), metaclass),
+        );
+        if name == &dunder::CALL
+            && metaclass
+                .class_object()
+                .has_toplevel_qname(ModuleName::builtins().as_str(), "type")
+        {
+            if let Some(class_type) = match cls {
+                ClassBase::ClassDef(cls)
+                | ClassBase::ClassType(cls)
+                | ClassBase::SelfType(cls)
+                | ClassBase::Quantified(_, cls)
+                | ClassBase::Protocol(cls, _) => Some(cls.clone()),
+            } {
+                return Some(ClassAttribute::read_write(
+                    self.constructor_to_callable(&class_type),
+                ));
+            }
+        }
+        Some(attr)
     }
 
     // When we're accessing the attribute of a string literal, we bind methods to

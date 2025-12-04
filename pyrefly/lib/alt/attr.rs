@@ -1112,20 +1112,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let metadata = self.get_metadata_for_class(cls.class_object());
         let metaclass = metadata.metaclass(self.stdlib);
-        if let Some(attr) = self.get_metaclass_attribute(cls, &metaclass, attr_name) {
-            if attr_name == &dunder::CALL
-                && metaclass
-                    .class_object()
-                    .has_toplevel_qname(ModuleName::builtins().as_str(), "type")
-            {
-                return self.synthetic_constructor_call_attribute(cls);
-            }
-            return attr.clone().as_instance_method().map(|_| attr);
-        }
-        if attr_name == &dunder::CALL {
-            return self.synthetic_constructor_call_attribute(cls);
-        }
-        None
+        let attr = self.get_metaclass_attribute(cls, metaclass, attr_name)?;
+        attr.clone().as_instance_method().map(|_| attr)
     }
 
     /// Helper for looking up attributes on `type[T]` wrappers.
@@ -1289,27 +1277,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 attr_name,
                             );
                             match instance_attr {
-                                Some(attr) => {
-                                    if attr_name == &dunder::CALL
-                                        && metadata
-                                            .metaclass(self.stdlib)
-                                            .class_object()
-                                            .has_toplevel_qname(
-                                                ModuleName::builtins().as_str(),
-                                                "type",
-                                            )
-                                    {
-                                        if let Some(synth) =
-                                            self.synthetic_constructor_call_attribute(class)
-                                        {
-                                            acc.found_class_attribute(synth, base);
-                                        } else {
-                                            acc.found_class_attribute(attr, base);
-                                        }
-                                    } else {
-                                        acc.found_class_attribute(attr, base);
-                                    }
-                                }
+                                Some(attr) => acc.found_class_attribute(attr, base),
                                 None if metadata.has_base_any() => {
                                     // We can't immediately fall back to Any in this case -- `type[Any]` is actually a special
                                     // AttributeBase which requires additional lookup on `type` itself before the Any fallback.
@@ -1319,25 +1287,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         acc,
                                     )
                                 }
-                                None => {
-                                    if attr_name == &dunder::CALL {
-                                        if let Some(attr) =
-                                            self.synthetic_constructor_call_attribute(class)
-                                        {
-                                            acc.found_class_attribute(attr, base);
-                                        } else {
-                                            acc.not_found(NotFoundOn::ClassObject(
-                                                class.class_object().dupe(),
-                                                base,
-                                            ));
-                                        }
-                                    } else {
-                                        acc.not_found(NotFoundOn::ClassObject(
-                                            class.class_object().dupe(),
-                                            base,
-                                        ));
-                                    }
-                                }
+                                None => acc.not_found(NotFoundOn::ClassObject(
+                                    class.class_object().dupe(),
+                                    base,
+                                )),
                             }
                         }
                     }
@@ -1424,19 +1377,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
-    }
-
-    fn synthetic_constructor_call_attribute(&self, class: &ClassBase) -> Option<ClassAttribute> {
-        let cls = match class {
-            ClassBase::ClassDef(cls)
-            | ClassBase::ClassType(cls)
-            | ClassBase::SelfType(cls)
-            | ClassBase::Quantified(_, cls) => cls.clone(),
-            ClassBase::Protocol(..) => return None,
-        };
-        Some(ClassAttribute::read_write(
-            self.constructor_to_callable(&cls),
-        ))
     }
 
     /// A magic dunder attribute differs from a normal attribute in one crucial aspect:
