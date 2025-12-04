@@ -3088,8 +3088,13 @@ impl Server {
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
-            info!("Invalidated config, prepare to recheck open files.");
-            let _ = lsp_queue.send(LspEvent::RecheckFinished);
+            // Only send RecheckFinished if there are actually open files to revalidate.
+            if !open_files.read().is_empty() {
+                info!("Invalidated config, prepare to recheck open files.");
+                let _ = lsp_queue.send(LspEvent::RecheckFinished);
+            } else {
+                info!("Invalidated config, but no open files to recheck.");
+            }
         }));
     }
 

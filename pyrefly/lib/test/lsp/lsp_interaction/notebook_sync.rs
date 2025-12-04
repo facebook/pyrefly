@@ -32,12 +32,6 @@ fn test_notebook_publish_diagnostics() {
         .expect_publish_diagnostics_uri(&cell_uri, 1)
         .unwrap();
 
-    // TODO: Stop sending multiple publishDiagnostics on didOpen
-    interaction
-        .client
-        .expect_publish_diagnostics_uri(&cell_uri, 1)
-        .unwrap();
-
     interaction.close_notebook("notebook.ipynb");
 
     interaction
