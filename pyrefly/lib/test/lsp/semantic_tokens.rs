@@ -11,6 +11,23 @@ use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
+fn utf16_to_byte_index(line: &str, utf16_offset: usize) -> usize {
+    if utf16_offset == 0 {
+        return 0;
+    }
+    let mut seen = 0;
+    for (byte_idx, ch) in line.char_indices() {
+        if seen == utf16_offset {
+            return byte_idx;
+        }
+        seen += ch.len_utf16();
+        if seen == utf16_offset {
+            return byte_idx + ch.len_utf8();
+        }
+    }
+    line.len()
+}
+
 fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
     let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::indexing());
     let mut report = String::new();
@@ -35,14 +52,19 @@ fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
             };
             start_line += token.delta_line as usize;
             let line = code.lines().nth(start_line).unwrap();
-            let end = start_col + token.length as usize;
-            let text = if line.len() >= end {
-                &line[start_col..end].to_owned()
+            let token_length = token.length as usize;
+            let end_utf16 = start_col + token_length;
+            let line_utf16_len = line.encode_utf16().count();
+            let text = if end_utf16 <= line_utf16_len {
+                let start_byte = utf16_to_byte_index(line, start_col.min(line_utf16_len));
+                let end_byte = utf16_to_byte_index(line, end_utf16);
+                line[start_byte..end_byte].to_owned()
             } else {
-                &format!(
+                let start_byte = utf16_to_byte_index(line, start_col.min(line_utf16_len));
+                format!(
                     "{}... (continues {} characters)",
-                    &line[start_col..],
-                    end - line.len()
+                    &line[start_byte..],
+                    end_utf16 - line_utf16_len
                 )
             };
             report.push_str(&format!(
@@ -742,5 +764,28 @@ token-type: class
 
 line: 4, column: 0, length: 13, text: SupportsFloat
 token-type: class, token-modifiers: [defaultLibrary]"#,
+    );
+}
+
+#[test]
+fn highlights_multibyte_identifiers() {
+    let code = r#"
+名字 = "值"
+print(名字)
+"#;
+
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 0, length: 2, text: 名字
+token-type: variable, token-modifiers: [readonly]
+
+line: 2, column: 0, length: 5, text: print
+token-type: function, token-modifiers: [defaultLibrary]
+
+line: 2, column: 6, length: 2, text: 名字
+token-type: variable, token-modifiers: [readonly]
+"#,
     );
 }

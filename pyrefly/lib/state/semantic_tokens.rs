@@ -105,17 +105,22 @@ impl SemanticTokensLegends {
         let mut lsp_semantic_tokens = Vec::new();
         for token in tokens {
             let cell_idx = module_info.to_cell_for_lsp(token.range.start());
-            // Skip tokens different cells if we're filtering for a particular cell
+            // Skip tokens in different cells if we're filtering for a particular cell
             if cell_idx != limit_cell_idx {
                 continue;
             }
-            let source_range = module_info.display_range(token.range);
-            let length = token.range.len().to_u32();
+            let start_pos = module_info.to_lsp_position(token.range.start());
+            let end_pos = module_info.to_lsp_position(token.range.end());
+            let length = if start_pos.line == end_pos.line {
+                end_pos.character.saturating_sub(start_pos.character)
+            } else {
+                0
+            };
             if length == 0 {
                 continue;
             }
-            let current_line = source_range.start.line_within_cell().to_zero_indexed();
-            let current_col = source_range.start.column().get() - 1;
+            let current_line = start_pos.line;
+            let current_col = start_pos.character;
             let (delta_line, delta_start) = {
                 let delta_line = current_line - previous_line;
                 let delta_start = if previous_line == current_line {
