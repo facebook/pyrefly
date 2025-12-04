@@ -26,6 +26,7 @@ use starlark_map::smallmap;
 use crate::callable::Function;
 use crate::class::Class;
 use crate::literal::Lit;
+use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_output::DisplayOutput;
 use crate::type_output::OutputWithLocations;
@@ -93,6 +94,7 @@ pub struct TypeDisplayContext<'a> {
     /// Should we display for IDE Hover? This makes type names more readable but less precise.
     hover: bool,
     always_display_module_name: bool,
+    extra_symbol_qnames: SmallMap<&'static str, &'a QName>,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -119,6 +121,15 @@ impl<'a> TypeDisplayContext<'a> {
                 self.add_qname(qname);
             }
         })
+    }
+
+    pub fn add_symbol_qname(&mut self, symbol: &'static str, qname: &'a QName) {
+        self.add_qname(qname);
+        self.extra_symbol_qnames.insert(symbol, qname);
+    }
+
+    pub(crate) fn symbol_qname(&self, symbol: &'static str) -> Option<&'a QName> {
+        self.extra_symbol_qnames.get(symbol).copied()
     }
 
     /// Force that we always display at least the module name for qualified names.
@@ -583,9 +594,11 @@ impl<'a> TypeDisplayContext<'a> {
                 }
             }
             Type::Intersect(x) => self.fmt_type_sequence(x.0.iter(), " & ", true, output),
-            Type::Tuple(t) => {
-                t.fmt_with_type(output, &|ty, o| self.fmt_helper_generic(ty, false, o))
-            }
+            Type::Tuple(t) => t.fmt_with_type(
+                output,
+                &|ty, o| self.fmt_helper_generic(ty, false, o),
+                self.symbol_qname("tuple"),
+            ),
             Type::Forall(box Forall {
                 tparams,
                 body: body @ Forallable::Callable(c),
@@ -796,8 +809,12 @@ impl Type {
         c.display(self).to_string()
     }
 
-    pub fn get_types_with_locations(&self) -> Vec<(String, Option<TextRangeWithModule>)> {
-        let ctx = TypeDisplayContext::new(&[self]);
+    pub fn get_types_with_locations(
+        &self,
+        stdlib: &Stdlib,
+    ) -> Vec<(String, Option<TextRangeWithModule>)> {
+        let mut ctx = TypeDisplayContext::new(&[self]);
+        ctx.add_symbol_qname("tuple", stdlib.tuple_object().qname());
         let mut output = OutputWithLocations::new(&ctx);
         ctx.fmt_helper_generic(self, false, &mut output).unwrap();
         output.parts().to_vec()
@@ -1672,6 +1689,16 @@ def overloaded_func[T](
         output.parts().to_vec()
     }
 
+    fn get_parts_with_tuple_qname(
+        t: &Type,
+        tuple_qname: &pyrefly_python::qname::QName,
+    ) -> Vec<(String, Option<TextRangeWithModule>)> {
+        let mut ctx = TypeDisplayContext::new(&[t]);
+        ctx.add_symbol_qname("tuple", tuple_qname);
+        let output = ctx.get_types_with_location(t, false);
+        output.parts().to_vec()
+    }
+
     fn parts_to_string(parts: &[(String, Option<TextRangeWithModule>)]) -> String {
         parts.iter().map(|(s, _)| s.as_str()).collect::<String>()
     }
@@ -1875,6 +1902,7 @@ def overloaded_func[T](
         let bar = fake_class("Bar", "test", 55);
         let foo_type = Type::ClassType(ClassType::new(foo, TArgs::default()));
         let bar_type = Type::ClassType(ClassType::new(bar, TArgs::default()));
+        let tuple_cls = fake_class("tuple", "builtins", 5);
 
         // Test concrete tuple: tuple[Foo, Bar]
         let concrete_tuple = Type::Tuple(Tuple::Concrete(vec![foo_type.clone(), bar_type.clone()]));
@@ -1882,6 +1910,8 @@ def overloaded_func[T](
         for expected in &["tuple", "Foo", "Bar"] {
             assert_output_contains(&parts, expected);
         }
+        let parts_with_location = get_parts_with_tuple_qname(&concrete_tuple, tuple_cls.qname());
+        assert_part_has_location(&parts_with_location, "tuple", "builtins", 5);
 
         // Test unbounded tuple: tuple[Foo, ...]
         let unbounded_tuple = Type::Tuple(Tuple::Unbounded(Box::new(foo_type)));
@@ -1889,6 +1919,8 @@ def overloaded_func[T](
         for expected in &["tuple", "Foo", "..."] {
             assert_output_contains(&parts2, expected);
         }
+        let parts_unbounded = get_parts_with_tuple_qname(&unbounded_tuple, tuple_cls.qname());
+        assert_part_has_location(&parts_unbounded, "tuple", "builtins", 5);
     }
 
     #[test]

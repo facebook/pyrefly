@@ -119,6 +119,7 @@ impl<'a> Transaction<'a> {
                 }
         };
         let bindings = self.get_bindings(handle)?;
+        let stdlib = self.get_stdlib(handle);
         let mut res = Vec::new();
         for idx in bindings.keys::<Key>() {
             match bindings.idx_to_key(idx) {
@@ -140,7 +141,7 @@ impl<'a> Transaction<'a> {
                                         ty = return_ty;
                                     }
                                     // Use get_types_with_locations to get type parts with location info
-                                    let type_parts = ty.get_types_with_locations();
+                                    let type_parts = ty.get_types_with_locations(stdlib.as_ref());
                                     let label_parts = once((" -> ".to_owned(), None))
                                         .chain(
                                             type_parts
@@ -182,7 +183,7 @@ impl<'a> Transaction<'a> {
                         && is_interesting(e, &ty, class_name)
                     {
                         // Use get_types_with_locations to get type parts with location info
-                        let type_parts = ty.get_types_with_locations();
+                        let type_parts = ty.get_types_with_locations(stdlib.as_ref());
                         let label_parts = once((": ".to_owned(), None))
                             .chain(
                                 type_parts

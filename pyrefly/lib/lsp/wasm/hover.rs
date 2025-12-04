@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use lsp_types::Hover;
 use lsp_types::HoverContents;
@@ -18,6 +19,7 @@ use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::qname::QName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Param;
@@ -33,7 +35,7 @@ use ruff_text_size::TextSize;
 
 use crate::alt::answers_solver::AnswersSolver;
 use crate::error::error::Error;
-use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::module_helpers::collect_symbol_def_paths_with_stdlib;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
@@ -148,12 +150,12 @@ pub struct HoverValue {
     pub parameter_doc: Option<(String, String)>,
     pub display: Option<String>,
     pub show_go_to_links: bool,
+    pub symbol_def_paths: Vec<(QName, PathBuf)>,
 }
 
 impl HoverValue {
     #[cfg(not(target_arch = "wasm32"))]
-    fn format_symbol_def_locations(t: &Type) -> Option<String> {
-        let symbol_paths = collect_symbol_def_paths(t);
+    fn format_symbol_def_locations(symbol_paths: &[(QName, PathBuf)]) -> Option<String> {
         let linked_names = symbol_paths
             .into_iter()
             .filter_map(|(qname, file_path)| {
@@ -189,7 +191,7 @@ impl HoverValue {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn format_symbol_def_locations(t: &Type) -> Option<String> {
+    fn format_symbol_def_locations(_symbol_paths: &[(QName, PathBuf)]) -> Option<String> {
         None
     }
 
@@ -222,7 +224,7 @@ impl HoverValue {
             .as_ref()
             .map_or("".to_owned(), |s| format!("{s}: "));
         let symbol_def_formatted = if self.show_go_to_links {
-            HoverValue::format_symbol_def_locations(&self.type_).unwrap_or("".to_owned())
+            HoverValue::format_symbol_def_locations(&self.symbol_def_paths).unwrap_or("".to_owned())
         } else {
             String::new()
         };
@@ -404,6 +406,9 @@ pub fn get_hover(
         }
     }
 
+    let stdlib = transaction.get_stdlib(handle);
+    let symbol_def_paths = collect_symbol_def_paths_with_stdlib(&type_, stdlib.as_ref());
+
     Some(
         HoverValue {
             kind,
@@ -413,6 +418,7 @@ pub fn get_hover(
             parameter_doc,
             display: type_display,
             show_go_to_links,
+            symbol_def_paths,
         }
         .format(),
     )
