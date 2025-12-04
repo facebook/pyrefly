@@ -657,19 +657,6 @@ from foo import
 2 | from foo import
                    ^
 Completion Results:
-- (Variable) imperial_guard
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
 
 
 # foo.py
@@ -704,21 +691,6 @@ from foo import func
 2 | from foo import func
                ^
 Completion Results:
-- (Variable) deprecated
-- (Variable) func_ok
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
-- (Variable) [DEPRECATED] func_not_ok
 
 2 | from foo import func
                         ^
@@ -766,19 +738,6 @@ from foo import imperial
 2 | from foo import imperial
                ^
 Completion Results:
-- (Variable) imperial_guard
-- (Variable) __annotations__
-- (Variable) __builtins__
-- (Variable) __cached__
-- (Variable) __debug__
-- (Variable) __dict__
-- (Variable) __doc__
-- (Variable) __file__
-- (Variable) __loader__
-- (Variable) __name__
-- (Variable) __package__
-- (Variable) __path__
-- (Variable) __spec__
 
 2 | from foo import imperial
                            ^
@@ -2527,127 +2486,150 @@ def foo(): pass
 }
 
 #[test]
-fn test_completion_from_import_trailing_space() {
-    let utils_code = "def format_number(x): pass";
-    // Place cursor after 'import '
-    let main_code = r#"
+fn from_module_import_with_trailing_space() {
+    let code = r#"
 from utils import 
 #                 ^
 "#;
-
-    let (handles, state) = mk_multi_file_state(
-        &[("utils", utils_code), ("main", main_code)],
-        Require::indexing(),
-        false,
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("utils", "def format_number(x): pass")],
+        get_default_test_report(),
     );
 
-    let handle = handles.get("main").unwrap();
-    let cursors = extract_cursors_for_test(main_code);
-    let position = cursors[0];
-
-    let completions =
-        state
-            .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
-
     assert!(
-        completions.iter().any(|c| c.label == "format_number"),
-        "format_number not found"
+        report.contains("- (Variable) format_number"),
+        "Expected format_number in completions. Report:\n{}",
+        report
     );
 }
 
 #[test]
-fn test_completion_import_trailing_space() {
-    let main_code = r#"
+fn import_with_trailing_space() {
+    let code = r#"
 import 
 #      ^
 "#;
-    let utils_code = "";
-
-    let (handles, state) = mk_multi_file_state(
-        &[("utils", utils_code), ("main", main_code)],
-        Require::indexing(),
-        false,
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("utils", "")],
+        get_default_test_report(),
     );
 
-    let handle = handles.get("main").unwrap();
-    let cursors = extract_cursors_for_test(main_code);
-    let position = cursors[0];
-
-    let completions =
-        state
-            .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
-
     assert!(
-        completions.iter().any(|c| c.label == "utils"),
-        "utils module not found"
+        report.contains("- (Module) utils"),
+        "Expected utils module in completions. Report:\n{}",
+        report
     );
     assert!(
-        !completions.iter().any(|c| c.label == "__main__"),
-        "__main__ should not be found"
+        !report.contains("__main__"),
+        "__main__ should not appear in completions. Report:\n{}",
+        report
     );
 }
 
 #[test]
-fn test_completion_from_import_multiple_spaces() {
-    let utils_code = "def format_number(x): pass";
-    // Place cursor after 'import   '
-    let main_code = r#"
+fn from_module_import_with_multiple_trailing_spaces() {
+    let code = r#"
 from utils import   
 #                   ^
 "#;
-
-    let (handles, state) = mk_multi_file_state(
-        &[("utils", utils_code), ("main", main_code)],
-        Require::indexing(),
-        false,
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("utils", "def format_number(x): pass")],
+        get_default_test_report(),
     );
 
-    let handle = handles.get("main").unwrap();
-    let cursors = extract_cursors_for_test(main_code);
-    let position = cursors[0];
-
-    let completions =
-        state
-            .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
-
     assert!(
-        completions.iter().any(|c| c.label == "format_number"),
-        "format_number not found"
+        report.contains("- (Variable) format_number"),
+        "Expected format_number in completions. Report:\n{}",
+        report
     );
 }
 
 #[test]
-fn test_completion_import_multiple_spaces() {
-    let main_code = r#"
+fn import_with_multiple_trailing_spaces() {
+    let code = r#"
 import   
 #        ^
 "#;
-    let utils_code = "";
-
-    let (handles, state) = mk_multi_file_state(
-        &[("utils", utils_code), ("main", main_code)],
-        Require::indexing(),
-        false,
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("utils", "")],
+        get_default_test_report(),
     );
 
-    let handle = handles.get("main").unwrap();
-    let cursors = extract_cursors_for_test(main_code);
-    let position = cursors[0];
-
-    let completions =
-        state
-            .transaction()
-            .completion(handle, position, ImportFormat::Absolute, true);
-
     assert!(
-        completions.iter().any(|c| c.label == "utils"),
-        "utils module not found"
+        report.contains("- (Module) utils"),
+        "Expected utils module in completions. Report:\n{}",
+        report
     );
     assert!(
-        !completions.iter().any(|c| c.label == "__main__"),
-        "__main__ should not be found"
+        !report.contains("__main__"),
+        "__main__ should not appear in completions. Report:\n{}",
+        report
+    );
+}
+
+#[test]
+fn from_with_space_shows_modules_not_builtins() {
+    let code = r#"
+from 
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("mymodule", "x = 1")],
+        get_default_test_report(),
+    );
+
+    // Should include our test module
+    assert!(
+        report.contains("- (Module) mymodule"),
+        "Expected module completion for 'mymodule'. Report:\n{}",
+        report
+    );
+
+    // Should not include builtin classes/exceptions
+    assert!(
+        !report.contains("MemoryError"),
+        "Should NOT suggest MemoryError as a module. Report:\n{}",
+        report
+    );
+    assert!(
+        !report.contains("ValueError"),
+        "Should NOT suggest ValueError as a module. Report:\n{}",
+        report
+    );
+    assert!(
+        !report.contains("- (Class) list") && !report.contains("- (Variable) list"),
+        "Should NOT suggest list as a module. Report:\n{}",
+        report
+    );
+}
+
+#[test]
+fn import_with_space_shows_modules_not_builtins() {
+    let code = r#"
+import 
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("utils", "x = 1")],
+        get_default_test_report(),
+    );
+
+    // Should include our test module
+    assert!(
+        report.contains("- (Module) utils"),
+        "Expected module completion for 'utils'. Report:\n{}",
+        report
+    );
+
+    // Should not include builtin classes/exceptions
+    assert!(
+        !report.contains("MemoryError"),
+        "Should NOT suggest MemoryError. Report:\n{}",
+        report
+    );
+    assert!(
+        !report.contains("ValueError"),
+        "Should NOT suggest ValueError. Report:\n{}",
+        report
     );
 }

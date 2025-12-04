@@ -2920,36 +2920,39 @@ impl<'a> Transaction<'a> {
                     }
 
                     if !processed_as_import_statement && nodes.is_empty() {
-                        self.add_keyword_completions(handle, &mut result);
-                        self.add_local_variable_completions(handle, None, position, &mut result);
-                        self.add_builtins_autoimport_completions(handle, None, &mut result);
-                    }
+                        // Check if we're right after "from " or "import " keywords
+                        // In these cases, we should show module completions, not general completions
+                        let text_before_cursor =
+                            if let Some(module_info) = self.get_module_info(handle) {
+                                let start = position.saturating_sub(TextSize::new(10));
+                                module_info
+                                    .code_at(TextRange::new(start, position))
+                                    .to_owned()
+                            } else {
+                                String::new()
+                            };
 
-                    // Original logic for when nodes are found, or after fallback if not processed as import
-                    if let Some(first) = nodes.first() {
-                        match first {
-                            AnyNodeRef::StmtImportFrom(import_from) => {
-                                // `from ... import <cursor>`
-                                if let Some(module) = &import_from.module
-                                    && position >= module.range().end()
-                                {
-                                    self.add_module_exports_completions(
-                                        handle,
-                                        ModuleName::from_str(module.as_str()),
-                                        &mut result,
-                                    );
-                                }
-                            }
-                            AnyNodeRef::StmtImport(_) => {
-                                // `import <cursor>`
-                                self.add_all_modules_completions(handle, &mut result);
-                            }
-                            _ => {}
+                        let is_after_from_or_import =
+                            text_before_cursor.trim_end().ends_with("from")
+                                || text_before_cursor.trim_end().ends_with("import");
+
+                        if !is_after_from_or_import {
+                            self.add_keyword_completions(handle, &mut result);
+                            self.add_local_variable_completions(
+                                handle,
+                                None,
+                                position,
+                                &mut result,
+                            );
+                            self.add_builtins_autoimport_completions(handle, None, &mut result);
+                        } else {
+                            // Show module completions for `from ` or `import `
+                            self.add_all_modules_completions(handle, &mut result);
                         }
                     }
 
-                    // Remaining general completions if no specific import context was found or handled
-                    if !processed_as_import_statement || !nodes.is_empty() {
+                    // General completions (literals, dict keys, kwargs) - skip if we processed a trailing space import
+                    if !processed_as_import_statement {
                         self.add_literal_completions(handle, position, &mut result);
                         self.add_dict_key_completions(
                             handle,
