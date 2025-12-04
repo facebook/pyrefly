@@ -56,7 +56,7 @@ fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
             let end_utf16 = start_col + token_length;
             let line_utf16_len = line.encode_utf16().count();
             let text = if end_utf16 <= line_utf16_len {
-                let start_byte = utf16_to_byte_index(line, start_col.min(line_utf16_len));
+                let start_byte = utf16_to_byte_index(line, start_col);
                 let end_byte = utf16_to_byte_index(line, end_utf16);
                 line[start_byte..end_byte].to_owned()
             } else {

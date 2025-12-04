@@ -114,6 +114,10 @@ impl SemanticTokensLegends {
             let length = if start_pos.line == end_pos.line {
                 end_pos.character.saturating_sub(start_pos.character)
             } else {
+                // LSP semantic tokens must be expressed within a single line; we currently
+                // generate only single-line ranges, so treat any multi-line span as invalid
+                // and skip it. (Today this effectively never happens, but the guard keeps us
+                // from emitting malformed data if it does.)
                 0
             };
             if length == 0 {
