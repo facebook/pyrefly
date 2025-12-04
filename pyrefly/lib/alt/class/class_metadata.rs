@@ -15,6 +15,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::annotation::Annotation;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
+use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -62,7 +63,7 @@ use crate::types::class::ClassKind;
 use crate::types::class::ClassType;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::keywords::DataclassKeywords;
-use crate::types::keywords::DataclassTransformKeywords;
+use crate::types::keywords::DataclassTransformMetadata;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
 use crate::types::types::CalleeKind;
@@ -659,8 +660,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         decorators: &[(Arc<Decorator>, TextRange)],
         metaclass: Option<&ClassType>,
-        dataclass_defaults_from_base_class: Option<DataclassTransformKeywords>,
-    ) -> Option<DataclassTransformKeywords> {
+        dataclass_defaults_from_base_class: Option<DataclassTransformMetadata>,
+    ) -> Option<DataclassTransformMetadata> {
         // This is set when a class is decorated with `@typing.dataclass_transform(...)`. Note that
         // this does not turn the class into a dataclass! Instead, it becomes a special base class
         // (or metaclass) that turns child classes into dataclasses.
@@ -678,7 +679,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && call.has_function_kind(FunctionKind::DataclassTransform)
             {
                 dataclass_transform_metadata =
-                    Some(DataclassTransformKeywords::from_type_map(&call.keywords));
+                    Some(DataclassTransformMetadata::from_type_map(&call.keywords));
             }
         }
         dataclass_transform_metadata
@@ -688,7 +689,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         keywords: &[(Name, Annotation)],
         decorators: &[(Arc<Decorator>, TextRange)],
-        dataclass_defaults_from_base_class: Option<DataclassTransformKeywords>,
+        dataclass_defaults_from_base_class: Option<DataclassTransformMetadata>,
         pydantic_config: Option<&PydanticConfig>,
     ) -> Option<(DataclassKeywords, Vec<CalleeKind>)> {
         // This is set when we should apply dataclass-like transformations to the class. The class
@@ -780,7 +781,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
-                        _converter_default: None,
                     });
                 }
                 // `@dataclass(...)`
@@ -792,7 +792,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         fields: dataclass_fields,
                         kws: DataclassKeywords::from_type_map(
                             &call.keywords,
-                            &DataclassTransformKeywords::new(),
+                            &DataclassTransformMetadata::new(),
                         ),
                         field_specifiers: vec![
                             CalleeKind::Function(FunctionKind::DataclassField),
@@ -801,7 +801,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
-                        _converter_default: None,
                     });
                 }
                 _ => {}
@@ -815,7 +814,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 alias_keyword,
                 init_defaults,
                 default_can_be_positional,
-                _converter_default: None,
             });
         }
         dataclass_metadata
@@ -870,15 +868,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if is_new_type {
                     BaseClassParseResult::InvalidType(typed_dict.to_type(), range)
                 } else {
-                    let class_object = typed_dict.class_object();
-                    let class_metadata = self.get_metadata_for_class(class_object);
-                    BaseClassParseResult::Parsed({
-                        ParsedBaseClass {
-                            class_object: class_object.dupe(),
-                            range,
-                            metadata: class_metadata,
+                    match typed_dict {
+                        TypedDict::TypedDict(inner) => {
+                            let class_object = inner.class_object();
+                            let class_metadata = self.get_metadata_for_class(class_object);
+                            BaseClassParseResult::Parsed({
+                                ParsedBaseClass {
+                                    class_object: class_object.dupe(),
+                                    range,
+                                    metadata: class_metadata,
+                                }
+                            })
                         }
-                    })
+                        TypedDict::Anonymous(_) => {
+                            BaseClassParseResult::InvalidType(typed_dict.to_type(), range)
+                        }
+                    }
                 }
             }
             _ => {

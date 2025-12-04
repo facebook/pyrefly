@@ -699,9 +699,15 @@ def bar(x: int) -> int:
 
 
 foo(
+    bar( # pyrefly: ignore [bad-argument-type]
+        12323423423
+    )
+)
+foo(
+    # pyrefly: ignore [bad-argument-type]
     bar(
         12323423423
-    ) # pyrefly: ignore [bad-argument-type]
+    )
 )
 "#;
         assert_remove_ignores(input, input, false, 0);

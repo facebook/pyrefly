@@ -675,9 +675,9 @@ class P2(Protocol):
     def __call__(self, *, v1: int) -> None: ...
 class P3(Protocol):
     def __call__(self, *, v1: int, v2: str, v4: str) -> None: ...
-x: P1 = func1  # E: `(**kwargs: Unpack[TypedDict[TD]]) -> None` is not assignable to `P1`
-y: P2 = func1  # E: `(**kwargs: Unpack[TypedDict[TD]]) -> None` is not assignable to `P2`
-z: P3 = func1  # E: `(**kwargs: Unpack[TypedDict[TD]]) -> None` is not assignable to `P3`
+x: P1 = func1  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `P1`
+y: P2 = func1  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `P2`
+z: P3 = func1  # E: `(**kwargs: Unpack[TD]) -> None` is not assignable to `P3`
 "#,
 );
 
@@ -1103,5 +1103,16 @@ testcase!(
 def f():
     x: int
     print(x)  # E: `x` is uninitialized
+    "#,
+);
+
+testcase!(
+    test_anywhere_name_in_lambda,
+    r#"
+from typing import assert_type
+f = lambda: A.x
+class A:
+    x: int = 0
+assert_type(f(), int)
     "#,
 );

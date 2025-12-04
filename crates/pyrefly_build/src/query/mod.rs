@@ -428,17 +428,30 @@ mod tests {
         pub fn get_test_database() -> Self {
             TargetManifestDatabase::new(
                 smallmap! {
+                    Target::from_string("//colorama:py-stubs".to_owned()) => TargetManifest::lib(
+                        &[
+                        (
+                            "colorama",
+                            &[
+                            "colorama/__init__.pyi",
+                            ],
+                        ),
+                        ],
+                        &[],
+                        "colorama/BUCK",
+                        &[],
+                        None,
+                    ),
                     Target::from_string("//colorama:py".to_owned()) => TargetManifest::lib(
                         &[
                         (
                             "colorama",
                             &[
                             "colorama/__init__.py",
-                            "colorama/__init__.pyi",
                             ]
                         ),
                         ],
-                        &[],
+                        &["//colorama:py-stubs"],
                         "colorama/BUCK",
                         &[],
                         None,
@@ -719,14 +732,24 @@ mod tests {
         const EXAMPLE_JSON: &str = r#"
 {
   "db": {
-    "//colorama:py": {
+    "//colorama:py-stubs": {
       "srcs": {
         "colorama": [
-          "colorama/__init__.py",
           "colorama/__init__.pyi"
         ]
       },
       "deps": [],
+      "buildfile_path": "colorama/BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//colorama:py": {
+      "srcs": {
+        "colorama": [
+          "colorama/__init__.py"
+        ]
+      },
+      "deps": ["//colorama:py-stubs"],
       "buildfile_path": "colorama/BUCK",
       "python_version": "3.12",
       "python_platform": "linux"
@@ -867,12 +890,11 @@ mod tests {
     #[test]
     fn test_produce_db() {
         let expected = smallmap! {
-            Target::from_string("//colorama:py".to_owned()) => PythonLibraryManifest::new(
+            Target::from_string("//colorama:py-stubs".to_owned()) => PythonLibraryManifest::new(
                 &[
                     (
                         "colorama",
                         &[
-                            "colorama/__init__.py",
                             "colorama/__init__.pyi",
                         ]
                     ),
@@ -881,8 +903,25 @@ mod tests {
                 "colorama/BUCK",
                 &[
                     ("colorama", &[
-                        "colorama/__init__.py",
                         "colorama/__init__.pyi",
+                    ]),
+                ],
+                None,
+            ),
+            Target::from_string("//colorama:py".to_owned()) => PythonLibraryManifest::new(
+                &[
+                    (
+                        "colorama",
+                        &[
+                            "colorama/__init__.py",
+                        ]
+                    ),
+                ],
+                &["//colorama:py-stubs"],
+                "colorama/BUCK",
+                &[
+                    ("colorama", &[
+                        "colorama/__init__.py",
                     ]),
                 ],
                 None,
@@ -1175,11 +1214,18 @@ mod tests {
             Target,
             SmallMap<ModuleName, Result<(Vec1<ModulePathBuf>, ModulePathBuf), PathBuf>>,
         > = smallmap! {
+            "//colorama:py-stubs" => smallmap! {
+                "colorama" => Ok((
+                    vec1![
+                        "colorama/__init__.pyi",
+                    ],
+                    "",
+                )),
+            },
             "//colorama:py" => smallmap! {
                 "colorama" => Ok((
                     vec1![
                         "colorama/__init__.py",
-                        "colorama/__init__.pyi",
                     ],
                     "",
                 )),
@@ -1266,10 +1312,14 @@ mod tests {
         assert_eq!(result.0, expected_start_packages);
 
         let expected_ancestor_synthesized_packages = smallmap! {
+            "//colorama:py-stubs" => smallmap! {
+                "colorama" => vec1![
+                        "colorama/__init__.pyi",
+                ],
+            },
             "//colorama:py" => smallmap! {
                 "colorama" => vec1![
                         "colorama/__init__.py",
-                        "colorama/__init__.pyi",
                 ],
             },
             "//click:py" => smallmap! {

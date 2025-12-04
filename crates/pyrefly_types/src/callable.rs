@@ -21,6 +21,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
@@ -32,7 +33,7 @@ use vec1::vec1;
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::equality::TypeEq;
-use crate::keywords::DataclassTransformKeywords;
+use crate::keywords::DataclassTransformMetadata;
 use crate::type_output::TypeOutput;
 use crate::types::Type;
 
@@ -381,7 +382,7 @@ pub struct FuncFlags {
     /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
     /// `dataclass_transform` call. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
-    pub dataclass_transform_metadata: Option<DataclassTransformKeywords>,
+    pub dataclass_transform_metadata: Option<DataclassTransformMetadata>,
 }
 
 #[derive(Debug, Clone)]
@@ -604,7 +605,7 @@ impl Callable {
         }
     }
 
-    pub fn split_first_param(&self) -> Option<(&Type, Self)> {
+    pub fn split_first_param<'a>(&'a self, owner: &'a mut Owner<Type>) -> Option<(&'a Type, Self)> {
         match self {
             Self {
                 params: Params::List(params),
@@ -623,6 +624,10 @@ impl Callable {
                     Self::concatenate(rest.iter().cloned().collect(), p.clone(), ret.clone()),
                 ))
             }
+            Self {
+                params: Params::Ellipsis,
+                ret: _,
+            } => Some((owner.push(Type::any_implicit()), self.clone())),
             _ => None,
         }
     }
@@ -642,6 +647,10 @@ impl Callable {
                 params: Params::ParamSpec(ts, _),
                 ret: _,
             } => ts.first().cloned().map(|x| x.0),
+            Self {
+                params: Params::Ellipsis,
+                ret: _,
+            } => Some(Type::any_implicit()),
             _ => None,
         }
     }

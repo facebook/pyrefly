@@ -48,6 +48,7 @@ use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
+use tracing::error;
 
 use crate::base::ConfigBase;
 use crate::base::UntypedDefBehavior;
@@ -501,7 +502,7 @@ pub struct ConfigFile {
     /// for a path and doing module finding.
     #[serde(skip, default)]
     #[derivative(PartialEq = "ignore")]
-    pub source_db: Option<Arc<Box<dyn SourceDatabase>>>,
+    pub source_db: Option<ArcId<Box<dyn SourceDatabase>>>,
 
     /// Skips the check to ensure any `-stubs` `site_package_path` entries have an
     /// installed non-stubs package.
@@ -853,7 +854,7 @@ impl ConfigFile {
         match &self
             .source_db
             .as_ref()
-            .and_then(|db| db.handle_from_module_path(module_path.dupe()))
+            .and_then(|db| db.handle_from_module_path(&module_path))
         {
             Some(handle) => handle.dupe(),
             None => {
@@ -890,24 +891,57 @@ impl ConfigFile {
         result
     }
 
-    pub fn requery_source_db(
-        this: &ArcId<Self>,
-        files: &SmallSet<ModulePath>,
-    ) -> anyhow::Result<bool> {
-        let Some(source_db) = &this.source_db else {
-            return Ok(false);
-        };
+    pub fn query_source_db(
+        configs_to_files: &SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>>,
+    ) -> SmallSet<ArcId<ConfigFile>> {
+        let mut reloaded_configs = SmallSet::new();
+        let mut sourcedb_configs: SmallMap<_, Vec<_>> = SmallMap::new();
+        for (config, files) in configs_to_files {
+            let Some(source_db) = &config.source_db else {
+                continue;
+            };
+            sourcedb_configs
+                .entry(source_db)
+                .or_default()
+                .push((config, files));
+        }
 
-        let files = files.iter().map(|p| p.module_path_buf()).collect();
-        let result = source_db.requery_source_db(files)?;
-        let generated_files = source_db.get_generated_files();
-        if !generated_files.is_empty() {
-            let mut write = GENERATED_FILE_CONFIG_OVERRIDE.write();
-            for file in generated_files {
-                write.insert(file, this.dupe());
+        for (source_db, configs_and_files) in sourcedb_configs {
+            let all_files = configs_and_files
+                .iter()
+                .flat_map(|x| x.1.iter())
+                .map(|p| p.module_path_buf())
+                .collect::<SmallSet<_>>();
+            let reloaded = match source_db.requery_source_db(all_files) {
+                Err(error) => {
+                    error!("Error reloading source database for config: {error:?}");
+                    continue;
+                }
+                Ok(r) => r,
+            };
+            let generated_files = source_db.get_generated_files();
+            if !generated_files.is_empty() {
+                let mut write = GENERATED_FILE_CONFIG_OVERRIDE.write();
+                // we don't need any specific config here, any config for this sourcedb will work
+                let first_config = configs_and_files.first().unwrap().0;
+                for file in generated_files {
+                    write.insert(file, first_config.dupe());
+                }
+            }
+            if reloaded {
+                debug!(
+                    "Performed grouped source db query for configs at {:?}",
+                    configs_and_files
+                        .iter()
+                        .filter_map(|x| x.0.source.root())
+                        .collect::<Vec<_>>(),
+                );
+                for (config, _) in configs_and_files {
+                    reloaded_configs.insert(config.dupe());
+                }
             }
         }
-        Ok(result)
+        reloaded_configs
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,
@@ -991,20 +1025,65 @@ impl ConfigFile {
         };
         self.root.enabled_ignores = Some(enabled_ignores);
 
-        if let Some(build_system) = &self.build_system {
-            match &self.source {
+        let mut configure_source_db = |build_system: &mut BuildSystem| {
+            let root = match &self.source {
                 ConfigSource::File(path) => {
                     let mut root = path.to_path_buf();
                     root.pop();
-                    self.source_db = Some(Arc::new(build_system.get_source_db(root.to_path_buf())));
+                    root
+                }
+                _ => {
+                    return Some(anyhow::anyhow!(
+                        "Invalid config state: `build-system` is set on project without config."
+                    ));
+                }
+            };
+
+            match build_system.get_source_db(root.to_path_buf())? {
+                Ok(source_db) => {
+                    self.source_db = Some(source_db);
                     self.fallback_search_path = FallbackSearchPath::DirectoryRelative(
                         DirectoryRelativeFallbackSearchPathCache::new(Some(root)),
                     );
+                    None
                 }
-                _ => configure_errors.push(anyhow::anyhow!(
-                    "Invalid config state: `build-system` is set on project without config."
-                )),
+                Err(error) => Some(error),
             }
+        };
+
+        // TODO(connernilsen): remove once PyTorch performs an upgrade
+        if cfg!(fbcode_build) {
+            let root = match &self.source {
+                ConfigSource::File(path) => {
+                    let mut root = path.to_path_buf();
+                    root.pop();
+                    Some(root)
+                }
+                _ => None,
+            };
+            if let Some(root) = root
+                && root.ends_with("fbsource/fbcode/caffe2")
+            {
+                self.build_system = Some(BuildSystem::new(
+                    Some(".pyrelsp".to_owned()),
+                    Some(vec![
+                        "--oncall=pyre".to_owned(),
+                        "--client-metadata=id=pyrefly".to_owned(),
+                    ]),
+                    true,
+                    vec![
+                        "python/typeshed_experimental".into(),
+                        "python/typeshed_internal".into(),
+                        "python/pyre_temporary_stubs".into(),
+                    ],
+                ));
+            }
+        }
+
+        if let Some(build_system) = &mut self.build_system
+            && let Some(error) = configure_source_db(build_system)
+        {
+            configure_errors.push(error)
         }
 
         fn validate<'a>(
@@ -1053,6 +1132,9 @@ impl ConfigFile {
             });
         if let Some(import_root) = &self.import_root {
             self.import_root = Some(import_root.absolutize_from(config_root));
+        }
+        if let Some(typeshed_path) = &self.typeshed_path {
+            self.typeshed_path = Some(typeshed_path.absolutize_from(config_root));
         }
         self.python_environment
             .site_package_path
@@ -1521,6 +1603,7 @@ mod tests {
         fn with_sep(s: &str) -> String {
             s.replace("/", path::MAIN_SEPARATOR_STR)
         }
+        let typeshed = "path/to/typeshed";
         let mut python_environment = PythonEnvironment {
             site_package_path: Some(vec![PathBuf::from("venv/lib/python1.2.3/site-packages")]),
             ..PythonEnvironment::default()
@@ -1555,7 +1638,7 @@ mod tests {
                 settings: Default::default(),
             }],
             ignore_missing_source: false,
-            typeshed_path: None,
+            typeshed_path: Some(PathBuf::from(typeshed)),
             skip_lsp_config_indexing: false,
         };
 
@@ -1574,6 +1657,7 @@ mod tests {
                 .into_owned(),
         ];
         let search_path = vec![test_path.parent().unwrap().parent().unwrap().to_path_buf()];
+        let expected_typeshed = test_path.join(typeshed);
         python_environment.site_package_path =
             Some(vec![test_path.join("venv/lib/python1.2.3/site-packages")]);
 
@@ -1613,7 +1697,7 @@ mod tests {
                 settings: Default::default(),
             }],
             ignore_missing_source: false,
-            typeshed_path: None,
+            typeshed_path: Some(expected_typeshed),
             skip_lsp_config_indexing: false,
         };
         assert_eq!(config, expected_config);

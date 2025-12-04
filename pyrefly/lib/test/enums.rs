@@ -682,3 +682,23 @@ class InclusionLevel(Enum):
 x: Callable[[InclusionLevel], bool] = InclusionLevel.is_included
     "#,
 );
+
+testcase!(
+    test_callable_enum,
+    r#"
+from enum import Enum
+from typing import assert_type
+
+class MyCallable:
+    def __call__(self) -> int:
+        return 42
+
+class E1(MyCallable, Enum):
+    pass
+
+class E2(E1):
+    X = 1
+
+assert_type(E2.X(), int)
+    "#,
+);

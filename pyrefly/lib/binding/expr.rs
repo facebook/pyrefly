@@ -42,6 +42,7 @@ use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::SuperStyle;
+use crate::binding::bindings::AwaitContext;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::bindings::LegacyTParamId;
@@ -381,6 +382,7 @@ impl<'a> BindingsBuilder<'a> {
         range: TextRange,
         comprehensions: &mut [Comprehension],
         usage: &mut Usage,
+        is_generator: bool,
     ) {
         for (i, comp) in comprehensions.iter_mut().enumerate() {
             // Resolve the type of the iteration value *before* binding the target of the iteration.
@@ -388,6 +390,15 @@ impl<'a> BindingsBuilder<'a> {
             // the `in x` lookup.
             self.ensure_expr(&mut comp.iter, usage);
             if i == 0 {
+                // Async list/set/dict comprehensions must be inside an async def. Async generator
+                // expressions are allowed to stand alone because they can have deferred execution.
+                if comp.is_async && !is_generator && !self.scopes.is_in_async_def() {
+                    self.error(
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "`async` can only be used inside an async function".to_owned(),
+                    );
+                }
                 self.scopes.push(Scope::comprehension(range));
             }
             // Incomplete nested comprehensions can have identical iterators
@@ -708,25 +719,35 @@ impl<'a> BindingsBuilder<'a> {
                 self.bind_lambda(x, usage);
             }
             Expr::ListComp(x) => {
-                self.bind_comprehensions(x.range, &mut x.generators, usage);
-                self.ensure_expr(&mut x.elt, usage);
-                self.scopes.pop();
+                self.with_await_context(AwaitContext::General, |this| {
+                    this.bind_comprehensions(x.range, &mut x.generators, usage, false);
+                    this.ensure_expr(&mut x.elt, usage);
+                    this.scopes.pop();
+                });
             }
             Expr::SetComp(x) => {
-                self.bind_comprehensions(x.range, &mut x.generators, usage);
-                self.ensure_expr(&mut x.elt, usage);
-                self.scopes.pop();
+                self.with_await_context(AwaitContext::General, |this| {
+                    this.bind_comprehensions(x.range, &mut x.generators, usage, false);
+                    this.ensure_expr(&mut x.elt, usage);
+                    this.scopes.pop();
+                });
             }
             Expr::DictComp(x) => {
-                self.bind_comprehensions(x.range, &mut x.generators, usage);
-                self.ensure_expr(&mut x.key, usage);
-                self.ensure_expr(&mut x.value, usage);
-                self.scopes.pop();
+                self.with_await_context(AwaitContext::General, |this| {
+                    this.bind_comprehensions(x.range, &mut x.generators, usage, false);
+                    this.ensure_expr(&mut x.key, usage);
+                    this.ensure_expr(&mut x.value, usage);
+                    this.scopes.pop();
+                });
             }
             Expr::Generator(x) => {
-                self.bind_comprehensions(x.range, &mut x.generators, usage);
-                self.ensure_expr(&mut x.elt, usage);
-                self.scopes.pop();
+                self.with_await_context(AwaitContext::General, |this| {
+                    this.bind_comprehensions(x.range, &mut x.generators, usage, true);
+                    this.with_await_context(AwaitContext::GeneratorElement, |this| {
+                        this.ensure_expr(&mut x.elt, usage);
+                    });
+                    this.scopes.pop();
+                });
             }
             Expr::Call(ExprCall { func, .. })
                 if matches!(
@@ -750,7 +771,10 @@ impl<'a> BindingsBuilder<'a> {
             }
             Expr::Await(x) => {
                 self.ensure_expr(&mut x.value, usage);
-                if !self.scopes.is_in_async_def() && !self.module_info.path().is_notebook() {
+                let in_async_def = self.scopes.is_in_async_def();
+                let in_generator_element = self.in_generator_await_context();
+                if !in_async_def && !in_generator_element && !self.module_info.path().is_notebook()
+                {
                     self.error(
                         x.range(),
                         ErrorInfo::Kind(ErrorKind::InvalidSyntax),

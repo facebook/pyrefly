@@ -714,9 +714,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 (type_owner.push(field.ty), field.required),
                             );
                         });
-                    if let ExtraItems::Extra(extra) =
-                        self.typed_dict_extra_items(typed_dict.class_object())
-                    {
+                    if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict) {
                         kwargs = Some((name.as_ref(), type_owner.push(extra.ty)))
                     }
                     kwargs_is_unpack = true;
@@ -760,16 +758,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     format!("Multiple values for argument `{name}`"),
                                 );
                                 hint = Some(*ty);
-                            } else if let Some((ty, required)) = kwparams.get(name) {
+                            } else if let Some((ty, _)) = kwparams.get(name) {
                                 seen_names.insert(name, *ty);
-                                if *required && !field.required {
-                                    error(
-                                        call_errors,
-                                        kw.range,
-                                        ErrorKind::MissingArgument,
-                                        format!("Expected key `{name}` to be required"),
-                                    );
-                                }
                                 hint = Some(*ty)
                             } else if kwargs.is_none() && !kwargs_is_unpack {
                                 unexpected_keyword_error(name, kw.range);

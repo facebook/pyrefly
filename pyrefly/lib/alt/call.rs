@@ -11,6 +11,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
@@ -82,7 +83,7 @@ pub enum CallTarget {
     /// A class object.
     Class(ClassType, ConstructorKind),
     /// A TypedDict.
-    TypedDict(TypedDict),
+    TypedDict(TypedDictInner),
     /// An overloaded function.
     FunctionOverload(Vec1<TargetWithTParams<Function>>, FuncMetadata),
     /// An overloaded method.
@@ -217,7 +218,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     cls,
                     ConstructorKind::BareClassName,
                 ))),
-                Type::TypedDict(typed_dict) => {
+                Type::TypedDict(TypedDict::TypedDict(typed_dict)) => {
                     CallTargetLookup::Ok(Box::new(CallTarget::TypedDict(typed_dict)))
                 }
                 _ => unreachable!(),
@@ -310,8 +311,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.as_call_target_impl(ty, None, dunder_call)
                     })
             }
-            Type::Type(box Type::TypedDict(typed_dict)) => {
+            Type::Type(box Type::TypedDict(TypedDict::TypedDict(typed_dict))) => {
                 CallTargetLookup::Ok(Box::new(CallTarget::TypedDict(typed_dict)))
+            }
+            Type::Type(box Type::TypedDict(td @ TypedDict::Anonymous(_))) => {
+                let value_ty = self.get_typed_dict_value_type(&td);
+                let cls = self
+                    .stdlib
+                    .dict(self.stdlib.str().clone().to_type(), value_ty);
+                CallTargetLookup::Ok(Box::new(CallTarget::Class(
+                    cls,
+                    ConstructorKind::TypeOfClass,
+                )))
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
@@ -355,6 +366,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             },
             Type::KwCall(call) => self.as_call_target_impl(call.return_ty, quantified, dunder_call),
+            Type::Literal(Lit::Enum(enum_)) => {
+                self.as_call_target_impl(enum_.class.to_type(), quantified, dunder_call)
+            }
             _ => CallTargetLookup::Error(vec![]),
         }
     }
@@ -669,7 +683,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn construct_typed_dict(
         &self,
-        mut typed_dict: TypedDict,
+        mut typed_dict: TypedDictInner,
         args: &[CallArg],
         keywords: &[CallKeyword],
         range: TextRange,
@@ -680,7 +694,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(hint) = hint {
             self.solver()
                 .freshen_class_targs(typed_dict.targs_mut(), self.uniques);
-
             self.is_subset_eq(&typed_dict.clone().to_type(), hint.ty());
             self.solver().generalize_class_targs(typed_dict.targs_mut());
         }
@@ -704,7 +717,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         self.solver()
             .finish_class_targs(typed_dict.targs_mut(), self.uniques);
-        Type::TypedDict(typed_dict)
+        Type::TypedDict(TypedDict::TypedDict(typed_dict))
     }
 
     fn first_arg_type(&self, args: &[CallArg], errors: &ErrorCollector) -> Option<Type> {

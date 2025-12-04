@@ -5,12 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -58,17 +56,19 @@ fn test_notebook_hover_import() {
     interaction.open_notebook("notebook.ipynb", vec!["from typing import List"]);
 
     // Hover over "List"
-    let expected_path = bundled_typeshed_path().join("builtins.pyi");
-    let expected_url = Url::from_file_path(&expected_path).unwrap();
-
     interaction
         .hover_cell("notebook.ipynb", "cell1", 0, 20)
-        .expect_response(json!({
-            "contents": {
-                "kind": "markdown",
-                "value": format!("```python\n(class) List: type[list]\n```\n\nGo to [list]({}#L3349,7)", expected_url.as_str()),
+        .expect_response_with(|response| {
+            if let Some(hover) = response
+                && let lsp_types::HoverContents::Markup(content) = &hover.contents
+            {
+                let value = &content.value;
+                return value.contains("(class) List: type[list]")
+                    && value.contains("Go to [list](")
+                    && value.contains("builtins.pyi#L");
             }
-        }))
+            false
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();

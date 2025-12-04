@@ -12,6 +12,7 @@ use pyrefly_types::class::Class;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
+use ruff_python_ast::name::Name;
 
 use crate::binding::binding::KeyClass;
 use crate::report::pysa::class::ClassId;
@@ -20,6 +21,7 @@ use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::get_all_functions;
+use crate::report::pysa::global_variable::GlobalVariableRef;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleKey;
 use crate::state::require::Require;
@@ -82,6 +84,7 @@ pub fn get_function_ref(
 
     // This is slow, but we don't care in tests.
     get_all_functions(&context)
+        .filter(|function| function.should_export(&context))
         .find(|function| function.name().as_str() == function_name)
         .expect("valid function name")
         .as_function_ref(&context)
@@ -98,6 +101,7 @@ pub fn get_method_ref(
 
     // This is slow, but we don't care in tests.
     get_all_functions(&context)
+        .filter(|function| function.should_export(&context))
         .find(|function| match function {
             FunctionNode::DecoratedFunction(decorated_function) => {
                 function.name().as_str() == function_name
@@ -111,6 +115,20 @@ pub fn get_method_ref(
         })
         .expect("valid method name")
         .as_function_ref(&context)
+}
+
+pub fn get_global_ref(
+    module_name: &str,
+    global_name: &str,
+    context: &ModuleContext,
+) -> GlobalVariableRef {
+    let handle = get_handle_for_module_name(module_name, context.transaction);
+    let context = ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
+    GlobalVariableRef {
+        module_id: context.module_id,
+        module_name: context.handle.module(),
+        name: Name::new(global_name),
+    }
 }
 
 pub fn create_location(

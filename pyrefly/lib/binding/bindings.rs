@@ -186,6 +186,7 @@ pub struct BindingsBuilder<'a> {
     pub lookup: &'a dyn LookupExport,
     pub sys_info: &'a SysInfo,
     pub class_count: u32,
+    await_context: AwaitContext,
     errors: &'a ErrorCollector,
     solver: &'a Solver,
     uniques: &'a UniqueFactory,
@@ -196,6 +197,21 @@ pub struct BindingsBuilder<'a> {
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
+}
+
+/// An enum tracking whether we are in a generator expression
+/// like `(x for x in xs)` - used to allow `await` inside of generators
+/// even when a function is not async, for example (await x for x in xs).
+///
+/// This is legal because the resulting AsyncGenerator does not actually
+/// await until iterated (which can only be done in an `async def`).
+///
+/// In any other comprehension, `await` requires us to be in an `async def`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AwaitContext {
+    #[default]
+    General,
+    GeneratorElement,
 }
 
 impl Bindings {
@@ -377,6 +393,7 @@ impl Bindings {
             solver,
             uniques,
             class_count: 0,
+            await_context: AwaitContext::General,
             has_docstring: Ast::has_docstring(&x),
             scopes: Scopes::module(x.range, enable_trace),
             table: Default::default(),
@@ -589,6 +606,22 @@ impl<'a> BindingsBuilder<'a> {
         self.unused_variables.extend(unused);
     }
 
+    pub(crate) fn with_await_context<R>(
+        &mut self,
+        ctx: AwaitContext,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let prev = self.await_context;
+        self.await_context = ctx;
+        let result = f(self);
+        self.await_context = prev;
+        result
+    }
+
+    pub(crate) fn in_generator_await_context(&self) -> bool {
+        matches!(self.await_context, AwaitContext::GeneratorElement)
+    }
+
     /// Insert a binding into the bindings table, given a `Usage`. This will panic if the usage
     /// is `Usage::NoUsageTracking`.
     pub fn insert_binding_current(&mut self, current: CurrentIdx, value: Binding) -> Idx<Key> {
@@ -753,6 +786,7 @@ impl<'a> BindingsBuilder<'a> {
             | FlowStyle::Import(..)
             | FlowStyle::ImportAs(_)
             | FlowStyle::FunctionDef(..)
+            | FlowStyle::ClassDef
             | FlowStyle::LoopRecursion => None,
         }
     }

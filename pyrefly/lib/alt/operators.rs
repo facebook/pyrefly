@@ -17,6 +17,7 @@ use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -341,100 +342,99 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn compare_infer(&self, x: &ExprCompare, errors: &ErrorCollector) -> Type {
-        let left = self.expr_infer(&x.left, errors);
-        let comparisons = x.ops.iter().zip(x.comparators.iter());
-        self.unions(
-            comparisons
-                .map(|(op, comparator)| {
-                    let right = self.expr_infer(comparator, errors);
-                    self.distribute_over_union(&left, |left| {
-                        self.distribute_over_union(&right, |right| {
-                            let context = || {
-                                ErrorContext::BinaryOp(
-                                    op.as_str().to_owned(),
-                                    self.for_display(left.clone()),
-                                    self.for_display(right.clone()),
-                                )
-                            };
-                            match op {
-                                CmpOp::Is | CmpOp::IsNot => {
-                                    // These comparisons never error.
-                                    self.stdlib.bool().clone().to_type()
-                                }
-                                CmpOp::In | CmpOp::NotIn => {
-                                    // See https://docs.python.org/3/reference/expressions.html#membership-test-operations.
-                                    // `x in y` first tries `y.__contains__(x)`, then checks if `x` matches an element
-                                    // obtained by iterating over `y`.
-                                    if let Some(ret) = self.call_magic_dunder_method(
-                                        right,
-                                        &dunder::CONTAINS,
-                                        x.range,
-                                        &[CallArg::ty(left, x.left.range())],
-                                        &[],
-                                        errors,
-                                        Some(&context),
-                                    ) {
-                                        // Comparison method called.
-                                        ret
-                                    } else {
-                                        let iteration_errors = self.error_collector();
-                                        let iterables = self.iterate(
-                                            right,
-                                            x.range,
-                                            &iteration_errors,
-                                            Some(&context),
-                                        );
-                                        if iteration_errors.is_empty() {
-                                            // Make sure `x` matches the produced type.
-                                            self.check_type(
-                                                left,
-                                                &self.get_produced_type(iterables),
-                                                x.range,
-                                                errors,
-                                                &|| TypeCheckContext {
-                                                    kind: TypeCheckKind::Container,
-                                                    context: Some(context()),
-                                                },
-                                            );
-                                        } else {
-                                            // Iterating `y` failed.
-                                            errors.extend(iteration_errors);
-                                        }
-                                        self.stdlib.bool().clone().to_type()
-                                    }
-                                }
-                                _ => {
-                                    // We've handled the other cases above, so we know we have a rich comparison op.
-                                    let calls_to_try = [
-                                        (
-                                            &dunder::rich_comparison_dunder(*op).unwrap(),
-                                            left,
-                                            right,
-                                        ),
-                                        (
-                                            &dunder::rich_comparison_fallback(*op).unwrap(),
-                                            right,
-                                            left,
-                                        ),
-                                    ];
-                                    let ret = self.try_binop_calls(
-                                        &calls_to_try,
+        // For chained comparisons like `a < b < c`, Python evaluates as `(a < b) and (b < c)`.
+        // We need to track the current left operand as we iterate through the chain.
+        let mut current_left = self.expr_infer(&x.left, errors);
+        let mut current_left_range = x.left.range();
+        let mut results = Vec::new();
+        for (op, comparator) in x.ops.iter().zip(x.comparators.iter()) {
+            let right = self.expr_infer(comparator, errors);
+
+            // Check for unnecessary identity comparisons (is/is not) BEFORE distribute_over_union
+            // to avoid false positives with union types.
+            self.check_unnecessary_comparison(
+                &current_left,
+                &right,
+                *op,
+                comparator.range(),
+                errors,
+            );
+
+            let result = self.distribute_over_union(&current_left, |left| {
+                self.distribute_over_union(&right, |right| {
+                    let context = || {
+                        ErrorContext::BinaryOp(
+                            op.as_str().to_owned(),
+                            self.for_display(left.clone()),
+                            self.for_display(right.clone()),
+                        )
+                    };
+                    match op {
+                        CmpOp::Is | CmpOp::IsNot => {
+                            // These comparisons never error.
+                            self.stdlib.bool().clone().to_type()
+                        }
+                        CmpOp::In | CmpOp::NotIn => {
+                            // See https://docs.python.org/3/reference/expressions.html#membership-test-operations.
+                            // `x in y` first tries `y.__contains__(x)`, then checks if `x` matches an element
+                            // obtained by iterating over `y`.
+                            if let Some(ret) = self.call_magic_dunder_method(
+                                right,
+                                &dunder::CONTAINS,
+                                x.range,
+                                &[CallArg::ty(left, current_left_range)],
+                                &[],
+                                errors,
+                                Some(&context),
+                            ) {
+                                // Comparison method called.
+                                ret
+                            } else {
+                                let iteration_errors = self.error_collector();
+                                let iterables =
+                                    self.iterate(right, x.range, &iteration_errors, Some(&context));
+                                if iteration_errors.is_empty() {
+                                    // Make sure `x` matches the produced type.
+                                    self.check_type(
+                                        left,
+                                        &self.get_produced_type(iterables),
                                         x.range,
                                         errors,
-                                        &context,
+                                        &|| TypeCheckContext {
+                                            kind: TypeCheckKind::Container,
+                                            context: Some(context()),
+                                        },
                                     );
-                                    if ret.is_error() {
-                                        self.stdlib.bool().clone().to_type()
-                                    } else {
-                                        ret
-                                    }
+                                } else {
+                                    // Iterating `y` failed.
+                                    errors.extend(iteration_errors);
                                 }
+                                self.stdlib.bool().clone().to_type()
                             }
-                        })
-                    })
+                        }
+                        _ => {
+                            // We've handled the other cases above, so we know we have a rich comparison op.
+                            let calls_to_try = [
+                                (&dunder::rich_comparison_dunder(*op).unwrap(), left, right),
+                                (&dunder::rich_comparison_fallback(*op).unwrap(), right, left),
+                            ];
+                            let ret =
+                                self.try_binop_calls(&calls_to_try, x.range, errors, &context);
+                            if ret.is_error() {
+                                self.stdlib.bool().clone().to_type()
+                            } else {
+                                ret
+                            }
+                        }
+                    }
                 })
-                .collect(),
-        )
+            });
+            results.push(result);
+            // For next comparison, the current right becomes the new left
+            current_left = right;
+            current_left_range = comparator.range();
+        }
+        self.unions(results)
     }
 
     pub fn unop_infer(&self, x: &ExprUnaryOp, errors: &ErrorCollector) -> Type {
@@ -486,5 +486,104 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 unop(t, &f, &dunder::INVERT)
             }
         })
+    }
+
+    /// Checks for unnecessary identity comparisons.
+    ///
+    /// Only emits warnings for identity comparisons (`is` or `is not`) between literals
+    /// whose comparison result is statically known.
+    /// Returns early without warnings for other comparison operators.
+    fn check_unnecessary_comparison(
+        &self,
+        left: &Type,
+        right: &Type,
+        op: CmpOp,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        // Only check identity comparisons
+        if !matches!(op, CmpOp::Is | CmpOp::IsNot) {
+            return;
+        }
+
+        let is_op = matches!(op, CmpOp::Is);
+        let is_bool_literal = |lit: &Lit| matches!(lit, Lit::Bool(_));
+        let emit_literal_warning = |left_str: &str, right_str: &str, result: &str| {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::UnnecessaryComparison),
+                format!(
+                    "Identity comparison `{} {} {}` is always {}",
+                    left_str,
+                    if is_op { "is" } else { "is not" },
+                    right_str,
+                    result
+                ),
+            );
+        };
+        let emit_instance_is_class_warning = |instance_str: &str, class_str: &str, is_op: bool| {
+            errors.add(
+                range,
+                ErrorInfo::Kind(ErrorKind::UnnecessaryComparison),
+                vec1![
+                    format!(
+                        "Identity comparison between an instance of `{}` and class `{}` is always {}",
+                        instance_str,
+                        class_str,
+                        if is_op { "False" } else { "True" }
+                    ),
+                    format!(
+                        "Did you mean to do `{}isinstance(..., {})`?",
+                        if is_op { "" } else { "not " },
+                        class_str,
+                    )
+                ],
+            );
+        };
+
+        match (left, right) {
+            // If both are literals/None, check for predictable results
+            (Type::Literal(l1), Type::Literal(l2)) => {
+                if l1 != l2 {
+                    emit_literal_warning(
+                        &l1.to_string(),
+                        &l2.to_string(),
+                        if is_op { "False" } else { "True" },
+                    );
+                } else if is_bool_literal(l1) {
+                    emit_literal_warning(
+                        &l1.to_string(),
+                        &l2.to_string(),
+                        if is_op { "True" } else { "False" },
+                    );
+                }
+            }
+            (Type::Literal(l), Type::None) => {
+                emit_literal_warning(&l.to_string(), "None", if is_op { "False" } else { "True" });
+            }
+            (Type::None, Type::Literal(l)) => {
+                emit_literal_warning("None", &l.to_string(), if is_op { "False" } else { "True" });
+            }
+
+            // ClassDef vs ClassType - disjoint unless ClassType is `type`, `object`,
+            // or another metaclass (subclass of type)
+            (Type::ClassDef(cdef), ctype @ Type::ClassType(cls))
+            | (ctype @ Type::ClassType(cls), Type::ClassDef(cdef)) => {
+                // A class object is an instance of `type` (or a metaclass), so it's only
+                // compatible with ClassType if that ClassType is `type`, `object`, or a metaclass
+                let is_metaclass_or_object = cls.is_builtin("object")
+                    || self.has_superclass(
+                        cls.class_object(),
+                        self.stdlib.builtins_type().class_object(),
+                    );
+                if !is_metaclass_or_object {
+                    emit_instance_is_class_warning(&ctype.to_string(), cdef.name().as_str(), is_op);
+                }
+            }
+
+            // All other combinations: no warning
+            _ => {}
+        }
     }
 }

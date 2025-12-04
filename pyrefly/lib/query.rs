@@ -33,6 +33,7 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::Type;
@@ -274,6 +275,7 @@ fn bound_of_type_var_decl(ty: &Type) -> Option<(&QName, &Type)> {
 fn type_to_string(ty: &Type) -> String {
     let mut ctx = TypeDisplayContext::new(&[ty]);
     ctx.always_display_module_name();
+    ctx.always_display_expanded_unions();
     if is_static_method(ty) {
         format!("typing.StaticMethod[{}]", ctx.display(ty))
     } else if let Some(bound) = bound_of_type_var(ty) {
@@ -665,7 +667,10 @@ impl<'a> CalleesWithLocation<'a> {
             Type::Type(t) => Self::class_info_from_bound_obj(t),
             Type::ClassType(c) => Self::class_info_for_qname(c.qname(), false),
             Type::ClassDef(c) => Self::class_info_for_qname(c.qname(), false),
-            Type::TypedDict(d) => Self::class_info_for_qname(d.qname(), true),
+            Type::TypedDict(d) => match d {
+                TypedDict::TypedDict(inner) => Self::class_info_for_qname(inner.qname(), true),
+                TypedDict::Anonymous(_) => vec![],
+            },
             Type::Literal(Lit::Str(_)) | Type::LiteralString => {
                 vec![(String::from("builtins.str"), false)]
             }

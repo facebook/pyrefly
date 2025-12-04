@@ -30,6 +30,7 @@ use crate::tuple::Tuple;
 use crate::type_output::DisplayOutput;
 use crate::type_output::OutputWithLocations;
 use crate::type_output::TypeOutput;
+use crate::typed_dict::TypedDict;
 use crate::types::AnyStyle;
 use crate::types::BoundMethod;
 use crate::types::BoundMethodType;
@@ -92,6 +93,7 @@ pub struct TypeDisplayContext<'a> {
     /// Should we display for IDE Hover? This makes type names more readable but less precise.
     hover: bool,
     always_display_module_name: bool,
+    always_display_expanded_unions: bool,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -128,6 +130,10 @@ impl<'a> TypeDisplayContext<'a> {
             c.info.insert(fake_module, None);
         }
         self.always_display_module_name = true;
+    }
+
+    pub fn always_display_expanded_unions(&mut self) {
+        self.always_display_expanded_unions = true;
     }
 
     /// Always display the module name, except for builtins.
@@ -323,18 +329,28 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_qname(class_type.qname())?;
                 output.write_targs(class_type.targs())
             }
-            Type::TypedDict(typed_dict) => {
-                output.write_str("TypedDict[")?;
-                output.write_qname(typed_dict.qname())?;
-                output.write_targs(typed_dict.targs())?;
-                output.write_str("]")
-            }
-            Type::PartialTypedDict(typed_dict) => {
-                output.write_str("Partial[")?;
-                output.write_qname(typed_dict.qname())?;
-                output.write_targs(typed_dict.targs())?;
-                output.write_str("]")
-            }
+            Type::TypedDict(typed_dict) => match typed_dict {
+                TypedDict::TypedDict(inner) => {
+                    output.write_qname(inner.qname())?;
+                    output.write_targs(inner.targs())
+                }
+                TypedDict::Anonymous(inner) => {
+                    output.write_str("dict[str, ")?;
+                    self.fmt_helper_generic(&inner.value_type, false, output)?;
+                    output.write_str("]")
+                }
+            },
+            Type::PartialTypedDict(typed_dict) => match typed_dict {
+                TypedDict::TypedDict(inner) => {
+                    output.write_qname(inner.qname())?;
+                    output.write_targs(inner.targs())
+                }
+                TypedDict::Anonymous(inner) => {
+                    output.write_str("dict[str, ")?;
+                    self.fmt_helper_generic(&inner.value_type, false, output)?;
+                    output.write_str("]")
+                }
+            },
             Type::TypeVar(t) => {
                 output.write_str("TypeVar[")?;
                 output.write_qname(t.qname())?;
@@ -471,7 +487,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Union(box Union {
                 display_name: Some(name),
                 ..
-            }) if !is_toplevel => output.write_str(name),
+            }) if !(self.always_display_expanded_unions || is_toplevel) => output.write_str(name),
             Type::Union(box Union { members, .. }) => {
                 let mut literal_idx = None;
                 let mut literals = Vec::new();
@@ -814,6 +830,7 @@ pub mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use TypedDict;
     use dupe::Dupe;
     use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
@@ -843,7 +860,6 @@ pub mod tests {
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::type_var::TypeVar;
-    use crate::typed_dict::TypedDict;
     use crate::types::BoundMethodType;
     use crate::types::Overload;
     use crate::types::OverloadType;
@@ -1449,7 +1465,7 @@ pub mod tests {
         let t = Type::None;
         let targs = TArgs::new(tparams.dupe(), vec![t]);
         let td = TypedDict::new(cls, targs);
-        assert_eq!(Type::TypedDict(td).to_string(), "TypedDict[C[None]]");
+        assert_eq!(Type::TypedDict(td).to_string(), "C[None]");
     }
 
     #[test]
@@ -1816,7 +1832,6 @@ def overloaded_func[T](
         let t = Type::TypedDict(td);
         let parts = get_parts(&t);
 
-        assert_output_contains(&parts, "TypedDict");
         assert_part_has_location(&parts, "MyTypedDict", "mymodule", 25);
     }
 
@@ -1963,7 +1978,6 @@ def overloaded_func[T](
         let t = Type::PartialTypedDict(td);
         let parts = get_parts(&t);
 
-        assert_output_contains(&parts, "Partial");
         assert_part_has_location(&parts, "MyTypedDict", "mymodule", 90);
     }
 }

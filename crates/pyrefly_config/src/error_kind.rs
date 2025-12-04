@@ -240,6 +240,9 @@ pub enum ErrorKind {
     UnexpectedPositionalArgument,
     /// Attempting to use a name that is not defined.
     UnknownName,
+    /// Identity comparison (`is` or `is not`) between types that are provably disjoint
+    /// or between literals whose comparison result is statically known.
+    UnnecessaryComparison,
     /// Attempting to use a feature that is not yet supported.
     Unsupported,
     /// Attempting to `del` something that cannot be deleted
@@ -289,6 +292,7 @@ impl ErrorKind {
             ErrorKind::RevealType => Severity::Info,
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::RedundantCast => Severity::Warn,
+            ErrorKind::UnnecessaryComparison => Severity::Warn,
             // TODO(rechen): re-enable this once we figure out how to make it less noisy.
             ErrorKind::UntypedImport => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,

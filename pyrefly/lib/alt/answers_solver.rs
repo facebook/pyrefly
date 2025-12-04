@@ -561,29 +561,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         let binding = self.bindings().get(idx);
-        let answer = K::solve(self, binding, self.base_errors);
 
-        let v = calculation.record_value(answer, |r, answer| {
-            let k = self.bindings().idx_to_key(idx).range();
-            // Always force recursive Vars as soon as we produce the final answer. This limits
-            // nondeterminism by ensuring that nothing downstream of the cycle can pin the type
-            // once the cycle has finished (although there can still be data races where the
-            // Var escapes the cycle in another thread before it has finished computing).
-            //
-            // `Var::ZERO` is just a dummy value used by a few of the `K: Solve`
-            // implementations that doesn't actually use the Var, so we have to skip it.
-            let final_answer = K::record_recursive(self, k, answer, r, self.base_errors);
-            if r != Var::ZERO {
-                self.solver().force_var(r);
-            }
-            final_answer
-        });
+        let answer = calculation
+            .record_value(K::solve(self, binding, self.base_errors), |var, answer| {
+                self.finalize_recursive_answer::<K>(idx, var, answer)
+            });
         // Handle cycle unwinding, if applicable.
         //
         // TODO(stroxler): we eventually need to use is-a-cycle-active information to isolate
         // placeholder values.
         self.cycles().on_calculation_finished(&current);
-        v
+        answer
+    }
+
+    /// Finalize a recursive answer. This takes the raw value produced by `K::solve` and calls
+    /// `K::record_recursive` in order to:
+    /// - ensure that the `Variables` map in `solver.rs` is updated
+    /// - possibly simplify the result; in particular a recursive solution that comes out to be
+    ///   a union that includes the recursive solution is simplified, which is important for
+    ///   some kinds of cycles, particularly those coming from LoopPhi
+    /// - force the recursive var if necessary; we skip Var::ZERO (which is an unforcable
+    ///   placeholder used by some kinds of bindings that aren't Types) in this step.
+    fn finalize_recursive_answer<K: Solve<Ans>>(
+        &self,
+        idx: Idx<K>,
+        var: Var,
+        answer: Arc<K::Answer>,
+    ) -> Arc<K::Answer>
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        let range = self.bindings().idx_to_key(idx).range();
+        let final_answer = K::record_recursive(self, range, answer, var, self.base_errors);
+        if var != Var::ZERO {
+            self.solver().force_var(var);
+        }
+        final_answer
     }
 
     /// Attempt to record a cycle placeholder result to unwind a cycle from here.

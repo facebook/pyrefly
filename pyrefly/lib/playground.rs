@@ -77,18 +77,18 @@ impl SourceDatabase for PlaygroundSourceDatabase {
 
     fn lookup(
         &self,
-        module_name: &ModuleName,
+        module_name: ModuleName,
         _: Option<&Path>,
         _: Option<ModuleStyle>,
     ) -> Option<ModulePath> {
-        self.module_mappings.get(module_name).cloned()
+        self.module_mappings.get(&module_name).cloned()
     }
 
-    fn handle_from_module_path(&self, path: ModulePath) -> Option<Handle> {
+    fn handle_from_module_path(&self, path: &ModulePath) -> Option<Handle> {
         // It should be fine to just iterate through this naively, since there generally
         // shouldn't be too many files open in the web editor.
-        let (name, _) = self.module_mappings.iter().find(|(_, p)| *p == &path)?;
-        Some(Handle::new(name.dupe(), path, self.sys_info.dupe()))
+        let (name, _) = self.module_mappings.iter().find(|(_, p)| *p == path)?;
+        Some(Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
     }
 
     fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
@@ -337,7 +337,7 @@ impl Playground {
         }
 
         let source_db = PlaygroundSourceDatabase::new(module_mappings, self.sys_info.dupe());
-        config.source_db = Some(Arc::new(Box::new(source_db)));
+        config.source_db = Some(ArcId::new(Box::new(source_db)));
 
         config.configure();
         let config = ArcId::new(config);
@@ -417,7 +417,7 @@ impl Playground {
                         message_details: e.msg_details().unwrap_or("").to_owned(),
                         kind: e.error_kind().to_name().to_owned(),
                         // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
-                        severity: match e.error_kind().default_severity() {
+                        severity: match e.severity() {
                             Severity::Error => 8,
                             Severity::Warn => 4,
                             Severity::Info => 2,

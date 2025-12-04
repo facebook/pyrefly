@@ -116,7 +116,7 @@ takes(foo=1, bar="x", baz=None)
     foo: int,
     bar: str,
     baz: bool | None,
-    **kwargs: Unpack[TypedDict[Payload]]
+    **kwargs: Unpack[Payload]
 ) -> None: ...
 ```
 "#

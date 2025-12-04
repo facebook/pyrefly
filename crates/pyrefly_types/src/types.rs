@@ -42,7 +42,7 @@ use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
-use crate::keywords::DataclassTransformKeywords;
+use crate::keywords::DataclassTransformMetadata;
 use crate::keywords::KwCall;
 use crate::literal::Lit;
 use crate::module::ModuleType;
@@ -863,16 +863,6 @@ impl Type {
         Type::Never(NeverStyle::Never)
     }
 
-    pub fn is_function_type(&self) -> bool {
-        matches!(
-            self,
-            Type::Function { .. }
-                | Type::Overload { .. }
-                | Type::BoundMethod { .. }
-                | Type::Callable { .. }
-        )
-    }
-
     pub fn as_module(&self) -> Option<&ModuleType> {
         match self {
             Type::Module(m) => Some(m),
@@ -1130,6 +1120,10 @@ impl Type {
         }
     }
 
+    pub fn has_toplevel_func_metadata(&self) -> bool {
+        self.check_toplevel_func_metadata(&|_| true)
+    }
+
     pub fn is_abstract_method(&self) -> bool {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_abstract_method)
     }
@@ -1170,7 +1164,7 @@ impl Type {
         self.check_toplevel_func_metadata(&|meta| meta.flags.has_final_decoration)
     }
 
-    pub fn dataclass_transform_metadata(&self) -> Option<DataclassTransformKeywords> {
+    pub fn dataclass_transform_metadata(&self) -> Option<DataclassTransformMetadata> {
         self.check_toplevel_func_metadata(&|meta| meta.flags.dataclass_transform_metadata.clone())
     }
 
@@ -1385,6 +1379,11 @@ impl Type {
         g(&mut self, &mut |ty| match &ty {
             Type::Literal(lit) => *ty = lit.general_class_type(stdlib).clone().to_type(),
             Type::LiteralString => *ty = stdlib.str().clone().to_type(),
+            Type::TypedDict(TypedDict::Anonymous(inner)) => {
+                *ty = stdlib
+                    .dict(stdlib.str().clone().to_type(), inner.value_type.clone())
+                    .to_type()
+            }
             _ => {}
         });
         self
@@ -1431,6 +1430,16 @@ impl Type {
         self.transform(&mut |ty| {
             if let Type::Type(box Type::Union(box Union { members, .. })) = ty {
                 *ty = unions(members.drain(..).map(Type::type_form).collect());
+            }
+        })
+    }
+
+    pub fn anon_typed_dicts(self, stdlib: &Stdlib) -> Self {
+        self.transform(&mut |ty| {
+            if let Type::TypedDict(TypedDict::Anonymous(inner)) = ty {
+                *ty = stdlib
+                    .dict(stdlib.str().clone().to_type(), inner.value_type.clone())
+                    .to_type()
             }
         })
     }
@@ -1563,8 +1572,8 @@ impl Type {
         match self {
             Type::ClassDef(cls) => Some(cls.qname()),
             Type::ClassType(c) => Some(c.qname()),
-            Type::TypedDict(c) => Some(c.qname()),
-            Type::PartialTypedDict(c) => Some(c.qname()),
+            Type::TypedDict(TypedDict::TypedDict(c)) => Some(c.qname()),
+            Type::PartialTypedDict(TypedDict::TypedDict(c)) => Some(c.qname()),
             Type::TypeVar(t) => Some(t.qname()),
             Type::TypeVarTuple(t) => Some(t.qname()),
             Type::ParamSpec(t) => Some(t.qname()),

@@ -68,6 +68,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .explicit_any()
                     .noreturn_to_never()
                     .anon_callables()
+                    .anon_typed_dicts(self.stdlib)
                     .distribute_type_over_union();
                 // Make assert_type(Self@SomeClass, typing.Self) work.
                 ty.subst_self_type_mut(&self_form);
@@ -372,6 +373,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // fresh vars and solve them during the is_subset_eq check below.
                         let protocol_instance_ty = self.instantiate_fresh_class(cls);
                         if let Some(object_type) = &object_type {
+                            let mut unsafe_overlap_errors = vec![];
                             for field_name in &protocol_metadata.members {
                                 if !self.has_attr(object_type, field_name) {
                                     // It's okay if the field is missing, since
@@ -395,23 +397,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     "runtime_checkable_protocol_unsafe_overlap",
                                 );
                                 if !self.is_subset_eq(&field_ty, &protocol_field_ty) {
-                                    errors.add(
-                                        range,
-                                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                                        vec1![
-                                            format!(
-                                                "Runtime checkable protocol `{}` has an unsafe overlap with type `{}`",
-                                                cls.name(),
-                                                self.for_display(object_type.clone())
-                                            ),
-                                            format!(
-                                                "Attribute `{}` has incompatible types: expected `{}`, got `{}`",
-                                                field_name,
-                                                self.for_display(protocol_field_ty),
-                                                self.for_display(field_ty),
-                                            ),
-                                        ]);
+                                    unsafe_overlap_errors.push(
+                                        format!(
+                                            "Attribute `{}` has incompatible types: expected `{}`, got `{}`",
+                                            field_name,
+                                            self.for_display(protocol_field_ty),
+                                            self.for_display(field_ty),
+                                        ),
+                                    );
                                 }
+                            }
+                            if !unsafe_overlap_errors.is_empty() {
+                                let mut full_msg = vec1![format!(
+                                    "Runtime checkable protocol `{}` has an unsafe overlap with type `{}`",
+                                    cls.name(),
+                                    self.for_display(object_type.clone())
+                                )];
+                                full_msg.extend(unsafe_overlap_errors);
+                                errors.add(
+                                    range,
+                                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                    full_msg,
+                                );
                             }
                         }
                     }
@@ -474,7 +481,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
 
                 // If it's not a callable type, it's a data member
-                if !ty.is_function_type() {
+                if !ty.is_toplevel_callable() {
                     return true;
                 }
             }

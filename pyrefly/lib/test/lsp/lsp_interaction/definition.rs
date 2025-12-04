@@ -11,6 +11,7 @@ use lsp_server::Message;
 use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::GotoDefinitionResponse;
+use lsp_types::Location;
 use lsp_types::Url;
 use lsp_types::request::GotoDeclarationResponse;
 use serde_json::json;
@@ -19,7 +20,9 @@ use tempfile::TempDir;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
+use crate::test::lsp::lsp_interaction::util::expect_definition_points_to_symbol;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::line_at_location;
 
 fn test_go_to_def(
     root: PathBuf,
@@ -241,8 +244,6 @@ fn definition_on_attr_of_pyi_goes_to_py() {
 #[test]
 fn definition_in_builtins_without_interpreter_goes_to_stub() {
     let root = get_test_files_root();
-    let pyrefly_typeshed_materialized = bundled_typeshed_path();
-    let result_file = pyrefly_typeshed_materialized.join("typing.pyi");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction
@@ -255,13 +256,9 @@ fn definition_in_builtins_without_interpreter_goes_to_stub() {
     interaction
         .client
         .definition("imports_builtins_no_config.py", 7, 7)
-        .expect_definition_response_absolute(
-            result_file.to_string_lossy().to_string(),
-            444,
-            0,
-            444,
-            4,
-        )
+        .expect_response_with(|response| {
+            expect_definition_points_to_symbol(response.as_ref(), "typing.pyi", "List =")
+        })
         .unwrap();
 }
 
@@ -335,13 +332,9 @@ fn goto_type_def_on_str_primitive_goes_to_builtins_stub() {
     interaction
         .client
         .type_definition("primitive_type_test.py", 5, 0)
-        .expect_definition_response_absolute(
-            result_file.to_string_lossy().to_string(),
-            1023,
-            6,
-            1023,
-            9,
-        )
+        .expect_response_with(|response| {
+            expect_definition_points_to_symbol(response.as_ref(), "builtins.pyi", "class str")
+        })
         .unwrap();
 
     assert!(
@@ -364,18 +357,12 @@ fn goto_type_def_on_int_primitive_goes_to_builtins_stub() {
         .unwrap();
     interaction.client.did_open("primitive_type_test.py");
 
-    // Expect to go to the int class definition in builtins.pyi
-    // Line 252 is 0-indexed (253 - 1), where "class int:" is defined
     interaction
         .client
         .type_definition("primitive_type_test.py", 6, 0)
-        .expect_definition_response_absolute(
-            result_file.to_string_lossy().to_string(),
-            417,
-            6,
-            417,
-            9,
-        )
+        .expect_response_with(|response| {
+            expect_definition_points_to_symbol(response.as_ref(), "builtins.pyi", "class int")
+        })
         .unwrap();
 
     assert!(
@@ -398,18 +385,12 @@ fn goto_type_def_on_bool_primitive_goes_to_builtins_stub() {
         .unwrap();
     interaction.client.did_open("primitive_type_test.py");
 
-    // Expect to go to the bool class definition in builtins.pyi
-    // Line 953 is 0-indexed (954 - 1), where "class bool:" is defined
     interaction
         .client
         .type_definition("primitive_type_test.py", 7, 0)
-        .expect_definition_response_absolute(
-            result_file.to_string_lossy().to_string(),
-            3098,
-            6,
-            3098,
-            10,
-        )
+        .expect_response_with(|response| {
+            expect_definition_points_to_symbol(response.as_ref(), "builtins.pyi", "class bool")
+        })
         .unwrap();
 
     assert!(
@@ -432,18 +413,12 @@ fn goto_type_def_on_bytes_primitive_goes_to_builtins_stub() {
         .unwrap();
     interaction.client.did_open("primitive_type_test.py");
 
-    // Expect to go to the bytes class definition in builtins.pyi
-    // Line 662 is 0-indexed (663 - 1), where "class bytes:" is defined
     interaction
         .client
         .type_definition("primitive_type_test.py", 8, 0)
-        .expect_definition_response_absolute(
-            result_file.to_string_lossy().to_string(),
-            1835,
-            6,
-            1835,
-            11,
-        )
+        .expect_response_with(|response| {
+            expect_definition_points_to_symbol(response.as_ref(), "builtins.pyi", "class bytes")
+        })
         .unwrap();
 
     assert!(
@@ -499,9 +474,11 @@ fn goto_type_def_on_list_of_primitives_shows_selector() {
                 let mut has_list = false;
 
                 for x in xs {
-                    if x.uri.to_file_path().unwrap() == builtins_file {
-                        has_int = has_int || x.range.start.line == 417;
-                        has_list = has_list || x.range.start.line == 3348;
+                    if x.uri.to_file_path().unwrap() == builtins_file
+                        && let Some(line) = line_at_location(&x)
+                    {
+                        has_int = has_int || line.contains("class int");
+                        has_list = has_list || line.contains("class list");
                     }
                 }
 
@@ -528,4 +505,37 @@ fn test_go_to_def_constructor_calls() {
             (8, 7, "person.py", 6, 6, 6, 12),
         ],
     );
+}
+
+#[test]
+fn goto_def_on_none_goes_to_builtins_stub() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.client.did_open("primitive_type_test.py");
+
+    let check_none_type_location = |x: &Location| {
+        let path = x.uri.to_file_path().unwrap();
+        let file_name = path.file_name().and_then(|n| n.to_str());
+        // NoneType can be in types.pyi (Python 3.10+) or __init__.pyi (older versions)
+        file_name == Some("types.pyi") || file_name == Some("__init__.pyi")
+    };
+
+    // Test goto definition on None - should go to NoneType in types.pyi or builtins.pyi
+    interaction
+        .client
+        .definition("primitive_type_test.py", 10, 4)
+        .expect_response_with(|response| match response {
+            Some(GotoDefinitionResponse::Scalar(x)) => check_none_type_location(&x),
+            Some(GotoDefinitionResponse::Array(xs)) if !xs.is_empty() => {
+                check_none_type_location(&xs[0])
+            }
+            _ => false,
+        })
+        .unwrap();
 }

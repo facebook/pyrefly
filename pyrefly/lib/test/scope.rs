@@ -169,6 +169,40 @@ async def test_async():
 );
 
 testcase!(
+    test_await_and_async_comprehensions,
+    r#"
+from typing import Any
+
+# A bare (parenthesized) generator containing an await immediately produces an
+# AsyncGenerator[_, _] result. It is legal to use in a synchronous function, although
+# it cannot be iterated except in an async function.
+#
+# Other kinds of comprehensions (list, set, etc) cannot use `await` unless in an async
+# function.
+
+def test(xs: Any):
+    (await x for x in xs)  # Ok
+    [await x for x in xs]  # E:
+    {await x for x in xs}  # E:
+    {0: await x for x in xs}  # E:
+    {await x: 0 for x in xs}  # E:
+
+    (x async for x in xs)  # OK
+    [x async for x in xs]  # E:
+    {x async for x in xs}  # E:
+    {x: 0 async for x in xs}  # E:
+
+    (x for x in await xs)  # E:
+    [x for x in await xs]  # E:
+    {x for x in await xs}  # E:
+    {x: 0 for x in await xs}  # E:
+
+    (await x async for x in (await y async for y in xs))  # Ok
+    [await x async for x in (await y async for y in xs)]  # E: `async` # E: `await`
+"#,
+);
+
+testcase!(
     test_global_simple,
     r#"
 x: str = ""

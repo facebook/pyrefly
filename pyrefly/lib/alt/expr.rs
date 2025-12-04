@@ -17,7 +17,10 @@ use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItems;
+use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Union;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
@@ -96,6 +99,8 @@ impl Ranged for TypeOrExpr<'_> {
         }
     }
 }
+
+static ANONYMOUS_TYPED_DICT_MAX_ITEMS: usize = 20;
 
 impl<'a> TypeOrExpr<'a> {
     pub fn infer<Ans: LookupAnswer>(
@@ -432,7 +437,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 );
                                 Type::any_implicit()
                             } else {
-                                self.solver().fresh_contained(self.uniques).to_type()
+                                self.solver().fresh_partial_contained(self.uniques).to_type()
                             }
                         },
                         |hint| hint.to_type(),
@@ -458,7 +463,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 );
                                 Type::any_implicit()
                             } else {
-                                self.solver().fresh_contained(self.uniques).to_type()
+                                self.solver().fresh_partial_contained(self.uniques).to_type()
                             }
                         },
                         |hint| hint.to_type(),
@@ -866,7 +871,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.dict_items_infer(range, flattened_items, hint, errors)
     }
 
-    /// Infers a `dict` type for dictionary items. Note: does not handle TypedDict!
+    /// Infers a type for a dictionary literal with the specified items & an optional contextual hint
+    /// In order to preserve information about heterogeneous key/value types, we will infer an anonymous
+    /// typed dict if the following conditions are met:
+    /// - there cannot already be a contextual hint
+    /// - all the keys must be string literals
+    /// - there cannot be any unpackings
+    /// - the dict cannot be empty
     fn dict_items_infer(
         &self,
         range: TextRange,
@@ -881,7 +892,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if !self.solver().infer_with_first_use {
                         Type::any_implicit()
                     } else {
-                        self.solver().fresh_contained(self.uniques).to_type()
+                        self.solver()
+                            .fresh_partial_contained(self.uniques)
+                            .to_type()
                     }
                 },
                 |ty| ty.to_type(),
@@ -891,7 +904,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if !self.solver().infer_with_first_use {
                         Type::any_implicit()
                     } else {
-                        self.solver().fresh_contained(self.uniques).to_type()
+                        self.solver()
+                            .fresh_partial_contained(self.uniques)
+                            .to_type()
                     }
                 },
                 |ty| ty.to_type(),
@@ -906,6 +921,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             self.stdlib.dict(key_ty, value_ty).to_type()
         } else {
+            let mut typed_dict_fields = Vec::new();
+            let mut can_create_anonymous_typed_dict = hint.is_none();
             let mut key_tys = Vec::new();
             let mut value_tys = Vec::new();
             items.iter().for_each(|x| match &x.key {
@@ -923,11 +940,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if !key_t.is_error() {
                         key_tys.push(key_t);
                     }
+                    let maybe_string_lit_key = key.as_string_literal_expr();
+                    if maybe_string_lit_key.is_none() {
+                        can_create_anonymous_typed_dict = false;
+                    }
                     if !value_t.is_error() {
+                        if let Some(string_lit) = maybe_string_lit_key
+                            && can_create_anonymous_typed_dict
+                        {
+                            let key_name = Name::new(string_lit.value.to_str());
+                            typed_dict_fields.push((
+                                key_name,
+                                TypedDictField {
+                                    ty: value_t.clone(),
+                                    required: false,
+                                    read_only_reason: None,
+                                },
+                            ));
+                        }
                         value_tys.push(value_t);
                     }
                 }
                 None => {
+                    can_create_anonymous_typed_dict = false;
                     let ty = self.expr_infer(&x.value, errors);
                     if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
                         if !key_t.is_error() {
@@ -958,6 +993,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             });
+            if can_create_anonymous_typed_dict
+                && typed_dict_fields.len() <= ANONYMOUS_TYPED_DICT_MAX_ITEMS
+                && !typed_dict_fields.is_empty()
+            {
+                return Type::TypedDict(TypedDict::Anonymous(Box::new(AnonymousTypedDictInner {
+                    fields: typed_dict_fields,
+                    value_type: self.unions(value_tys),
+                })));
+            }
             if key_tys.is_empty() {
                 key_tys.push(Type::any_error())
             }
@@ -2131,7 +2175,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if let Some(field) = fields.get(&Name::new(field_name)) {
                                 field.ty.clone()
                             } else if let ExtraItems::Extra(extra) =
-                                self.typed_dict_extra_items(typed_dict.class_object())
+                                self.typed_dict_extra_items(&typed_dict)
                             {
                                 extra.ty
                             } else {
@@ -2154,25 +2198,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 Type::any_error()
                             }
                         }
-                        Type::ClassType(cls)
-                            if cls.is_builtin("str")
+                        _ => {
+                            if self.is_subset_eq(ty, &self.stdlib.str().clone().to_type())
                                 && !matches!(
-                                    self.typed_dict_extra_items(typed_dict.class_object()),
+                                    self.typed_dict_extra_items(&typed_dict),
                                     ExtraItems::Default
-                                ) =>
-                        {
-                            self.get_typed_dict_value_type(&typed_dict)
+                                )
+                            {
+                                self.get_typed_dict_value_type(&typed_dict)
+                            } else {
+                                self.error(
+                                    errors,
+                                    slice.range(),
+                                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                    format!(
+                                        "Invalid key for TypedDict `{}`, got `{}`",
+                                        typed_dict.name(),
+                                        self.for_display(ty.clone())
+                                    ),
+                                )
+                            }
                         }
-                        _ => self.error(
-                            errors,
-                            slice.range(),
-                            ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
-                            format!(
-                                "Invalid key for TypedDict `{}`, got `{}`",
-                                typed_dict.name(),
-                                self.for_display(ty.clone())
-                            ),
-                        ),
                     })
                 }
                 t => self.error(

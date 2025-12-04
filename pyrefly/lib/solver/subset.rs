@@ -741,13 +741,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         got: &TypedDict,
         want: &TypedDict,
     ) -> Result<(), SubsetError> {
-        let got_name = got.name().clone();
-        let want_name = want.name().clone();
+        let got_name = got.name();
+        let want_name = want.name();
         let (got_fields, want_fields) = {
             let mut got_fields = self.get_typed_dict_fields(got);
             let mut want_fields = self.get_typed_dict_fields(want);
-            let got_extra_items = self.type_order.typed_dict_extra_items(got.class_object());
-            let want_extra_items = self.type_order.typed_dict_extra_items(want.class_object());
+            let got_extra_items = self.type_order.typed_dict_extra_items(got);
+            let want_extra_items = self.type_order.typed_dict_extra_items(want);
             if [&got_extra_items, &want_extra_items]
                 .iter()
                 .any(|extra| !matches!(extra, ExtraItems::Default))
@@ -780,8 +780,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     ))),
                     |got_v| {
                         self.is_subset_typed_dict_field(
-                            (&got_name, got_v),
-                            (&want_name, want_v),
+                            (got_name, got_v),
+                            (want_name, want_v),
                             &field_name,
                         )
                     },
@@ -796,8 +796,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         Ok(())
                     } else {
                         self.is_subset_typed_dict_field(
-                            (&got_name, got_v),
-                            (&want_name, want_v),
+                            (got_name, got_v),
+                            (want_name, want_v),
                             &k.display_name(),
                         )
                     }
@@ -826,8 +826,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     ) -> Result<(), SubsetError> {
         let got_fields = self.type_order.typed_dict_fields(got);
         let want_fields = self.type_order.typed_dict_fields(want);
-        let got_extra_items = self.type_order.typed_dict_extra_items(got.class_object());
-        let want_extra_items = self.type_order.typed_dict_extra_items(want.class_object());
+        let got_extra_items = self.type_order.typed_dict_extra_items(got);
+        let want_extra_items = self.type_order.typed_dict_extra_items(want);
         all(want_fields.iter(), |(k, want_v)| {
             let got_field_ty = got_fields.get(k).map(|got_v| &got_v.ty);
             let got_ty = match (got_field_ty, &got_extra_items) {
@@ -1031,7 +1031,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::TypedDict(got), Type::PartialTypedDict(want)) => {
                 self.is_subset_partial_typed_dict(got, want)
             }
-            (Type::TypedDict(_), Type::SelfType(cls))
+            (Type::TypedDict(TypedDict::TypedDict(_)), Type::SelfType(cls))
                 if cls == self.type_order.stdlib().typed_dict_fallback() =>
             {
                 // Allow substituting a TypedDict for Self when we call methods
@@ -1046,6 +1046,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     self.is_subset_eq(
                         &stdlib
                             .dict(stdlib.str().clone().to_type(), value_type)
+                            .to_type(),
+                        want,
+                    )
+                } else if matches!(td, TypedDict::Anonymous(_)) {
+                    self.is_subset_eq(
+                        &stdlib
+                            .dict(
+                                stdlib.str().clone().to_type(),
+                                self.type_order.get_typed_dict_value_type(td),
+                            )
                             .to_type(),
                         want,
                     )

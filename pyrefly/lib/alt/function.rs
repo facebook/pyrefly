@@ -23,6 +23,7 @@ use pyrefly_types::types::TParam;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::TParamsSource;
 use pyrefly_types::types::Union;
+use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -66,7 +67,7 @@ use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::ClassKind;
-use crate::types::keywords::DataclassTransformKeywords;
+use crate::types::keywords::DataclassTransformMetadata;
 use crate::types::types::CalleeKind;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
@@ -647,7 +648,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             SpecialDecorator::DataclassTransformCall(kws) => {
                 flags.dataclass_transform_metadata =
-                    Some(DataclassTransformKeywords::from_type_map(kws));
+                    Some(DataclassTransformMetadata::from_type_map(kws));
                 true
             }
             SpecialDecorator::AbstractMethod => {
@@ -1191,7 +1192,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|p| matches!(p, Param::Pos(..) | Param::PosOnly(..)))
             .count()
-            - (if defining_cls.is_some() && !is_staticmethod {
+            .saturating_sub(if defining_cls.is_some() && !is_staticmethod {
                 1 // Subtract the "self" or "cls" parameter
             } else {
                 0
@@ -1583,9 +1584,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         obj: &Type,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Option<Type> {
+        let mut owner = Owner::new();
         match t {
             Type::Forall(forall) => match &forall.body {
-                Forallable::Callable(c) => c.split_first_param().map(|(param, c)| {
+                Forallable::Callable(c) => c.split_first_param(&mut owner).map(|(param, c)| {
                     let c =
                         self.instantiate_callable_self(&forall.tparams, obj, param, c, is_subset);
                     Type::Forall(Box::new(Forall {
@@ -1593,23 +1595,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         body: Forallable::Callable(c),
                     }))
                 }),
-                Forallable::Function(f) => f.signature.split_first_param().map(|(param, c)| {
-                    let c =
-                        self.instantiate_callable_self(&forall.tparams, obj, param, c, is_subset);
-                    Type::Forall(Box::new(Forall {
-                        tparams: forall.tparams.clone(),
-                        body: Forallable::Function(Function {
-                            signature: c,
-                            metadata: f.metadata.clone(),
-                        }),
-                    }))
-                }),
+                Forallable::Function(f) => {
+                    f.signature.split_first_param(&mut owner).map(|(param, c)| {
+                        let c = self.instantiate_callable_self(
+                            &forall.tparams,
+                            obj,
+                            param,
+                            c,
+                            is_subset,
+                        );
+                        Type::Forall(Box::new(Forall {
+                            tparams: forall.tparams.clone(),
+                            body: Forallable::Function(Function {
+                                signature: c,
+                                metadata: f.metadata.clone(),
+                            }),
+                        }))
+                    })
+                }
                 Forallable::TypeAlias(_) => None,
             },
             Type::Callable(callable) => callable
-                .split_first_param()
+                .split_first_param(&mut owner)
                 .map(|(_, c)| Type::Callable(Box::new(c))),
-            Type::Function(func) => func.signature.split_first_param().map(|(_, c)| {
+            Type::Function(func) => func.signature.split_first_param(&mut owner).map(|(_, c)| {
                 Type::Function(Box::new(Function {
                     signature: c,
                     metadata: func.metadata.clone(),
@@ -1620,7 +1629,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .try_mapped_ref(|x| match x {
                     OverloadType::Function(f) => f
                         .signature
-                        .split_first_param()
+                        .split_first_param(&mut owner)
                         .map(|(_, c)| {
                             OverloadType::Function(Function {
                                 signature: c,
@@ -1631,7 +1640,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     OverloadType::Forall(forall) => forall
                         .body
                         .signature
-                        .split_first_param()
+                        .split_first_param(&mut owner)
                         .map(|(param, c)| {
                             let c = self.instantiate_callable_self(
                                 &forall.tparams,

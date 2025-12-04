@@ -34,7 +34,7 @@ use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::display::ClassDisplayContext;
 use crate::types::keywords::DataclassKeywords;
-use crate::types::keywords::DataclassTransformKeywords;
+use crate::types::keywords::DataclassTransformMetadata;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
@@ -59,7 +59,7 @@ pub struct ClassMetadata {
     total_ordering_metadata: Option<TotalOrderingMetadata>,
     /// If this class is decorated with `typing.dataclass_transform(...)`, the keyword arguments
     /// that were passed to the `dataclass_transform` call.
-    dataclass_transform_metadata: Option<DataclassTransformKeywords>,
+    dataclass_transform_metadata: Option<DataclassTransformMetadata>,
     pydantic_model_kind: Option<PydanticModelKind>,
     django_model_metadata: Option<DjangoModelMetadata>,
 }
@@ -95,7 +95,7 @@ impl ClassMetadata {
         deprecation: Option<Deprecation>,
         is_disjoint_base: bool,
         total_ordering_metadata: Option<TotalOrderingMetadata>,
-        dataclass_transform_metadata: Option<DataclassTransformKeywords>,
+        dataclass_transform_metadata: Option<DataclassTransformMetadata>,
         pydantic_model_kind: Option<PydanticModelKind>,
         django_model_metadata: Option<DjangoModelMetadata>,
     ) -> ClassMetadata {
@@ -273,7 +273,7 @@ impl ClassMetadata {
         self.dataclass_metadata.as_ref()
     }
 
-    pub fn dataclass_transform_metadata(&self) -> Option<&DataclassTransformKeywords> {
+    pub fn dataclass_transform_metadata(&self) -> Option<&DataclassTransformMetadata> {
         self.dataclass_transform_metadata.as_ref()
     }
 
@@ -314,16 +314,8 @@ impl ClassSynthesizedField {
 }
 
 /// A class's synthesized fields, such as a dataclass's `__init__` method.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default, VisitMut)]
 pub struct ClassSynthesizedFields(SmallMap<Name, ClassSynthesizedField>);
-
-impl VisitMut<Type> for ClassSynthesizedFields {
-    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
-        for field in self.0.values_mut() {
-            field.visit_mut(f);
-        }
-    }
-}
 
 impl ClassSynthesizedFields {
     pub fn new(fields: SmallMap<Name, ClassSynthesizedField>) -> Self {
@@ -364,10 +356,11 @@ impl Display for ClassSynthesizedFields {
 
 /// A struct representing a class's metaclass. A value of `None` indicates
 /// no explicit metaclass, in which case the default metaclass is `type`.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
 pub enum Metaclass {
     Direct(ClassType),
     Inherited(ClassType),
+    #[default]
     None,
 }
 
@@ -378,12 +371,6 @@ impl Display for Metaclass {
             Self::Inherited(metaclass) => write!(f, "inherited({metaclass})"),
             Self::None => write!(f, "type"),
         }
-    }
-}
-
-impl Default for Metaclass {
-    fn default() -> Self {
-        Self::None
     }
 }
 
@@ -466,9 +453,6 @@ pub struct DataclassMetadata {
     pub init_defaults: InitDefaults,
     /// Whether a default can be passed positionally to field specifier calls
     pub default_can_be_positional: bool,
-    /// Default converter to apply to fields that don't have an explicit converter.
-    /// Inherited from the dataclass_transform decorator's converter_default parameter.
-    pub _converter_default: Option<Type>,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

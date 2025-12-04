@@ -6,10 +6,13 @@
  */
 
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 
 /// Represents the specific reason why a field is read-only, to provide better error messages
-#[derive(Debug, Clone, PartialEq, Eq, Hash, TypeEq, VisitMut)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, TypeEq, Visit, VisitMut, PartialOrd, Ord
+)]
 pub enum ReadOnlyReason {
     /// Field is marked with a `Final` qualifier
     Final,

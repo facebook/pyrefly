@@ -13,6 +13,7 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forall;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
@@ -441,7 +442,7 @@ enum AttributeBase1 {
     /// Result of a super() call. See Type::SuperInstance for details on what these fields are.
     SuperInstance(ClassType, SuperObj),
     /// Typed dictionaries have similar properties to dict and Mapping, with some exceptions
-    TypedDict(TypedDict),
+    TypedDict(TypedDictInner),
     /// Attribute lookup on a base as part of a subset check against a protocol.
     ProtocolSubset(Box<AttributeBase1>),
     Intersect(Vec<AttributeBase1>, Vec<AttributeBase1>),
@@ -1667,8 +1668,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(box Type::SelfType(class_type)) => {
                 acc.push(AttributeBase1::ClassObject(ClassBase::SelfType(class_type)))
             }
-            Type::TypedDict(td) | Type::PartialTypedDict(td) => {
+            Type::TypedDict(TypedDict::TypedDict(td))
+            | Type::PartialTypedDict(TypedDict::TypedDict(td)) => {
                 acc.push(AttributeBase1::TypedDict(td.clone()))
+            }
+            Type::TypedDict(td @ TypedDict::Anonymous(_))
+            | Type::PartialTypedDict(td @ TypedDict::Anonymous(_)) => {
+                let value_ty = self.get_typed_dict_value_type(&td);
+                acc.push(AttributeBase1::ClassInstance(
+                    self.stdlib
+                        .dict(self.stdlib.str().clone().to_type(), value_ty),
+                ))
             }
             Type::Type(box (Type::TypedDict(_) | Type::PartialTypedDict(_))) => {
                 acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(

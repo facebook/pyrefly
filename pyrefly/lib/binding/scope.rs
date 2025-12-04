@@ -584,6 +584,8 @@ pub enum FlowStyle {
     /// Am I a function definition? Used to chain overload definitions.
     /// If so, does my return type have an explicit annotation?
     FunctionDef(Idx<KeyDecoratedFunction>, bool),
+    /// Am I a class definition?
+    ClassDef,
     /// The name is possibly uninitialized (perhaps due to merging branches)
     PossiblyUninitialized,
     /// The name was in an annotated declaration like `x: int` but not initialized
@@ -1857,6 +1859,9 @@ impl Scopes {
                         definition: value.idx,
                         has_return_annotation: *has_return_annotation,
                     },
+                    FlowStyle::ClassDef => ClassFieldDefinition::NestedClass {
+                        definition: value.idx,
+                    },
                     FlowStyle::ClassField {
                         initial_value: Some(e),
                     } => ClassFieldDefinition::AssignedInBody {
@@ -2037,7 +2042,7 @@ impl Scopes {
                     // exception because they are synthesized scope entries that don't exist at all
                     // in the runtime; we treat them as always initialized to avoid false positives
                     // for uninitialized local checks in class bodies.
-                    initialized: if flow_barrier == FlowBarrier::BlockFlow
+                    initialized: if flow_barrier > FlowBarrier::AllowFlowChecked
                         || matches!(static_info.style, StaticStyle::PossibleLegacyTParam)
                     {
                         InitializedInFlow::Yes
@@ -2530,23 +2535,13 @@ impl<'a> BindingsBuilder<'a> {
     ///
     /// Names in `loop_header_targets` will not get phi keys - this is used for loop
     /// variables that are unconditionally reassigned in `for` loop headers
-    pub fn setup_loop(
-        &mut self,
-        range: TextRange,
-        narrow_ops: &NarrowOps,
-        loop_header_targets: &SmallSet<Name>,
-    ) {
+    pub fn setup_loop(&mut self, range: TextRange, loop_header_targets: &SmallSet<Name>) {
         let base = mem::take(&mut self.scopes.current_mut().flow);
         // To account for possible assignments to existing names in a loop, we
         // speculatively insert phi keys upfront.
         self.scopes.current_mut().flow =
             self.insert_phi_keys(base.clone(), range, loop_header_targets);
         self.scopes.current_mut().loops.push(Loop::new(base));
-        self.bind_narrow_ops(
-            narrow_ops,
-            NarrowUseLocation::Span(range),
-            &Usage::Narrowing(None),
-        );
     }
 
     pub fn teardown_loop(

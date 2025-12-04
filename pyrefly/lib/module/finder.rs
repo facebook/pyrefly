@@ -518,8 +518,18 @@ pub fn find_import_filtered(
 
     if module != ModuleName::builtins() && config.replace_imports_with_any(origin, module) {
         FindingOrError::Error(FindError::Ignored)
+    } else if let Some(build_system) = config.build_system.as_ref()
+        && let Some(path) = find_module(
+            module,
+            build_system.search_path_prefix.iter(),
+            &mut namespaces_found,
+            style_filter,
+            None,
+        )
+    {
+        path
     } else if let Some(sourcedb) = config.source_db.as_ref()
-        && let Some(path) = sourcedb.lookup(&module, origin, style_filter)
+        && let Some(path) = sourcedb.lookup(module, origin, style_filter)
     {
         FindingOrError::new_finding(path.clone())
     } else if let Some(path) = find_module(

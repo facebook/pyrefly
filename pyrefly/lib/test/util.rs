@@ -264,7 +264,7 @@ impl TestEnv {
         for (name, path, _) in self.modules.iter() {
             sourcedb.insert(*name, path.dupe());
         }
-        config.source_db = Some(Arc::new(Box::new(sourcedb)));
+        config.source_db = Some(ArcId::new(Box::new(sourcedb)));
         config.interpreters.skip_interpreter_query = true;
         config.configure();
         ArcId::new(config)

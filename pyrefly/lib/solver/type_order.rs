@@ -131,8 +131,8 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.typed_dict_kw_param_info(typed_dict)
     }
 
-    pub fn typed_dict_extra_items(self, cls: &Class) -> ExtraItems {
-        self.0.typed_dict_extra_items(cls)
+    pub fn typed_dict_extra_items(self, typed_dict: &TypedDict) -> ExtraItems {
+        self.0.typed_dict_extra_items(typed_dict)
     }
 
     pub fn get_typed_dict_value_type(self, typed_dict: &TypedDict) -> Type {

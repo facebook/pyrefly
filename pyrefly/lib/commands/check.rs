@@ -27,6 +27,7 @@ use dupe::Dupe as _;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::config::ConfigFile;
+use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::finder::ConfigError;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -234,15 +235,16 @@ struct OutputArgs {
     )]
     summarize_errors: Option<usize>,
 
-    /// Filter the error summary to show only a specific error kind (e.g., bad-assignment, missing-return, etc.).
-    /// Must be used in conjunction with --summarize-errors.
+    /// Filter errors to show only a specific error kind (e.g., bad-assignment, missing-return, etc.).
+    /// Can be passed multiple times or as a comma-separated list.
     #[arg(
         long,
         value_enum,
         value_name = "ERROR_KIND",
-        hide_possible_values = true
+        hide_possible_values = true,
+        value_delimiter = ','
     )]
-    only: Option<crate::config::error_kind::ErrorKind>,
+    only: Option<Vec<ErrorKind>>,
 
     /// By default show the number of errors. Pass `--summary` to show information about lines checked and time/memory,
     /// or `--summary=none` to hide the summary line entirely.
@@ -418,24 +420,12 @@ impl Handles {
                 .insert(path.dupe());
         }
 
-        let mut errors = Vec::new();
-        let mut reloaded_configs = SmallSet::new();
-        for (config, files) in &configs {
-            match ConfigFile::requery_source_db(config, files) {
-                Ok(reload) if reload => {
-                    reloaded_configs.insert(config.dupe());
-                }
-                Err(error) => {
-                    errors.push(ConfigError::error(error));
-                }
-                _ => (),
-            }
-        }
+        let reloaded_configs = ConfigFile::query_source_db(&configs);
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
             .collect();
-        (result, reloaded_configs, errors)
+        (result, reloaded_configs, Vec::new())
     }
 
     fn update<'a>(
@@ -726,12 +716,22 @@ impl CheckArgs {
 
         let errors = loads
             .collect_errors_with_baseline(self.output.baseline.as_deref(), relative_to.as_path());
+        let shown_errors = if let Some(only) = &self.output.only {
+            let only = only.iter().collect::<SmallSet<_>>();
+            errors
+                .shown
+                .into_iter()
+                .filter(|e| only.contains(&e.error_kind()))
+                .collect()
+        } else {
+            errors.shown
+        };
 
         // We update the baseline file if requested, after reporting any new errors using the old baseline
         if self.output.update_baseline
             && let Some(baseline_path) = &self.output.baseline
         {
-            let mut new_baseline = errors.shown.clone();
+            let mut new_baseline = shown_errors.clone();
             new_baseline.extend(errors.baseline);
             new_baseline.sort_by_cached_key(|error| {
                 (
@@ -752,22 +752,22 @@ impl CheckArgs {
             self.output.output_format.write_errors_to_file(
                 path,
                 relative_to.as_path(),
-                &errors.shown,
+                &shown_errors,
             )?;
         } else {
             self.output
                 .output_format
-                .write_errors_to_console(relative_to.as_path(), &errors.shown)?;
+                .write_errors_to_console(relative_to.as_path(), &shown_errors)?;
         }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
-            print_error_counts(&errors.shown, limit);
+            print_error_counts(&shown_errors, limit);
         }
         if self.output.summarize_errors.is_some() {
-            print_error_summary(&errors.shown, self.output.only);
+            print_error_summary(&shown_errors);
         }
         let mut shown_errors_count = config_errors_count;
-        for error in &errors.shown {
+        for error in &shown_errors {
             if error.severity() >= Severity::Error {
                 shown_errors_count += 1;
             }
@@ -837,18 +837,18 @@ impl CheckArgs {
             fs_anyhow::write(path, report::trace::trace(transaction))?;
         }
         if self.behavior.suppress_errors {
-            suppress::suppress_errors(errors.shown.clone());
+            suppress::suppress_errors(shown_errors.clone());
         }
         if self.behavior.remove_unused_ignores {
             suppress::remove_unused_ignores(&loads, self.behavior.all);
         }
         if self.behavior.expectations {
             loads.check_against_expectations()?;
-            Ok((CommandExitStatus::Success, errors.shown))
+            Ok((CommandExitStatus::Success, shown_errors))
         } else if shown_errors_count > 0 {
-            Ok((CommandExitStatus::UserError, errors.shown))
+            Ok((CommandExitStatus::UserError, shown_errors))
         } else {
-            Ok((CommandExitStatus::Success, errors.shown))
+            Ok((CommandExitStatus::Success, shown_errors))
         }
     }
 }

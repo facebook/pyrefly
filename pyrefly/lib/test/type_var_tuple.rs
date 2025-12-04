@@ -210,6 +210,16 @@ assert_type(test(1), tuple[int])
 );
 
 testcase!(
+    test_type_var_tuple_slice_empty,
+    r#"
+from typing import assert_type
+
+def f[*Ts](*x: *Ts) -> None:
+    assert_type(x[1:0], tuple[()])
+"#,
+);
+
+testcase!(
     test_type_var_tuple_bound_method_resolves_to_empty,
     r#"
 from collections.abc import Callable, Awaitable

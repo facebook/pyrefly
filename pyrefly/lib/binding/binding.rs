@@ -2005,6 +2005,9 @@ pub enum ClassFieldDefinition {
         definition: Idx<Key>,
         has_return_annotation: bool,
     },
+    /// A nested class definition within the class body.
+    /// The definition field stores the Idx<Key> that points to the class binding.
+    NestedClass { definition: Idx<Key> },
     /// Defined in some way other than assignment or a `def` form,
     /// for example a name imported into a class body.
     DefinedWithoutAssign { definition: Idx<Key> },
@@ -2041,6 +2044,13 @@ impl DisplayWith<Bindings> for ClassFieldDefinition {
                 write!(
                     f,
                     "ClassFieldDefinition::MethodLike({}, ..)",
+                    ctx.display(*definition)
+                )
+            }
+            Self::NestedClass { definition } => {
+                write!(
+                    f,
+                    "ClassFieldDefinition::NestedClass({})",
                     ctx.display(*definition)
                 )
             }

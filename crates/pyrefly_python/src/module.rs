@@ -174,7 +174,6 @@ impl Module {
     ) -> bool {
         self.0.ignore.is_ignored(
             source_range.start.line_within_file(),
-            source_range.end.line_within_file(),
             error_kind,
             enabled_ignores,
         )

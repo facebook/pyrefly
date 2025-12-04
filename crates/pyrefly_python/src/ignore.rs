@@ -294,7 +294,6 @@ impl Ignore {
     pub fn is_ignored(
         &self,
         start_line: LineNumber,
-        end_line: LineNumber,
         kind: &str,
         enabled_ignores: &SmallSet<Tool>,
     ) -> bool {
@@ -304,30 +303,24 @@ impl Ignore {
         {
             return true;
         }
-
-        // We allow an ignore on any line within the range.
-        // We convert to/from zero-indexed because LineNumber does not implement Step.
-        for line in start_line.to_zero_indexed()..=end_line.to_zero_indexed() {
-            if let Some(suppressions) = self.ignores.get(&LineNumber::from_zero_indexed(line))
-                && suppressions.iter().any(|supp| {
-                    enabled_ignores.contains(&supp.tool)
-                        && match supp.tool {
-                            // We only check the subkind if they do `# pyrefly: ignore`
-                            Tool::Pyrefly => {
-                                supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind)
-                            }
-                            _ => true,
+        if let Some(suppressions) = self.ignores.get(&start_line)
+            && suppressions.iter().any(|supp| {
+                enabled_ignores.contains(&supp.tool)
+                    && match supp.tool {
+                        // We only check the subkind if they do `# pyrefly: ignore`
+                        Tool::Pyrefly => {
+                            supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind)
                         }
-                })
-            {
-                return true;
-            }
+                        _ => true,
+                    }
+            })
+        {
+            return true;
         }
-
         false
     }
 
-    /// Similar to `is_ignored``, but it only returns true if the error is ignored
+    /// Similar to `is_ignored`, but it only returns true if the error is ignored
     /// by a suppression that targets a specific line.
     pub fn is_ignored_by_suppression_line(
         &self,

@@ -284,7 +284,7 @@ impl<'a> BindingsBuilder<'a> {
                 class_indices.class_idx,
                 decorators.clone().into_boxed_slice(),
             ),
-            FlowStyle::Other,
+            FlowStyle::ClassDef,
         );
 
         // Insert a `KeyTParams` / `BindingTParams` pair, but only if there is at least
@@ -602,7 +602,7 @@ impl<'a> BindingsBuilder<'a> {
             &class_name,
             class_object,
             Binding::ClassDef(class_indices.class_idx, Box::new([])),
-            FlowStyle::Other,
+            FlowStyle::ClassDef,
         );
         self.insert_binding_idx(
             class_indices.class_idx,

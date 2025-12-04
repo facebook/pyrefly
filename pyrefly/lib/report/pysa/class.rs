@@ -179,7 +179,11 @@ impl PysaClassFieldDeclaration {
             ClassFieldDefinition::AssignedInBody { .. } => {
                 Some(PysaClassFieldDeclaration::AssignedInBody)
             }
-            ClassFieldDefinition::DefinedWithoutAssign { .. } => {
+            ClassFieldDefinition::NestedClass { .. }
+            | ClassFieldDefinition::DefinedWithoutAssign { .. } => {
+                // TODO: we handled NestedClass this way for backward
+                // compatibility after a Pyrefly refactor. Should it be modeled
+                // differently?
                 Some(PysaClassFieldDeclaration::DefinedWithoutAssign)
             }
             ClassFieldDefinition::DefinedInMethod { .. } => {

@@ -375,7 +375,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(_) => overload
                         .1
                         .signature
-                        .split_first_param()
+                        .split_first_param(&mut Owner::new())
                         .map(|(_, signature)| signature)
                         .unwrap_or(overload.1.signature),
                     None => overload.1.signature,

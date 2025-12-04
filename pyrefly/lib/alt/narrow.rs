@@ -79,7 +79,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    fn disjoint_base<'b>(&'b self, t: &'b Type) -> &'b Class {
+    pub fn disjoint_base<'b>(&'b self, t: &'b Type) -> &'b Class {
         // TODO: Implement the full disjoint base spec: https://peps.python.org/pep-0800/#specification.
         match t {
             Type::ClassType(cls)

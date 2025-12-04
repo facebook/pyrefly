@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_types::types::Union;
-use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
@@ -50,14 +50,8 @@ use crate::types::types::Type;
 // We need to visit the types that we know are required to be visited for variance inference, and appear in the context of a class with type variables.
 // For example, SelfType is intentionally skipped and should not be visited because it should not be included in the variance calculation.
 
-#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default, VisitMut)]
 pub struct VarianceMap(SmallMap<Name, Variance>);
-
-impl VisitMut<Type> for VarianceMap {
-    fn recurse_mut(&mut self, _visitor: &mut dyn FnMut(&mut Type)) {
-        // No-op: VarianceMap does not contain any Type
-    }
-}
 
 impl Display for VarianceMap {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
@@ -237,13 +231,15 @@ fn on_class(
         if let Some((ty, _, read_only)) = field.for_variance_inference() {
             // TODO: We need a much better way to distinguish between fields and methods than this
             // currently, class field representation isn't good enough but we need to fix that soon
-            let variance =
-                if ty.is_function_type() || is_private_field(name) || read_only || field.is_final()
-                {
-                    Variance::Covariant
-                } else {
-                    Variance::Invariant
-                };
+            let variance = if ty.is_toplevel_callable()
+                || is_private_field(name)
+                || read_only
+                || field.is_final()
+            {
+                Variance::Covariant
+            } else {
+                Variance::Invariant
+            };
             on_type(variance, true, ty, on_edge, on_var);
         }
     }

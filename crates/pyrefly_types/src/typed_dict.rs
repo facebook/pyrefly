@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::LazyLock;
+
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
@@ -19,7 +21,9 @@ use crate::types::Substitution;
 use crate::types::TArgs;
 use crate::types::Type;
 
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Hash)]
+#[derive(
+    Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq, Hash, PartialOrd, Ord
+)]
 pub struct TypedDictField {
     pub ty: Type,
     pub required: bool,
@@ -42,18 +46,15 @@ impl TypedDictField {
     }
 }
 
-#[derive(Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct TypedDict {
+#[derive(
+    Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
+)]
+pub struct TypedDictInner {
     class: Class,
     args: TArgs,
 }
 
-impl TypedDict {
-    pub fn new(class: Class, args: TArgs) -> Self {
-        Self { class, args }
-    }
-
+impl TypedDictInner {
     pub fn qname(&self) -> &QName {
         self.class.qname()
     }
@@ -75,7 +76,47 @@ impl TypedDict {
     }
 
     pub fn to_type(self) -> Type {
+        Type::TypedDict(TypedDict::TypedDict(self))
+    }
+}
+
+#[derive(
+    Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
+)]
+pub struct AnonymousTypedDictInner {
+    pub fields: Vec<(Name, TypedDictField)>,
+    pub value_type: Type,
+}
+
+#[derive(
+    Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash, TypeEq, Visit, VisitMut
+)]
+pub enum TypedDict {
+    TypedDict(TypedDictInner),
+    Anonymous(Box<AnonymousTypedDictInner>),
+}
+
+// When we get the name of a class-based typed dict we borrow the class's name, so we need
+// a name that we can borrow for anonymous typed dicts
+// This is a lazily initialized value, Name::new normally can't be used as the RHS of a static
+static ANONYMOUS_TYPED_DICT: LazyLock<Name> = LazyLock::new(|| Name::new("<anonymous>"));
+
+impl TypedDict {
+    pub fn new(class: Class, args: TArgs) -> Self {
+        Self::TypedDict(TypedDictInner { class, args })
+    }
+
+    pub fn to_type(self) -> Type {
         Type::TypedDict(self)
+    }
+
+    // This is just a placeholder to reduce refactoring for existing code
+    // We should consider showing the anonymous typed dicts like `{k1: v1, k2: v2}`
+    pub fn name(&self) -> &Name {
+        match self {
+            Self::TypedDict(inner) => inner.name(),
+            Self::Anonymous(_) => &ANONYMOUS_TYPED_DICT,
+        }
     }
 }
 

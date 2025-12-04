@@ -337,6 +337,122 @@ Point = namedtuple('Point', ['x', 'y'])
 );
 
 exported_class_testcase!(
+    test_export_typed_dict,
+    r#"
+from typing import TypedDict
+class Point(TypedDict):
+    x: int
+    y: int
+"#,
+    &|context: &ModuleContext| {
+        ClassDefinition {
+            class_id: ClassId::from_int(0),
+            name: "Point".to_owned(),
+            bases: vec![get_class_ref(
+                "_typeshed._type_checker_internals",
+                "TypedDictFallback",
+                context,
+            )],
+            mro: PysaClassMro::Resolved(vec![
+                get_class_ref(
+                    "_typeshed._type_checker_internals",
+                    "TypedDictFallback",
+                    context,
+                ),
+                get_class_ref("typing", "Mapping", context),
+                get_class_ref("typing", "Collection", context),
+                get_class_ref("typing", "Iterable", context),
+                get_class_ref("typing", "Container", context),
+            ]),
+            parent: ScopeParent::TopLevel,
+            is_synthesized: false,
+            is_dataclass: false,
+            is_named_tuple: false,
+            is_typed_dict: true,
+            fields: HashMap::from([
+                (
+                    "x".into(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.int(), context),
+                        explicit_annotation: Some("int".to_owned()),
+                        location: Some(create_location(4, 5, 4, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+                (
+                    "y".into(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.int(), context),
+                        explicit_annotation: Some("int".to_owned()),
+                        location: Some(create_location(5, 5, 5, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+            ]),
+            decorator_callees: HashMap::new(),
+        }
+    },
+);
+
+exported_class_testcase!(
+    test_export_non_total_typed_dict,
+    r#"
+from typing import TypedDict
+class Point(TypedDict, total=False):
+    x: int
+    y: int
+"#,
+    &|context: &ModuleContext| {
+        ClassDefinition {
+            class_id: ClassId::from_int(0),
+            name: "Point".to_owned(),
+            bases: vec![get_class_ref(
+                "_typeshed._type_checker_internals",
+                "TypedDictFallback",
+                context,
+            )],
+            mro: PysaClassMro::Resolved(vec![
+                get_class_ref(
+                    "_typeshed._type_checker_internals",
+                    "TypedDictFallback",
+                    context,
+                ),
+                get_class_ref("typing", "Mapping", context),
+                get_class_ref("typing", "Collection", context),
+                get_class_ref("typing", "Iterable", context),
+                get_class_ref("typing", "Container", context),
+            ]),
+            parent: ScopeParent::TopLevel,
+            is_synthesized: false,
+            is_dataclass: false,
+            is_named_tuple: false,
+            is_typed_dict: true,
+            fields: HashMap::from([
+                (
+                    "x".into(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.int(), context),
+                        explicit_annotation: Some("int".to_owned()),
+                        location: Some(create_location(4, 5, 4, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+                (
+                    "y".into(),
+                    PysaClassField {
+                        type_: PysaType::from_class_type(context.stdlib.int(), context),
+                        explicit_annotation: Some("int".to_owned()),
+                        location: Some(create_location(5, 5, 5, 6)),
+                        declaration_kind: Some(PysaClassFieldDeclaration::DeclaredByAnnotation),
+                    },
+                ),
+            ]),
+            decorator_callees: HashMap::new(),
+        }
+    },
+);
+
+exported_class_testcase!(
     test_export_typing_namedtuple_class,
     r#"
 import typing
@@ -565,6 +681,14 @@ class Foo:
                     },
                 ),
             ]))
+            .with_decorator_callees(HashMap::from([(
+                create_location(3, 2, 3, 11),
+                vec![Target::Function(get_function_ref(
+                    "dataclasses",
+                    "dataclass",
+                    context,
+                ))],
+            )]))
     },
 );
 

@@ -68,11 +68,11 @@ impl SourceDatabase for MapDatabase {
 
     fn lookup(
         &self,
-        module: &ModuleName,
+        module: ModuleName,
         _: Option<&Path>,
         style: Option<ModuleStyle>,
     ) -> Option<ModulePath> {
-        let paths = self.0.get(module)?;
+        let paths = self.0.get(&module)?;
         let style = style.unwrap_or(ModuleStyle::Interface);
         if let Some(result) = paths.iter().find(|p| p.style() == style) {
             return Some(result.dupe());
@@ -80,12 +80,12 @@ impl SourceDatabase for MapDatabase {
         Some(paths.last().dupe())
     }
 
-    fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle> {
+    fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle> {
         let (name, _) = self
             .0
             .iter()
-            .find(|(_, paths)| paths.iter().any(|p| p == &module_path))?;
-        Some(Handle::new(name.dupe(), module_path, self.1.dupe()))
+            .find(|(_, paths)| paths.iter().any(|p| p == module_path))?;
+        Some(Handle::new(name.dupe(), module_path.dupe(), self.1.dupe()))
     }
 
     fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {

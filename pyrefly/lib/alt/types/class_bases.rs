@@ -14,6 +14,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_util::display::commas_iter;
 use ruff_python_ast::Expr;
 use ruff_text_size::Ranged;
@@ -282,14 +283,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // class ancestors are represented as ClassType all over the code base, and changing this
                             // would be quite painful. So we convert TypedDict to ClassType in this one spot. Please do
                             // not do this anywhere else.
-                            Some((
-                                ClassType::new(
-                                    typed_dict.class_object().dupe(),
-                                    typed_dict.targs().clone(),
-                                ),
-                                self.get_base_types_for_class(typed_dict.class_object()),
-                                range,
-                            ))
+                            match typed_dict {
+                                TypedDict::TypedDict(inner) => Some((
+                                    ClassType::new(
+                                        inner.class_object().dupe(),
+                                        inner.targs().clone(),
+                                    ),
+                                    self.get_base_types_for_class(inner.class_object()),
+                                    range,
+                                )),
+                                TypedDict::Anonymous(_) => {
+                                    // Anonymous TypedDict cannot be used as a base class
+                                    None
+                                }
+                            }
                         }
                     }
                     (_, _) => None,

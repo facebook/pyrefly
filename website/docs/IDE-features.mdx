@@ -71,6 +71,19 @@ On a method, navigate to all reimplementations.
 />
 ---
 
+### [Move/rename file](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_didRename)
+
+When moving or renaming a file, Pyrefly will do it's best to rename all references to it.
+<video
+  src="/videos/move-file.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
 
 ### [Find references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references)
 
@@ -241,8 +254,20 @@ We reuse Pyright's `python.analysis.inlayHints.<>` settings for backwards compat
 You can turn inlay hints on or off using the [VSCode Setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints) `editor.inlayHints.enabled`.
 
 
+Inlay hints can be double clicked to insert them as an annotation.
 <video
-  src="/videos/inlay-hints.mp4"
+  src="/videos/double-click-inlay-hint.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Go-to-definition can be used on a type in an inlay hint to jump its definition. This works even if the type isn't explicitly imported by the current file.
+<video
+  src="/videos/cmd-click-inlay-hint.mp4"
   width="720"
   muted
   loop

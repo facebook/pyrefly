@@ -14,6 +14,7 @@ use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
@@ -29,6 +30,7 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use serde::Serialize;
+use starlark_map::Hashed;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::decorated_function::DecoratedFunction;
@@ -128,30 +130,6 @@ impl FunctionRef {
         }
     }
 
-    pub fn from_find_definition_item_with_docstring(
-        item: &FindDefinitionItemWithDocstring,
-        function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
-        context: &ModuleContext,
-    ) -> Option<Self> {
-        // TODO: For overloads, return the last definition instead of the one from go-to-definitions.
-        let display_range = item.module.display_range(item.definition_range);
-        let function_id = FunctionId::Function {
-            location: PysaLocation::new(display_range),
-        };
-        let module_id = context
-            .module_ids
-            .get(ModuleKey::from_module(&item.module))
-            .unwrap();
-        function_base_definitions
-            .get(module_id, &function_id)
-            .map(|function_base_definition| FunctionRef {
-                module_id,
-                module_name: item.module.name(),
-                function_id: function_id.clone(),
-                function_name: function_base_definition.name.clone(),
-            })
-    }
-
     pub fn get_decorated_target(self) -> Option<Self> {
         match self {
             FunctionRef {
@@ -216,7 +194,8 @@ pub struct FunctionSignature {
     pub return_annotation: PysaType,
 }
 
-/// Only store memory-efficient information from `FunctionDefinition`
+/// Represents information about a function definition, collected in a pre-analysis step.
+/// See `FunctionDefinition` for the type exported to Pysa. This only store memory-efficient information.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FunctionBaseDefinition {
     pub name: Name,
@@ -353,10 +332,10 @@ impl<GenericFunctionDefinition> WholeProgramFunctionDefinitions<GenericFunctionD
             .and_then(|functions| functions.0.get(function_id))
     }
 
-    pub fn get_for_module<'a>(
-        &'a self,
+    pub fn get_for_module(
+        &self,
         module_id: ModuleId,
-    ) -> Option<&'a ModuleFunctionDefinitions<GenericFunctionDefinition>> {
+    ) -> Option<&ModuleFunctionDefinitions<GenericFunctionDefinition>> {
         self.0.get(&module_id)
     }
 }
@@ -645,6 +624,26 @@ impl FunctionNode {
         } else {
             None
         }
+    }
+
+    pub fn exported_function_from_definition_item_with_docstring<'a>(
+        item: &FindDefinitionItemWithDocstring,
+        context: &ModuleContext<'a>,
+    ) -> Option<(Self, ModuleContext<'a>)> {
+        let handle = Handle::new(
+            item.module.name(),
+            item.module.path().dupe(),
+            context.handle.sys_info().dupe(),
+        );
+        let context =
+            ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
+        let key_decorated_function =
+            KeyDecoratedFunction(ShortIdentifier::from_text_range(item.definition_range));
+        context
+            .bindings
+            .key_to_idx_hashed_opt(Hashed::new(&key_decorated_function))
+            .map(|idx| get_exported_decorated_function(idx, &context))
+            .map(|exported_function| (FunctionNode::DecoratedFunction(exported_function), context))
     }
 
     pub fn as_function_ref(&self, context: &ModuleContext) -> FunctionRef {

@@ -1554,6 +1554,34 @@ C.x = 43  # E: This field is marked as Final
 );
 
 testcase!(
+    test_final_qualifier_with_inherited_type,
+    r#"
+from typing import Final
+class Parent:
+    x: float = 1
+class Child(Parent):
+    x: Final = 2  # E: `Child.x` is read-only, but `Parent.x` is read-write
+child = Child()
+child.x = 3.0  # E: Cannot set field `x`
+    "#,
+);
+
+testcase!(
+    test_inherited_annotation_with_tuple_unpacking,
+    r#"
+from typing import assert_type
+class Parent:
+    x: float
+    y: float
+class Child(Parent):
+    x, y = 3, 4
+child = Child()
+assert_type(child.x, float)
+assert_type(child.y, float)
+    "#,
+);
+
+testcase!(
     test_attr_cast,
     r#"
 from typing import Self, cast, Any, assert_type

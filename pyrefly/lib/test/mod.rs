@@ -66,6 +66,7 @@ mod type_alias;
 mod type_var_tuple;
 mod typed_dict;
 mod typing_self;
+mod unnecessary_comparison;
 mod untyped_def_behaviors;
 pub mod util;
 mod var_resolution;

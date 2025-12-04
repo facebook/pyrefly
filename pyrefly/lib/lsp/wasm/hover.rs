@@ -362,7 +362,7 @@ pub fn get_hover(
         .next()
     {
         let mut kind = metadata.symbol_kind();
-        if matches!(kind, Some(SymbolKind::Attribute)) && type_.is_function_type() {
+        if matches!(kind, Some(SymbolKind::Attribute)) && type_.is_toplevel_callable() {
             kind = Some(SymbolKind::Method);
         }
         (

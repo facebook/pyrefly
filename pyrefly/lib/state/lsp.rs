@@ -103,7 +103,6 @@ pub struct InlayHintConfig {
     #[serde(default = "default_true")]
     pub function_return_types: bool,
     #[serde(default)]
-    #[expect(unused)]
     pub pytest_parameters: bool,
     #[serde(default = "default_true")]
     pub variable_types: bool,
@@ -1515,7 +1514,41 @@ impl<'a> Transaction<'a> {
             }) => {
                 self.find_definition_for_attribute(handle, base_range, identifier.id(), preference)
             }
-            None => self.find_definition_for_operator(handle, &covering_nodes, preference),
+            None => {
+                // Check if this is a None literal, if so, resolve to NoneType class
+                if covering_nodes
+                    .iter()
+                    .any(|node| matches!(node, AnyNodeRef::ExprNoneLiteral(_)))
+                    && let Some(res) = self.find_definition_for_none(handle)
+                {
+                    return res;
+                }
+                // Fall back to operator handling
+                self.find_definition_for_operator(handle, &covering_nodes, preference)
+            }
+        }
+    }
+
+    /// Get the definition we should point at for `None`.
+    fn find_definition_for_none(
+        &self,
+        handle: &Handle,
+    ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
+        let stdlib = self.get_stdlib(handle);
+        let none_type = stdlib.none_type().clone().to_type();
+        let symbol_def_paths = collect_symbol_def_paths(&none_type);
+        if symbol_def_paths.is_empty() {
+            None
+        } else {
+            Some(symbol_def_paths.map(|(qname, _)| {
+                let module_info = qname.module().clone();
+                FindDefinitionItemWithDocstring {
+                    metadata: DefinitionMetadata::VariableOrAttribute(Some(SymbolKind::Class)),
+                    module: module_info,
+                    definition_range: qname.range(),
+                    docstring_range: None,
+                }
+            }))
         }
     }
 
@@ -1697,13 +1730,37 @@ impl<'a> Transaction<'a> {
         false
     }
 
+    fn is_source_file(&self, module: &Module, handle: &Handle) -> bool {
+        let config = self.get_config(handle);
+        let module_path = module.path();
+
+        if let Some(config) = config {
+            // Editable packages are installed in site-packages (via .pth files) but their
+            // source code resides in the search_path location. A module is from an editable
+            // package if its path starts with an explicitly configured search_path entry.
+            // We only check search_path_from_file (user-configured paths) and not import_root
+            // (auto-inferred paths), because import_root defaults to the project root and
+            // would incorrectly match all modules.
+            for search_path in &config.search_path_from_file {
+                if module_path.as_path().starts_with(search_path) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     pub fn prepare_rename(&self, handle: &Handle, position: TextSize) -> Option<TextRange> {
         let identifier_context = self.identifier_at(handle, position);
 
         let definitions = self.find_definition(handle, position, FindPreference::default());
 
         for FindDefinitionItemWithDocstring { module, .. } in definitions {
-            if self.is_third_party_module(&module, handle) {
+            // Block rename only if it's third-party AND not an editable install/source file.
+
+            if self.is_third_party_module(&module, handle) && !self.is_source_file(&module, handle)
+            {
                 return None;
             }
         }
@@ -2202,19 +2259,9 @@ impl<'a> Transaction<'a> {
                     (insert_text, Some(vec![import_text_edit]), module_name)
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
-                let (label, label_details) = if supports_completion_item_details {
-                    (
-                        name,
-                        Some(CompletionItemLabelDetails {
-                            detail: Some(auto_import_label_detail),
-                            description: Some(module_description),
-                        }),
-                    )
-                } else {
-                    (format!("{name}{auto_import_label_detail}"), None)
-                };
+
                 completions.push(CompletionItem {
-                    label,
+                    label: name,
                     detail: Some(insert_text),
                     kind: export
                         .symbol_kind
@@ -2222,7 +2269,12 @@ impl<'a> Transaction<'a> {
                             Some(k.to_lsp_completion_item_kind())
                         }),
                     additional_text_edits,
-                    label_details,
+                    label_details: supports_completion_item_details.then_some(
+                        CompletionItemLabelDetails {
+                            detail: Some(auto_import_label_detail),
+                            description: Some(module_description),
+                        },
+                    ),
                     tags: if export.deprecation.is_some() {
                         Some(vec![CompletionItemTag::DEPRECATED])
                     } else {
@@ -2250,23 +2302,18 @@ impl<'a> Transaction<'a> {
                         (insert_text, Some(vec![import_text_edit]))
                     };
                     let auto_import_label_detail = format!(" (import {module_name_str})");
-                    let (label, label_details) = if supports_completion_item_details {
-                        (
-                            module_name_str.clone(),
-                            Some(CompletionItemLabelDetails {
-                                detail: Some(auto_import_label_detail),
-                                description: Some(module_name_str.clone()),
-                            }),
-                        )
-                    } else {
-                        (format!("{module_name_str}{auto_import_label_detail}"), None)
-                    };
+
                     completions.push(CompletionItem {
-                        label,
+                        label: module_name_str.clone(),
                         detail: Some(insert_text),
                         kind: Some(CompletionItemKind::MODULE),
                         additional_text_edits,
-                        label_details,
+                        label_details: supports_completion_item_details.then_some(
+                            CompletionItemLabelDetails {
+                                detail: Some(auto_import_label_detail),
+                                description: Some(module_name_str),
+                            },
+                        ),
                         ..Default::default()
                     });
                 }
