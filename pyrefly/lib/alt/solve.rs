@@ -4028,6 +4028,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "Type variable bounds and constraints must be concrete".to_owned(),
             );
         }
+        if type_form_context == TypeFormContext::TypeArgumentForType {
+            if let Some(cls) = match &ty {
+                Type::ClassType(cls) | Type::SelfType(cls) => Some(cls.class_object().clone()),
+                Type::ClassDef(cls) => Some(cls.clone()),
+                _ => None,
+            } {
+                if self.get_metadata_for_class(&cls).is_new_type() {
+                    return self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        format!(
+                            "NewType `{}` is not a class and cannot be used with `type` or `Type`",
+                            cls.name()
+                        ),
+                    );
+                }
+            }
+        }
         ty
     }
 

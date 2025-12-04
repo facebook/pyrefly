@@ -137,6 +137,22 @@ y: type[Any] = Foo  # E: `type[Foo]` is not assignable to `type[Any]`
 );
 
 testcase!(
+    test_new_type_type_argument,
+    r#"
+from typing import NewType, Type
+
+Thing = NewType("Thing", int)
+ThingType = type[Thing]  # E: NewType `Thing` is not a class and cannot be used with `type` or `Type`
+OtherThingType = Type[Thing]  # E: NewType `Thing` is not a class and cannot be used with `type` or `Type`
+
+mapping: dict[int, ThingType] = {1: Thing}
+
+def func(x: ThingType) -> None: ...
+func(Thing)
+    "#,
+);
+
+testcase!(
     test_new_type_runtime_attrs,
     r#"
 from typing import NewType

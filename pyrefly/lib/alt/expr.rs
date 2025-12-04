@@ -1898,7 +1898,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     };
                     // TODO: Validate that `targ` refers to a "valid in-scope class or TypeVar"
                     // (https://typing.readthedocs.io/en/latest/spec/annotations.html#type-and-annotation-expressions)
-                    Type::type_form(Type::type_form(targ))
+                    // If the type argument is an error, propagate it to avoid cascading errors.
+                    if targ.is_error() {
+                        targ
+                    } else {
+                        Type::type_form(Type::type_form(targ))
+                    }
                 }
                 // TODO: pyre_extensions.PyreReadOnly is a non-standard type system extension that marks read-only
                 // objects. We don't support it yet.
