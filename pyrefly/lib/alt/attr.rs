@@ -1110,6 +1110,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return None;
         }
+        if attr_name == &dunder::CALL {
+            if let Some(attr) = self.synthetic_constructor_call_attribute(cls) {
+                return Some(attr);
+            }
+        }
         let metadata = self.get_metadata_for_class(cls.class_object());
         let metaclass = metadata.metaclass(self.stdlib);
         let attr = self.get_metaclass_attribute(cls, metaclass, attr_name)?;
@@ -1257,6 +1262,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match attr {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None => {
+                        if attr_name == &dunder::CALL {
+                            if let Some(attr) = self.synthetic_constructor_call_attribute(class) {
+                                acc.found_class_attribute(attr, base);
+                                return;
+                            }
+                        }
                         // Classes are instances of their metaclass, which defaults to `builtins.type`.
                         // NOTE(grievejia): This lookup serves as fallback for normal class attribute lookup for regular
                         // attributes, but for magic dunder methods it needs to supersede normal class attribute lookup.
@@ -1377,6 +1388,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
+    }
+
+    fn synthetic_constructor_call_attribute(&self, class: &ClassBase) -> Option<ClassAttribute> {
+        let cls = match class {
+            ClassBase::ClassDef(cls)
+            | ClassBase::ClassType(cls)
+            | ClassBase::SelfType(cls)
+            | ClassBase::Quantified(_, cls) => cls.clone(),
+            ClassBase::Protocol(..) => return None,
+        };
+        Some(ClassAttribute::read_write(
+            self.constructor_to_callable(&cls),
+        ))
     }
 
     /// A magic dunder attribute differs from a normal attribute in one crucial aspect:
