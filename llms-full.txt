@@ -331,7 +331,7 @@ If you experience issues with the Pyrefly extension, please create an [issue](ht
 ## Other Editors
 Support for other editors is community-driven. If you would like to set this up, please contribute.
 
-### Windsurf, Cursor and Kiro
+### Antigravity, Windsurf, Cursor and Kiro
 
 You can use Pyrefly in your favorite AI editor that supports [OpenVSX](https://open-vsx.org/extension/meta/pyrefly) extensions. Search for "Pyrefly" in the extension marketplace and install it. Similar to VSCode, Pyrefly will automatically activate when you open a Python file.
 
