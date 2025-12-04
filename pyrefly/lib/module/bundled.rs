@@ -61,6 +61,12 @@ pub fn create_bundled_stub_config(
     config_file
 }
 
+/// Trait for managing bundled Python stub files (type hints) that are embedded in the binary.
+///
+/// This trait provides methods for accessing bundled stub files, such as those from typeshed,
+/// which are included with the type checker rather than loaded from the file system.
+/// Implementations can find modules by name, load their contents, and materialize the bundled
+/// files to disk when needed for inspection or debugging.
 pub trait BundledStub {
     fn new() -> anyhow::Result<Self>
     where
@@ -84,11 +90,16 @@ pub trait BundledStub {
         }
         Ok(temp_dir)
     }
-    fn write(&self, temp_dir: &Path) -> anyhow::Result<()> {
-        fs_anyhow::create_dir_all(temp_dir)?;
+
+    /// Writes all bundled stub files to a directory on disk.
+    ///
+    /// File writes are atomic (using temp files and rename) to prevent corruption.
+    /// Files are made read-only after writing as a guardrail.
+    fn write(&self, output_dir: &Path) -> anyhow::Result<()> {
+        fs_anyhow::create_dir_all(output_dir)?;
 
         for (relative_path, contents) in self.load_map() {
-            let mut file_path = temp_dir.to_owned();
+            let mut file_path = output_dir.to_owned();
             file_path.push(relative_path);
 
             if let Some(parent) = file_path.parent() {
@@ -139,9 +150,12 @@ pub trait BundledStub {
 
         Self::config()
             .as_ref()
-            .write_to_toml_in_directory(temp_dir)
+            .write_to_toml_in_directory(output_dir)
             .with_context(|| {
-                format!("Failed to write pyrefly config at {:?}", temp_dir.display())
+                format!(
+                    "Failed to write pyrefly config at {:?}",
+                    output_dir.display()
+                )
             })?;
         Ok(())
     }

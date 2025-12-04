@@ -8,7 +8,6 @@
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
-use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::ordered_map::OrderedMap;
@@ -20,7 +19,9 @@ use crate::tuple::Tuple;
 use crate::types::CalleeKind;
 use crate::types::Type;
 
-#[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash, Visit, VisitMut
+)]
 pub struct TypeMap(pub OrderedMap<Name, Type>);
 
 impl TypeMap {
@@ -37,22 +38,6 @@ impl TypeMap {
             Type::Literal(Lit::Str(s)) => Some(&**s),
             _ => None,
         })
-    }
-}
-
-impl Visit<Type> for TypeMap {
-    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
-        for (_, ty) in self.0.iter() {
-            ty.visit(f);
-        }
-    }
-}
-
-impl VisitMut<Type> for TypeMap {
-    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
-        for (_, ty) in self.0.iter_mut() {
-            ty.visit_mut(f);
-        }
     }
 }
 
@@ -78,17 +63,15 @@ impl KwCall {
 /// See https://typing.python.org/en/latest/spec/dataclasses.html#dataclass-transform-parameters.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
-pub struct DataclassTransformKeywords {
+pub struct DataclassTransformMetadata {
     pub eq_default: bool,
     pub order_default: bool,
     pub kw_only_default: bool,
     pub frozen_default: bool,
     pub field_specifiers: Vec<CalleeKind>,
-    /// Default converter to apply to fields that don't have an explicit converter.
-    pub _converter_default: Option<Type>,
 }
 
-impl DataclassTransformKeywords {
+impl DataclassTransformMetadata {
     const EQ_DEFAULT: Name = Name::new_static("eq_default");
     const ORDER_DEFAULT: Name = Name::new_static("order_default");
     const KW_ONLY_DEFAULT: Name = Name::new_static("kw_only_default");
@@ -107,12 +90,43 @@ impl DataclassTransformKeywords {
                 }
                 _ => Vec::new(),
             },
-            _converter_default: None,
         }
     }
 
     pub fn new() -> Self {
         Self::from_type_map(&TypeMap::new())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, TypeEq)]
+pub struct ConverterMap(OrderedMap<Type, Type>);
+
+impl ConverterMap {
+    pub fn new() -> Self {
+        Self(OrderedMap::new())
+    }
+
+    pub fn from_map(map: OrderedMap<Type, Type>) -> Self {
+        Self(map)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get(&self, key: &Type) -> Option<&Type> {
+        self.0.get(key)
+    }
+}
+
+impl VisitMut<Type> for ConverterMap {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        // The converter map is built from static type information, so the keys shouldn't contain
+        // anything interesting for visiting.
+        for value in self.0.values_mut() {
+            value.visit_mut(f);
+        }
     }
 }
 
@@ -205,7 +219,7 @@ impl DataclassKeywords {
     const UNSAFE_HASH: Name = Name::new_static("unsafe_hash");
     const SLOTS: Name = Name::new_static("slots");
 
-    pub fn from_type_map(map: &TypeMap, defaults: &DataclassTransformKeywords) -> Self {
+    pub fn from_type_map(map: &TypeMap, defaults: &DataclassTransformMetadata) -> Self {
         Self {
             init: map.get_bool(&Self::INIT).unwrap_or(true),
             order: map.get_bool(&Self::ORDER).unwrap_or(defaults.order_default),
@@ -225,6 +239,6 @@ impl DataclassKeywords {
     }
 
     pub fn new() -> Self {
-        Self::from_type_map(&TypeMap::new(), &DataclassTransformKeywords::new())
+        Self::from_type_map(&TypeMap::new(), &DataclassTransformMetadata::new())
     }
 }

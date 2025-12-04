@@ -18,12 +18,15 @@ use pyrefly_types::callable::Function;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
+use pyrefly_types::class::ClassType;
+use pyrefly_types::keywords::ConverterMap;
 use pyrefly_types::keywords::DataclassFieldKeywords;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
+use starlark_map::ordered_map::OrderedMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -463,5 +466,72 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(le) = &keywords.le {
             emit_violation("le", le);
         }
+    }
+
+    fn insert_lax_conversion(
+        &self,
+        table: &mut OrderedMap<Type, Type>,
+        field_ty: &Type,
+        accepted_class_types: &[&ClassType],
+    ) {
+        let accepted_types: Vec<Type> = accepted_class_types
+            .iter()
+            .map(|cls| (*cls).clone().to_type())
+            .collect();
+        table.insert(field_ty.clone(), self.unions(accepted_types));
+    }
+
+    pub fn build_pydantic_lax_conversion_table(&self, field_types: &[Type]) -> ConverterMap {
+        let mut table = OrderedMap::new();
+
+        for field_ty in field_types {
+            if table.contains_key(field_ty) {
+                continue;
+            }
+
+            if let Type::ClassType(cls) = field_ty {
+                if cls == self.stdlib.bool() {
+                    self.insert_lax_conversion(
+                        &mut table,
+                        field_ty,
+                        &[
+                            self.stdlib.bool(),
+                            self.stdlib.int(),
+                            self.stdlib.float(),
+                            self.stdlib.str(),
+                            self.stdlib.decimal(),
+                        ],
+                    );
+                } else if cls == self.stdlib.int() {
+                    self.insert_lax_conversion(
+                        &mut table,
+                        field_ty,
+                        &[
+                            self.stdlib.int(),
+                            self.stdlib.bool(),
+                            self.stdlib.float(),
+                            self.stdlib.str(),
+                            self.stdlib.bytes(),
+                            self.stdlib.decimal(),
+                        ],
+                    );
+                } else if cls == self.stdlib.float() {
+                    self.insert_lax_conversion(
+                        &mut table,
+                        field_ty,
+                        &[
+                            self.stdlib.float(),
+                            self.stdlib.int(),
+                            self.stdlib.bool(),
+                            self.stdlib.str(),
+                            self.stdlib.bytes(),
+                            self.stdlib.decimal(),
+                        ],
+                    );
+                }
+            }
+        }
+
+        ConverterMap::from_map(table)
     }
 }

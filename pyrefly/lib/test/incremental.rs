@@ -85,7 +85,7 @@ impl Incremental {
                 ModulePath::memory(PathBuf::from(file)),
             );
         }
-        config.source_db = Some(Arc::new(Box::new(sourcedb)));
+        config.source_db = Some(ArcId::new(Box::new(sourcedb)));
         config.configure();
         let config = ArcId::new(config);
 

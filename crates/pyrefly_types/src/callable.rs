@@ -32,7 +32,7 @@ use vec1::vec1;
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::equality::TypeEq;
-use crate::keywords::DataclassTransformKeywords;
+use crate::keywords::DataclassTransformMetadata;
 use crate::type_output::TypeOutput;
 use crate::types::Type;
 
@@ -381,7 +381,7 @@ pub struct FuncFlags {
     /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
     /// `dataclass_transform` call. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
-    pub dataclass_transform_metadata: Option<DataclassTransformKeywords>,
+    pub dataclass_transform_metadata: Option<DataclassTransformMetadata>,
 }
 
 #[derive(Debug, Clone)]

@@ -324,16 +324,12 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_targs(class_type.targs())
             }
             Type::TypedDict(typed_dict) => {
-                output.write_str("TypedDict[")?;
                 output.write_qname(typed_dict.qname())?;
-                output.write_targs(typed_dict.targs())?;
-                output.write_str("]")
+                output.write_targs(typed_dict.targs())
             }
             Type::PartialTypedDict(typed_dict) => {
-                output.write_str("Partial[")?;
                 output.write_qname(typed_dict.qname())?;
-                output.write_targs(typed_dict.targs())?;
-                output.write_str("]")
+                output.write_targs(typed_dict.targs())
             }
             Type::TypeVar(t) => {
                 output.write_str("TypeVar[")?;
@@ -1449,7 +1445,7 @@ pub mod tests {
         let t = Type::None;
         let targs = TArgs::new(tparams.dupe(), vec![t]);
         let td = TypedDict::new(cls, targs);
-        assert_eq!(Type::TypedDict(td).to_string(), "TypedDict[C[None]]");
+        assert_eq!(Type::TypedDict(td).to_string(), "C[None]");
     }
 
     #[test]
@@ -1816,7 +1812,6 @@ def overloaded_func[T](
         let t = Type::TypedDict(td);
         let parts = get_parts(&t);
 
-        assert_output_contains(&parts, "TypedDict");
         assert_part_has_location(&parts, "MyTypedDict", "mymodule", 25);
     }
 
@@ -1963,7 +1958,6 @@ def overloaded_func[T](
         let t = Type::PartialTypedDict(td);
         let parts = get_parts(&t);
 
-        assert_output_contains(&parts, "Partial");
         assert_part_has_location(&parts, "MyTypedDict", "mymodule", 90);
     }
 }

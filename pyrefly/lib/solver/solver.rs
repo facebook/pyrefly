@@ -62,17 +62,20 @@ const INITIAL_GAS: Gas = Gas::new(1000);
 
 #[derive(Debug)]
 enum Variable {
-    /// A placeholder representing an unknown type parameter in a "partial
-    /// type". Used for empty containers.
+    /// A "partial type" (terminology borrowed from mypy) for an empty container.
     ///
-    /// Pyrefly only creates these for assignments, and will attempt to
+    /// Pyrefly only creates partial types for assignments, and will attempt to
     /// determine the type ("pin" it) using the first use of the name assigned.
-    Partial,
-    /// A placeholder representing a type parameter in a function call that is
-    /// not solved by the call. Pins on first use like Partial above but falls
-    /// back to the type parameter's default when forced and stores the type
-    /// parameter so we can check its restrictions.
-    Unsolved(Box<Quantified>),
+    ///
+    /// It will attempt to infer the type from the first downsteam use; if the
+    /// type cannot be determined it becomes `Any`.
+    PartialContained,
+    /// A "partial type" (see above) representing a type variable that was not
+    /// solved as part of a generic function or constructor call.
+    ///
+    /// Behaves similar to `PartialContained`, but it has the ability to use
+    /// the default type if the first use does not pin.
+    PartialQuantified(Box<Quantified>),
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
     Quantified(Box<Quantified>),
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
@@ -93,11 +96,11 @@ enum Variable {
 }
 
 impl Variable {
-    fn unsolved(q: &Quantified) -> Self {
+    fn finished(q: &Quantified) -> Self {
         if let Some(d) = q.default() {
             Variable::Answer(d.clone())
         } else {
-            Variable::Unsolved(Box::new(q.clone()))
+            Variable::PartialQuantified(Box::new(q.clone()))
         }
     }
 }
@@ -123,10 +126,10 @@ enum LoopBound {
 impl Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Variable::Partial => write!(f, "Partial"),
-            Variable::Unsolved(q) | Variable::Quantified(q) => {
-                let label = if matches!(self, Variable::Unsolved(_)) {
-                    "Unsolved"
+            Variable::PartialContained => write!(f, "PartialContained"),
+            Variable::PartialQuantified(q) | Variable::Quantified(q) => {
+                let label = if matches!(self, Variable::PartialQuantified(_)) {
+                    "PartialQuantified"
                 } else {
                     "Quantified"
                 };
@@ -340,10 +343,10 @@ impl Solver {
             Variable::Quantified(q) => {
                 *variable = Variable::Answer(q.as_gradual_type());
             }
-            Variable::Unsolved(q) => {
+            Variable::PartialQuantified(q) => {
                 *variable = Variable::Answer(default(q));
             }
-            Variable::Partial | Variable::Unwrap => {
+            Variable::PartialContained | Variable::Unwrap => {
                 *variable = Variable::Answer(Type::any_implicit());
             }
             Variable::Parameter => {
@@ -421,7 +424,7 @@ impl Solver {
             _ => {
                 let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
-                    Variable::Unsolved(q) => default(q),
+                    Variable::PartialQuantified(q) => default(q),
                     _ => Type::any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
@@ -541,7 +544,7 @@ impl Solver {
                         let lock = self.variables.lock();
                         let variable = lock.get(*v);
                         match &*variable {
-                            Variable::Unsolved(q) => {
+                            Variable::PartialQuantified(q) => {
                                 let erase = q.default.is_none();
                                 drop(variable);
                                 drop(lock);
@@ -590,9 +593,11 @@ impl Solver {
 
     /// Generate a fresh variable based on code that is unspecified inside a container,
     /// e.g. `[]` with an unknown type of element.
-    pub fn fresh_contained(&self, uniques: &UniqueFactory) -> Var {
+    pub fn fresh_partial_contained(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
-        self.variables.lock().insert_fresh(v, Variable::Partial);
+        self.variables
+            .lock()
+            .insert_fresh(v, Variable::PartialContained);
         v
     }
 
@@ -740,7 +745,7 @@ impl Solver {
                 }
                 Variable::Quantified(q) => {
                     if self.infer_with_first_use {
-                        *e = Variable::unsolved(q);
+                        *e = Variable::finished(q);
                     } else {
                         *e = Variable::Answer(default(q))
                     }
@@ -829,7 +834,7 @@ impl Solver {
                     Some(t)
                 } else if self.infer_with_first_use {
                     let v = Var::new(uniques);
-                    self.variables.lock().insert_fresh(v, Variable::unsolved(q));
+                    self.variables.lock().insert_fresh(v, Variable::finished(q));
                     Some(v.to_type())
                 } else {
                     Some(default(q))
@@ -1409,7 +1414,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(&t1, t2)
                     }
-                    Variable::Quantified(q) | Variable::Unsolved(q) => {
+                    Variable::Quantified(q) | Variable::PartialQuantified(q) => {
                         let name = q.name.clone();
                         let bound = q.restriction().as_type(self.type_order.stdlib());
                         drop(v1_ref);
@@ -1467,7 +1472,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Err(e) => Err(e),
                         }
                     }
-                    Variable::Partial | Variable::Unwrap | Variable::Recursive => {
+                    Variable::PartialContained | Variable::Unwrap | Variable::Recursive => {
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         Ok(())
@@ -1490,7 +1495,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(t1, &t2)
                     }
-                    Variable::Quantified(q) | Variable::Unsolved(q) => {
+                    Variable::Quantified(q) | Variable::PartialQuantified(q) => {
                         let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
                         let name = q.name.clone();
                         let bound = q.restriction().as_type(self.type_order.stdlib());
@@ -1523,7 +1528,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                         Ok(())
                     }
-                    Variable::Partial => {
+                    Variable::PartialContained => {
                         let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
                         drop(v2_ref);
                         variables.update(*v2, Variable::Answer(t1_p));

@@ -431,7 +431,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 );
                                 Type::any_implicit()
                             } else {
-                                self.solver().fresh_contained(self.uniques).to_type()
+                                self.solver().fresh_partial_contained(self.uniques).to_type()
                             }
                         },
                         |hint| hint.to_type(),
@@ -457,7 +457,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 );
                                 Type::any_implicit()
                             } else {
-                                self.solver().fresh_contained(self.uniques).to_type()
+                                self.solver().fresh_partial_contained(self.uniques).to_type()
                             }
                         },
                         |hint| hint.to_type(),
@@ -880,7 +880,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if !self.solver().infer_with_first_use {
                         Type::any_implicit()
                     } else {
-                        self.solver().fresh_contained(self.uniques).to_type()
+                        self.solver()
+                            .fresh_partial_contained(self.uniques)
+                            .to_type()
                     }
                 },
                 |ty| ty.to_type(),
@@ -890,7 +892,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if !self.solver().infer_with_first_use {
                         Type::any_implicit()
                     } else {
-                        self.solver().fresh_contained(self.uniques).to_type()
+                        self.solver()
+                            .fresh_partial_contained(self.uniques)
+                            .to_type()
                     }
                 },
                 |ty| ty.to_type(),

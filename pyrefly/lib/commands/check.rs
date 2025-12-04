@@ -418,24 +418,12 @@ impl Handles {
                 .insert(path.dupe());
         }
 
-        let mut errors = Vec::new();
-        let mut reloaded_configs = SmallSet::new();
-        for (config, files) in &configs {
-            match ConfigFile::requery_source_db(config, files) {
-                Ok(reload) if reload => {
-                    reloaded_configs.insert(config.dupe());
-                }
-                Err(error) => {
-                    errors.push(ConfigError::error(error));
-                }
-                _ => (),
-            }
-        }
+        let reloaded_configs = ConfigFile::query_source_db(&configs);
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
             .collect();
-        (result, reloaded_configs, errors)
+        (result, reloaded_configs, Vec::new())
     }
 
     fn update<'a>(

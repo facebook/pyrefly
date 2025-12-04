@@ -136,7 +136,7 @@ Definition Result:
 4 | def f(x: list[int], y: str, z: Literal[42]):
                                     ^
 Definition Result:
-253 | Literal: _SpecialForm
+249 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | yyy = f([1, 2, 3], "test", 42)
@@ -591,7 +591,7 @@ Definition Result:
 6 | foo: Literal[1] = 1
              ^
 Definition Result:
-253 | Literal: _SpecialForm
+249 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | bar = f([1], "", 42)
@@ -1681,4 +1681,16 @@ Definition Result:
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn goto_def_on_none_test() {
+    let code = r#"
+x = None
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // None should resolve to builtins.pyi
+    assert!(report.contains("Definition Result:"));
+    assert!(report.contains("None"));
 }

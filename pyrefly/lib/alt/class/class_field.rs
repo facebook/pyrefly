@@ -194,31 +194,6 @@ pub enum DescriptorBase {
     ClassDef(Class),
 }
 
-/// Helper type for going from binding information to the calculated class field.
-///
-/// TODO(stroxler): This type is mostly an artifact of a refactor, it used to be
-/// used in `BindingClassField`. We probably can eliminate it.
-enum RawClassFieldInitialization {
-    /// At the point where the field is declared, it does not have an initial value. This includes
-    /// fields declared but not initialized in the class body, and instance-only fields of
-    /// synthesized classes.
-    Uninitialized,
-    /// The field is set in a method *and declared nowhere else*. Consider:
-    ///   class A:
-    ///     x: int
-    ///     def __init__(self):
-    ///         self.x = 42
-    ///         self.y = 42
-    /// `x`'s initialization type is `Uninitialized`, whereas y's is `Method('__init__')`.
-    Method(MethodThatSetsAttr),
-    /// The field is declared and initialized to a value in the class body.
-    ///
-    /// If the value is from an assignment, stores the expression that the field is assigned to,
-    /// which is needed for some cases like dataclass fields. The `None` case is for fields that
-    /// have values which don't come from assignment (e.g. function defs, imports in a class body)
-    ClassBody(Option<Expr>),
-}
-
 /// Correctly analyzing which attributes are visible on class objects, as well
 /// as handling method binding correctly, requires distinguishing which fields
 /// are assigned values in the class body.
@@ -1070,81 +1045,84 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // It's a mess because we are relying on refs to fields that don't make sense for some cases,
         // which requires us having a place to store synthesized dummy values until we've refactored more.
         let value_storage = Owner::new();
-        let initial_value_storage = Owner::new();
-        let direct_annotation = self.annotation_of_field_definition(field_definition);
 
         let (
-            initial_value,
+            initialization,
             is_function_without_return_annotation,
             value_ty,
-            inherited_annotation,
+            annotation,
             is_inherited,
+            direct_annotation,
         ) = match field_definition {
-            ClassFieldDefinition::DeclaredByAnnotation { .. } => {
-                let initial_value =
-                    initial_value_storage.push(RawClassFieldInitialization::Uninitialized);
-                if let Some(annotated_ty) =
-                    direct_annotation.as_ref().and_then(|ann| ann.ty.clone())
+            ClassFieldDefinition::DeclaredByAnnotation { annotation: annot } => {
+                let direct_annotation = Some(self.get_idx(*annot).annotation.clone());
+                let initialization = if class.module_path().is_interface()
+                    || direct_annotation
+                        .as_ref()
+                        .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
                 {
-                    (
-                        initial_value,
-                        false,
-                        annotated_ty,
-                        None,
-                        if Ast::is_mangled_attr(name) {
-                            IsInherited::No
-                        } else {
-                            IsInherited::Maybe
-                        },
-                    )
+                    ClassFieldInitialization::Magic
                 } else {
-                    let value = value_storage
-                        .push(ExprOrBinding::Binding(Binding::Type(Type::any_implicit())));
-                    let (value_ty, inherited_annotation, is_inherited) =
-                        self.analyze_class_field_value(value, class, name, false, errors);
-                    (
-                        initial_value,
-                        false,
-                        value_ty,
-                        inherited_annotation,
-                        is_inherited,
-                    )
-                }
-            }
-            ClassFieldDefinition::AssignedInBody { value, .. } => {
-                let initial_value = initial_value_storage.push(
-                    RawClassFieldInitialization::ClassBody(match value {
-                        ExprOrBinding::Expr(e) => Some(e.clone()),
-                        ExprOrBinding::Binding(_) => None,
-                    }),
+                    ClassFieldInitialization::Uninitialized
+                };
+                let value =
+                    value_storage.push(ExprOrBinding::Binding(Binding::Type(Type::any_implicit())));
+                let (value_ty, annotation, is_inherited) = self.analyze_class_field_value(
+                    value,
+                    class,
+                    name,
+                    direct_annotation.as_ref(),
+                    false,
+                    errors,
                 );
-                if let Some(annotated_ty) =
-                    direct_annotation.as_ref().and_then(|ann| ann.ty.clone())
-                {
-                    (
-                        initial_value,
-                        false,
-                        annotated_ty,
-                        None,
-                        if Ast::is_mangled_attr(name) {
-                            IsInherited::No
-                        } else {
-                            IsInherited::Maybe
-                        },
-                    )
-                } else {
-                    let (value_ty, inherited_annotation, is_inherited) =
-                        self.analyze_class_field_value(value, class, name, false, errors);
-                    (
-                        initial_value,
-                        false,
-                        value_ty,
-                        inherited_annotation,
-                        is_inherited,
-                    )
-                }
+                (
+                    initialization,
+                    false,
+                    value_ty,
+                    annotation,
+                    is_inherited,
+                    direct_annotation,
+                )
             }
-            ClassFieldDefinition::DefinedInMethod { value, method, .. } => {
+            ClassFieldDefinition::AssignedInBody {
+                value,
+                annotation: annot,
+                ..
+            } => {
+                let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
+                let initialization = if let ExprOrBinding::Expr(e) = value
+                    && let Some(dm) = metadata.dataclass_metadata()
+                    && let Expr::Call(call) = e
+                {
+                    let flags = self.compute_dataclass_field_initialization(call, dm);
+                    ClassFieldInitialization::ClassBody(flags.map(Box::new))
+                } else {
+                    ClassFieldInitialization::ClassBody(None)
+                };
+                let (value_ty, annotation, is_inherited) = self.analyze_class_field_value(
+                    value,
+                    class,
+                    name,
+                    direct_annotation.as_ref(),
+                    false,
+                    errors,
+                );
+                (
+                    initialization,
+                    false,
+                    value_ty,
+                    annotation,
+                    is_inherited,
+                    direct_annotation,
+                )
+            }
+            ClassFieldDefinition::DefinedInMethod {
+                value,
+                method,
+                annotation: annot,
+                ..
+            } => {
+                let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
                 // Check if there's an inherited property field from a parent class
                 // If so, we should just use the parent's property instead of creating a new field
                 if !Ast::is_mangled_attr(name) {
@@ -1167,126 +1145,96 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
 
-                let initial_value =
-                    initial_value_storage.push(RawClassFieldInitialization::Method(method.clone()));
-                if let Some(annotated_ty) =
-                    direct_annotation.as_ref().and_then(|ann| ann.ty.clone())
-                {
-                    (
-                        initial_value,
-                        false,
-                        annotated_ty,
-                        None,
-                        if Ast::is_mangled_attr(name) {
-                            IsInherited::No
-                        } else {
-                            IsInherited::Maybe
-                        },
-                    )
-                } else {
-                    let (mut value_ty, inherited_annotation, is_inherited) =
-                        self.analyze_class_field_value(value, class, name, true, errors);
-                    if matches!(method.instance_or_class, MethodSelfKind::Instance) {
-                        value_ty = self.check_and_sanitize_type_parameters(
-                            class, value_ty, name, range, errors,
-                        );
-                    }
-                    (
-                        initial_value,
-                        false,
-                        value_ty,
-                        inherited_annotation,
-                        is_inherited,
-                    )
+                let initialization = match method.instance_or_class {
+                    MethodSelfKind::Class => ClassFieldInitialization::ClassBody(None),
+                    MethodSelfKind::Instance => ClassFieldInitialization::Method,
+                };
+                let (mut value_ty, annotation, is_inherited) = self.analyze_class_field_value(
+                    value,
+                    class,
+                    name,
+                    direct_annotation.as_ref(),
+                    true,
+                    errors,
+                );
+                if matches!(method.instance_or_class, MethodSelfKind::Instance) {
+                    value_ty = self
+                        .check_and_sanitize_type_parameters(class, value_ty, name, range, errors);
                 }
+                (
+                    initialization,
+                    false,
+                    value_ty,
+                    annotation,
+                    is_inherited,
+                    direct_annotation,
+                )
             }
             ClassFieldDefinition::MethodLike {
                 definition,
                 has_return_annotation,
             } => {
-                let initial_value =
-                    initial_value_storage.push(RawClassFieldInitialization::ClassBody(None));
-                let value =
-                    value_storage.push(ExprOrBinding::Binding(Binding::Forward(*definition)));
-                let (value_ty, inherited_annotation, is_inherited) =
-                    self.analyze_class_field_value(value, class, name, false, errors);
+                let initialization = ClassFieldInitialization::ClassBody(None);
+                // Evaluate the binding directly without analyzing inherited annotations
+                let binding = Binding::Forward(*definition);
+                let value_ty = Arc::unwrap_or_clone(self.solve_binding(&binding, errors)).into_ty();
                 (
-                    initial_value,
+                    initialization,
                     !has_return_annotation,
                     value_ty,
-                    inherited_annotation,
-                    is_inherited,
+                    None, // No annotation for methods
+                    IsInherited::Maybe,
+                    None,
+                )
+            }
+            ClassFieldDefinition::NestedClass { definition } => {
+                // Evaluate the binding directly without analyzing inherited annotations
+                let initialization = ClassFieldInitialization::ClassBody(None);
+                let binding = Binding::Forward(*definition);
+                let value_ty = Arc::unwrap_or_clone(self.solve_binding(&binding, errors)).into_ty();
+                (
+                    initialization,
+                    false,
+                    value_ty,
+                    None, // No annotation for nested classes
+                    IsInherited::Maybe,
+                    None,
                 )
             }
             ClassFieldDefinition::DefinedWithoutAssign { definition } => {
-                let initial_value =
-                    initial_value_storage.push(RawClassFieldInitialization::ClassBody(None));
+                let initialization = ClassFieldInitialization::ClassBody(None);
                 let value =
                     value_storage.push(ExprOrBinding::Binding(Binding::Forward(*definition)));
-                let (value_ty, inherited_annotation, is_inherited) =
-                    self.analyze_class_field_value(value, class, name, false, errors);
+                let (value_ty, annotation, is_inherited) =
+                    self.analyze_class_field_value(value, class, name, None, false, errors);
                 (
-                    initial_value,
+                    initialization,
                     false,
                     value_ty,
-                    inherited_annotation,
+                    annotation,
                     is_inherited,
+                    None,
                 )
             }
             ClassFieldDefinition::DeclaredWithoutAnnotation => {
                 // This is a field in a synthesized class with no information at all, treat it as Any.
-                let initial_value =
-                    initial_value_storage.push(RawClassFieldInitialization::Uninitialized);
-                let value =
-                    value_storage.push(ExprOrBinding::Binding(Binding::Type(Type::any_implicit())));
-                let (value_ty, inherited_annotation, is_inherited) =
-                    self.analyze_class_field_value(value, class, name, false, errors);
-                (
-                    initial_value,
-                    false,
-                    value_ty,
-                    inherited_annotation,
-                    is_inherited,
-                )
-            }
-        };
-
-        let initialization = match initial_value {
-            RawClassFieldInitialization::ClassBody(None) => {
-                ClassFieldInitialization::ClassBody(None)
-            }
-            RawClassFieldInitialization::ClassBody(Some(e)) => {
-                // If this field was created via a call to a dataclass field specifier, extract field flags from the call.
-                if let Some(dm) = metadata.dataclass_metadata()
-                    && let Expr::Call(call) = e
-                {
-                    let flags = self.compute_dataclass_field_initialization(call, dm);
-                    ClassFieldInitialization::ClassBody(flags.map(Box::new))
-                } else {
-                    ClassFieldInitialization::ClassBody(None)
-                }
-            }
-            RawClassFieldInitialization::Method(MethodThatSetsAttr {
-                instance_or_class: MethodSelfKind::Class,
-                ..
-            }) => ClassFieldInitialization::ClassBody(None),
-            RawClassFieldInitialization::Method(MethodThatSetsAttr {
-                instance_or_class: MethodSelfKind::Instance,
-                ..
-            }) => ClassFieldInitialization::Method,
-            RawClassFieldInitialization::Uninitialized => {
-                // We consider fields to be always-initialized if it's defined within stub files.
-                // See https://github.com/python/typeshed/pull/13875 for reasoning.
-                if class.module_path().is_interface()
-                    // We consider fields to be always-initialized if it's annotated explicitly with `ClassVar`.
-                    || direct_annotation
-                        .as_ref()
-                        .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
-                {
+                let initialization = if class.module_path().is_interface() {
                     ClassFieldInitialization::Magic
                 } else {
                     ClassFieldInitialization::Uninitialized
-                }
+                };
+                let value =
+                    value_storage.push(ExprOrBinding::Binding(Binding::Type(Type::any_implicit())));
+                let (value_ty, annotation, is_inherited) =
+                    self.analyze_class_field_value(value, class, name, None, false, errors);
+                (
+                    initialization,
+                    false,
+                    value_ty,
+                    annotation,
+                    is_inherited,
+                    None,
+                )
             }
         };
 
@@ -1301,20 +1249,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
 
-        let annotation = direct_annotation.as_ref().or(inherited_annotation.as_ref());
-        let read_only_reason = self.determine_read_only_reason(
-            name,
-            annotation,
-            &metadata,
-            &value_ty,
-            &initialization,
-            range,
-        );
+        let read_only_reason =
+            self.determine_read_only_reason(name, annotation.as_ref(), &metadata, field_definition);
 
         // Determine the final type, promoting literals when appropriate.
-        let ty = if let Some(ty) = annotation.and_then(|ann| ann.ty.as_ref()) {
-            ty.clone()
-        } else if matches!(read_only_reason, None | Some(ReadOnlyReason::NamedTuple))
+        let ty = if annotation
+            .as_ref()
+            .and_then(|ann| ann.ty.as_ref())
+            .is_none()
+            && matches!(read_only_reason, None | Some(ReadOnlyReason::NamedTuple))
             && value_ty.is_literal()
         {
             value_ty.promote_literals(self.stdlib)
@@ -1359,7 +1302,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             name,
             direct_annotation.as_ref(),
             &ty,
-            initial_value,
+            field_definition,
             descriptor.is_some(),
             range,
             errors,
@@ -1382,7 +1325,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_abstract = ty.is_abstract_method();
         let class_field = ClassField::new(
             ty,
-            direct_annotation,
+            annotation,
             initialization,
             read_only_reason,
             descriptor,
@@ -1394,11 +1337,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // *** Everything below here is for validation only and has no impact on downstream analysis ***
 
-        if let RawClassFieldInitialization::Method(MethodThatSetsAttr {
-            method_name,
-            recognized_attribute_defining_method,
-            instance_or_class: _,
-        }) = initial_value
+        if let ClassFieldDefinition::DefinedInMethod {
+            method:
+                MethodThatSetsAttr {
+                    method_name,
+                    recognized_attribute_defining_method,
+                    instance_or_class: _,
+                },
+            ..
+        } = field_definition
         {
             let mut defined_in_parent = false;
             let parents = metadata.base_class_objects();
@@ -1451,32 +1398,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_field
     }
 
-    fn annotation_of_field_definition(
-        &self,
-        field_definition: &ClassFieldDefinition,
-    ) -> Option<Annotation> {
-        match field_definition {
-            ClassFieldDefinition::DeclaredByAnnotation { annotation }
-            | ClassFieldDefinition::AssignedInBody {
-                annotation: Some(annotation),
-                ..
-            }
-            | ClassFieldDefinition::DefinedInMethod {
-                annotation: Some(annotation),
-                ..
-            } => Some(self.get_idx(*annotation).annotation.clone()),
-            ClassFieldDefinition::AssignedInBody {
-                annotation: None, ..
-            }
-            | ClassFieldDefinition::DefinedInMethod {
-                annotation: None, ..
-            }
-            | ClassFieldDefinition::DeclaredWithoutAnnotation
-            | ClassFieldDefinition::MethodLike { .. }
-            | ClassFieldDefinition::DefinedWithoutAssign { .. } => None,
-        }
-    }
-
     /// Helper to infer with an optional annotation as a hint and then expand
     pub fn attribute_expr_infer(
         &self,
@@ -1507,13 +1428,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         direct_annotation: Option<&Annotation>,
         ty: &Type,
-        initial_value: &RawClassFieldInitialization,
+        field_definition: &ClassFieldDefinition,
         is_descriptor: bool,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        let is_initialized_on_class_body =
-            matches!(initial_value, RawClassFieldInitialization::ClassBody(_));
+        let is_initialized_on_class_body = matches!(
+            field_definition,
+            ClassFieldDefinition::AssignedInBody { .. }
+                | ClassFieldDefinition::MethodLike { .. }
+                | ClassFieldDefinition::DefinedWithoutAssign { .. }
+        );
         self.get_enum_class_field_type(
             class,
             name,
@@ -1526,8 +1451,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
         .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
         .or_else(|| {
-            let initial_value_expr = match initial_value {
-                RawClassFieldInitialization::ClassBody(e) => e.as_ref(),
+            let initial_value_expr = match field_definition {
+                ClassFieldDefinition::AssignedInBody {
+                    value: ExprOrBinding::Expr(expr),
+                    ..
+                } => Some(expr),
                 _ => None,
             };
             self.get_django_field_type(ty, class, Some(name), initial_value_expr)
@@ -1539,13 +1467,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         annotation: Option<&Annotation>,
         metadata: &ClassMetadata,
-        ty: &Type,
-        initialization: &ClassFieldInitialization,
-        range: TextRange,
+        field_definition: &ClassFieldDefinition,
     ) -> Option<ReadOnlyReason> {
         if let Some(ann) = annotation {
-            // TODO: enable this for Final attrs that aren't initialized on the class
-            if ann.is_final() && matches!(initialization, ClassFieldInitialization::ClassBody(_)) {
+            // TODO: enable this for Final attrs that aren't initialized on the class;
+            // this is a hack to avoid throwing errors when the attribute is set in
+            // `__init__` because so far we lack the hooks to special-case that.
+            let is_class_body_init = !matches!(
+                field_definition,
+                ClassFieldDefinition::DeclaredByAnnotation { .. }
+                    | ClassFieldDefinition::DeclaredWithoutAnnotation
+                    | ClassFieldDefinition::DefinedInMethod {
+                        method: MethodThatSetsAttr {
+                            instance_or_class: MethodSelfKind::Instance,
+                            ..
+                        },
+                        ..
+                    }
+            );
+            if ann.is_final() && is_class_body_init {
                 return Some(ReadOnlyReason::Final);
             }
             if ann.has_qualifier(&Qualifier::ReadOnly) {
@@ -1572,10 +1512,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Some(reason);
         }
 
-        // A nested class def is assumed to be ReadOnly. We distinguish a nested `class C: ...`
-        // from an assignment of a class object (`SomeAttr = C`) by checking the attribute range
-        // against the nested class definition range.
-        if matches!(ty, Type::ClassDef(cls) if cls.range() == range) {
+        // Nested class definitions are read-only
+        if matches!(field_definition, ClassFieldDefinition::NestedClass { .. }) {
             return Some(ReadOnlyReason::ClassObjectInitializedOnBody);
         }
         // Default: the field is read-write
@@ -1619,26 +1557,47 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         (found_field, annotation)
     }
 
-    /// Compute the type, inherited annotation, and inheritance status for a field
-    /// that has a `value: ExprOrBinding` and no directly annotated type.
+    /// Compute the type, final annotation (direct or inherited), and inheritance status for a field
+    /// that has a `value: ExprOrBinding` and possibly a directly annotated type.
     fn analyze_class_field_value(
         &self,
         value: &ExprOrBinding,
         class: &Class,
         name: &Name,
+        direct_annotation: Option<&Annotation>,
         inferrred_from_method: bool,
         errors: &ErrorCollector,
     ) -> (Type, Option<Annotation>, IsInherited) {
-        match value {
-            ExprOrBinding::Expr(e) => {
-                let (inherited_ty, inherited_annotation) =
-                    self.get_inherited_type_and_annotation(class, name);
-                let is_inherited = if inherited_ty.is_none() {
+        // If we have a direct annotation with a type, use it and skip analyzing the value
+        let direct_qualifiers = if let Some(ann) = direct_annotation {
+            if let Some(ty) = ann.ty.clone() {
+                let is_inherited = if Ast::is_mangled_attr(name) {
                     IsInherited::No
                 } else {
                     IsInherited::Maybe
                 };
-                let ty = if let Some(inherited_ty) = inherited_ty
+                return (ty, direct_annotation.cloned(), is_inherited);
+            } else {
+                Some(&ann.qualifiers)
+            }
+        } else {
+            None
+        };
+        // Otherwise, analyze the value to determine the type
+        let (inherited_ty, inherited_annotation) =
+            self.get_inherited_type_and_annotation(class, name);
+        let is_inherited = if inherited_ty.is_none() {
+            IsInherited::No
+        } else {
+            IsInherited::Maybe
+        };
+        let final_annotation = Self::merge_direct_qualifiers_with_inherited_annotation(
+            inherited_annotation.clone(),
+            direct_qualifiers,
+        );
+        let inferred_ty = match value {
+            ExprOrBinding::Expr(e) => {
+                if let Some(inherited_ty) = inherited_ty
                     && inferrred_from_method
                 {
                     // Inherit the previous type of the attribute if the only declaration-like
@@ -1646,14 +1605,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     inherited_ty
                 } else {
                     self.attribute_expr_infer(e, inherited_annotation.as_ref(), name, errors)
-                };
-                (ty, inherited_annotation, is_inherited)
+                }
             }
-            ExprOrBinding::Binding(b) => (
-                Arc::unwrap_or_clone(self.solve_binding(b, errors)).into_ty(),
-                None,
-                IsInherited::Maybe,
-            ),
+            ExprOrBinding::Binding(b) => {
+                Arc::unwrap_or_clone(self.solve_binding(b, errors)).into_ty()
+            }
+        };
+        // Note that we use `final_annotation`'s `ty` rather than `inherited_ty`
+        // because we only want to override the `inferred_ty` when there's an inherited
+        // *annotation*, and in some cases `inherited_ty` is inferred (which means we only
+        // use it for contextual typing, not as an explicit type declaration)
+        let ty = final_annotation
+            .as_ref()
+            .and_then(|ann| ann.ty.clone())
+            .unwrap_or(inferred_ty);
+        (ty, final_annotation, is_inherited)
+    }
+
+    /// Given an inherited annotation and possible qualifiers from a direct annotation,
+    /// combine them:
+    /// - If neither is present, return `None`
+    /// - If only one is non-None, create an annotation from it
+    /// - If both are non-None, combine the type from the inherited annotation from
+    ///   the direct qualifiers.
+    ///
+    /// Note that qualifiers from the inherited annotation are always discarded
+    /// if the direct annotation is present. This is arguable (the typing rules
+    /// don't specify behavior) but simpler than combining qualifiers.
+    fn merge_direct_qualifiers_with_inherited_annotation(
+        inherited: Option<Annotation>,
+        direct_qualifiers: Option<&Vec<Qualifier>>,
+    ) -> Option<Annotation> {
+        match (inherited, direct_qualifiers) {
+            (inherited, Some(qualifiers)) => Some(Annotation {
+                ty: inherited.and_then(|ann| ann.ty),
+                qualifiers: qualifiers.clone(),
+            }),
+            (ann, None) => ann,
         }
     }
 
@@ -1927,10 +1915,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Param {
         let ClassField(ClassFieldInner::Simple { ty, descriptor, .. }, ..) = field;
-        let param_ty = if !strict {
-            Type::any_explicit()
-        } else if let Some(converter_param) = converter_param {
+        let param_ty = if let Some(converter_param) = converter_param {
+            // If a converter is specified (e.g., from pydantic lax mode or explicit field converter),
+            // use it regardless of strict mode
             converter_param
+        } else if !strict {
+            Type::any_explicit()
         } else if let Some(x) = descriptor
             && let Some(setter) = self.resolve_descriptor_setter(name, x, errors)
         {

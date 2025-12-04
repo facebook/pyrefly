@@ -117,7 +117,7 @@ impl ClassNamesFromType {
     }
 }
 
-fn string_for_type(type_: &Type) -> String {
+pub fn string_for_type(type_: &Type) -> String {
     let mut ctx = TypeDisplayContext::new(&[type_]);
     ctx.always_display_module_name_except_builtins();
     ctx.display(type_).to_string()
@@ -223,7 +223,8 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
     }
 }
 
-fn preprocess_type(type_: &Type, context: &ModuleContext) -> Type {
+/// Apply normalization to a type before exporting it to Pysa.
+pub fn preprocess_type(type_: &Type, context: &ModuleContext) -> Type {
     // Promote `Literal[..]` into `str` or `int`.
     let type_ = type_.clone().promote_literals(&context.stdlib);
     strip_self_type(type_)
@@ -346,6 +347,11 @@ impl ScalarTypeProperties {
             is_float: false,
             is_enum: false,
         }
+    }
+
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn is_none(&self) -> bool {
+        *self == Self::none()
     }
 
     #[cfg(test)]

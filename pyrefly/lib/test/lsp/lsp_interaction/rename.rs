@@ -105,6 +105,74 @@ fn test_rename_third_party_symbols_in_venv_is_not_allowed() {
     interaction.shutdown().unwrap();
 }
 
+/// todo(jvansch): Fix this test once bug fix is implemented.
+#[test]
+fn test_rename_editable_package_symbols_is_currently_blocked() {
+    // BUG: This test demonstrates the current bug where editable packages cannot be renamed.
+    // Editable packages (installed via `pip install -e .`) appear in both site-packages
+    // AND the search_path, and should be treated like first-party code for renaming purposes.
+    //
+    // Currently, this test expects renaming to be blocked (returns null), which is the BUG.
+    // When the bug is fixed, this test should be updated to expect a successful rename
+    // (return a range instead of null, and verify the rename succeeds).
+    let root = get_test_files_root();
+    let root_path = root.path().join("rename_editable_package");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let user_code = root_path.join("user_code.py");
+
+    interaction.client.did_open("user_code.py");
+
+    // BUG: Currently prepareRename returns null for editable packages, blocking rename
+    // This should return a range instead, allowing the rename
+    interaction
+        .client
+        .send_request::<PrepareRenameRequest>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&user_code).unwrap().to_string()
+            },
+            "position": {
+                "line": 13,  // Line with "editable_result = editable_function()"
+                "character": 25  // Position on "editable_function"
+            }
+        }))
+        .expect_response(serde_json::Value::Null) // BUG: Should return a range, not null
+        .unwrap();
+
+    // BUG: Verify that attempting to rename an editable package symbol returns an error
+    // This should succeed instead
+    interaction
+        .client
+        .send_request::<Rename>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&user_code).unwrap().to_string()
+            },
+            "position": {
+                "line": 13,  // Line with "editable_result = editable_function()"
+                "character": 25  // Position on "editable_function"
+            },
+            "newName": "new_editable_function"
+        }))
+        .expect_response_error(json!({
+            "code": -32600,
+            "message": "Third-party symbols cannot be renamed",
+            "data": null,
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_rename() {
     let root = get_test_files_root();

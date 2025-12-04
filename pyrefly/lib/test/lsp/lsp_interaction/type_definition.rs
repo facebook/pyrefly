@@ -8,6 +8,7 @@
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
+use crate::test::lsp::lsp_interaction::util::expect_definition_points_to_symbol;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -26,13 +27,9 @@ fn builtins_import_goes_to_typeshed() {
     interaction
         .client
         .type_definition("imports_builtins_no_config.py", 7, 7)
-        .expect_definition_response_absolute(
-            result_file.to_string_lossy().to_string(),
-            3348,
-            6,
-            3348,
-            10,
-        )
+        .expect_response_with(|response| {
+            expect_definition_points_to_symbol(response.as_ref(), "builtins.pyi", "class list")
+        })
         .unwrap();
     assert!(
         pyrefly_typeshed_materialized.join("pyrefly.toml").exists(),

@@ -22,7 +22,6 @@ use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use tracing::info;
 
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
@@ -78,17 +77,7 @@ pub fn queue_source_db_rebuild_and_recheck(
                 .or_default()
                 .insert(handle.path().dupe());
         }
-        let new_invalidated_configs: SmallSet<ArcId<ConfigFile>> = configs_to_paths
-            .into_iter()
-            .filter(|(c, files)| match ConfigFile::requery_source_db(c, files) {
-                Ok(reloaded) => reloaded,
-                Err(error) => {
-                    info!("Error reloading source database for config: {error:?}");
-                    false
-                }
-            })
-            .map(|(c, _)| c)
-            .collect();
+        let new_invalidated_configs = ConfigFile::query_source_db(&configs_to_paths);
         if !new_invalidated_configs.is_empty() {
             let mut lock = invalidated_configs.lock();
             for c in new_invalidated_configs {

@@ -66,7 +66,7 @@ fn test_notebook_hover_import() {
         .expect_response(json!({
             "contents": {
                 "kind": "markdown",
-                "value": format!("```python\n(class) List: type[list]\n```\n\nGo to [list]({}#L3349,7)", expected_url.as_str()),
+                "value": format!("```python\n(class) List: type[list]\n```\n\nGo to [list]({}#L3351,7)", expected_url.as_str()),
             }
         }))
         .unwrap();

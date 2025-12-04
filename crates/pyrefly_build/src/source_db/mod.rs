@@ -75,6 +75,9 @@ impl Target {
     }
 }
 
+/// A `ModulePath` is optimised so that equal paths compare equal with `Arc::ptr_eq`,
+/// that only works if we reuse the `ModulePath` and don't create new ones each time.
+/// Use this cache to ensure we are reusing them.
 #[derive(Debug)]
 pub struct ModulePathCache(RwLock<SmallMap<PathBuf, ModulePath>>);
 
@@ -107,13 +110,13 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// Find the given module in the sourcedb, given the module it's originating from.
     fn lookup(
         &self,
-        module: &ModuleName,
+        module: ModuleName,
         origin: Option<&Path>,
         style_filter: Option<ModuleStyle>,
     ) -> Option<ModulePath>;
     /// Get the handle for the given module path, including its Python platform and version
     /// settings.
-    fn handle_from_module_path(&self, module_path: ModulePath) -> Option<Handle>;
+    fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle>;
     /// Requeries this sourcedb if the set of files provided differs from the files
     /// previously queried for. This is a blocking operation.
     /// Returns `Err` if the shellout to the build system failed

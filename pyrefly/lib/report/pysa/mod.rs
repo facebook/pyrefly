@@ -63,6 +63,8 @@ use crate::report::pysa::function::WholeProgramFunctionDefinitions;
 use crate::report::pysa::function::collect_function_base_definitions;
 use crate::report::pysa::function::export_function_definitions;
 use crate::report::pysa::global_variable::GlobalVariable;
+use crate::report::pysa::global_variable::WholeProgramGlobalVariables;
+use crate::report::pysa::global_variable::collect_global_variables;
 use crate::report::pysa::global_variable::export_global_variables;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
@@ -136,11 +138,11 @@ pub struct PysaModuleCallGraphs {
 pub fn export_module_definitions(
     context: &ModuleContext,
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
+    global_variables: &WholeProgramGlobalVariables,
 ) -> PysaModuleDefinitions {
-    let global_variables = export_global_variables(context);
+    let global_variables_exported = export_global_variables(global_variables, context);
     let captured_variables = export_captured_variables(context);
     let class_definitions = export_all_classes(function_base_definitions, context);
-
     let function_definitions =
         export_function_definitions(function_base_definitions, &captured_variables, context);
     PysaModuleDefinitions {
@@ -150,7 +152,7 @@ pub fn export_module_definitions(
         source_path: context.module_info.path().details().clone(),
         function_definitions,
         class_definitions,
-        global_variables,
+        global_variables: global_variables_exported,
     }
 }
 
@@ -169,12 +171,18 @@ pub fn export_module_call_graphs(
     context: &ModuleContext,
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     override_graph: &OverrideGraph,
+    global_variables: &WholeProgramGlobalVariables,
 ) -> PysaModuleCallGraphs {
-    let call_graphs = export_call_graphs(context, function_base_definitions, override_graph)
-        .into_iter()
-        .map(|(function_ref, call_graph)| (function_ref.function_id, call_graph))
-        .collect_no_duplicate_keys()
-        .expect("Found multiple call graphs for the same function");
+    let call_graphs = export_call_graphs(
+        context,
+        function_base_definitions,
+        override_graph,
+        global_variables,
+    )
+    .into_iter()
+    .map(|(function_ref, call_graph)| (function_ref.function_id, call_graph))
+    .collect_no_duplicate_keys()
+    .expect("Found multiple call graphs for the same function");
     PysaModuleCallGraphs {
         format_version: 1,
         module_id: context.module_id,
@@ -258,6 +266,7 @@ fn make_module_work_list(
 fn write_module_definitions_files(
     module_work_list: &Vec<(Handle, ModuleId, PathBuf)>,
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
+    global_variables: &WholeProgramGlobalVariables,
     transaction: &Transaction,
     module_ids: &ModuleIds,
     definitions_directory: &Path,
@@ -274,7 +283,13 @@ fn write_module_definitions_files(
                     let context =
                         ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
                     let module_definitions = slow_function_monitor.monitor_function(
-                        || export_module_definitions(&context, function_base_definitions),
+                        || {
+                            export_module_definitions(
+                                &context,
+                                function_base_definitions,
+                                global_variables,
+                            )
+                        },
                         format!(
                             "Exporting module definitions for `{}`",
                             handle.module().as_str()
@@ -337,6 +352,7 @@ fn write_module_call_graph_files(
     module_work_list: &Vec<(Handle, ModuleId, PathBuf)>,
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     override_graph: &OverrideGraph,
+    global_variables: &WholeProgramGlobalVariables,
     transaction: &Transaction,
     module_ids: &ModuleIds,
     call_graphs_directory: &Path,
@@ -358,6 +374,7 @@ fn write_module_call_graph_files(
                                 &context,
                                 function_base_definitions,
                                 override_graph,
+                                global_variables,
                             )
                         },
                         format!("Exporting call graphs for `{}`", handle.module().as_str()),
@@ -468,6 +485,7 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
         &module_ids,
         &reversed_override_graph,
     );
+    let global_variables = collect_global_variables(&handles, transaction, &module_ids);
 
     let override_graph =
         OverrideGraph::from_reversed(&reversed_override_graph, &function_base_definitions);
@@ -475,6 +493,7 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
     write_module_definitions_files(
         &module_work_list,
         &function_base_definitions,
+        &global_variables,
         transaction,
         &module_ids,
         &definitions_directory,
@@ -491,6 +510,7 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
         &module_work_list,
         &function_base_definitions,
         &override_graph,
+        &global_variables,
         transaction,
         &module_ids,
         &call_graphs_directory,

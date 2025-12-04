@@ -100,30 +100,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
 
-        if field_name.is_some()
+        let base_type = if field_name.is_some()
             && let Some(e) = initial_value_expr
             && let Some(call_expr) = e.as_call_expr()
             && let Some(to_expr) = call_expr.arguments.args.first()
             && let Some(model_type) = self.resolve_target(to_expr)
         {
             if self.is_foreign_key_field(field) {
-                // If nullable, union with None
-                if self.is_django_field_nullable(call_expr) {
-                    return Some(self.union(model_type, Type::None));
-                } else {
-                    return Some(model_type);
-                }
-            }
-
-            if self.is_many_to_many_field(field) {
-                // TODO: check if nullability applies to this case as well
+                Some(model_type)
+            } else if self.is_many_to_many_field(field) {
                 return self.get_manager_type(model_type);
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
 
-        // Default: use _pyi_private_get_type from the field class
-        self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
-            .map(|field| field.ty())
+        let base_type = base_type.or_else(|| {
+            self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
+                .map(|field| field.ty())
+        })?;
+
+        if let Some(e) = initial_value_expr
+            && let Some(call_expr) = e.as_call_expr()
+            && self.is_django_field_nullable(call_expr)
+        {
+            Some(self.union(base_type, Type::None))
+        } else {
+            Some(base_type)
+        }
     }
 
     /// Check if a class inherits from Django's Field class

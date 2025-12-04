@@ -92,6 +92,29 @@ async def test_async():
 );
 
 testcase!(
+    test_await_and_async_comprehensions,
+    r#"
+from typing import Any
+def test(xs: Any):
+    (await x for x in xs)  # OK
+    [await x for x in xs]  # E:
+    {await x for x in xs}  # E:
+    {0: await x for x in xs}  # E:
+    {await x: 0 for x in xs}  # E:
+
+    (x async for x in xs)  # OK
+    [x async for x in xs]  # E:
+    {x async for x in xs}  # E:
+    {x: 0 async for x in xs}  # E:
+
+    (x for x in await xs)  # E:
+    [x for x in await xs]  # E:
+    {x for x in await xs}  # E:
+    {x: 0 for x in await xs}  # E:
+"#,
+);
+
+testcase!(
     test_global_simple,
     r#"
 x: str = ""

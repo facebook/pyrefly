@@ -835,10 +835,11 @@ x = X()
 );
 
 testcase!(
+    bug = "When something is imported via *, we should warn on usage not on import",
     test_import_star_deprecated_class_warn,
     env_class_x_deprecated(),
     r#"
-from foo import * # E: `X` is deprecated
+from foo import *
 
 x = X()
 "#,
@@ -879,7 +880,7 @@ testcase!(
     test_import_star_deprecated_func_warn,
     env_func_x_deprecated(),
     r#"
-from foo import * # E: `x` is deprecated
+from foo import *
 
 x()  # E: `foo.x` is deprecated
 "#,

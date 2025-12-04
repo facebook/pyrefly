@@ -17,7 +17,6 @@
 #![deny(clippy::inefficient_to_string)]
 #![deny(clippy::mem_replace_option_with_some)]
 #![deny(clippy::str_to_string)]
-#![deny(clippy::string_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(box_patterns)]
 #![feature(if_let_guard)]

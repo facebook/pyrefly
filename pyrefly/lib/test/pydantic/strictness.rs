@@ -104,7 +104,6 @@ Model2(x='0')  # E: `Literal['0']` is not assignable to parameter `x`
 );
 
 pydantic_testcase!(
-    bug = "Revealed type should be more informative",
     test_lax_mode_coercion,
     r#"
 from pydantic import BaseModel
@@ -114,7 +113,7 @@ from decimal import Decimal
 class Model(BaseModel):
     x: int = 0
 
-reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, x: Any = ..., **Unknown) -> None
+reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, x: Decimal | bool | bytes | float | int | str = ..., **Unknown) -> None
 
 # int field accepts: int, bool, float, str, bytes, Decimal
 Model(x=1)
@@ -123,5 +122,34 @@ Model(x=1.0)
 Model(x='123')
 Model(x=b'123')
 Model(x=Decimal('123'))
+    "#,
+);
+
+pydantic_testcase!(
+    bug = "An error should be raised here",
+    test_lax_mode_coercion_literals,
+    r#"
+from typing import Literal
+from pydantic import BaseModel
+
+class Model1(BaseModel):
+    status: Literal[1]
+
+m = Model1(status="1")
+    "#,
+);
+
+pydantic_testcase!(
+    bug = "Revealed type should be more informative and conversion table should be applied to containers",
+    test_lax_mode_coercion_container,
+    r#"
+from typing import List, reveal_type
+
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    x: List[int] = [0, 1]
+
+reveal_type(Model.__init__) # E: revealed type: (self: Model, *, x: Any = ..., **Unknown) -> None
     "#,
 );

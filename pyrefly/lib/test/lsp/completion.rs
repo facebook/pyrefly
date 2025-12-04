@@ -1760,7 +1760,7 @@ T = foooooo
             .completion(handle, position, ImportFormat::Absolute, false);
     completions
         .into_iter()
-        .find(|item| item.label == "foooooo (import bar)")
+        .find(|item| item.label == "foooooo")
         .expect("expected foooooo to be in completions");
 }
 
@@ -1992,7 +1992,6 @@ Completion Results:
 - (Variable) _LiteralInteger
 - (Variable) _M_contra
 - (Variable) _NegativeInteger
-- (Class) _NotImplementedType
 - (Variable) _Opener
 - (Variable) _P
 - (Variable) _PositiveInteger

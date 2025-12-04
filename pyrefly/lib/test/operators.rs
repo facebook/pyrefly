@@ -681,3 +681,35 @@ def f[S, T](x: type[S], y: type[T]):
     return x == y
     "#,
 );
+
+testcase!(
+    test_chained_in,
+    r#"
+class Foo:
+    def __contains__(self, x: int) -> bool:
+        ...
+
+class Bar:
+    def __contains__(self, x: Foo) -> bool:
+        ...
+
+def test(x: int, foo: Foo, bar: Bar) -> None:
+    x in foo in bar  # Should be OK
+    x in bar # E: `in` is not supported between `int` and `Bar`
+    "#,
+);
+
+testcase!(
+    test_chained_lt,
+    r#"
+class A:
+    def __lt__(self, other: "B") -> bool: ...
+class B:
+    def __lt__(self, other: "C") -> bool: ...
+class C: pass
+
+def test(a: A, b: B, c: C) -> None:
+    a < b < c  # Should be OK: (a < b) and (b < c)
+    a < c      # E: `<` is not supported between `A` and `C`
+    "#,
+);

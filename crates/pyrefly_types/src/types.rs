@@ -42,7 +42,7 @@ use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
-use crate::keywords::DataclassTransformKeywords;
+use crate::keywords::DataclassTransformMetadata;
 use crate::keywords::KwCall;
 use crate::literal::Lit;
 use crate::module::ModuleType;
@@ -1170,7 +1170,7 @@ impl Type {
         self.check_toplevel_func_metadata(&|meta| meta.flags.has_final_decoration)
     }
 
-    pub fn dataclass_transform_metadata(&self) -> Option<DataclassTransformKeywords> {
+    pub fn dataclass_transform_metadata(&self) -> Option<DataclassTransformMetadata> {
         self.check_toplevel_func_metadata(&|meta| meta.flags.dataclass_transform_metadata.clone())
     }
 

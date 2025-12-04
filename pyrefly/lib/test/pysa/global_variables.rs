@@ -12,6 +12,7 @@ use ruff_python_ast::name::Name;
 
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::global_variable::GlobalVariable;
+use crate::report::pysa::global_variable::collect_global_variables;
 use crate::report::pysa::global_variable::export_global_variables;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleIds;
@@ -40,7 +41,9 @@ fn test_exported_global_variables(
 
     let expected_globals = create_expected_globals(&context);
 
-    let actual_globals = export_global_variables(&context);
+    let whole_program_global_variables =
+        collect_global_variables(&handles, &transaction, &module_ids);
+    let actual_globals = export_global_variables(&whole_program_global_variables, &context);
 
     assert_eq!(expected_globals, actual_globals);
 }
