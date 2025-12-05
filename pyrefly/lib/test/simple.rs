@@ -1821,7 +1821,7 @@ reveal_type(f1) # E: revealed type: (x: Unknown, *args: Unknown, **kwargs: Unkno
 testcase!(
     test_missing_name_in_dunder_all,
     r#"
-__all__ = ["x", "y"]
+__all__ = ["x", "y"]  # E: Name `y` is listed in `__all__` but is not defined in the module
 x = 5
     "#,
 );

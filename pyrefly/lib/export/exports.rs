@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
@@ -158,6 +159,43 @@ impl Exports {
             .definitions
             .implicitly_imported_submodules
             .contains(name)
+    }
+
+    /// Returns entries in `__all__` that don't exist in the module's definitions.
+    /// Only validates explicitly user-defined `__all__` entries, not synthesized ones.
+    /// Returns a vector of (range, name) tuples for invalid entries.
+    pub fn invalid_dunder_all_entries(
+        &self,
+        lookup: &dyn LookupExport,
+    ) -> Vec<(TextRange, Name)> {
+        // Only validate if __all__ was explicitly defined by the user
+        if !self.0.definitions.definitions.contains_key(&dunder::ALL) {
+            return Vec::new();
+        }
+
+        let mut invalid = Vec::new();
+        for entry in &self.0.definitions.dunder_all {
+            if let DunderAllEntry::Name(range, name) = entry {
+                // Check if name exists in definitions
+                if self.0.definitions.definitions.contains_key(name) {
+                    continue;
+                }
+                // Check if name is available through a wildcard import
+                let mut found_in_import = false;
+                for (module, _) in self.0.definitions.import_all.iter() {
+                    if let Some(exports) = lookup.get(*module).finding() {
+                        if exports.wildcard(lookup).contains(name) {
+                            found_in_import = true;
+                            break;
+                        }
+                    }
+                }
+                if !found_in_import {
+                    invalid.push((*range, name.clone()));
+                }
+            }
+        }
+        invalid
     }
 
     pub fn exports(&self, lookup: &dyn LookupExport) -> Arc<SmallMap<Name, ExportLocation>> {

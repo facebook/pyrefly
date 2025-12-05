@@ -412,6 +412,18 @@ impl Bindings {
         builder.inject_globals();
         builder.stmts(x.body, &NestingContext::toplevel());
         assert_eq!(builder.scopes.loop_depth(), 0);
+
+        // Validate that all entries in __all__ are defined in the module
+        for (range, name) in exports.invalid_dunder_all_entries(lookup) {
+            builder.error(
+                range,
+                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                format!(
+                    "Name `{name}` is listed in `__all__` but is not defined in the module"
+                ),
+            );
+        }
+
         let unused_imports = builder.scopes.collect_module_unused_imports();
         builder.record_unused_imports(unused_imports);
         let scope_trace = builder.scopes.finish();

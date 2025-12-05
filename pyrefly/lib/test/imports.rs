@@ -450,7 +450,7 @@ fn env_export_all_wrongly() -> TestEnv {
     TestEnv::one(
         "foo",
         r#"
-__all__ = ['bad_definition']
+__all__ = ['bad_definition']  # E: Name `bad_definition` is listed in `__all__` but is not defined in the module
 __all__.extend(bad_module.__all__)  # E: Could not find name `bad_module`
 "#,
     )
