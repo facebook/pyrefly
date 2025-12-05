@@ -800,7 +800,7 @@ fn test_shows_stdlib_errors_when_explicitly_included_in_project_includes() {
 }
 
 #[test]
-fn test_version_support_publish_diagnostics() {
+fn test_publish_diagnostics_version_numbers_only_go_up() {
     let test_files_root = get_test_files_root();
     let root = test_files_root.path().to_path_buf();
     let mut file = root.clone();
