@@ -802,12 +802,11 @@ fn test_shows_stdlib_errors_when_explicitly_included_in_project_includes() {
 #[test]
 fn test_publish_diagnostics_version_numbers_only_go_up() {
     let test_files_root = get_test_files_root();
-    let root = test_files_root.path().to_path_buf();
-    let mut file = root.clone();
-    file.push("text_document.py");
+    let root = test_files_root.path();
+    let file = root.join("text_document.py");
     let uri = Url::from_file_path(file).unwrap();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root);
+    interaction.set_root(root.to_path_buf());
     interaction.initialize(InitializeSettings {
         configuration: Some(None),
         capabilities: Some(serde_json::json!({
