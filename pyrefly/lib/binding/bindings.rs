@@ -414,7 +414,7 @@ impl Bindings {
         assert_eq!(builder.scopes.loop_depth(), 0);
 
         // Validate that all entries in __all__ are defined in the module
-        for (range, name) in exports.invalid_dunder_all_entries(lookup) {
+        for (range, name) in exports.invalid_dunder_all_entries(lookup, &module_info) {
             builder.error(
                 range,
                 ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
