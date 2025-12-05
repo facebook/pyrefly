@@ -254,8 +254,20 @@ We reuse Pyright's `python.analysis.inlayHints.<>` settings for backwards compat
 You can turn inlay hints on or off using the [VSCode Setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints) `editor.inlayHints.enabled`.
 
 
+Inlay hints can be double clicked to insert them as an annotation.
 <video
-  src="/videos/inlay-hints.mp4"
+  src="/videos/double-click-inlay-hint.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Go-to-definition can be used on a type in an inlay hint to jump its definition. This works even if the type isn't explicitly imported by the current file.
+<video
+  src="/videos/cmd-click-inlay-hint.mp4"
   width="720"
   muted
   loop
@@ -2950,6 +2962,28 @@ def where() -> None:
   # There is no spoon: unknown-name
   global spoon
 ```
+
+## unnecessary-comparison
+
+This warning is raised when an identity comparison (`is` or `is not`) is made between
+literals whose comparison result is statically known.
+
+```python
+def test0() -> None:
+    # Different literals are always different objects
+    if 1 is 2:  # unnecessary-comparison: always False
+        pass
+    # Same singletons are always the same object
+    if True is not False:  # unnecessary-comparison: always True
+        pass
+
+def test1(x: object) -> None:
+    # Comparing an instance to a class is always False
+    if x is int:  # unnecessary-comparison: did you mean isinstance(x, int)?
+        pass
+```
+
+This check is relatively conservative and only warn on limited cases where the comparison is highly likely to be redundant.
 
 ## unsupported
 
