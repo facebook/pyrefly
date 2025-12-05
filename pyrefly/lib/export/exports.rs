@@ -164,10 +164,7 @@ impl Exports {
     /// Returns entries in `__all__` that don't exist in the module's definitions.
     /// Only validates explicitly user-defined `__all__` entries, not synthesized ones.
     /// Returns a vector of (range, name) tuples for invalid entries.
-    pub fn invalid_dunder_all_entries(
-        &self,
-        lookup: &dyn LookupExport,
-    ) -> Vec<(TextRange, Name)> {
+    pub fn invalid_dunder_all_entries(&self, lookup: &dyn LookupExport) -> Vec<(TextRange, Name)> {
         // Only validate if __all__ was explicitly defined by the user
         if !self.0.definitions.definitions.contains_key(&dunder::ALL) {
             return Vec::new();

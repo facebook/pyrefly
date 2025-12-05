@@ -418,9 +418,7 @@ impl Bindings {
             builder.error(
                 range,
                 ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                format!(
-                    "Name `{name}` is listed in `__all__` but is not defined in the module"
-                ),
+                format!("Name `{name}` is listed in `__all__` but is not defined in the module"),
             );
         }
 
