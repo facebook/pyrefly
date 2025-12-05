@@ -171,7 +171,7 @@ class C:
 assert_type(C.d, int)
 assert_type(C().d, int)
 C.d = 42  # E: Attribute `d` of class `C` is a descriptor, which may not be overwritten
-C().d = 42  # E:  Attribute `d` of class `C` is a read-only descriptor with no `__set__` and cannot be set
+C().d = 42
     "#,
 );
 
@@ -220,7 +220,7 @@ class C:
 assert_type(C.cp, int)
 assert_type(C().cp, int)
 C.cp = 42  # E: Attribute `cp` of class `C` is a descriptor, which may not be overwritten
-C().cp = 42  # E:  Attribute `cp` of class `C` is a read-only descriptor with no `__set__` and cannot be set
+C().cp = 42
     "#,
 );
 

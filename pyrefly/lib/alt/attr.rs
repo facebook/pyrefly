@@ -30,6 +30,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
+use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::expr::TypeOrExpr;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::KeyExport;
@@ -906,6 +907,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 Attribute::ClassAttribute(class_attr) => {
+                    if let (
+                        ClassAttribute::Descriptor(
+                            descriptor,
+                            DescriptorBase::Instance(_class_type),
+                        ),
+                        AttributeBase1::ClassInstance(_),
+                    ) = (&class_attr, &found_on)
+                        && !descriptor.has_setter()
+                    {
+                        // Non-data descriptors (no __set__) are overridden by instance
+                        // assignments. Treat the assignment as writing to a plain attribute
+                        // so it type-checks but does not attempt to call a descriptor setter.
+                        self.check_set_read_write_and_infer_narrow(
+                            Type::any_explicit(),
+                            attr_name,
+                            got,
+                            range,
+                            errors,
+                            context,
+                            false,
+                            &mut narrowed_types,
+                        );
+                        should_narrow = false;
+                        continue;
+                    }
+
                     // If we are writing to an instance, we may need access to
                     // the class to special-case dataclass converters.
                     let instance_class = match &found_on {

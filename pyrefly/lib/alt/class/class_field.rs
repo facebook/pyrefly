@@ -189,6 +189,12 @@ pub struct Descriptor {
     setter: bool,
 }
 
+impl Descriptor {
+    pub fn has_setter(&self) -> bool {
+        self.setter
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum DescriptorBase {
     Instance(ClassType),
