@@ -134,6 +134,32 @@ def f(c: C):
 );
 
 testcase!(
+    test_property_with_setter_and_deleter,
+    r#"
+from typing import assert_type, reveal_type
+
+class C:
+    @property
+    def foo(self) -> int:
+        return 42
+
+    @foo.setter
+    def foo(self, value: int) -> None:
+        pass
+
+    @foo.deleter
+    def foo(self) -> None:
+        pass
+
+def f(c: C) -> None:
+    assert_type(c.foo, int)
+    c.foo = 1
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: int)
+    del c.foo
+    "#,
+);
+
+testcase!(
     test_cached_property_assignment_allowed,
     r#"
 from functools import cached_property

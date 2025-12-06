@@ -38,6 +38,7 @@ use crate::callable::FunctionKind;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
+use crate::callable::PropertyPayload;
 use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
@@ -1150,6 +1151,10 @@ impl Type {
 
     pub fn is_property_setter_with_getter(&self) -> Option<Type> {
         self.check_toplevel_func_metadata(&|meta| meta.flags.is_property_setter_with_getter.clone())
+    }
+
+    pub fn property_deleter_payload(&self) -> Option<PropertyPayload> {
+        self.check_toplevel_func_metadata(&|meta| meta.flags.property_deleter_payload.clone())
     }
 
     pub fn is_overload(&self) -> bool {

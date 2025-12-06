@@ -349,6 +349,14 @@ impl Deprecation {
     }
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
+)]
+pub struct PropertyPayload {
+    pub getter: Type,
+    pub setter: Option<Type>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct FuncFlags {
@@ -369,6 +377,7 @@ pub struct FuncFlags {
     ///
     /// The stored type is `foo` (the getter).
     pub is_property_setter_with_getter: Option<Type>,
+    pub property_deleter_payload: Option<PropertyPayload>,
     pub has_enum_member_decoration: bool,
     pub is_override: bool,
     pub has_final_decoration: bool,
