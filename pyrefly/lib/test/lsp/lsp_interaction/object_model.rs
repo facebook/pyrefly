@@ -37,6 +37,7 @@ use lsp_types::notification::DidChangeNotebookDocument;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::notification::DidChangeWatchedFiles;
 use lsp_types::notification::DidCloseNotebookDocument;
+use lsp_types::notification::DidCloseTextDocument;
 use lsp_types::notification::DidOpenNotebookDocument;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::notification::Exit;
@@ -423,6 +424,18 @@ impl TestClient {
                 "character": col,
             },
         }))
+    }
+
+    pub fn did_close(&self, file: &'static str) {
+        let path = self.get_root_or_panic().join(file);
+        self.send_notification::<DidCloseTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 1,
+                "text": read_to_string(&path).unwrap(),
+            },
+        }));
     }
 
     pub fn did_open(&self, file: &'static str) {

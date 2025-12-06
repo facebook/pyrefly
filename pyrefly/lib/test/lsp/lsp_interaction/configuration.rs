@@ -280,6 +280,97 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
     interaction.shutdown().expect("Failed to shutdown");
 }
 
+// Only run this test on unix since windows has no way to mock a .exe without compiling something
+// (we call python with python.exe)
+#[cfg(unix)]
+#[test]
+fn test_interpreter_change_removes_type_errors() {
+    let test_files_root = get_test_files_root();
+    let good_interpreter_path =
+        setup_dummy_interpreter(&test_files_root.path().join("custom_interpreter"));
+    let bad_interpreter_path = setup_dummy_interpreter(
+        &test_files_root
+            .path()
+            .join("interpreter_with_no_site_packages"),
+    );
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("custom_interpreter/src/foo.py");
+    // Without any interpreter configured, there should be 1 import error
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(
+            test_files_root.path().join("custom_interpreter/src/foo.py"),
+            1,
+        )
+        .unwrap();
+    // Configure broken interpreter with empty site-packages - should still have 1 import error
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .unwrap()
+        .send_configuration_response(json!([
+            {
+                "pythonPath": bad_interpreter_path.to_str().unwrap()
+            }
+        ]));
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(
+            test_files_root.path().join("custom_interpreter/src/foo.py"),
+            1,
+        )
+        .unwrap();
+
+    // Switch to good interpreter with site-packages
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .unwrap()
+        .send_configuration_response(json!([
+            {
+                "pythonPath": good_interpreter_path.to_str().unwrap()
+            }
+        ]));
+
+    // BUG: Expecting 1 error demonstrates incorrect behavior.
+    // After switching to good interpreter, the error should be resolved to 0.
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(
+            test_files_root.path().join("custom_interpreter/src/foo.py"),
+            1,
+        )
+        .unwrap();
+
+    // BUG: it works after a did_close -> did_open
+    interaction
+        .client
+        .did_close("custom_interpreter/src/foo.py");
+    interaction.client.did_open("custom_interpreter/src/foo.py");
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(
+            test_files_root.path().join("custom_interpreter/src/foo.py"),
+            0,
+        )
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_disable_language_services() {
     let test_files_root = get_test_files_root();
