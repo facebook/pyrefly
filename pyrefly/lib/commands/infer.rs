@@ -295,7 +295,7 @@ impl InferArgs {
                                 let imports: Vec<(TextSize, String, String)> = transaction
                                     .search_exports_exact(unknown_name)
                                     .into_iter()
-                                    .map(|handle_to_import_from| {
+                                    .map(|(handle_to_import_from, _)| {
                                         insert_import_edit_with_forced_import_format(
                                             &ast,
                                             handle.dupe(),
