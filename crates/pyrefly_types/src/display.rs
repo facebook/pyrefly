@@ -796,9 +796,22 @@ impl Display for Type {
 
 impl Type {
     pub fn as_hover_string(&self) -> String {
+        self.as_hover_string_with_fallback_name(None)
+    }
+
+    pub fn as_hover_string_with_fallback_name(&self, fallback_name: Option<&str>) -> String {
         let mut c = TypeDisplayContext::new(&[self]);
         c.set_display_mode_to_hover();
-        c.display(self).to_string()
+        let rendered = c.display(self).to_string();
+        if let Some(name) = fallback_name
+            && self.is_function_type()
+        {
+            let trimmed = rendered.trim_start();
+            if trimmed.starts_with('(') {
+                return format!("def {}{}: ...", name, trimmed);
+            }
+        }
+        rendered
     }
 
     pub fn get_types_with_locations(&self) -> Vec<(String, Option<TextRangeWithModule>)> {

@@ -359,10 +359,10 @@ lhs @ rhs
 13 | lhs @ rhs
          ^
 ```python
-(method) __matmul__: (
+(method) __matmul__: def __matmul__(
     self: Matrix,
     other: Matrix
-) -> Matrix
+) -> Matrix: ...
 ```
 "#
         .trim(),
