@@ -2446,3 +2446,189 @@ x = sys.version
         "Expected completions in normal code but got none"
     );
 }
+
+#[test]
+fn test_no_builtins_in_import_completions() {
+    // Use a prefix "Arith" to trigger completion for ArithmeticError
+    let code = r#"
+from lib import Arith
+#                   ^
+"#;
+    // Explicitly import * from builtins to force them into import_all.
+    // In the real LSP environment, builtins appear in exports implicitly.
+    // In this test environment, we must explicitly import them
+    // to simulate that condition and verify our filter logic works.
+    let lib = r#"
+from builtins import *
+def foo(): pass
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("lib", lib)],
+        get_default_test_report(),
+    );
+
+    assert!(
+        report.contains("foo"),
+        "Should contain defined function 'foo'"
+    );
+
+    assert!(
+        report.contains("__name__"),
+        "Should contain implicit global '__name__'"
+    );
+
+    assert!(
+        !report.contains("ArithmeticError"),
+        "Should NOT contain builtin 'ArithmeticError' in import completions. Report:\n{}",
+        report
+    );
+}
+
+#[test]
+fn from_module_import_with_trailing_space() {
+    let code = r#"
+from utils import 
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("utils", "def format_number(x): pass")],
+        get_default_test_report(),
+    );
+
+    assert!(
+        report.contains("- (Variable) format_number"),
+        "Expected format_number in completions. Report:\n{}",
+        report
+    );
+}
+
+#[test]
+fn import_with_trailing_space() {
+    let code = r#"
+import 
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("utils", "")],
+        get_default_test_report(),
+    );
+
+    assert!(
+        report.contains("- (Module) utils"),
+        "Expected utils module in completions. Report:\n{}",
+        report
+    );
+    assert!(
+        !report.contains("__main__"),
+        "__main__ should not appear in completions. Report:\n{}",
+        report
+    );
+}
+
+#[test]
+fn from_module_import_with_multiple_trailing_spaces() {
+    let code = r#"
+from utils import   
+#                   ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("utils", "def format_number(x): pass")],
+        get_default_test_report(),
+    );
+
+    assert!(
+        report.contains("- (Variable) format_number"),
+        "Expected format_number in completions. Report:\n{}",
+        report
+    );
+}
+
+#[test]
+fn import_with_multiple_trailing_spaces() {
+    let code = r#"
+import   
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("utils", "")],
+        get_default_test_report(),
+    );
+
+    assert!(
+        report.contains("- (Module) utils"),
+        "Expected utils module in completions. Report:\n{}",
+        report
+    );
+    assert!(
+        !report.contains("__main__"),
+        "__main__ should not appear in completions. Report:\n{}",
+        report
+    );
+}
+
+#[test]
+fn from_with_space_shows_modules_not_builtins() {
+    let code = r#"
+from 
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("mymodule", "x = 1")],
+        get_default_test_report(),
+    );
+
+    // Should include our test module
+    assert!(
+        report.contains("- (Module) mymodule"),
+        "Expected module completion for 'mymodule'. Report:\n{}",
+        report
+    );
+
+    // Should not include builtin classes/exceptions
+    assert!(
+        !report.contains("MemoryError"),
+        "Should NOT suggest MemoryError as a module. Report:\n{}",
+        report
+    );
+    assert!(
+        !report.contains("ValueError"),
+        "Should NOT suggest ValueError as a module. Report:\n{}",
+        report
+    );
+    assert!(
+        !report.contains("- (Class) list") && !report.contains("- (Variable) list"),
+        "Should NOT suggest list as a module. Report:\n{}",
+        report
+    );
+}
+
+#[test]
+fn import_with_space_shows_modules_not_builtins() {
+    let code = r#"
+import 
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("utils", "x = 1")],
+        get_default_test_report(),
+    );
+
+    // Should include our test module
+    assert!(
+        report.contains("- (Module) utils"),
+        "Expected module completion for 'utils'. Report:\n{}",
+        report
+    );
+
+    // Should not include builtin classes/exceptions
+    assert!(
+        !report.contains("MemoryError"),
+        "Should NOT suggest MemoryError. Report:\n{}",
+        report
+    );
+    assert!(
+        !report.contains("ValueError"),
+        "Should NOT suggest ValueError. Report:\n{}",
+        report
+    );
+}
