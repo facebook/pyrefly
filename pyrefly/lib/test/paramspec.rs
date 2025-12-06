@@ -46,6 +46,40 @@ def test(x1: Callable[[int, str], int], x2: Callable[..., int]):
 );
 
 testcase!(
+    test_paramspec_middleware_kwargs_mismatch,
+    r#"
+from typing import Protocol, Any
+
+class ASGIApp:
+    pass
+
+class _MiddlewareFactory[**P](Protocol):
+    def __call__(self, app: ASGIApp, /, *args: P.args, **kwargs: P.kwargs) -> Any: ...
+
+class FastAPI:
+    def add_middleware[**P](
+        self,
+        middleware_class: _MiddlewareFactory[P],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> None:
+        pass
+
+class CORSMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        pass
+
+
+def use_middleware() -> None:
+    app = FastAPI()
+    app.add_middleware(
+        CORSMiddleware,
+        x="",  # E: Unexpected keyword argument `x`
+    )
+"#,
+);
+
+testcase!(
     test_param_spec_generic_function,
     r#"
 from typing import Callable, reveal_type
