@@ -313,7 +313,7 @@ impl ServerConnection {
         &self,
         diags: SmallMap<PathBuf, Vec<Diagnostic>>,
         notebook_cell_urls: SmallMap<PathBuf, Url>,
-        version_info: &HashMap<PathBuf, i32>,
+        version_info: HashMap<PathBuf, i32>,
     ) {
         for (path, diags) in diags {
             if let Some(url) = notebook_cell_urls.get(&path) {
@@ -1453,7 +1453,7 @@ impl Server {
             self.connection.publish_diagnostics(
                 diags,
                 notebook_cell_urls,
-                &*self.version_info.lock(),
+                self.version_info.lock().clone(),
             );
             if self
                 .initialize_params
