@@ -819,7 +819,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
         ..Default::default()
     });
 
-    let gen_validator = |expected_version: i64| {
+    let create_version_validator = |expected_version: i64| {
         let actual_uri = uri.as_str();
         move |msg: &Message| {
             let Message::Notification(Notification { method, params }) = msg else {
@@ -856,7 +856,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
 
     let version = 1;
     interaction.client.expect_message_helper(
-        gen_validator(version),
+        create_version_validator(version),
         &format!(
             "publishDiagnostics notification with version {} for file: {}",
             version,
@@ -868,7 +868,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
 
     let version = 2;
     interaction.client.expect_message_helper(
-        gen_validator(version),
+        create_version_validator(version),
         &format!(
             "publishDiagnostics notification with version {} for file: {}",
             version,
@@ -891,7 +891,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
 
     let version = 3;
     interaction.client.expect_message_helper(
-        gen_validator(version),
+        create_version_validator(version),
         &format!(
             "publishDiagnostics notification with version {} for file: {}",
             version,
