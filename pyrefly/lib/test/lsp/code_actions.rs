@@ -275,14 +275,15 @@ TypeVar('T')
 }
 
 #[test]
-fn test_skip_deprecated_import() {
+fn test_take_deprecation_into_account_in_sorting_of_actions() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[
             (
                 "a",
                 "from warnings import deprecated\n@deprecated('')\ndef my_func(): pass",
             ),
-            ("b", "my_func()\n# ^"),
+            ("b", "def my_func(): pass"),
+            ("c", "my_func()\n# ^"),
         ],
         get_test_report,
     );
@@ -291,9 +292,29 @@ fn test_skip_deprecated_import() {
 # a.py
 
 # b.py
+
+# c.py
 1 | my_func()
       ^
 Code Actions Results:
+# Title: Insert import: `from b import my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+from b import my_func
+my_func()
+# ^
+# Title: Insert import: `from a import my_func` (deprecated)
+
+## Before:
+my_func()
+# ^
+## After:
+from a import my_func
+my_func()
+# ^
 "#
         .trim(),
         report.trim()

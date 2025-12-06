@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
@@ -1676,7 +1677,9 @@ impl<'a> Transaction<'a> {
                     let error_range = error.range();
                     if error_range.contains_range(range) {
                         let unknown_name = module_info.code_at(error_range);
-                        for handle_to_import_from in self.search_exports_exact(unknown_name) {
+                        for (handle_to_import_from, export) in
+                            self.search_exports_exact(unknown_name)
+                        {
                             let (position, insert_text, _) = insert_import_edit(
                                 &ast,
                                 self.config_finder(),
@@ -1686,7 +1689,12 @@ impl<'a> Transaction<'a> {
                                 import_format,
                             );
                             let range = TextRange::at(position, TextSize::new(0));
-                            let title = format!("Insert import: `{}`", insert_text.trim());
+                            let mut title = format!("Insert import: `{}`", insert_text.trim());
+
+                            if export.deprecation.is_some() {
+                                title.push_str(" (deprecated)");
+                            }
+
                             code_actions.push((title, module_info.dupe(), range, insert_text));
                         }
 
@@ -1709,7 +1717,16 @@ impl<'a> Transaction<'a> {
                 _ => {}
             }
         }
-        code_actions.sort_by(|(title1, _, _, _), (title2, _, _, _)| title1.cmp(title2));
+
+        // Sort code actions: non-deprecated first, then alphabetically
+        code_actions.sort_by(|(title1, _, _, _), (title2, _, _, _)| {
+            match (title1.contains("deprecated"), title2.contains("deprecated")) {
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                _ => title1.cmp(title2),
+            }
+        });
+
         Some(code_actions)
     }
 
@@ -2934,17 +2951,11 @@ impl<'a> Transaction<'a> {
         (result, is_incomplete)
     }
 
-    pub fn search_exports_exact(&self, name: &str) -> Vec<Handle> {
+    pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
         self.search_exports(|handle, exports| {
             if let Some(export_location) = exports.get(&Name::new(name)) {
                 match export_location {
-                    ExportLocation::ThisModule(export) => {
-                        // Ignore deprecated exports in autoimport suggestions
-                        if export.deprecation.is_some() {
-                            return Vec::new();
-                        }
-                        vec![handle.dupe()]
-                    }
+                    ExportLocation::ThisModule(export) => vec![(handle.dupe(), export.clone())],
                     // Re-exported modules like `foo` in `from from_module import foo`
                     // should likely be ignored in autoimport suggestions
                     // because the original export in from_module will show it.
