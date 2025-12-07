@@ -178,6 +178,7 @@ jobs:
           "${BINARY_NAME}" --version
           "${BINARY_NAME}" --help
           "${BINARY_NAME}" check test.py
+          "${BINARY_NAME}" check err.py
           python -m "${BINARY_NAME}" --version
       - name: Upload wheels
         uses: actions/upload-artifact@v4
