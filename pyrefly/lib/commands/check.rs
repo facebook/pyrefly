@@ -389,6 +389,150 @@ impl OutputFormat {
     }
 }
 
+fn emit_github_actions_annotations(relative_to: &Path, errors: &[Error]) {
+    if !matches!(
+        std::env::var("GITHUB_ACTIONS"),
+        Ok(value) if value.eq_ignore_ascii_case("true")
+    ) {
+        return;
+    }
+    for error in errors {
+        if let Some(command) = github_actions_command(error, relative_to) {
+            println!("{command}");
+        }
+    }
+}
+
+fn github_actions_command(error: &Error, relative_to: &Path) -> Option<String> {
+    let command = match error.severity() {
+        Severity::Error => "error",
+        Severity::Warn => "warning",
+        Severity::Info => "notice",
+        Severity::Ignore => return None,
+    };
+    let range = error.display_range();
+    let file = github_actions_path(error.path().as_path(), relative_to);
+    let params = format!(
+        "file={},line={},col={},endLine={},endColumn={},title={}",
+        escape_workflow_property(&file),
+        range.start.line_within_file().get(),
+        range.start.column().get(),
+        range.end.line_within_file().get(),
+        range.end.column().get(),
+        escape_workflow_property(&format!("Pyrefly {}", error.error_kind().to_name())),
+    );
+    let message = escape_workflow_data(&error.msg());
+    Some(format!("::{command} {params}::{message}"))
+}
+
+fn github_actions_path(path: &Path, relative_to: &Path) -> String {
+    let relative = if relative_to.as_os_str().is_empty() {
+        path
+    } else {
+        path.strip_prefix(relative_to).unwrap_or(path)
+    };
+    let candidate = if relative.as_os_str().is_empty() {
+        path
+    } else {
+        relative
+    };
+    let mut path_str = candidate.to_string_lossy().into_owned();
+    if std::path::MAIN_SEPARATOR != '/' {
+        path_str = path_str.replace(std::path::MAIN_SEPARATOR, "/");
+    }
+    path_str
+}
+
+fn escape_workflow_data(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+fn escape_workflow_property(value: &str) -> String {
+    escape_workflow_data(value)
+        .replace(' ', "%20")
+        .replace(':', "%3A")
+        .replace(',', "%2C")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+    use vec1::Vec1;
+    use vec1::vec1;
+
+    use super::*;
+
+    fn sample_error(msg: Vec1<String>) -> Error {
+        let module = Module::new(
+            ModuleName::from_str("sample"),
+            ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
+            Arc::new("x = 1\n".to_owned()),
+        );
+        Error::new(
+            module,
+            TextRange::new(TextSize::from(0), TextSize::from(1)),
+            msg,
+            ErrorKind::BadAssignment,
+        )
+    }
+
+    #[test]
+    fn github_actions_command_includes_relative_path_and_metadata() {
+        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]), Path::new("/repo"))
+            .expect("should emit command");
+        assert!(cmd.starts_with("::error "), "{cmd}");
+        assert!(
+            cmd.contains("file=foo.py"),
+            "relative path expected, got {cmd}"
+        );
+        assert!(
+            cmd.contains("title=Pyrefly%20bad-assignment"),
+            "title missing, got {cmd}"
+        );
+        assert!(cmd.ends_with("::bad"));
+    }
+
+    #[test]
+    fn github_actions_command_respects_severity_mapping() {
+        let warning = sample_error(vec1!["bad".into()]).with_severity(Severity::Warn);
+        let notice = sample_error(vec1!["bad".into()]).with_severity(Severity::Info);
+        let ignored = sample_error(vec1!["bad".into()]).with_severity(Severity::Ignore);
+        assert!(
+            github_actions_command(&warning, Path::new(""))
+                .unwrap()
+                .starts_with("::warning "),
+            "warning severity not mapped"
+        );
+        assert!(
+            github_actions_command(&notice, Path::new(""))
+                .unwrap()
+                .starts_with("::notice "),
+            "info severity not mapped"
+        );
+        assert!(github_actions_command(&ignored, Path::new("")).is_none());
+    }
+
+    #[test]
+    fn escape_helpers_follow_workflow_spec() {
+        assert_eq!(
+            escape_workflow_data("line1\nline2\r% done"),
+            "line1%0Aline2%0D%25 done"
+        );
+        assert_eq!(escape_workflow_property("file:name,py"), "file%3Aname%2Cpy");
+    }
+}
+
 /// A data structure to facilitate the creation of handles for all the files we want to check.
 pub struct Handles {
     /// A mapping from a file to all other information needed to create a `Handle`.
@@ -769,6 +913,7 @@ impl CheckArgs {
                 .output_format
                 .write_errors_to_console(relative_to.as_path(), &shown_errors)?;
         }
+        emit_github_actions_annotations(relative_to.as_path(), &shown_errors);
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
             print_error_counts(&shown_errors, limit);
