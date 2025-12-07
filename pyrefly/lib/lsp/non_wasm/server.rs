@@ -469,7 +469,10 @@ pub fn capabilities(
         type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
         code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+            code_action_kinds: Some(vec![
+                CodeActionKind::QUICKFIX,
+                CodeActionKind::REFACTOR_EXTRACT,
+            ]),
             ..Default::default()
         })),
         completion_provider: Some(CompletionOptions {
@@ -2294,26 +2297,63 @@ impl Server {
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let module_info = transaction.get_module_info(&handle)?;
         let range = self.from_lsp_range(uri, &module_info, params.range);
-        let code_actions = transaction
-            .local_quickfix_code_actions(&handle, range, import_format)?
-            .into_map(|(title, info, range, insert_text)| {
-                CodeActionOrCommand::CodeAction(CodeAction {
-                    title,
-                    kind: Some(CodeActionKind::QUICKFIX),
+        let mut actions = Vec::new();
+        if let Some(quickfixes) =
+            transaction.local_quickfix_code_actions(&handle, range, import_format)
+        {
+            actions.extend(
+                quickfixes
+                    .into_iter()
+                    .map(|(title, info, range, insert_text)| {
+                        CodeActionOrCommand::CodeAction(CodeAction {
+                            title,
+                            kind: Some(CodeActionKind::QUICKFIX),
+                            edit: Some(WorkspaceEdit {
+                                changes: Some(HashMap::from([(
+                                    uri.clone(),
+                                    vec![TextEdit {
+                                        range: info.to_lsp_range(range),
+                                        new_text: insert_text,
+                                    }],
+                                )])),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        })
+                    }),
+            );
+        }
+        if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
+            for action in refactors {
+                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                for (module, edit_range, new_text) in action.edits {
+                    let Some(edit_uri) = module_info_to_uri(&module) else {
+                        continue;
+                    };
+                    changes.entry(edit_uri).or_default().push(TextEdit {
+                        range: module.to_lsp_range(edit_range),
+                        new_text,
+                    });
+                }
+                if changes.is_empty() {
+                    continue;
+                }
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: action.title,
+                    kind: Some(action.kind),
                     edit: Some(WorkspaceEdit {
-                        changes: Some(HashMap::from([(
-                            uri.clone(),
-                            vec![TextEdit {
-                                range: info.to_lsp_range(range),
-                                new_text: insert_text,
-                            }],
-                        )])),
+                        changes: Some(changes),
                         ..Default::default()
                     }),
                     ..Default::default()
-                })
-            });
-        Some(code_actions)
+                }));
+            }
+        }
+        if actions.is_empty() {
+            None
+        } else {
+            Some(actions)
+        }
     }
 
     fn document_highlight(
