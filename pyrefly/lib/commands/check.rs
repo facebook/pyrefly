@@ -452,7 +452,6 @@ fn escape_workflow_data(value: &str) -> String {
 
 fn escape_workflow_property(value: &str) -> String {
     escape_workflow_data(value)
-        .replace(' ', "%20")
         .replace(':', "%3A")
         .replace(',', "%2C")
 }
@@ -497,7 +496,7 @@ mod tests {
             "relative path expected, got {cmd}"
         );
         assert!(
-            cmd.contains("title=Pyrefly%20bad-assignment"),
+            cmd.contains("title=Pyrefly bad-assignment"),
             "title missing, got {cmd}"
         );
         assert!(cmd.ends_with("::bad"));
