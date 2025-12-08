@@ -1661,7 +1661,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Produce code actions that makes edits local to the file.
-    pub fn local_quickfix_code_actions(
+    pub fn local_quickfix_code_actions_sorted(
         &self,
         handle: &Handle,
         range: TextRange,

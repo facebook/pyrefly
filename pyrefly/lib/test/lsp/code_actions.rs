@@ -30,7 +30,7 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     let mut report = "Code Actions Results:\n".to_owned();
     let transaction = state.transaction();
     for (title, info, range, patch) in transaction
-        .local_quickfix_code_actions(
+        .local_quickfix_code_actions_sorted(
             handle,
             TextRange::new(position, position),
             ImportFormat::Absolute,

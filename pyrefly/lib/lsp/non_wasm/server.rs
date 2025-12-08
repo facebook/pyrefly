@@ -2306,7 +2306,7 @@ impl Server {
         let module_info = transaction.get_module_info(&handle)?;
         let range = self.from_lsp_range(uri, &module_info, params.range);
         let code_actions = transaction
-            .local_quickfix_code_actions(&handle, range, import_format)?
+            .local_quickfix_code_actions_sorted(&handle, range, import_format)?
             .into_map(|(title, info, range, insert_text)| {
                 CodeActionOrCommand::CodeAction(CodeAction {
                     title,
