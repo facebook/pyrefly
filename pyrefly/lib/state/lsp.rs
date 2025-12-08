@@ -1689,11 +1689,11 @@ impl<'a> Transaction<'a> {
                                 import_format,
                             );
                             let range = TextRange::at(position, TextSize::new(0));
-                            let mut title = format!("Insert import: `{}`", insert_text.trim());
-
-                            if export.deprecation.is_some() {
-                                title.push_str(" (deprecated)");
-                            }
+                            let title = format!(
+                                "Insert import: `{}`{}",
+                                insert_text.trim(),
+                                export.deprecation.map_or("", |_| " (deprecated)")
+                            );
 
                             code_actions.push((title, module_info.dupe(), range, insert_text));
                         }
