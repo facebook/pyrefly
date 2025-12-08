@@ -68,6 +68,234 @@ Data(0, 1)  # E: Argument `Literal[1]` is not assignable to parameter `y` with t
 );
 
 testcase!(
+    test_replace,
+    r#"
+from dataclasses import dataclass, replace
+
+@dataclass
+class Foo:
+    x: int
+    y: str
+
+f = Foo(1, "a")
+
+replace(f, x="wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `x` with type `int` in function `dataclasses.replace`
+replace(f, z=3)  # E: Unexpected keyword argument `z` in function `dataclasses.replace`
+    "#,
+);
+
+testcase!(
+    test_replace_initvar_default,
+    r#"
+from dataclasses import dataclass, field, InitVar, replace
+
+@dataclass
+class WithInitVarDefault:
+    x: int
+    y: InitVar[str] = "ok"
+
+w = WithInitVarDefault(0)
+replace(w)
+replace(w, y="new")
+    "#,
+);
+
+testcase!(
+    test_replace_initvar_required,
+    r#"
+from dataclasses import dataclass, InitVar, replace
+
+@dataclass
+class Foo:
+    x: int
+    y: InitVar[int]
+
+f = Foo(1, 2)
+
+replace(f)  # E: Missing argument `y` in function `dataclasses.replace`
+    "#,
+);
+
+testcase!(
+    test_replace_positional_args_rejected,
+    r#"
+from dataclasses import dataclass, replace
+
+@dataclass
+class Foo:
+    x: int
+    y: str
+
+f = Foo(1, "a")
+
+replace(f, "extra")  # E: Expected 1 positional argument, got 2
+    "#,
+);
+
+testcase!(
+    test_replace_init_false_field_rejected,
+    r#"
+from dataclasses import dataclass, field, replace
+
+@dataclass
+class WithInitFalse:
+    x: int
+    y: int = field(init=False, default=5)
+
+g = WithInitFalse(1)
+
+replace(g, y=10)  # E: Unexpected keyword argument `y` in function `dataclasses.replace`
+    "#,
+);
+
+testcase!(
+    test_replace_classvar_rejected,
+    r#"
+from dataclasses import dataclass, replace
+from typing import ClassVar
+
+@dataclass
+class Config:
+    limit: int
+    MAX_ID: ClassVar[int] = 100
+
+c = Config(10)
+replace(c, limit=20)
+replace(c, MAX_ID=200) # E: Unexpected keyword argument `MAX_ID` in function `dataclasses.replace`
+    "#,
+);
+
+testcase!(
+    test_replace_union_mixed_dataclass,
+    r#"
+from dataclasses import dataclass, replace
+from typing import Union
+
+@dataclass
+class Foo:
+    x: int
+
+class Bar:
+    x: int
+
+def f(obj: Union[Foo, Bar]):
+    replace(obj, x=0)  # E: dataclasses.replace() expects a dataclass instance; got Bar | Foo
+    "#,
+);
+
+testcase!(
+    test_replace_union_two_dataclasses_rejects_bad_kw,
+    r#"
+from dataclasses import dataclass, replace
+from typing import Union
+
+@dataclass
+class A:
+    x: int
+
+@dataclass
+class B:
+    y: int
+
+def f(obj: Union[A, B]):
+    replace(obj, z=1)  # E: Unexpected keyword argument `z` in function `dataclasses.replace`
+    "#,
+);
+
+testcase!(
+    test_replace_starred_args_rejected,
+    r#"
+from dataclasses import dataclass, replace
+
+@dataclass
+class Foo:
+    x: int
+    y: int
+
+foo = Foo(1, 2)
+
+replace(foo, *())
+replace(foo, **{"x": "bad"})  # E: Argument `str` is not assignable to parameter `x` with type `int` in function `dataclasses.replace`
+replace(foo, **{"z": 0})  # E: Unexpected keyword argument `z` in function `dataclasses.replace`
+    "#,
+);
+
+testcase!(
+    test_replace_rejects_obj_keyword,
+    r#"
+from dataclasses import dataclass, replace
+
+@dataclass
+class Foo:
+    x: int
+
+foo = Foo(1)
+
+replace(foo, obj=foo)  # E: Unexpected keyword argument `obj` in function `dataclasses.replace`
+    "#,
+);
+
+testcase!(
+    test_replace_generic_consistency,
+    r#"
+from dataclasses import dataclass, replace
+from typing import TypeVar, Generic
+
+T = TypeVar("T")
+
+@dataclass
+class Box(Generic[T]):
+    item: T
+
+b = Box(item=1)
+replace(b, item=2)
+replace(b, item="wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `item` with type `int`
+    "#,
+);
+
+testcase!(
+    test_replace_union_of_two_dataclasses_rejects_bad_kw,
+    r#"
+from dataclasses import dataclass, replace
+from typing import Union
+
+@dataclass
+class A:
+    x: int
+
+@dataclass
+class B:
+    y: int
+
+def f(obj: Union[A, B]):
+    replace(obj, z=1)  # E: Unexpected keyword argument `z` in function `dataclasses.replace`
+    "#,
+);
+
+testcase!(
+    test_replace_does_not_treat_dataclass_transform_as_dataclass,
+    r#"
+from dataclasses import replace
+from typing import dataclass_transform
+
+@dataclass_transform()
+def my_dc(cls):
+    return cls
+
+@my_dc
+class Model:
+    x: int
+    y: str
+
+    def __init__(self, x: int, y: str) -> None: ...
+
+m = Model(1, "a")
+
+replace(m, x=2)  # E: dataclasses.replace() should be called on dataclass instances
+    "#,
+);
+
+testcase!(
     test_inheritance,
     r#"
 import dataclasses

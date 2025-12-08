@@ -478,6 +478,7 @@ pub enum FunctionKind {
     IsSubclass,
     Dataclass,
     DataclassField,
+    DataclassReplace,
     /// `typing.dataclass_transform`. Note that this is `dataclass_transform` itself, *not* the
     /// decorator created by a `dataclass_transform(...)` call. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
@@ -810,6 +811,7 @@ impl FunctionKind {
             ("builtins", None, "classmethod") => Self::ClassMethod,
             ("dataclasses", None, "dataclass") => Self::Dataclass,
             ("dataclasses", None, "field") => Self::DataclassField,
+            ("dataclasses", None, "replace") => Self::DataclassReplace,
             ("typing", None, "overload") => Self::Overload,
             ("typing", None, "override") => Self::Override,
             ("typing", None, "cast") => Self::Cast,
@@ -840,6 +842,7 @@ impl FunctionKind {
             Self::ClassMethod => ModuleName::builtins(),
             Self::Dataclass => ModuleName::dataclasses(),
             Self::DataclassField => ModuleName::dataclasses(),
+            Self::DataclassReplace => ModuleName::dataclasses(),
             Self::DataclassTransform => ModuleName::typing(),
             Self::Final => ModuleName::typing(),
             Self::Overload => ModuleName::typing(),
@@ -865,6 +868,7 @@ impl FunctionKind {
             Self::ClassMethod => Cow::Owned(Name::new_static("classmethod")),
             Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
             Self::DataclassField => Cow::Owned(Name::new_static("field")),
+            Self::DataclassReplace => Cow::Owned(Name::new_static("replace")),
             Self::DataclassTransform => Cow::Owned(Name::new_static("dataclass_transform")),
             Self::Final => Cow::Owned(Name::new_static("final")),
             Self::Overload => Cow::Owned(Name::new_static("overload")),
@@ -890,6 +894,7 @@ impl FunctionKind {
             Self::ClassMethod => None,
             Self::Dataclass => None,
             Self::DataclassField => None,
+            Self::DataclassReplace => None,
             Self::DataclassTransform => None,
             Self::Final => None,
             Self::Overload => None,

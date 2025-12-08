@@ -1243,6 +1243,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                     )
                 }
+                Some(CalleeKind::Function(FunctionKind::DataclassReplace)) => {
+                    self.call_dataclasses_replace(
+                        &x.arguments.args,
+                        &x.arguments.keywords,
+                        x.arguments.range,
+                        errors,
+                    )
+                }
                 // Treat assert_type and reveal_type like pseudo-builtins for convenience. Note that we still
                 // log a name-not-found error, but we also assert/reveal the type as requested.
                 None if ty.is_error() && is_special_name(&x.func, "assert_type") => self
