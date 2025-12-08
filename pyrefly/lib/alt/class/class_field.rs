@@ -852,6 +852,27 @@ impl ClassField {
         }
     }
 
+    pub fn is_uninit_class_var(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Property { .. } => false,
+            ClassFieldInner::Descriptor { .. } => false,
+            ClassFieldInner::Method { .. } => false,
+            ClassFieldInner::NestedClass { .. } => false,
+            ClassFieldInner::ClassAttribute {
+                is_classvar,
+                initialization,
+                ..
+            } => {
+                *is_classvar
+                    && matches!(
+                        initialization,
+                        ClassFieldInitialization::Uninitialized | ClassFieldInitialization::Magic
+                    )
+            }
+            ClassFieldInner::InstanceAttribute { .. } => false,
+        }
+    }
+
     pub fn is_init_var(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { .. } => false,

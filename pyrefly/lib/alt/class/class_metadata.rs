@@ -1212,7 +1212,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut abstract_members = SmallSet::new();
         for field_name in fields_to_check {
             if let Some(field) = self.get_non_synthesized_class_member(cls, &field_name)
-                && field.is_abstract()
+                && (field.is_abstract() || field.is_uninit_class_var())
             {
                 abstract_members.insert(field_name.clone());
             }

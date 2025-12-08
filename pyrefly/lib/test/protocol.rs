@@ -752,3 +752,18 @@ isinstance(Impl(), GenericProtocol)  # E: Runtime checkable protocol `GenericPro
 issubclass(Impl, GenericProtocol)  # E: Runtime checkable protocol `GenericProtocol` has an unsafe overlap with type `Impl`
 "#,
 );
+
+testcase!(
+    test_protocol_with_uninit_classvar,
+    r#"
+from typing import Protocol, ClassVar, final
+class P(Protocol):
+    x: ClassVar[int]
+
+@final
+class C(P): # E: Final class `C` cannot have unimplemented abstract members: `x`
+    pass
+
+c = C()  # E: Cannot instantiate `C` because the following members are abstract: `x`
+"#,
+);
