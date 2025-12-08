@@ -417,3 +417,16 @@ class D(C):  # E: Class `D` has unimplemented abstract members: `bar`
         yield 1
     "#,
 );
+
+
+testcase!(
+    test_uninit_classvar_abc,
+    r#"
+from abc import ABC
+from typing import ClassVar, final
+@final
+class A(ABC): # E: Final class `A` cannot have unimplemented abstract members: `x`
+    x: ClassVar[int]
+a = A()  # E: Cannot instantiate `A` because the following members are abstract: `x`
+"#,
+);
