@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -1319,5 +1321,96 @@ def test_keyword_pattern_not_special(x: float) -> None:
     match x:
         case float(real=r):
             assert_type(r, float)
+"#,
+);
+
+// PEP 765: Disallow return/break/continue that exit a finally block
+
+testcase!(
+    test_pep765_return_in_finally,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+def f():
+    try:
+        pass
+    finally:
+        return 1  # E: `return` in a `finally` block will silence exceptions
+"#,
+);
+
+testcase!(
+    test_pep765_break_in_finally,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+for i in range(10):
+    try:
+        pass
+    finally:
+        break  # E: `break` in a `finally` block will silence exceptions
+"#,
+);
+
+testcase!(
+    test_pep765_continue_in_finally,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+while True:
+    try:
+        pass
+    finally:
+        continue  # E: `continue` in a `finally` block will silence exceptions
+"#,
+);
+
+testcase!(
+    test_pep765_return_in_nested_function_ok,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+def f():
+    try:
+        pass
+    finally:
+        def inner():
+            return 1  # OK: return is in nested function
+        inner()
+"#,
+);
+
+testcase!(
+    test_pep765_break_in_nested_loop_ok,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+for i in range(10):
+    try:
+        pass
+    finally:
+        for j in range(5):
+            break  # OK: break targets nested loop
+"#,
+);
+
+testcase!(
+    test_pep765_continue_in_nested_loop_ok,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+while True:
+    try:
+        pass
+    finally:
+        for j in range(5):
+            continue  # OK: continue targets nested loop
+        break  # E: `break` in a `finally` block will silence exceptions
+"#,
+);
+
+testcase!(
+    test_pep765_return_python313_no_error,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+def f():
+    try:
+        pass
+    finally:
+        return 1  # No error on Python 3.13
 "#,
 );

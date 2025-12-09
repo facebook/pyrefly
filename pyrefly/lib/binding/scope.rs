@@ -886,13 +886,16 @@ pub enum LoopExit {
 struct Loop {
     base: Flow,
     exits: Vec<(LoopExit, Flow)>,
+    /// Whether this loop was started inside a finally block (PEP 765).
+    in_finally: bool,
 }
 
 impl Loop {
-    pub fn new(base: Flow) -> Self {
+    pub fn new(base: Flow, in_finally: bool) -> Self {
         Self {
             base,
             exits: Default::default(),
+            in_finally,
         }
     }
 }
@@ -956,6 +959,8 @@ pub struct Scope {
     imports: SmallMap<Name, ImportUsage>,
     /// Tracking variables in the current scope (module, function, and method scopes)
     variables: SmallMap<Name, VariableUsage>,
+    /// Depth of finally blocks we're in. Resets in new function scopes (PEP 765).
+    finally_depth: usize,
 }
 
 impl Scope {
@@ -970,6 +975,7 @@ impl Scope {
             forks: Default::default(),
             imports: SmallMap::new(),
             variables: SmallMap::new(),
+            finally_depth: 0,
         }
     }
 
@@ -1137,6 +1143,28 @@ impl Scopes {
     pub fn in_function_scope(&self) -> bool {
         self.iter_rev()
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
+    }
+
+    /// Enter a finally block (PEP 765).
+    pub fn enter_finally(&mut self) {
+        self.current_mut().finally_depth += 1;
+    }
+
+    /// Exit a finally block (PEP 765).
+    pub fn exit_finally(&mut self) {
+        self.current_mut().finally_depth -= 1;
+    }
+
+    /// Check if we're in a finally block at the current scope level.
+    /// This resets when entering a new function scope, so nested functions are OK.
+    pub fn in_finally(&self) -> bool {
+        self.current().finally_depth > 0
+    }
+
+    /// Check if we're inside a loop that was started inside the finally block.
+    /// If so, break/continue is OK because it targets that loop, not the finally block.
+    pub fn loop_protects_from_finally_exit(&self) -> bool {
+        self.current().loops.iter().any(|l| l.in_finally)
     }
 
     /// Are we currently in a class body. If so, return the keys for the class and its metadata.
@@ -2546,12 +2574,13 @@ impl<'a> BindingsBuilder<'a> {
     /// Names in `loop_header_targets` will not get phi keys - this is used for loop
     /// variables that are unconditionally reassigned in `for` loop headers
     pub fn setup_loop(&mut self, range: TextRange, loop_header_targets: &SmallSet<Name>) {
+        let in_finally = self.scopes.in_finally();
         let base = mem::take(&mut self.scopes.current_mut().flow);
         // To account for possible assignments to existing names in a loop, we
         // speculatively insert phi keys upfront.
         self.scopes.current_mut().flow =
             self.insert_phi_keys(base.clone(), range, loop_header_targets);
-        self.scopes.current_mut().loops.push(Loop::new(base));
+        self.scopes.current_mut().loops.push(Loop::new(base, in_finally));
     }
 
     pub fn teardown_loop(

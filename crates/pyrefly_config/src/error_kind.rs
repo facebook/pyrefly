@@ -172,6 +172,9 @@ pub enum ErrorKind {
     InvalidOverload,
     /// An error related to ParamSpec definition or usage.
     InvalidParamSpec,
+    /// A return, break, or continue statement that directly exits a finally block.
+    /// This is disallowed starting in Python 3.14 (PEP 765).
+    InvalidReturnInFinally,
     /// A use of `typing.Self` in a context where Pyrefly does not recognize it as
     /// mapping to a valid class type.
     InvalidSelfType,
@@ -297,6 +300,7 @@ impl ErrorKind {
         match self {
             ErrorKind::RevealType => Severity::Info,
             ErrorKind::Deprecated => Severity::Warn,
+            ErrorKind::InvalidReturnInFinally => Severity::Warn,
             ErrorKind::RedundantCast => Severity::Warn,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             // TODO(rechen): re-enable this once we figure out how to make it less noisy.

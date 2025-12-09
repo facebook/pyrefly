@@ -600,6 +600,32 @@ def f(x, *args: P1.args, **kwargs: P2.kwargs) -> None:
 
 Here, `P1.args` and `P2.kwargs` can't be used together; `*args` and `**kwargs` must come from the same `ParamSpec`.
 
+## invalid-return-in-finally
+
+A `return`, `break`, or `continue` statement that directly exits a `finally` block. Starting in Python 3.14 ([PEP 765](https://peps.python.org/pep-0765/)), this is disallowed because it can silently mask exceptions.
+
+```python
+def f():
+    try:
+        raise ValueError()
+    finally:
+        return 42  # Silences the ValueError!
+```
+
+The following are allowed because they don't exit the finally block:
+
+```python
+def f():
+    try:
+        pass
+    finally:
+        def inner():
+            return 42  # OK: return is in nested function
+
+        for x in range(10):
+            break  # OK: break targets nested loop
+```
+
 ## invalid-self-type
 
 This error occurs when `Self` is used in a context Pyrefly does not currently support.
