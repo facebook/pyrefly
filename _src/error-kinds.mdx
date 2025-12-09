@@ -413,22 +413,14 @@ This error defaults to `Ignore`, so opt in by enabling it in your configuration 
 
 ## implicit-any
 
-This error is emitted when a Pyrefly infers an implicit `Any` type in your code. This is common in gradually-typed code, but reduces type safety so we provide this error for users that want to enforce fully-typed codebases.
+This error is emitted when Pyrefly infers an implicit `Any` type in your code for type variables or generic parameters that cannot be determined. This is common in gradually-typed code, but reduces type safety so we provide this error for users that want to enforce fully-typed codebases.
 
-This error is off by default. Typically, it can be fixed by providing an explicit type annotation.
+This error is off by default. Typically, it can be fixed by providing explicit type arguments or default values for type variables.
 
 ```python
-# this only errors when return type inference is disabled
-def missing_return_annotation():
-    return 1
-
-def missing_param_annotation(x: int, y) -> int:
-    return x
-
 # this only errors when first-use inference is disabled
-x = []
+x = []  # error: infers list[Any]
 ```
-
 
 ## implicit-import
 
@@ -982,6 +974,54 @@ if "abc":
 ## reveal-type
 
 Pyrefly uses this error to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
+
+## unannotated-attribute
+
+This error is raised when a class attribute is missing a type annotation and is initialized with the `None` literal. Without an explicit annotation, Pyrefly infers the type as `Any | None`, which reduces type safety.
+
+This error is off by default. To fix it, add an explicit type annotation to the attribute.
+
+```python
+class MyClass:
+    # error: This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.
+    value = None
+
+# Fixed version:
+class MyClass:
+    value: int | None = None
+```
+
+## unannotated-parameter
+
+This error is raised when a function parameter is missing a type annotation. This helps enforce fully-typed codebases by ensuring all parameters have explicit types.
+
+Note: The `self` and `cls` parameters are excluded from this check as they are implicitly typed.
+
+This error is off by default. To fix it, add a type annotation to the parameter.
+
+```python
+def process_data(x: int, y):  # error: `process_data` is missing an annotation for parameter `y`
+    return x + y
+
+# Fixed version:
+def process_data(x: int, y: int) -> int:
+    return x + y
+```
+
+## unannotated-return
+
+This error is raised when a function is missing a return type annotation. This helps enforce fully-typed codebases by ensuring all functions declare their return types explicitly.
+
+This error is off by default. To fix it, add a return type annotation to the function.
+
+```python
+def calculate_sum(x: int, y: int):  # error: `calculate_sum` is missing a return annotation
+    return x + y
+
+# Fixed version:
+def calculate_sum(x: int, y: int) -> int:
+    return x + y
+```
 
 ## unbound-name
 
