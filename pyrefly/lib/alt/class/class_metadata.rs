@@ -1209,17 +1209,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .cloned(),
             );
         }
-        // skip __hash__, but we might need to find a better way to handle it in the future.
-        // Context:
-        // https://github.com/facebook/pyrefly/pull/1797#issuecomment-3629910569
-        // and
-        // https://github.com/python/typeshed/issues/2148
-        fields_to_check.shift_remove(&Name::new_static("__hash__"));
 
         let mut abstract_members = SmallSet::new();
         for field_name in fields_to_check {
             if let Some(field) = self.get_non_synthesized_class_member(cls, &field_name)
-                && (field.is_abstract() || field.is_uninit_class_var())
+                && (field.is_abstract() ||
+                // If a class variable is declared on the interface file, don't consider as abstract
+                !cls.module().path().is_interface() && field.is_uninit_class_var())
             {
                 abstract_members.insert(field_name.clone());
             }
