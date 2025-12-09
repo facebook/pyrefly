@@ -418,7 +418,6 @@ class D(C):  # E: Class `D` has unimplemented abstract members: `bar`
     "#,
 );
 
-
 testcase!(
     test_uninit_classvar_abc,
     r#"
