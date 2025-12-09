@@ -811,34 +811,27 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
 
     let create_version_validator = |expected_version: i64| {
         let actual_uri = uri.as_str();
-        move |msg: &Message| {
-            let Message::Notification(Notification { method, params }) = msg else {
-                return ValidationResult::Skip;
-            };
-            let Some(uri_val) = params.get("uri") else {
-                return ValidationResult::Skip;
-            };
-            let Some(expected_uri) = uri_val.as_str() else {
-                return ValidationResult::Skip;
-            };
-            if expected_uri == actual_uri && method == "textDocument/publishDiagnostics" {
-                if let Some(actual_version) = params.get("version") {
-                    if let Some(actual_version) = actual_version.as_i64() {
-                        assert!(
-                            actual_version <= expected_version,
-                            "expected version: {}, actual version: {}",
-                            expected_version,
-                            actual_version
-                        );
-                        return match actual_version.cmp(&expected_version) {
-                            std::cmp::Ordering::Less => ValidationResult::Skip,
-                            std::cmp::Ordering::Equal => ValidationResult::Pass,
-                            std::cmp::Ordering::Greater => ValidationResult::Fail,
-                        };
-                    }
+        move |msg: &Message| match msg {
+            Message::Notification(Notification { method, params })
+                if let Some((expected_uri, actual_version)) = params
+                    .get("uri")
+                    .and_then(|uri| uri.as_str())
+                    .zip(params.get("version").and_then(|version| version.as_i64()))
+                    && expected_uri == actual_uri
+                    && method == "textDocument/publishDiagnostics" =>
+            {
+                assert!(
+                    actual_version == expected_version,
+                    "expected version: {}, actual version: {}",
+                    expected_version,
+                    actual_version
+                );
+                match actual_version.cmp(&expected_version) {
+                    std::cmp::Ordering::Equal => ValidationResult::Pass,
+                    _ => ValidationResult::Fail,
                 }
             }
-            ValidationResult::Skip
+            _ => ValidationResult::Skip,
         }
     };
 
