@@ -7,13 +7,11 @@
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 use dupe::Dupe;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
-use lsp_types::CodeActionKind;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemLabelDetails;
@@ -54,12 +52,9 @@ use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Number;
-use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
-use ruff_python_ast::visitor;
-use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -87,12 +82,9 @@ use crate::types::callable::Param;
 use crate::types::module::ModuleType;
 use crate::types::types::Type;
 
-#[derive(Clone, Debug)]
-pub struct LocalRefactorCodeAction {
-    pub title: String,
-    pub edits: Vec<(Module, TextRange, String)>,
-    pub kind: CodeActionKind,
-}
+mod quick_fixes;
+
+use self::quick_fixes::extract_function::LocalRefactorCodeAction;
 
 fn default_true() -> bool {
     true
@@ -1730,122 +1722,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
-        if selection.is_empty() {
-            return None;
-        }
-        let Some(module_info) = self.get_module_info(handle) else {
-            return None;
-        };
-        let Some(ast) = self.get_ast(handle) else {
-            return None;
-        };
-        let selection_text = module_info.code_at(selection);
-        if selection_text.trim().is_empty() {
-            return None;
-        }
-        let module_len =
-            TextSize::try_from(module_info.contents().len()).unwrap_or(TextSize::new(0));
-        let module_stmt_range =
-            find_enclosing_module_statement_range(ast.as_ref(), selection, module_len);
-        if selection_contains_disallowed_statements(ast.as_ref(), selection) {
-            return None;
-        }
-        let (load_refs, store_refs) = collect_identifier_refs(ast.as_ref(), selection);
-        if load_refs.is_empty() && store_refs.is_empty() {
-            return None;
-        }
-        let post_loads =
-            collect_post_selection_loads(ast.as_ref(), module_stmt_range, selection.end());
-        let block_indent = detect_block_indent(selection_text);
-        let Some(mut dedented_body) = dedent_selection(selection_text) else {
-            return None;
-        };
-        if dedented_body.trim().is_empty() {
-            return None;
-        }
-        if dedented_body.ends_with('\n') {
-            dedented_body.pop();
-            if dedented_body.ends_with('\r') {
-                dedented_body.pop();
-            }
-        }
-        let helper_name = generate_helper_name(module_info.contents());
-        let mut params = Vec::new();
-        let mut seen_params = HashSet::new();
-        for ident in load_refs {
-            if seen_params.contains(&ident.name) {
-                continue;
-            }
-            if ident.synthetic_load {
-                seen_params.insert(ident.name.clone());
-                params.push(ident.name.clone());
-                continue;
-            }
-            let defs = self.find_definition(handle, ident.position, FindPreference::default());
-            let Some(def) = defs.first() else {
-                continue;
-            };
-            if def.module.path() != module_info.path() {
-                continue;
-            }
-            if !contains_range(module_stmt_range, def.definition_range)
-                || contains_range(selection, def.definition_range)
-                || def.definition_range.start() >= selection.start()
-            {
-                continue;
-            }
-            seen_params.insert(ident.name.clone());
-            params.push(ident.name.clone());
-        }
-        let mut returns = Vec::new();
-        let mut seen_returns = HashSet::new();
-        for ident in store_refs {
-            if seen_returns.contains(&ident.name) || !post_loads.contains(&ident.name) {
-                continue;
-            }
-            seen_returns.insert(ident.name.clone());
-            returns.push(ident.name.clone());
-        }
-        let helper_params = params.join(", ");
-        let indented_body = if dedented_body.trim().is_empty() {
-            "    pass\n".to_owned()
-        } else {
-            indent_block(&dedented_body, "    ")
-        };
-        let mut helper_text = format!("def {helper_name}({helper_params}):\n{indented_body}");
-        if !returns.is_empty() {
-            let return_expr = if returns.len() == 1 {
-                returns[0].clone()
-            } else {
-                returns.join(", ")
-            };
-            helper_text.push_str(&format!("    return {return_expr}\n"));
-        }
-        helper_text.push('\n');
-        let call_args = params.join(", ");
-        let call_expr = format!("{helper_name}({call_args})");
-        let replacement_line = if returns.is_empty() {
-            format!("{block_indent}{call_expr}\n")
-        } else {
-            let lhs = if returns.len() == 1 {
-                returns[0].clone()
-            } else {
-                returns.join(", ")
-            };
-            format!("{block_indent}{lhs} = {call_expr}\n")
-        };
-        let helper_edit = (
-            module_info.dupe(),
-            TextRange::at(module_stmt_range.start(), TextSize::new(0)),
-            helper_text,
-        );
-        let call_edit = (module_info.dupe(), selection, replacement_line);
-        let action = LocalRefactorCodeAction {
-            title: format!("Extract into helper `{helper_name}`"),
-            edits: vec![helper_edit, call_edit],
-            kind: CodeActionKind::REFACTOR_EXTRACT,
-        };
-        Some(vec![action])
+        quick_fixes::extract_function::extract_function_code_actions(self, handle, selection)
     }
 
     /// Determines whether a module is a third-party package.
@@ -3106,203 +2983,6 @@ impl<'a> Transaction<'a> {
         });
         res.sort_by_key(|(score, _, _, _)| Reverse(*score));
         res.into_map(|(_, handle, name, export)| (handle, name, export))
-    }
-}
-
-#[derive(Clone, Debug)]
-struct IdentifierRef {
-    name: String,
-    position: TextSize,
-    synthetic_load: bool,
-}
-
-fn contains_range(outer: TextRange, inner: TextRange) -> bool {
-    outer.start() <= inner.start() && outer.end() >= inner.end()
-}
-
-fn ranges_overlap(a: TextRange, b: TextRange) -> bool {
-    a.start() < b.end() && b.start() < a.end()
-}
-
-fn collect_identifier_refs(
-    ast: &ModModule,
-    selection: TextRange,
-) -> (Vec<IdentifierRef>, Vec<IdentifierRef>) {
-    struct IdentifierCollector {
-        selection: TextRange,
-        loads: Vec<IdentifierRef>,
-        stores: Vec<IdentifierRef>,
-    }
-
-    impl<'a> visitor::Visitor<'a> for IdentifierCollector {
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if contains_range(self.selection, expr.range())
-                && let Expr::Name(name) = expr
-            {
-                let ident = IdentifierRef {
-                    name: name.id.to_string(),
-                    position: name.range.start(),
-                    synthetic_load: false,
-                };
-                match name.ctx {
-                    ExprContext::Load => self.loads.push(ident),
-                    ExprContext::Store => self.stores.push(ident),
-                    ExprContext::Del | ExprContext::Invalid => {}
-                }
-            }
-            visitor::walk_expr(self, expr);
-        }
-
-        fn visit_stmt(&mut self, stmt: &'a Stmt) {
-            if contains_range(self.selection, stmt.range())
-                && let Stmt::AugAssign(aug) = stmt
-                && let Expr::Name(name) = aug.target.as_ref()
-            {
-                self.loads.push(IdentifierRef {
-                    name: name.id.to_string(),
-                    position: name.range.start(),
-                    synthetic_load: true,
-                });
-            }
-            visitor::walk_stmt(self, stmt);
-        }
-    }
-
-    let mut collector = IdentifierCollector {
-        selection,
-        loads: Vec::new(),
-        stores: Vec::new(),
-    };
-    collector.visit_body(&ast.body);
-    (collector.loads, collector.stores)
-}
-
-fn selection_contains_disallowed_statements(ast: &ModModule, selection: TextRange) -> bool {
-    fn visit_stmt(stmt: &Stmt, selection: TextRange, found: &mut bool) {
-        if *found || !ranges_overlap(stmt.range(), selection) {
-            return;
-        }
-        if contains_range(selection, stmt.range()) {
-            match stmt {
-                Stmt::Return(_)
-                | Stmt::Break(_)
-                | Stmt::Continue(_)
-                | Stmt::Raise(_)
-                | Stmt::FunctionDef(_)
-                | Stmt::ClassDef(_) => {
-                    *found = true;
-                    return;
-                }
-                _ => {}
-            }
-        }
-        stmt.recurse(&mut |child| visit_stmt(child, selection, found));
-    }
-    let mut found = false;
-    for stmt in &ast.body {
-        visit_stmt(stmt, selection, &mut found);
-        if found {
-            break;
-        }
-    }
-    found
-}
-
-fn find_enclosing_module_statement_range(
-    ast: &ModModule,
-    selection: TextRange,
-    module_len: TextSize,
-) -> TextRange {
-    for stmt in &ast.body {
-        if contains_range(stmt.range(), selection) {
-            return stmt.range();
-        }
-    }
-    TextRange::new(TextSize::new(0), module_len)
-}
-
-fn collect_post_selection_loads(
-    ast: &ModModule,
-    module_stmt_range: TextRange,
-    selection_end: TextSize,
-) -> HashSet<String> {
-    let mut loads = HashSet::new();
-    ast.visit(&mut |expr: &Expr| {
-        if let Expr::Name(name) = expr
-            && matches!(name.ctx, ExprContext::Load)
-            && contains_range(module_stmt_range, name.range)
-            && name.range.start() > selection_end
-        {
-            loads.insert(name.id.to_string());
-        }
-    });
-    loads
-}
-
-fn detect_block_indent(selection_text: &str) -> String {
-    for line in selection_text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        return line
-            .chars()
-            .take_while(|c| c.is_whitespace())
-            .collect::<String>();
-    }
-    String::new()
-}
-
-fn dedent_selection(selection_text: &str) -> Option<String> {
-    let mut min_indent = usize::MAX;
-    for line in selection_text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let indent = line.chars().take_while(|c| c.is_whitespace()).count();
-        min_indent = min_indent.min(indent);
-    }
-    if min_indent == usize::MAX {
-        return None;
-    }
-    let mut dedented = String::new();
-    for line in selection_text.lines() {
-        if line.trim().is_empty() {
-            dedented.push('\n');
-            continue;
-        }
-        let dedented_line = line.chars().skip(min_indent).collect::<String>();
-        dedented.push_str(&dedented_line);
-        dedented.push('\n');
-    }
-    if !selection_text.ends_with('\n') {
-        dedented.push('\n');
-    }
-    Some(dedented)
-}
-
-fn indent_block(block: &str, indent: &str) -> String {
-    let mut result = String::new();
-    for line in block.lines() {
-        result.push_str(indent);
-        result.push_str(line);
-        result.push('\n');
-    }
-    result
-}
-
-fn generate_helper_name(source: &str) -> String {
-    let mut counter = 1;
-    loop {
-        let candidate = if counter == 1 {
-            "extracted_function".to_owned()
-        } else {
-            format!("extracted_function_{counter}")
-        };
-        let needle = format!("def {candidate}(");
-        if !source.contains(&needle) {
-            return candidate;
-        }
-        counter += 1;
     }
 }
 

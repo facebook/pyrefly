@@ -131,6 +131,34 @@ fn dedented_lines_for_parsing(docstring: &str) -> Vec<String> {
         .collect()
 }
 
+/// Dedent a block of text while preserving blank lines, similar to how we handle docstrings.
+pub fn dedent_block_preserving_layout(text: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let min_indent = minimal_indentation(lines.iter().copied());
+    let mut dedented = String::new();
+    for line in lines {
+        if line.trim().is_empty() {
+            dedented.push('\n');
+            continue;
+        }
+        let start = min_indent.min(line.len());
+        dedented.push_str(&line[start..]);
+        dedented.push('\n');
+    }
+    if !text.ends_with('\n') {
+        dedented.push('\n');
+    }
+    Some(dedented)
+}
+
 fn leading_space_count(line: &str) -> usize {
     line.as_bytes().iter().take_while(|c| **c == b' ').count()
 }

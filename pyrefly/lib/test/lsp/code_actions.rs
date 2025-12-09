@@ -96,6 +96,43 @@ fn find_marked_range(source: &str) -> TextRange {
     )
 }
 
+fn compute_extract_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = find_marked_range(module_info.contents());
+    let actions = transaction
+        .extract_function_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_first_extract_action(code: &str) -> Option<String> {
+    let (module_info, actions, _) = compute_extract_actions(code);
+    let edits = actions.first()?;
+    Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn assert_no_extract_action(code: &str) {
+    let (_, actions, _) = compute_extract_actions(code);
+    assert!(
+        actions.is_empty(),
+        "expected no extract-function actions, found {}",
+        actions.len()
+    );
+}
+
 #[test]
 fn basic_test() {
     let report = get_batched_lsp_operations_report_allow_error(
@@ -303,17 +340,7 @@ if __name__ == "__main__":
     result = process_data(data)
     print(f"The final sum is: {result}")
 "#;
-    let (handles, state) =
-        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
-    let handle = handles.get("main").unwrap();
-    let transaction = state.transaction();
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let selection = find_marked_range(module_info.contents());
-    let actions = transaction
-        .extract_function_code_actions(handle, selection)
-        .unwrap_or_default();
-    assert!(!actions.is_empty(), "expected extract refactor action");
-    let updated = apply_refactor_edits_for_module(&module_info, &actions[0].edits);
+    let updated = apply_first_extract_action(code).expect("expected extract refactor action");
     let expected = r#"
 def extracted_function(item, total_sum):
     squared_value = item * item
@@ -337,4 +364,86 @@ if __name__ == "__main__":
     print(f"The final sum is: {result}")
 "#;
     assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_method_scope_preserves_indent() {
+    let code = r#"
+class Processor:
+    def consume(self, item):
+        print(item)
+
+    def process(self, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            squared_value = item * item
+            if squared_value > 10:
+                self.consume(squared_value)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    let updated = apply_first_extract_action(code).expect("expected extract refactor action");
+    let expected = r#"
+def extracted_function(item, self):
+    squared_value = item * item
+    if squared_value > 10:
+        self.consume(squared_value)
+
+class Processor:
+    def consume(self, item):
+        print(item)
+
+    def process(self, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            extracted_function(item, self)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_rejects_empty_selection() {
+    let code = r#"
+def sink(values):
+    for value in values:
+        # EXTRACT-START
+        # EXTRACT-END
+        print(value)
+"#;
+    assert!(
+        apply_first_extract_action(code).is_none(),
+        "expected no refactor action for empty selection"
+    );
+}
+
+#[test]
+fn extract_function_rejects_return_statement() {
+    let code = r#"
+def sink(values):
+    # EXTRACT-START
+    return values[0]
+    # EXTRACT-END
+"#;
+    assert_no_extract_action(code);
+}
+
+#[test]
+#[ignore = "multiple insertion point choices not yet supported"]
+fn extract_function_offers_inner_function_option() {
+    let code = r#"
+def outer(xs):
+    # EXTRACT-START
+    running = 0
+    for x in xs:
+        running += x
+    # EXTRACT-END
+    return running
+"#;
+    let (_, _, titles) = compute_extract_actions(code);
+    assert!(
+        titles.iter().any(|title| title.contains("module scope")),
+        "expected at least one extract action when control flow is simple"
+    );
 }
