@@ -37,12 +37,8 @@ pub(crate) fn extract_function_code_actions(
     if selection.is_empty() {
         return None;
     }
-    let Some(module_info) = transaction.get_module_info(handle) else {
-        return None;
-    };
-    let Some(ast) = transaction.get_ast(handle) else {
-        return None;
-    };
+    let module_info = transaction.get_module_info(handle)?;
+    let ast = transaction.get_ast(handle)?;
     let selection_text = module_info.code_at(selection);
     if selection_text.trim().is_empty() {
         return None;
@@ -59,9 +55,7 @@ pub(crate) fn extract_function_code_actions(
     }
     let post_loads = collect_post_selection_loads(ast.as_ref(), module_stmt_range, selection.end());
     let block_indent = detect_block_indent(selection_text);
-    let Some(mut dedented_body) = dedent_block_preserving_layout(selection_text) else {
-        return None;
-    };
+    let mut dedented_body = dedent_block_preserving_layout(selection_text)?;
     if dedented_body.ends_with('\n') {
         dedented_body.pop();
         if dedented_body.ends_with('\r') {
@@ -176,34 +170,33 @@ fn collect_identifier_refs(
 
     impl<'a> ruff_python_ast::visitor::Visitor<'a> for IdentifierCollector {
         fn visit_expr(&mut self, expr: &'a Expr) {
-            if self.selection.contains_range(expr.range()) {
-                if let Expr::Name(name) = expr {
-                    let ident = IdentifierRef {
-                        name: name.id.to_string(),
-                        position: name.range.start(),
-                        synthetic_load: false,
-                    };
-                    match name.ctx {
-                        ExprContext::Load => self.loads.push(ident),
-                        ExprContext::Store => self.stores.push(ident),
-                        ExprContext::Del | ExprContext::Invalid => {}
-                    }
+            if self.selection.contains_range(expr.range())
+                && let Expr::Name(name) = expr
+            {
+                let ident = IdentifierRef {
+                    name: name.id.to_string(),
+                    position: name.range.start(),
+                    synthetic_load: false,
+                };
+                match name.ctx {
+                    ExprContext::Load => self.loads.push(ident),
+                    ExprContext::Store => self.stores.push(ident),
+                    ExprContext::Del | ExprContext::Invalid => {}
                 }
             }
             ruff_python_ast::visitor::walk_expr(self, expr);
         }
 
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
-            if self.selection.contains_range(stmt.range()) {
-                if let Stmt::AugAssign(aug) = stmt {
-                    if let Expr::Name(name) = aug.target.as_ref() {
-                        self.loads.push(IdentifierRef {
-                            name: name.id.to_string(),
-                            position: name.range.start(),
-                            synthetic_load: true,
-                        });
-                    }
-                }
+            if self.selection.contains_range(stmt.range())
+                && let Stmt::AugAssign(aug) = stmt
+                && let Expr::Name(name) = aug.target.as_ref()
+            {
+                self.loads.push(IdentifierRef {
+                    name: name.id.to_string(),
+                    position: name.range.start(),
+                    synthetic_load: true,
+                });
             }
             ruff_python_ast::visitor::walk_stmt(self, stmt);
         }
@@ -270,13 +263,12 @@ fn collect_post_selection_loads(
 ) -> HashSet<String> {
     let mut loads = HashSet::new();
     ast.visit(&mut |expr: &Expr| {
-        if let Expr::Name(name) = expr {
-            if matches!(name.ctx, ExprContext::Load)
-                && module_stmt_range.contains_range(name.range)
-                && name.range.start() > selection_end
-            {
-                loads.insert(name.id.to_string());
-            }
+        if let Expr::Name(name) = expr
+            && matches!(name.ctx, ExprContext::Load)
+            && module_stmt_range.contains_range(name.range)
+            && name.range.start() > selection_end
+        {
+            loads.insert(name.id.to_string());
         }
     });
     loads
@@ -309,7 +301,7 @@ fn generate_helper_name(source: &str) -> String {
     let mut counter = 1;
     loop {
         let candidate = if counter == 1 {
-            "extracted_function".to_string()
+            "extracted_function".to_owned()
         } else {
             format!("extracted_function_{counter}")
         };
