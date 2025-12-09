@@ -807,17 +807,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
     let uri = Url::from_file_path(file).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        capabilities: Some(serde_json::json!({
-            "textDocument": {
-                "publishDiagnostics": {
-                    "versionSupport": true,
-                },
-            },
-        })),
-        ..Default::default()
-    });
+    interaction.initialize(InitializeSettings::default());
 
     let create_version_validator = |expected_version: i64| {
         let actual_uri = uri.as_str();
