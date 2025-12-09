@@ -83,10 +83,10 @@ fn extract_pyi_files_from_archive(filter: PathFilter) -> anyhow::Result<SmallMap
         let mut relative_path_components = relative_path_context.components();
 
         let first_component = relative_path_components.next();
-        if let Some(expected) = filter.expected_first_component() {
-            if first_component.is_none_or(|component| component.as_os_str() != expected) {
-                continue;
-            }
+        if let Some(expected) = filter.expected_first_component()
+            && first_component.is_none_or(|component| component.as_os_str() != expected)
+        {
+            continue;
         }
         // For ThirdPartyStubs, we need to put first_component back into the path
 

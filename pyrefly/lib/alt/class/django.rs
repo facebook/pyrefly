@@ -11,6 +11,8 @@ use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
 use pyrefly_types::callable::ParamList;
+use pyrefly_types::callable::PropertyMetadata;
+use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
@@ -310,7 +312,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn property(&self, cls: &Class, name: Name, ty: Type) -> Type {
         let signature = Callable::list(ParamList::new(vec![self.class_self_param(cls, false)]), ty);
         let mut metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), name);
-        metadata.flags.is_property_getter = true;
+        metadata.flags.property_metadata = Some(PropertyMetadata {
+            role: PropertyRole::Getter,
+            getter: Type::any_error(),
+            setter: None,
+            has_deleter: false,
+        });
         Type::Function(Box::new(Function {
             signature,
             metadata,

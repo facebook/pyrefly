@@ -28,6 +28,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
 use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::quantified::Quantified;
@@ -996,7 +997,13 @@ impl Query {
         let class_ty = transaction.get_type_at(&handle, cls.name.start());
         fn get_kind_and_field_type(ty: &Type) -> (Option<String>, &Type) {
             match ty {
-                Type::Function(f) if f.metadata.flags.is_property_getter => {
+                Type::Function(f)
+                    if f.metadata
+                        .flags
+                        .property_metadata
+                        .as_ref()
+                        .is_some_and(|meta| matches!(meta.role, PropertyRole::Getter)) =>
+                {
                     (Some(String::from("property")), ty)
                 }
                 Type::ClassType(c)

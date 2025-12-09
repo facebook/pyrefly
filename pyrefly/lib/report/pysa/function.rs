@@ -19,6 +19,7 @@ use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
+use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Overload;
@@ -715,9 +716,12 @@ impl FunctionNode {
 
     fn is_property_getter(&self) -> bool {
         match self {
-            FunctionNode::DecoratedFunction(function) => {
-                function.metadata().flags.is_property_getter
-            }
+            FunctionNode::DecoratedFunction(function) => function
+                .metadata()
+                .flags
+                .property_metadata
+                .as_ref()
+                .is_some_and(|meta| matches!(meta.role, PropertyRole::Getter)),
             FunctionNode::ClassField { .. } => false,
         }
     }
@@ -727,8 +731,9 @@ impl FunctionNode {
             FunctionNode::DecoratedFunction(function) => function
                 .metadata()
                 .flags
-                .is_property_setter_with_getter
-                .is_some(),
+                .property_metadata
+                .as_ref()
+                .is_some_and(|meta| matches!(meta.role, PropertyRole::Setter)),
             FunctionNode::ClassField { .. } => false,
         }
     }

@@ -47,7 +47,8 @@ use crate::solver::solver::SubsetError;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
-use crate::types::callable::PropertyPayload;
+use crate::types::callable::PropertyMetadata;
+use crate::types::callable::PropertyRole;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
@@ -414,6 +415,7 @@ struct AttributeBase(Vec1<AttributeBase1>);
 struct PropertyAttr {
     getter: Type,
     setter: Option<Type>,
+    deleter: bool,
 }
 
 /// A single, "atomic" attribute base, not coming from a union or an intersection.
@@ -1408,8 +1410,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // TODO(stroxler): it is probably possible to synthesize a forall type here
                     // that uses a type var to propagate the setter. Investigate this option later.
                     let mut getter = property.getter.clone();
+                    let metadata_getter = property.getter.without_property_metadata();
+                    let metadata_setter = property
+                        .setter
+                        .as_ref()
+                        .map(|setter| setter.without_property_metadata());
                     getter.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {
-                        meta.flags.is_property_setter_decorator = true;
+                        meta.flags.property_metadata = Some(PropertyMetadata {
+                            role: PropertyRole::SetterDecorator,
+                            getter: metadata_getter.clone(),
+                            setter: metadata_setter.clone(),
+                            has_deleter: property.deleter,
+                        });
                     });
                     acc.found_type(
                         // TODO(samzhou19815): Support go-to-definition for @property applied symbols
@@ -1417,12 +1429,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 } else if attr_name == "deleter" {
                     let mut getter = property.getter.clone();
-                    let payload = PropertyPayload {
-                        getter: property.getter.clone(),
-                        setter: property.setter.clone(),
-                    };
                     getter.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {
-                        meta.flags.property_deleter_payload = Some(payload.clone());
+                        meta.flags.property_metadata = Some(PropertyMetadata {
+                            role: PropertyRole::DeleterDecorator,
+                            getter: property.getter.clone(),
+                            setter: property.setter.clone(),
+                            has_deleter: true,
+                        });
                     });
                     acc.found_type(getter, base)
                 } else {
@@ -1862,15 +1875,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ClassBase::ClassType(self.stdlib.method_type().clone()),
             )),
             Type::Never(_) => acc.push(AttributeBase1::Never),
-            _ if ty.is_property_getter() => acc.push(AttributeBase1::Property(PropertyAttr {
-                getter: ty.clone(),
-                setter: None,
-            })),
-            _ if let Some(getter) = ty.is_property_setter_with_getter() => {
+            _ if ty.is_property_getter() => {
+                let deleter = ty
+                    .property_metadata()
+                    .map(|meta| meta.has_deleter)
+                    .unwrap_or(false);
                 acc.push(AttributeBase1::Property(PropertyAttr {
-                    getter,
+                    getter: ty.clone(),
+                    setter: None,
+                    deleter,
+                }));
+            }
+            _ if let Some(metadata) = ty.property_metadata()
+                && matches!(metadata.role, PropertyRole::Setter) =>
+            {
+                acc.push(AttributeBase1::Property(PropertyAttr {
+                    getter: metadata.getter.clone(),
                     setter: Some(ty.clone()),
-                }))
+                    deleter: metadata.has_deleter,
+                }));
             }
             Type::Callable(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.function_type().clone(),

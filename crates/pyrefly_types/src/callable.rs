@@ -352,9 +352,21 @@ impl Deprecation {
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
 )]
-pub struct PropertyPayload {
+pub enum PropertyRole {
+    Getter,
+    Setter,
+    SetterDecorator,
+    DeleterDecorator,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
+)]
+pub struct PropertyMetadata {
+    pub role: PropertyRole,
     pub getter: Type,
     pub setter: Option<Type>,
+    pub has_deleter: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -365,19 +377,10 @@ pub struct FuncFlags {
     pub is_classmethod: bool,
     /// A function decorated with `@deprecated`
     pub deprecation: Option<Deprecation>,
-    /// A function decorated with `@property`
-    pub is_property_getter: bool,
+    /// Metadata for `@property`, `@foo.setter`, and `@foo.deleter`.
+    pub property_metadata: Option<PropertyMetadata>,
     /// A function decorated with `functools.cached_property` or equivalent.
     pub is_cached_property: bool,
-    /// A `foo.setter` function, where `foo` is some `@property`-decorated function.
-    /// When used to decorate a function, turns the decorated function into a property setter.
-    pub is_property_setter_decorator: bool,
-    /// If None, this is a function decorated with `@foo.setter`, where `foo` is
-    /// a property (i.e. a function decoratoed with `@property`)
-    ///
-    /// The stored type is `foo` (the getter).
-    pub is_property_setter_with_getter: Option<Type>,
-    pub property_deleter_payload: Option<PropertyPayload>,
     pub has_enum_member_decoration: bool,
     pub is_override: bool,
     pub has_final_decoration: bool,
