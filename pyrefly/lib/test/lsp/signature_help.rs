@@ -777,3 +777,121 @@ Signature Help Result: active=0
         report.trim(),
     );
 }
+
+#[test]
+fn function_docstring_test() {
+    let code = r#"
+def greet(name: str, age: int) -> None:
+    """
+    Greet a person with their name and age.
+
+    This function prints a friendly greeting message.
+
+    Args:
+        name: The person's name
+        age: The person's age
+    """
+    pass
+
+greet()
+#     ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let handle = handles.get("main").unwrap();
+    let cursors = extract_cursors_for_test(code);
+
+    let signature = state
+        .transaction()
+        .get_signature_help_at(handle, cursors[0])
+        .expect("signature help available");
+
+    assert_eq!(signature.signatures.len(), 1);
+    let sig_info = &signature.signatures[0];
+
+    // Check that function-level documentation is present
+    assert!(
+        sig_info.documentation.is_some(),
+        "function-level documentation should be present"
+    );
+
+    if let Some(Documentation::MarkupContent(content)) = &sig_info.documentation {
+        assert!(
+            content.value.contains("Greet a person"),
+            "docstring should contain summary text"
+        );
+        assert!(
+            content.value.contains("friendly greeting"),
+            "docstring should contain description text"
+        );
+    } else {
+        panic!("unexpected documentation variant");
+    }
+
+    // Also verify parameters still have their documentation
+    let params = sig_info
+        .parameters
+        .as_ref()
+        .expect("parameters should be present");
+
+    let name_param = params
+        .iter()
+        .find(|p| matches!(&p.label, ParameterLabel::Simple(label) if label.starts_with("name")))
+        .expect("name parameter should exist");
+
+    if let Some(Documentation::MarkupContent(content)) = &name_param.documentation {
+        assert_eq!(content.value, "The person's name");
+    }
+}
+
+#[test]
+fn function_docstring_without_param_docs_test() {
+    let code = r#"
+def calculate(x: int, y: int) -> int:
+    """
+    Calculate the sum of two numbers.
+
+    This is a simple addition function.
+    """
+    return x + y
+
+calculate(1, 2)
+#            ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let handle = handles.get("main").unwrap();
+    let cursors = extract_cursors_for_test(code);
+
+    let signature = state
+        .transaction()
+        .get_signature_help_at(handle, cursors[0])
+        .expect("signature help available");
+
+    assert_eq!(signature.signatures.len(), 1);
+    let sig_info = &signature.signatures[0];
+
+    // Function-level documentation should be present
+    assert!(
+        sig_info.documentation.is_some(),
+        "function-level documentation should be present even without param docs"
+    );
+
+    if let Some(Documentation::MarkupContent(content)) = &sig_info.documentation {
+        assert!(content.value.contains("Calculate the sum"));
+        assert!(content.value.contains("simple addition"));
+    }
+
+    // Parameters should not have individual documentation
+    let params = sig_info
+        .parameters
+        .as_ref()
+        .expect("parameters should be present");
+
+    for param in params {
+        assert!(
+            param.documentation.is_none(),
+            "parameters should not have individual docs when not specified"
+        );
+    }
+}

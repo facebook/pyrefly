@@ -8,11 +8,15 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use lsp_types::Documentation;
+use lsp_types::MarkupContent;
+use lsp_types::MarkupKind;
 use lsp_types::ParameterInformation;
 use lsp_types::ParameterLabel;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureInformation;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::docstring::Docstring;
 use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_util::prelude::VecExt;
@@ -160,6 +164,7 @@ impl Transaction<'_> {
         self.get_callables_from_call(handle, position).map(
             |(callables, chosen_overload_index, active_argument, callee_range)| {
                 let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
+                let function_docstring = self.function_docstring_for_callee(handle, callee_range);
                 let signatures = callables
                     .into_iter()
                     .map(|t| {
@@ -167,6 +172,7 @@ impl Transaction<'_> {
                             t,
                             &active_argument,
                             parameter_docs.as_ref(),
+                            function_docstring.as_ref(),
                         )
                     })
                     .collect_vec();
@@ -215,10 +221,43 @@ impl Transaction<'_> {
         if docs.is_empty() { None } else { Some(docs) }
     }
 
+    /// Extract the full docstring for a callee to display in signature help.
+    pub(crate) fn function_docstring_for_callee(
+        &self,
+        handle: &Handle,
+        callee_range: TextRange,
+    ) -> Option<Docstring> {
+        let position = callee_range.start();
+        let (docstring_range, module) = self
+            .find_definition(
+                handle,
+                position,
+                FindPreference {
+                    prefer_pyi: false,
+                    ..Default::default()
+                },
+            )
+            .into_iter()
+            .find_map(|item| {
+                item.docstring_range
+                    .map(|range| (range, item.module.clone()))
+            })
+            .or_else(|| {
+                self.find_definition(handle, position, FindPreference::default())
+                    .into_iter()
+                    .find_map(|item| {
+                        item.docstring_range
+                            .map(|range| (range, item.module.clone()))
+                    })
+            })?;
+        Some(Docstring(docstring_range, module))
+    }
+
     pub(crate) fn create_signature_information(
         type_: Type,
         active_argument: &ActiveArgument,
         parameter_docs: Option<&HashMap<String, String>>,
+        function_docstring: Option<&Docstring>,
     ) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
         let label = type_.as_hover_string();
@@ -254,7 +293,12 @@ impl Transaction<'_> {
         };
         SignatureInformation {
             label,
-            documentation: None,
+            documentation: function_docstring.map(|docstring| {
+                Documentation::MarkupContent(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: docstring.resolve(),
+                })
+            }),
             parameters,
             active_parameter,
         }
