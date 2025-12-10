@@ -1054,14 +1054,11 @@ impl<'a> BindingsBuilder<'a> {
                     };
                     let key = self.insert_binding(key, val);
                     // Register the imported name from wildcard imports
-                    self.scopes.register_import_with_star(
-                        &Identifier {
-                            node_index: AtomicNodeIndex::default(),
-                            id: name.into_key().clone(),
-                            range: x.range,
-                        },
-                        true,
-                    );
+                    self.scopes.register_import_with_star(&Identifier {
+                        node_index: AtomicNodeIndex::default(),
+                        id: name.into_key().clone(),
+                        range: x.range,
+                    });
                     self.bind_name(
                         name.key(),
                         key,
@@ -1116,7 +1113,13 @@ impl<'a> BindingsBuilder<'a> {
                         Binding::Type(Type::any_explicit())
                     }
                 };
-                self.scopes.register_import(&asname);
+                // __future__ imports have side effects even if not explicitly used,
+                // so we skip the unused import check for them.
+                if m == ModuleName::future() {
+                    self.scopes.register_future_import(&asname);
+                } else {
+                    self.scopes.register_import(&asname);
+                }
                 self.bind_definition(&asname, val, FlowStyle::Import(m, x.name.id));
             }
         }

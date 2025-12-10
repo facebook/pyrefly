@@ -116,6 +116,10 @@ impl ModuleName {
         Self::from_str("typing_extensions")
     }
 
+    pub fn future() -> Self {
+        Self::from_str("__future__")
+    }
+
     pub fn types() -> Self {
         Self::from_str("types")
     }

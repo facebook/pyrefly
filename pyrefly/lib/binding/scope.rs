@@ -805,7 +805,9 @@ struct ParameterUsage {
 struct ImportUsage {
     range: TextRange,
     used: bool,
-    is_star_import: bool,
+    /// Skip reporting this import as unused. This is true for star imports
+    /// and __future__ imports, which have side effects even if not explicitly used.
+    skip_unused_check: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1345,7 +1347,7 @@ impl Scopes {
         imports
             .into_iter()
             .filter_map(|(name, usage)| {
-                if usage.used || usage.is_star_import {
+                if usage.used || usage.skip_unused_check {
                     None
                 } else {
                     Some(UnusedImport {
@@ -1736,17 +1738,25 @@ impl Scopes {
     }
 
     pub fn register_import(&mut self, name: &Identifier) {
-        self.register_import_with_star(name, false);
+        self.register_import_internal(name, false);
     }
 
-    pub fn register_import_with_star(&mut self, name: &Identifier, is_star_import: bool) {
+    pub fn register_import_with_star(&mut self, name: &Identifier) {
+        self.register_import_internal(name, true);
+    }
+
+    pub fn register_future_import(&mut self, name: &Identifier) {
+        self.register_import_internal(name, true);
+    }
+
+    fn register_import_internal(&mut self, name: &Identifier, skip_unused_check: bool) {
         if matches!(self.current().kind, ScopeKind::Module) {
             self.current_mut().imports.insert(
                 name.id.clone(),
                 ImportUsage {
                     range: name.range,
                     used: false,
-                    is_star_import,
+                    skip_unused_check,
                 },
             );
         }
