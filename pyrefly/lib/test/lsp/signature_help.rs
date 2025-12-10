@@ -772,7 +772,7 @@ foo()
 6 | foo()
         ^
 Signature Help Result: active=0
-- def foo(a: KylesInt) -> None: ..., parameters=[a: int | str], active parameter = 0"
+- def foo(a: KylesInt) -> None: ..., parameters=[a: KylesInt], active parameter = 0"
             .trim(),
         report.trim(),
     );

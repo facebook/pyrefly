@@ -798,6 +798,27 @@ impl Param {
             _ => false,
         }
     }
+
+    /// Format a parameter for display using the proper type display infrastructure.
+    /// This ensures consistent formatting with default values, position-only markers, etc.
+    ///
+    /// This is similar to the `Display` impl, but allows passing in a `TypeDisplayContext`
+    /// for context-aware formatting (e.g., disambiguating types with the same name).
+    pub fn format_for_signature(&self, type_ctx: &crate::display::TypeDisplayContext) -> String {
+        use pyrefly_util::display::Fmt;
+
+        use crate::type_output::DisplayOutput;
+
+        format!(
+            "{}",
+            Fmt(|f| {
+                let mut output = DisplayOutput::new(type_ctx, f);
+                self.fmt_with_type(&mut output, &|ty, o| {
+                    type_ctx.fmt_helper_generic(ty, false, o)
+                })
+            })
+        )
+    }
 }
 
 impl Display for Param {
