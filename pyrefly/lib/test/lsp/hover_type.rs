@@ -113,7 +113,7 @@ xy = xy + 1
 # main.py
 3 | xy = xy + 1
      ^
-Hover Result: `int`
+Hover Result: `Literal[6]`
 "#
         .trim(),
         report.trim(),
