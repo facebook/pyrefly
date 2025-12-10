@@ -1979,7 +1979,7 @@ impl Server {
             }
         } else {
             self.connection
-                .publish_diagnostics_for_uri(url, Vec::new(), version);
+                .publish_diagnostics_for_uri(url.clone(), Vec::new(), version);
         }
         self.unsaved_file_tracker.forget_uri_path(&url);
         self.recheck_queue.queue_task(HeavyTask::new(move |server| {

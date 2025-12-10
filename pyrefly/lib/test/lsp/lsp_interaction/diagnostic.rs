@@ -7,16 +7,12 @@
 
 use lsp_server::Message;
 use lsp_server::Notification;
-use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::Url;
-use lsp_types::request::DocumentDiagnosticRequest;
 use pyrefly_config::environment::environment::PythonEnvironment;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::object_model::ValidationResult;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -807,11 +803,13 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
     let uri = Url::from_file_path(file).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.to_path_buf());
-    interaction.initialize(InitializeSettings::default());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
     let create_version_validator = |expected_version: i64| {
         let actual_uri = uri.as_str();
-        move |msg: &Message| match msg {
+        move |msg: Message| match msg {
             Message::Notification(Notification { method, params })
                 if let Some((expected_uri, actual_version)) = params
                     .get("uri")
@@ -826,41 +824,44 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
                     expected_version,
                     actual_version
                 );
-                match actual_version.cmp(&expected_version) {
-                    std::cmp::Ordering::Equal => ValidationResult::Pass,
-                    _ => ValidationResult::Fail,
-                }
+                (actual_version == expected_version).then_some(())
             }
-            _ => ValidationResult::Skip,
+            _ => None,
         }
     };
 
-    interaction.server.did_open("text_document.py");
+    interaction.client.did_open("text_document.py");
 
     let version = 1;
-    interaction.client.expect_message_helper(
-        create_version_validator(version),
-        &format!(
-            "publishDiagnostics notification with version {} for file: {}",
-            version,
-            uri.as_str()
-        ),
-    );
+    interaction
+        .client
+        .expect_message(
+            &format!(
+                "publishDiagnostics notification with version {} for file: {}",
+                version,
+                uri.as_str()
+            ),
+            create_version_validator(version),
+        )
+        .unwrap();
 
-    interaction.server.did_change("text_document.py", "a = b");
+    interaction.client.did_change("text_document.py", "a = b");
 
     let version = 2;
-    interaction.client.expect_message_helper(
-        create_version_validator(version),
-        &format!(
-            "publishDiagnostics notification with version {} for file: {}",
-            version,
-            uri.as_str()
-        ),
-    );
+    interaction
+        .client
+        .expect_message(
+            &format!(
+                "publishDiagnostics notification with version {} for file: {}",
+                version,
+                uri.as_str()
+            ),
+            create_version_validator(version),
+        )
+        .unwrap();
 
     interaction
-        .server
+        .client
         .send_message(Message::Notification(Notification {
             method: "textDocument/didClose".to_owned(),
             params: serde_json::json!({
@@ -873,14 +874,17 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
         }));
 
     let version = 3;
-    interaction.client.expect_message_helper(
-        create_version_validator(version),
-        &format!(
-            "publishDiagnostics notification with version {} for file: {}",
-            version,
-            uri.as_str()
-        ),
-    );
+    interaction
+        .client
+        .expect_message(
+            &format!(
+                "publishDiagnostics notification with version {} for file: {}",
+                version,
+                uri.as_str()
+            ),
+            create_version_validator(version),
+        )
+        .unwrap();
 
-    interaction.shutdown();
+    interaction.shutdown().unwrap();
 }
