@@ -2580,7 +2580,10 @@ impl<'a> BindingsBuilder<'a> {
         // speculatively insert phi keys upfront.
         self.scopes.current_mut().flow =
             self.insert_phi_keys(base.clone(), range, loop_header_targets);
-        self.scopes.current_mut().loops.push(Loop::new(base, in_finally));
+        self.scopes
+            .current_mut()
+            .loops
+            .push(Loop::new(base, in_finally));
     }
 
     pub fn teardown_loop(
