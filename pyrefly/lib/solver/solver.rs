@@ -43,7 +43,6 @@ use crate::error::context::TypeCheckKind;
 use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;
-use crate::types::callable::Param;
 use crate::types::callable::Params;
 use crate::types::module::ModuleType;
 use crate::types::simplify::simplify_tuples;
@@ -546,14 +545,7 @@ impl Solver {
                         let mut representative_quantifieds: Vec<Quantified> = Vec::new();
 
                         for param in params.items() {
-                            let ty = match param {
-                                Param::PosOnly(_, ty, _) => ty,
-                                Param::Pos(_, ty, _) => ty,
-                                Param::VarArg(_, ty) => ty,
-                                Param::KwOnly(_, ty, _) => ty,
-                                Param::Kwargs(_, ty) => ty,
-                            };
-                            ty.universe(&mut |t| {
+                            param.as_type().universe(&mut |t| {
                                 if let Type::Var(v) = t {
                                     if let Some(q) = self.get_quantified_for_var(*v) {
                                         var_to_representative.insert(*v, q.clone());
@@ -593,11 +585,16 @@ impl Solver {
                         });
 
                         // Build new tparams from representative Quantifieds
+                        //
+                        // TODO: We use PUndefined (Bivariant) because Quantified doesn't store
+                        // variance and Variable::Quantified only stores Quantified, not TParam.
+                        // The proper fix would be to track variance through fresh_quantified.
+                        // PUndefined is safe (won't cause false errors) but may miss some errors.
                         let new_tparams: Vec<TParam> = representative_quantifieds
                             .into_iter()
                             .map(|q| TParam {
                                 quantified: q,
-                                variance: PreInferenceVariance::PInvariant,
+                                variance: PreInferenceVariance::PUndefined,
                             })
                             .collect();
 

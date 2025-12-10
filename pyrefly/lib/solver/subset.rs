@@ -583,15 +583,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         let mut quantifieds = Vec::new();
 
         for param in params.items() {
-            let ty = match param {
-                Param::PosOnly(_, ty, _) => ty,
-                Param::Pos(_, ty, _) => ty,
-                Param::VarArg(_, ty) => ty,
-                Param::KwOnly(_, ty, _) => ty,
-                Param::Kwargs(_, ty) => ty,
-            };
-
-            ty.universe(&mut |t| {
+            param.as_type().universe(&mut |t| {
                 match t {
                     Type::Quantified(q) => {
                         if !quantifieds.contains(&(**q)) {
@@ -618,11 +610,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // Create TParams from the quantified variables
             // Note: We keep the original Vars in the params - substitution will happen
             // later in simplify_mut after all unifications are complete.
+            //
+            // TODO: We use PUndefined (Bivariant) because Quantified doesn't store variance
+            // and Variable::Quantified only stores Quantified, not TParam. The proper fix
+            // would be to track variance through fresh_quantified -> Variable::Quantified.
+            // PUndefined is safe (won't cause false errors) but may miss some real errors.
             let tparams: Vec<TParam> = quantifieds
                 .into_iter()
                 .map(|q| TParam {
                     quantified: q,
-                    variance: PreInferenceVariance::PInvariant,
+                    variance: PreInferenceVariance::PUndefined,
                 })
                 .collect();
 
