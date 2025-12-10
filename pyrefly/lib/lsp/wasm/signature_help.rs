@@ -261,14 +261,14 @@ impl Transaction<'_> {
         function_docstring: Option<&Docstring>,
     ) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
-        let label = type_.as_lsp_string(LspDisplayMode::Hover);
+        let label = type_.as_lsp_string(LspDisplayMode::SignatureHelp);
         let (parameters, active_parameter) = if let Some(params) =
             Self::normalize_singleton_function_type_into_params(type_)
         {
             // Create a type display context for consistent parameter formatting
             let param_types: Vec<&Type> = params.iter().map(|p| p.as_type()).collect();
             let mut type_ctx = TypeDisplayContext::new(&param_types);
-            type_ctx.set_lsp_display_mode(LspDisplayMode::Hover);
+            type_ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
 
             let active_parameter =
                 Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);

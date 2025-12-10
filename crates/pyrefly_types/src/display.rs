@@ -95,6 +95,8 @@ pub enum LspDisplayMode {
     Standard,
     /// Hover mode: Multi-line for readability
     Hover,
+    /// Signature help mode: Single-line for LSP compatibility
+    SignatureHelp,
 }
 
 #[derive(Debug, Default)]
@@ -401,19 +403,28 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Function(box Function {
                 signature,
                 metadata,
-            }) => {
-                if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
+            }) => match self.lsp_display_mode {
+                LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
                     let func_name = metadata.kind.function_name();
                     output.write_str("def ")?;
                     output.write_str(func_name.as_ref().as_str())?;
-                    signature.fmt_with_type_with_newlines(output, &|t, o| {
-                        self.fmt_helper_generic(t, false, o)
-                    })?;
+                    match self.lsp_display_mode {
+                        LspDisplayMode::Hover => {
+                            signature.fmt_with_type_with_newlines(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })?;
+                        }
+                        LspDisplayMode::SignatureHelp => {
+                            signature.fmt_with_type(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })?;
+                        }
+                        _ => unreachable!(),
+                    }
                     output.write_str(": ...")
-                } else {
-                    signature.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
-            }
+                _ => signature.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o)),
+            },
             Type::Overload(overload) => {
                 if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     output.write_str("\n@overload\n")?;
@@ -439,52 +450,78 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("]")
             }
             Type::BoundMethod(box BoundMethod { obj, func }) => {
-                if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
-                    match func {
-                        BoundMethodType::Function(Function {
-                            signature,
-                            metadata,
-                        }) => {
-                            let func_name = metadata.kind.function_name();
-                            output.write_str("def ")?;
-                            output.write_str(func_name.as_ref().as_str())?;
-                            signature.fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })?;
-                            output.write_str(": ...")
-                        }
-                        BoundMethodType::Forall(Forall {
-                            tparams,
-                            body:
-                                Function {
-                                    signature,
-                                    metadata,
-                                },
-                        }) => {
-                            let func_name = metadata.kind.function_name();
-                            output.write_str("def ")?;
-                            output.write_str(func_name.as_ref().as_str())?;
-                            output.write_str("[")?;
-                            output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
-                            output.write_str("]")?;
-                            signature.fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })?;
-                            output.write_str(": ...")
-                        }
-                        BoundMethodType::Overload(_) => {
-                            // Use display instead of display_internal to show overloads w/ top-level formatting
-                            self.fmt_helper_generic(&func.clone().as_type(), true, output)
+                match self.lsp_display_mode {
+                    LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
+                        match func {
+                            BoundMethodType::Function(Function {
+                                signature,
+                                metadata,
+                            }) => {
+                                let func_name = metadata.kind.function_name();
+                                output.write_str("def ")?;
+                                output.write_str(func_name.as_ref().as_str())?;
+                                match self.lsp_display_mode {
+                                    LspDisplayMode::Hover => {
+                                        signature
+                                            .fmt_with_type_with_newlines(output, &|t, o| {
+                                                self.fmt_helper_generic(t, false, o)
+                                            })?;
+                                    }
+                                    LspDisplayMode::SignatureHelp => {
+                                        signature.fmt_with_type(output, &|t, o| {
+                                            self.fmt_helper_generic(t, false, o)
+                                        })?;
+                                    }
+                                    LspDisplayMode::Standard => unreachable!(),
+                                }
+                                output.write_str(": ...")
+                            }
+                            BoundMethodType::Forall(Forall {
+                                tparams,
+                                body:
+                                    Function {
+                                        signature,
+                                        metadata,
+                                    },
+                            }) => {
+                                let func_name = metadata.kind.function_name();
+                                output.write_str("def ")?;
+                                output.write_str(func_name.as_ref().as_str())?;
+                                output.write_str("[")?;
+                                output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                                output.write_str("]")?;
+                                match self.lsp_display_mode {
+                                    LspDisplayMode::Hover => {
+                                        signature
+                                            .fmt_with_type_with_newlines(output, &|t, o| {
+                                                self.fmt_helper_generic(t, false, o)
+                                            })?;
+                                    }
+                                    LspDisplayMode::SignatureHelp => {
+                                        signature.fmt_with_type(output, &|t, o| {
+                                            self.fmt_helper_generic(t, false, o)
+                                        })?;
+                                    }
+                                    LspDisplayMode::Standard => unreachable!(),
+                                }
+                                output.write_str(": ...")
+                            }
+                            BoundMethodType::Overload(_) => {
+                                // Use display instead of display_internal to show overloads w/ top-level formatting
+                                self.fmt_helper_generic(&func.clone().as_type(), true, output)
+                            }
                         }
                     }
-                } else if self.lsp_display_mode == LspDisplayMode::Hover {
-                    self.fmt_helper_generic(&func.clone().as_type(), false, output)
-                } else {
-                    output.write_str("BoundMethod[")?;
-                    self.fmt_helper_generic(obj, false, output)?;
-                    output.write_str(", ")?;
-                    self.fmt_helper_generic(&func.clone().as_type(), false, output)?;
-                    output.write_str("]")
+                    LspDisplayMode::Hover | LspDisplayMode::SignatureHelp => {
+                        self.fmt_helper_generic(&func.clone().as_type(), false, output)
+                    }
+                    _ => {
+                        output.write_str("BoundMethod[")?;
+                        self.fmt_helper_generic(obj, false, output)?;
+                        output.write_str(", ")?;
+                        self.fmt_helper_generic(&func.clone().as_type(), false, output)?;
+                        output.write_str("]")
+                    }
                 }
             }
             Type::Never(NeverStyle::NoReturn) => {
@@ -627,25 +664,36 @@ impl<'a> TypeDisplayContext<'a> {
                         metadata,
                         ..
                     }),
-            }) => {
-                if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
+            }) => match self.lsp_display_mode {
+                LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
                     let func_name = metadata.kind.function_name();
                     output.write_str("def ")?;
                     output.write_str(func_name.as_ref().as_str())?;
                     output.write_str("[")?;
                     output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
                     output.write_str("]")?;
-                    signature.fmt_with_type_with_newlines(output, &|t, o| {
-                        self.fmt_helper_generic(t, false, o)
-                    })?;
+                    match self.lsp_display_mode {
+                        LspDisplayMode::Hover => {
+                            signature.fmt_with_type_with_newlines(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })?;
+                        }
+                        LspDisplayMode::SignatureHelp => {
+                            signature.fmt_with_type(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })?;
+                        }
+                        _ => unreachable!(),
+                    }
                     output.write_str(": ...")
-                } else {
+                }
+                _ => {
                     output.write_str("[")?;
                     output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
                     output.write_str("]")?;
                     self.fmt_helper_generic(&body.clone().as_type(), false, output)
                 }
-            }
+            },
             Type::Forall(box Forall {
                 tparams,
                 body: Forallable::TypeAlias(ta),
