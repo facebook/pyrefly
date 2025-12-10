@@ -14,6 +14,7 @@ use lsp_types::SignatureHelp;
 use lsp_types::SignatureInformation;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::parse_parameter_documentation;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -221,37 +222,36 @@ impl Transaction<'_> {
     ) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
         let label = type_.as_hover_string();
-        let (parameters, active_parameter) =
-            if let Some(params) = Self::normalize_singleton_function_type_into_params(type_) {
-                let active_parameter =
-                    Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);
-                (
-                    Some(
-                        params
-                            .into_iter()
-                            .map(|param| ParameterInformation {
-                                label: ParameterLabel::Simple(format!("{param}")),
-                                documentation: param
-                                    .name()
-                                    .and_then(|name| {
-                                        parameter_docs.and_then(|docs| docs.get(name.as_str()))
-                                    })
-                                    .map(|text| {
-                                        lsp_types::Documentation::MarkupContent(
-                                            lsp_types::MarkupContent {
-                                                kind: lsp_types::MarkupKind::Markdown,
-                                                value: text.clone(),
-                                            },
-                                        )
-                                    }),
+        let (parameters, active_parameter) = if let Some(params) =
+            Self::normalize_singleton_function_type_into_params(type_)
+        {
+            // Create a type display context for consistent parameter formatting
+            let param_types: Vec<&Type> = params.iter().map(|p| p.as_type()).collect();
+            let mut type_ctx = TypeDisplayContext::new(&param_types);
+            type_ctx.set_display_mode_to_hover();
+
+            let active_parameter =
+                Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);
+
+            let parameter_info: Vec<ParameterInformation> = params
+                .iter()
+                .map(|param| ParameterInformation {
+                    label: ParameterLabel::Simple(param.format_for_signature(&type_ctx)),
+                    documentation: param
+                        .name()
+                        .and_then(|name| parameter_docs.and_then(|docs| docs.get(name.as_str())))
+                        .map(|text| {
+                            lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
+                                kind: lsp_types::MarkupKind::Markdown,
+                                value: text.clone(),
                             })
-                            .collect(),
-                    ),
-                    active_parameter,
-                )
-            } else {
-                (None, None)
-            };
+                        }),
+                })
+                .collect();
+            (Some(parameter_info), active_parameter)
+        } else {
+            (None, None)
+        };
         SignatureInformation {
             label,
             documentation: None,
