@@ -754,3 +754,26 @@ foo(a=1, b="", c=True)
         assert_eq!(content.value, "google style");
     }
 }
+
+#[test]
+fn union_type_alias_in_callable_test() {
+    let code = r#"
+from typing import TypeAlias, Callable, overload
+KylesInt: TypeAlias = int | str
+def foo(a: KylesInt) -> None:
+    pass
+foo()
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        "
+# main.py
+6 | foo()
+        ^
+Signature Help Result: active=0
+- def foo(a: KylesInt) -> None: ..., parameters=[a: int | str], active parameter = 0"
+            .trim(),
+        report.trim(),
+    );
+}
