@@ -24,6 +24,7 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
+use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
 use ruff_python_ast::Stmt;
@@ -235,7 +236,7 @@ impl HoverValue {
         };
         let type_display = self.display.clone().unwrap_or_else(|| {
             self.type_
-                .as_hover_string_with_fallback_name(self.name.as_deref())
+                .as_lsp_string_with_fallback_name(self.name.as_deref(), LspDisplayMode::Hover)
         });
 
         Hover {
@@ -417,7 +418,10 @@ pub fn get_hover(
         let mut cloned = type_.clone();
         move |solver| {
             cloned.visit_toplevel_callable_mut(|c| expand_callable_kwargs_for_hover(&solver, c));
-            cloned.as_hover_string_with_fallback_name(name_for_display.as_deref())
+            cloned.as_lsp_string_with_fallback_name(
+                name_for_display.as_deref(),
+                LspDisplayMode::Hover,
+            )
         }
     });
 

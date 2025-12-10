@@ -31,6 +31,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::facet::FacetKind;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -2842,7 +2843,8 @@ impl<'a> Transaction<'a> {
                                     _ => Some(CompletionItemKind::FIELD),
                                 };
                                 let ty = &x.ty;
-                                let detail = ty.clone().map(|t| t.as_hover_string());
+                                let detail =
+                                    ty.clone().map(|t| t.as_lsp_string(LspDisplayMode::Hover));
                                 let documentation = self.get_docstring_for_attribute(handle, x);
                                 result.push(CompletionItem {
                                     label: x.name.as_str().to_owned(),

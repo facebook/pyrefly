@@ -18,6 +18,7 @@ use lsp_types::SignatureInformation;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::docstring::parse_parameter_documentation;
+use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
@@ -260,14 +261,14 @@ impl Transaction<'_> {
         function_docstring: Option<&Docstring>,
     ) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
-        let label = type_.as_hover_string();
+        let label = type_.as_lsp_string(LspDisplayMode::Hover);
         let (parameters, active_parameter) = if let Some(params) =
             Self::normalize_singleton_function_type_into_params(type_)
         {
             // Create a type display context for consistent parameter formatting
             let param_types: Vec<&Type> = params.iter().map(|p| p.as_type()).collect();
             let mut type_ctx = TypeDisplayContext::new(&param_types);
-            type_ctx.set_display_mode_to_hover();
+            type_ctx.set_lsp_display_mode(LspDisplayMode::Hover);
 
             let active_parameter =
                 Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);
