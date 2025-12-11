@@ -19,7 +19,7 @@ pyrefly_derive = { path = "../pyrefly_derive" }
 pyrefly_python = { path = "../pyrefly_python" }
 pyrefly_util = { path = "../pyrefly_util" }
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5" }
-ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5" }
+ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5", features = ["serde"] }
 starlark_map = "0.14.2"
 static_assertions = "1.1.0"
 vec1 = { version = "1.12.1", features = ["serde"] }
