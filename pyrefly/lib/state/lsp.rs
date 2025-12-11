@@ -181,7 +181,7 @@ fn filesystem_docstring(range: (u32, u32), path: &str) -> Option<lsp_types::Docu
     let contents = fs::read_to_string(path).ok()?;
     let start = range.0 as usize;
     let end = range.1 as usize;
-    if start >= end || end > contents.len() {
+    if start > end || end > contents.len() {
         return None;
     }
     let slice = &contents[start..end];
