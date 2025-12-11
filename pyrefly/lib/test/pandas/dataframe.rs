@@ -130,7 +130,7 @@ df = pd.DataFrame(
 );
 
 // Test with BROKEN pandas 2.x stubs (without position-only markers)
-// This demonstrates the edge case fix in is_subset_param_list works
+// This demonstrates the SequenceNotStr-specific hack in is_subset_protocol works
 testcase!(
     test_dataframe_with_broken_stubs,
     {
@@ -152,7 +152,7 @@ class SequenceNotStr(Protocol[_T_co]):
     def __len__(self) -> int: ...
     def __iter__(self) -> Iterator[_T_co]: ...
     # BROKEN: Missing position-only markers (actual pandas 2.x stubs)
-    # This should still work thanks to the edge case in is_subset_param_list
+    # This should still work thanks to the SequenceNotStr hack in is_subset_protocol
     def index(self, value: Any, start: int = ..., stop: int = ...) -> int: ...
     def count(self, value: Any, /) -> int: ...
     def __reversed__(self) -> Iterator[_T_co]: ...
@@ -187,9 +187,8 @@ from pandas.core.frame import DataFrame as DataFrame
     r#"
 import pandas as pd
 
-# This should work even with broken stubs: list[str] should match SequenceNotStr[Any]
-# because list.index() has position-only params, and our edge case allows PosOnly
-# to match Pos in protocol checking
+# This should work even with broken stubs: list[str] satisfies SequenceNotStr[Any]
+# because we have a specific hack in is_subset_protocol for pandas SequenceNotStr
 df = pd.DataFrame([[1, 2, 3], [4, 5, 6]], columns=["A", "B", "C"])
 "#,
 );

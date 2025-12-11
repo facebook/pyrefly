@@ -120,20 +120,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
-                // EDGE CASE: Allow PosOnly parameters to match Pos parameters in protocols
-                // This handles cases like list.index() (which has position-only params) matching
-                // SequenceNotStr.index() from pandas 2.x typeshed stubs (which incorrectly
-                // lacks position-only markers, fixed in pandas 3.0).
-                // From a typing perspective, this is sound: if a protocol allows a parameter
-                // to be passed by position or keyword (Pos), an implementation that only allows
-                // positional (PosOnly) is more restrictive, which is acceptable.
-                (Some(Param::PosOnly(_, l, l_req)), Some(Param::Pos(_, u, u_req)))
-                    if (*u_req == Required::Required || matches!(l_req, Required::Optional(_))) =>
-                {
-                    self.is_subset_eq(u, l)?;
-                    l_arg = l_args.next();
-                    u_arg = u_args.next();
-                }
                 (Some(Param::Pos(l_name, l, l_req)), Some(Param::Pos(u_name, u, u_req)))
                     if *u_req == Required::Required || matches!(l_req, Required::Optional(_)) =>
                 {
@@ -424,6 +410,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         if !self.recursive_assumptions.insert(recursive_check) {
             // Assume recursive checks are true
             return Ok(());
+        }
+        // HACK: pandas 2.x typeshed stubs have a bug where SequenceNotStr.index() has incorrect
+        // parameter kinds (not all position-only), causing list[str] to fail the protocol check.
+        // This is fixed in pandas 3.0 stubs. Until then, we hard-code that list/tuple satisfy
+        // SequenceNotStr. See https://github.com/pandas-dev/pandas/issues/56995
+        if protocol.has_qname("pandas._typing", "SequenceNotStr") {
+            if let Type::ClassType(got_cls) = &got {
+                if got_cls.is_builtin("list") || got_cls.is_builtin("tuple") {
+                    return Ok(());
+                }
+            }
         }
         let protocol_members = self
             .type_order
