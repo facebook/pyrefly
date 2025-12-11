@@ -39,7 +39,8 @@ fn test_initialize_basic() {
                 "codeActionKinds": ["quickfix"]
             },
             "completionProvider": {
-                "triggerCharacters": [".", "'", "\""]
+                "triggerCharacters": [".", "'", "\""],
+                "resolveProvider": true
             },
             "declarationProvider": true,
             "documentHighlightProvider": true,
