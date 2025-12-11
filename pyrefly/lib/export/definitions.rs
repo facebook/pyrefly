@@ -46,6 +46,27 @@ pub enum MutableCaptureKind {
     Nonlocal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Reachability {
+    #[default]
+    Reachable,
+    Unreachable,
+}
+
+impl Reachability {
+    pub fn combine(self, other: Self) -> Self {
+        if matches!(self, Self::Reachable) || matches!(other, Self::Reachable) {
+            Self::Reachable
+        } else {
+            Self::Unreachable
+        }
+    }
+
+    pub fn is_reachable(self) -> bool {
+        matches!(self, Self::Reachable)
+    }
+}
+
 /// How a name is defined. If a name is defined outside of this
 /// module, we additionally store the module we got it from.
 ///
@@ -90,6 +111,8 @@ pub struct Definition {
     /// If the first statement in a definition (class, function) is a string literal, PEP 257 convention
     /// states that is the docstring.
     pub docstring_range: Option<TextRange>,
+    /// Whether this definition can run given the current configuration.
+    pub reachability: Reachability,
 }
 
 impl Definition {
@@ -100,7 +123,7 @@ impl Definition {
         }
     }
 
-    fn merge(&mut self, other: DefinitionStyle, range: TextRange) {
+    fn merge(&mut self, other: DefinitionStyle, range: TextRange, reachability: Reachability) {
         // To ensure binding code cannot produce invalid lookups, we ensure that
         // `self.style` and `self.range` always match.
         if other < self.style {
@@ -119,6 +142,7 @@ impl Definition {
             DefinitionStyle::MutableCapture(..) | DefinitionStyle::Delete => false,
             _ => true,
         };
+        self.reachability = self.reachability.combine(reachability);
     }
 }
 
@@ -187,6 +211,7 @@ struct DefinitionsBuilder<'a> {
     module_name: ModuleName,
     is_init: bool,
     sys_info: &'a SysInfo,
+    reachability: Reachability,
     inner: Definitions,
 }
 
@@ -218,6 +243,7 @@ impl Definitions {
             module_name,
             sys_info,
             is_init,
+            reachability: Reachability::Reachable,
             inner: Definitions::default(),
         };
         builder.stmts(x);
@@ -242,6 +268,7 @@ impl Definitions {
                     style: DefinitionStyle::ImplicitGlobal,
                     needs_anywhere: false,
                     docstring_range: None,
+                    reachability: Reachability::Reachable,
                 },
             );
         }
@@ -286,6 +313,18 @@ impl Definitions {
 }
 
 impl<'a> DefinitionsBuilder<'a> {
+    fn with_reachability<R>(
+        &mut self,
+        reachability: Reachability,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self.reachability;
+        self.reachability = reachability;
+        let result = f(self);
+        self.reachability = previous;
+        result
+    }
+
     fn stmts(&mut self, xs: &[Stmt]) {
         for x in xs {
             self.stmt(x);
@@ -299,9 +338,10 @@ impl<'a> DefinitionsBuilder<'a> {
         style: DefinitionStyle,
         body: Option<&[Stmt]>,
     ) {
+        let reachability = self.reachability;
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
-                e.get_mut().merge(style, range);
+                e.get_mut().merge(style, range, reachability);
             }
             Entry::Vacant(e) => {
                 e.insert(Definition {
@@ -309,6 +349,7 @@ impl<'a> DefinitionsBuilder<'a> {
                     style,
                     needs_anywhere: false,
                     docstring_range: body.and_then(Docstring::range_from_stmts),
+                    reachability,
                 });
             }
         }
@@ -623,8 +664,20 @@ impl<'a> DefinitionsBuilder<'a> {
             }
             Stmt::If(x) => {
                 self.named_in_expr(&x.test);
-                for (_, body) in self.sys_info.pruned_if_branches(x) {
-                    self.stmts(body);
+                let mut seen_definitely_true = false;
+                for (test, body) in Ast::if_branches(x) {
+                    let evaluation = test
+                        .map(|expr| self.sys_info.evaluate_bool(expr))
+                        .unwrap_or(Some(true));
+                    let branch_reachability = if seen_definitely_true || evaluation == Some(false) {
+                        Reachability::Unreachable
+                    } else {
+                        Reachability::Reachable
+                    };
+                    self.with_reachability(branch_reachability, |builder| builder.stmts(body));
+                    if evaluation == Some(true) {
+                        seen_definitely_true = true;
+                    }
                 }
                 return; // We went through the relevant branches already
             }
