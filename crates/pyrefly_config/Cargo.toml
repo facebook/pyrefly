@@ -8,6 +8,9 @@ edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.98"
 clap = { version = "4.5.42", features = ["derive", "env", "string", "unicode", "wrap_help"] }
