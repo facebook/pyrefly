@@ -44,11 +44,14 @@ use crate::lsp::wasm::signature_help::CallInfo;
 use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
+use crate::state::lsp::CompletionResolveData;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::IdentifierWithContext;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::MIN_CHARACTERS_TYPED_AUTOIMPORT;
+use crate::state::lsp::completion_data_doc_range;
+use crate::state::lsp::completion_data_handle_path;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::types::Type;
@@ -673,6 +676,7 @@ impl Transaction<'_> {
                     continue;
                 }
                 let module_description = handle_to_import_from.module().as_str().to_owned();
+                let handle_for_data = handle_to_import_from.dupe();
                 let (insert_text, additional_text_edits, imported_module) = {
                     let (position, insert_text, module_name) = insert_import_edit(
                         &ast,
@@ -689,6 +693,12 @@ impl Transaction<'_> {
                     (insert_text, Some(vec![import_text_edit]), module_name)
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
+                let data = CompletionResolveData::export_value(
+                    handle_for_data.module(),
+                    name.clone(),
+                    completion_data_handle_path(&handle_for_data),
+                    completion_data_doc_range(export.docstring_range),
+                );
 
                 completions.push(RankedCompletion {
                     item: CompletionItem {
@@ -706,6 +716,7 @@ impl Transaction<'_> {
                                 description: Some(module_description),
                             },
                         ),
+                        data: Some(data),
                         tags: if export.deprecation.is_some() {
                             Some(vec![CompletionItemTag::DEPRECATED])
                         } else {
@@ -894,7 +905,7 @@ impl Transaction<'_> {
     ) {
         let exports = self.get_exports(imp_handle);
         for (name, export) in exports.iter() {
-            let (is_deprecated, kind) = match export {
+            let (is_deprecated, kind, data) = match export {
                 ExportLocation::ThisModule(export) => (
                     export.deprecation.is_some(),
                     export
@@ -902,12 +913,19 @@ impl Transaction<'_> {
                         .map_or(CompletionItemKind::VARIABLE, |k| {
                             k.to_lsp_completion_item_kind()
                         }),
+                    Some(CompletionResolveData::export_value(
+                        imp_handle.module(),
+                        name.as_str(),
+                        completion_data_handle_path(imp_handle),
+                        completion_data_doc_range(export.docstring_range),
+                    )),
                 ),
-                ExportLocation::OtherModule(_, _) => (false, CompletionItemKind::VARIABLE),
+                ExportLocation::OtherModule(_, _) => (false, CompletionItemKind::VARIABLE, None),
             };
             result.push(RankedCompletion::new(CompletionItem {
                 label: name.to_string(),
                 kind: Some(kind),
+                data,
                 tags: if is_deprecated {
                     Some(vec![CompletionItemTag::DEPRECATED])
                 } else {
