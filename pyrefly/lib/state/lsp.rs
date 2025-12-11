@@ -184,7 +184,7 @@ fn filesystem_docstring(range: (u32, u32), path: &str) -> Option<lsp_types::Docu
     if start >= end || end > contents.len() {
         return None;
     }
-    let slice = contents.get(start..end)?;
+    let slice = &contents[start..end];
     let cleaned = Docstring::clean(slice);
     Some(lsp_types::Documentation::MarkupContent(
         lsp_types::MarkupContent {
