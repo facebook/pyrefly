@@ -148,7 +148,8 @@ pub enum CompletionResolveData {
         module: String,
         symbol: String,
         path: Option<String>,
-        doc_range: Option<(u32, u32)>,
+        #[serde(with = "serde_text_range_option")]
+        doc_range: Option<TextRange>,
     },
 }
 
@@ -157,15 +158,19 @@ impl CompletionResolveData {
         module: ModuleName,
         symbol: impl Into<String>,
         path: Option<String>,
-        doc_range: Option<(u32, u32)>,
+        doc_range: Option<TextRange>,
     ) -> serde_json::Value {
+        let module_name = module.as_str().to_owned();
+        let symbol = symbol.into();
         serde_json::to_value(Self::Export {
-            module: module.as_str().to_owned(),
-            symbol: symbol.into(),
+            module: module_name.clone(),
+            symbol: symbol.clone(),
             path,
             doc_range,
         })
-        .expect("completion resolve data serialization should never fail")
+        .unwrap_or_else(|err| {
+            panic!("failed to serialize completion resolve data for {module_name}::{symbol}: {err}")
+        })
     }
 }
 
@@ -173,14 +178,10 @@ fn completion_data_handle_path(handle: &Handle) -> String {
     handle.path().as_path().to_string_lossy().into_owned()
 }
 
-fn completion_data_doc_range(range: Option<TextRange>) -> Option<(u32, u32)> {
-    range.map(|r| (u32::from(r.start()), u32::from(r.end())))
-}
-
-fn filesystem_docstring(range: (u32, u32), path: &str) -> Option<lsp_types::Documentation> {
+fn filesystem_docstring(range: TextRange, path: &str) -> Option<lsp_types::Documentation> {
     let contents = fs::read_to_string(path).ok()?;
-    let start = range.0 as usize;
-    let end = range.1 as usize;
+    let start = range.start().to_usize();
+    let end = range.end().to_usize();
     if start > end || end > contents.len() {
         return None;
     }
@@ -192,6 +193,34 @@ fn filesystem_docstring(range: (u32, u32), path: &str) -> Option<lsp_types::Docu
             value: cleaned,
         },
     ))
+}
+
+mod serde_text_range_option {
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+    use serde::Deserialize;
+    use serde::Deserializer;
+    use serde::Serializer;
+
+    pub fn serialize<S>(value: &Option<TextRange>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(range) => {
+                serializer.serialize_some(&(range.start().to_u32(), range.end().to_u32()))
+            }
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<TextRange>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt = Option::<(u32, u32)>::deserialize(deserializer)?;
+        Ok(opt.map(|(start, end)| TextRange::new(TextSize::new(start), TextSize::new(end))))
+    }
 }
 
 const RESOLVE_EXPORT_INITIAL_GAS: Gas = Gas::new(100);
@@ -2279,7 +2308,7 @@ impl<'a> Transaction<'a> {
                             .map_or(Some(CompletionItemKind::VARIABLE), |k| {
                                 Some(k.to_lsp_completion_item_kind())
                             }),
-                        completion_data_doc_range(export.docstring_range),
+                        export.docstring_range,
                     ),
                 };
                 let data = CompletionResolveData::export_value(
@@ -2344,7 +2373,7 @@ impl<'a> Transaction<'a> {
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
                 let path = Some(completion_data_handle_path(&handle_for_data));
-                let doc_range = completion_data_doc_range(export.docstring_range);
+                let doc_range = export.docstring_range;
                 let data = CompletionResolveData::export_value(
                     handle_for_data.module(),
                     name.as_str(),
