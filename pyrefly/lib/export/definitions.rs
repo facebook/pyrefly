@@ -211,6 +211,7 @@ struct DefinitionsBuilder<'a> {
     module_name: ModuleName,
     is_init: bool,
     sys_info: &'a SysInfo,
+    include_unreachable: bool,
     reachability: Reachability,
     inner: Definitions,
 }
@@ -238,11 +239,18 @@ fn is_overload_decorator(decorator: &Decorator) -> bool {
 }
 
 impl Definitions {
-    pub fn new(x: &[Stmt], module_name: ModuleName, is_init: bool, sys_info: &SysInfo) -> Self {
+    pub fn new(
+        x: &[Stmt],
+        module_name: ModuleName,
+        is_init: bool,
+        sys_info: &SysInfo,
+        include_unreachable: bool,
+    ) -> Self {
         let mut builder = DefinitionsBuilder {
             module_name,
             sys_info,
             is_init,
+            include_unreachable,
             reachability: Reachability::Reachable,
             inner: Definitions::default(),
         };
@@ -663,20 +671,24 @@ impl<'a> DefinitionsBuilder<'a> {
                 }
             }
             Stmt::If(x) => {
-                self.named_in_expr(&x.test);
-                let mut seen_definitely_true = false;
                 for (test, body) in Ast::if_branches(x) {
+                    if let Some(test_expr) = test {
+                        self.named_in_expr(test_expr);
+                    }
                     let evaluation = test
                         .map(|expr| self.sys_info.evaluate_bool(expr))
                         .unwrap_or(Some(true));
-                    let branch_reachability = if seen_definitely_true || evaluation == Some(false) {
+                    if evaluation == Some(false) && !self.include_unreachable {
+                        continue;
+                    }
+                    let branch_reachability = if evaluation == Some(false) {
                         Reachability::Unreachable
                     } else {
                         Reachability::Reachable
                     };
                     self.with_reachability(branch_reachability, |builder| builder.stmts(body));
                     if evaluation == Some(true) {
-                        seen_definitely_true = true;
+                        break; // Later branches are not evaluated in this configuration
                     }
                 }
                 return; // We went through the relevant branches already
@@ -775,23 +787,42 @@ mod tests {
         }
     }
 
-    fn calculate_unranged_definitions(
+    fn calculate_unranged_definitions_with_config(
         contents: &str,
         module_name: ModuleName,
         is_init: bool,
+        include_unreachable: bool,
     ) -> Definitions {
         let mut res = Definitions::new(
             &Ast::parse(contents, PySourceType::Python).0.body,
             module_name,
             is_init,
             &SysInfo::default(),
+            include_unreachable,
         );
         res.dunder_all.iter_mut().for_each(unrange);
         res
     }
 
+    fn calculate_unranged_definitions(
+        contents: &str,
+        module_name: ModuleName,
+        is_init: bool,
+    ) -> Definitions {
+        calculate_unranged_definitions_with_config(contents, module_name, is_init, false)
+    }
+
     fn calculate_unranged_definitions_with_defaults(contents: &str) -> Definitions {
         calculate_unranged_definitions(contents, ModuleName::from_str("main"), false)
+    }
+
+    fn calculate_unranged_definitions_with_unreachable(contents: &str) -> Definitions {
+        calculate_unranged_definitions_with_config(
+            contents,
+            ModuleName::from_str("main"),
+            false,
+            true,
+        )
     }
 
     fn assert_import_all(defs: &Definitions, expected_import_all: &[&str]) {
@@ -822,6 +853,40 @@ mod tests {
                 .map(|x| x.as_str())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_unreachable_if_defs_respected() {
+        let contents = r#"
+if False:
+    foo: TypeIs[int]
+else:
+    bar = 1
+"#;
+        let defs = calculate_unranged_definitions_with_unreachable(contents);
+        let foo = defs.definitions.get(&Name::new("foo")).unwrap();
+        assert!(matches!(foo.reachability, Reachability::Unreachable));
+        let bar = defs.definitions.get(&Name::new("bar")).unwrap();
+        assert!(matches!(bar.reachability, Reachability::Reachable));
+
+        let defs_pruned = calculate_unranged_definitions_with_defaults(contents);
+        assert!(defs_pruned.definitions.get(&Name::new("foo")).is_none());
+        assert!(defs_pruned.definitions.get(&Name::new("bar")).is_some());
+    }
+
+    #[test]
+    fn test_unreachable_if_comparison_defs_respected() {
+        let contents = r#"
+if 1 == 0:
+    foo = 1
+
+bar = 2
+"#;
+        let defs = calculate_unranged_definitions_with_unreachable(contents);
+        assert!(defs.definitions.get(&Name::new("foo")).is_some());
+
+        let defs_pruned = calculate_unranged_definitions_with_defaults(contents);
+        assert!(defs_pruned.definitions.get(&Name::new("foo")).is_none());
     }
 
     #[test]

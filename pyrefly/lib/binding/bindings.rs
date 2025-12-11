@@ -751,6 +751,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn init_static_scope(&mut self, x: &[Stmt], top_level: bool) {
+        let include_unreachable_defs = self.should_bind_unreachable_branches();
         self.scopes.init_current_static(
             x,
             &self.module_info,
@@ -763,6 +764,7 @@ impl<'a> BindingsBuilder<'a> {
                     .0
                     .insert(KeyAnnotation::Annotation(x))
             },
+            include_unreachable_defs,
         );
     }
 
@@ -1110,18 +1112,32 @@ impl<'a> BindingsBuilder<'a> {
         idx: Idx<Key>,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
-        let hashed_name = Hashed::new(name);
+        let mut hashed_name = Hashed::new(name);
         let allow_unreachable_defs =
             self.errors_suppressed() && self.should_bind_unreachable_branches();
-        let write_info = self
-            .scopes
-            .define_in_current_flow(hashed_name, idx, style.clone(), allow_unreachable_defs)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Name `{name}` not found in static scope of module `{}`.",
-                    self.module_info.name(),
-                )
-            });
+        let mut write_info = self.scopes.define_in_current_flow(
+            hashed_name,
+            idx,
+            style.clone(),
+            allow_unreachable_defs,
+        );
+        if write_info.is_none() && allow_unreachable_defs {
+            let key_range = self.table.types.0.idx_to_key(idx).range();
+            self.scopes.add_synthetic_definition(name, key_range);
+            hashed_name = Hashed::new(name);
+            write_info = self.scopes.define_in_current_flow(
+                hashed_name,
+                idx,
+                style.clone(),
+                allow_unreachable_defs,
+            );
+        }
+        let write_info = write_info.unwrap_or_else(|| {
+            panic!(
+                "Name `{name}` not found in static scope of module `{}`.",
+                self.module_info.name(),
+            )
+        });
         if !write_info.reachability.is_reachable() {
             debug_assert!(allow_unreachable_defs);
         }
