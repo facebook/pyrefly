@@ -424,12 +424,14 @@ impl Static {
         sys_info: SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
         scopes: Option<&Scopes>,
+        include_unreachable_defs: bool,
     ) -> (SmallSet<Name>, SmallSet<Name>, SmallMap<Name, String>) {
         let mut d = Definitions::new(
             x,
             module_info.name(),
             module_info.path().is_init(),
             sys_info,
+            include_unreachable_defs,
         );
         if top_level {
             if module_info.name() != ModuleName::builtins() {
@@ -1695,6 +1697,7 @@ impl Scopes {
         lookup: &dyn LookupExport,
         sys_info: SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
+        include_unreachable_defs: bool,
     ) {
         let mut initialize = |scope: &mut Scope, myself: Option<&Self>| {
             let (implicit_captures, final_names, final_string_values) = scope.stat.stmts(
@@ -1705,6 +1708,7 @@ impl Scopes {
                 sys_info,
                 get_annotation_idx,
                 myself,
+                include_unreachable_defs,
             );
             scope.implicit_captures = implicit_captures;
             scope.final_names = final_names;
@@ -2470,6 +2474,22 @@ impl Scopes {
         self.current_mut().stat.expr_lvalue(x);
     }
 
+    /// Synthesize a static definition entry for `name` in the current scope if it
+    /// is missing. Used when we analyze unreachable code for IDE metadata.
+    pub fn add_synthetic_definition(&mut self, name: &Name, range: TextRange) {
+        let hashed_ref = Hashed::new(name);
+        if self.current().stat.0.get_hashed(hashed_ref).is_some() {
+            return;
+        }
+        self.current_mut().stat.upsert(
+            Hashed::new(name.clone()),
+            range,
+            StaticStyle::SingleDef(None),
+            range,
+            Reachability::Reachable,
+        );
+    }
+
     /// Add a loop exit point to the current innermost loop with the current flow.
     ///
     /// Return a bool indicating whether we were in a loop (if we weren't, we do nothing).
@@ -3134,6 +3154,9 @@ impl ScopeTrace {
                     Key::Definition(short_identifier)
                         if short_identifier.range().contains_inclusive(position) =>
                     {
+                        definition = Some(key);
+                    }
+                    Key::Anywhere(x) if x.1.contains_inclusive(position) => {
                         definition = Some(key);
                     }
                     _ => {}
