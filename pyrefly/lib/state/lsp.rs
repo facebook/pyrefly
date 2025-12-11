@@ -1245,6 +1245,21 @@ impl<'a> Transaction<'a> {
                     }
                     None
                 }
+                AnyNodeRef::ExprSubscript(subscript) => {
+                    let dunder_name = match subscript.ctx {
+                        ExprContext::Load => Some(dunder::GETITEM.clone()),
+                        ExprContext::Store => Some(dunder::SETITEM.clone()),
+                        ExprContext::Del => Some(dunder::DELITEM.clone()),
+                        ExprContext::Invalid => None,
+                    };
+                    if let Some(dunder_name) = dunder_name
+                        && let Some(answers) = self.get_answers(handle)
+                        && let Some(base_type) = answers.get_type_trace(subscript.value.range())
+                    {
+                        return Some((base_type, dunder_name));
+                    }
+                    None
+                }
                 _ => None,
             })
         else {

@@ -371,6 +371,79 @@ lhs @ rhs
 }
 
 #[test]
+fn hover_over_getitem_operator_shows_dunder_name() {
+    let code = r#"
+class Container:
+    def __getitem__(self, idx: int) -> int: ...
+
+c = Container()
+c [0]
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("6 | c [0]"),
+        "Expected code frame to include subscript line, got: {report}"
+    );
+    assert!(
+        report.contains("\n      ^\n```python"),
+        "Expected caret to precede hover block, got: {report}"
+    );
+    assert!(
+        report.contains(
+            "```python\n(method) __getitem__: def __getitem__(\n    self: Container,\n    idx: int\n) -> int: ...\n```"
+        ),
+        "Expected __getitem__ signature in hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_setitem_operator_shows_dunder_name() {
+    let code = r#"
+class Container:
+    def __setitem__(self, idx: int, value: str) -> None: ...
+
+c = Container()
+c [0] = "foo"
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("6 | c [0] = \"foo\""),
+        "Expected code frame to include assignment subscript, got: {report}"
+    );
+    assert!(
+        report.contains(
+            "```python\n(method) __setitem__: def __setitem__(\n    self: Container,\n    idx: int,\n    value: str\n) -> None: ...\n```"
+        ),
+        "Expected __setitem__ signature in hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_delitem_operator_shows_dunder_name() {
+    let code = r#"
+class Container:
+    def __delitem__(self, idx: int) -> None: ...
+
+c = Container()
+del c [0]
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("6 | del c [0]"),
+        "Expected code frame to include delete subscript, got: {report}"
+    );
+    assert!(
+        report.contains(
+            "```python\n(method) __delitem__: def __delitem__(\n    self: Container,\n    idx: int\n) -> None: ...\n```"
+        ),
+        "Expected __delitem__ signature in hover, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_code_with_ignore_shows_type() {
     let code = r#"
 a: int = "test"  # pyrefly: ignore

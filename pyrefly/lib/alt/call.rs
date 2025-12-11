@@ -498,6 +498,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let callee_ty =
             self.type_of_attr_get(ty, method_name, range, errors, context, "Expr::call_method");
+        self.record_resolved_trace(range, callee_ty.clone());
         self.make_call_target_and_call(
             callee_ty,
             method_name,
