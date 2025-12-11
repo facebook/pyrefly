@@ -313,3 +313,68 @@ def gen() -> Generator[int, None, str]:
     return  # E: Returned type `None` is not assignable to declared return type `str`
 "#,
 );
+
+testcase!(
+    test_unreachable_return_after_return,
+    r#"
+def test():
+    return 1
+    return 2 # E: This `return` statement is unreachable
+"#,
+);
+
+testcase!(
+    test_unreachable_return_after_raise,
+    r#"
+def test():
+    raise Exception()
+    return 1 # E: This `return` statement is unreachable
+"#,
+);
+
+testcase!(
+    test_unreachable_yield_after_return,
+    r#"
+def test():
+    return 1
+    yield 2 # E: This `yield` expression is unreachable
+"#,
+);
+
+testcase!(
+    test_unreachable_return_after_break,
+    r#"
+def test():
+    while True:
+        break
+        return 1 # E: This `return` statement is unreachable
+"#,
+);
+
+testcase!(
+    test_unreachable_return_after_continue,
+    r#"
+def test():
+    while True:
+        continue
+        return 1 # E: This `return` statement is unreachable
+"#,
+);
+
+testcase!(
+    test_yield_after_yield_is_ok,
+    r#"
+def test():
+    yield 1
+    yield 2  # No error - yields can follow other yields
+"#,
+);
+
+testcase!(
+    test_unreachable_yield_from_after_return,
+    r#"
+def test():
+    return 1
+    yield from [2, 3] # E: This `yield from` expression is unreachable
+"#,
+);

@@ -1849,6 +1849,11 @@ impl Scopes {
         self.current_mut().flow.has_terminated = true;
     }
 
+    /// Check if the current flow has terminated (e.g., after a return, raise, break, or continue).
+    pub fn has_flow_terminated(&self) -> bool {
+        self.current().flow.has_terminated
+    }
+
     /// Whenever we enter the scope of a method *and* we see a matching
     /// parameter, we record the name of it so that we can detect `self` assignments
     /// that might define class fields.

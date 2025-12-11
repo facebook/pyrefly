@@ -1088,6 +1088,35 @@ def test1(x: object) -> None:
 
 This check is relatively conservative and only warn on limited cases where the comparison is highly likely to be redundant.
 
+## unreachable-statement
+
+This error is raised when a `return` or `yield` statement can never be reached because it comes
+after a statement that always exits the current flow, such as `return`, `raise`, `break`, or `continue`.
+
+```python
+def example():
+    return 1
+    return 2  # This `return` statement is unreachable [unreachable-statement]
+
+def generator():
+    return
+    yield 1  # This `yield` expression is unreachable [unreachable-statement]
+
+def loop_example():
+    while True:
+        break
+        return 1  # This `return` statement is unreachable [unreachable-statement]
+```
+
+Note that `yield` statements can follow other `yield` statements without error, since generators
+can produce multiple values:
+
+```python
+def valid_generator():
+    yield 1
+    yield 2  # This is valid
+```
+
 ## unsupported
 
 This error indicates that pyrefly does not currently support a typing feature.
