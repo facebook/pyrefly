@@ -7,6 +7,7 @@
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
+use std::fs;
 
 use dupe::Dupe;
 use fuzzy_matcher::FuzzyMatcher;
@@ -61,6 +62,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
+use serde::Serialize;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
 
@@ -138,6 +140,59 @@ pub enum DisplayTypeErrors {
     ForceOn,
     /// Only show errors for missing imports and missing sources
     ErrorMissingImports,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CompletionResolveData {
+    Export {
+        module: String,
+        symbol: String,
+        path: Option<String>,
+        doc_range: Option<TextRange>,
+    },
+}
+
+impl CompletionResolveData {
+    pub fn export_value(
+        module: ModuleName,
+        symbol: impl Into<String>,
+        path: Option<String>,
+        doc_range: Option<TextRange>,
+    ) -> serde_json::Value {
+        let module_name = module.as_str().to_owned();
+        let symbol = symbol.into();
+        serde_json::to_value(Self::Export {
+            module: module_name.clone(),
+            symbol: symbol.clone(),
+            path,
+            doc_range,
+        })
+        .unwrap_or_else(|err| {
+            panic!("failed to serialize completion resolve data for {module_name}::{symbol}: {err}")
+        })
+    }
+}
+
+fn completion_data_handle_path(handle: &Handle) -> String {
+    handle.path().as_path().to_string_lossy().into_owned()
+}
+
+fn filesystem_docstring(range: TextRange, path: &str) -> Option<lsp_types::Documentation> {
+    let contents = fs::read_to_string(path).ok()?;
+    let start = range.start().to_usize();
+    let end = range.end().to_usize();
+    if start > end || end > contents.len() {
+        return None;
+    }
+    let slice = &contents[start..end];
+    let cleaned = Docstring::clean(slice);
+    Some(lsp_types::Documentation::MarkupContent(
+        lsp_types::MarkupContent {
+            kind: lsp_types::MarkupKind::Markdown,
+            value: cleaned,
+        },
+    ))
 }
 
 const RESOLVE_EXPORT_INITIAL_GAS: Gas = Gas::new(100);
@@ -2207,6 +2262,7 @@ impl<'a> Transaction<'a> {
             .finding()
         {
             let builtin_exports = self.get_exports(&builtin_handle);
+            let builtin_path = Some(completion_data_handle_path(&builtin_handle));
             for (name, location) in builtin_exports.iter() {
                 if let Some(identifier) = identifier
                     && SkimMatcherV2::default()
@@ -2216,19 +2272,28 @@ impl<'a> Transaction<'a> {
                 {
                     continue;
                 }
-                let kind = match location {
+                let (kind, doc_range) = match location {
                     ExportLocation::OtherModule(..) => continue,
-                    ExportLocation::ThisModule(export) => export
-                        .symbol_kind
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
+                    ExportLocation::ThisModule(export) => (
+                        export
+                            .symbol_kind
+                            .map_or(Some(CompletionItemKind::VARIABLE), |k| {
+                                Some(k.to_lsp_completion_item_kind())
+                            }),
+                        export.docstring_range,
+                    ),
                 };
+                let data = CompletionResolveData::export_value(
+                    ModuleName::builtins(),
+                    name.as_str(),
+                    builtin_path.clone(),
+                    doc_range,
+                );
                 completions.push(CompletionItem {
                     label: name.as_str().to_owned(),
                     detail: None,
                     kind,
-                    data: Some(serde_json::json!("builtin")),
+                    data: Some(data),
                     ..Default::default()
                 });
             }
@@ -2261,6 +2326,7 @@ impl<'a> Transaction<'a> {
                     continue;
                 }
                 let module_description = handle_to_import_from.module().as_str().to_owned();
+                let handle_for_data = handle_to_import_from.dupe();
                 let (insert_text, additional_text_edits, imported_module) = {
                     let (position, insert_text, module_name) = insert_import_edit(
                         &ast,
@@ -2278,6 +2344,14 @@ impl<'a> Transaction<'a> {
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
+                let path = Some(completion_data_handle_path(&handle_for_data));
+                let doc_range = export.docstring_range;
+                let data = CompletionResolveData::export_value(
+                    handle_for_data.module(),
+                    name.as_str(),
+                    path,
+                    doc_range,
+                );
                 completions.push(CompletionItem {
                     label: name,
                     detail: Some(insert_text),
@@ -2298,6 +2372,7 @@ impl<'a> Transaction<'a> {
                     } else {
                         None
                     },
+                    data: Some(data),
                     ..Default::default()
                 });
             }
@@ -2352,6 +2427,81 @@ impl<'a> Transaction<'a> {
             value: docstring,
         });
         Some(documentation)
+    }
+
+    fn documentation_for_completion_export(
+        &self,
+        module: ModuleName,
+        symbol: &str,
+    ) -> Option<lsp_types::Documentation> {
+        for handle in self.search_exports_exact(symbol) {
+            if handle.module() != module {
+                continue;
+            }
+            let exports = self.get_exports(&handle);
+            if let Some((_, ExportLocation::ThisModule(export))) =
+                exports.iter().find(|(name, _)| name.as_str() == symbol)
+            {
+                return self.get_documentation_from_export(Some((handle, export.clone())));
+            }
+        }
+        None
+    }
+
+    pub fn resolve_completion_item(&self, mut item: CompletionItem) -> CompletionItem {
+        if item.documentation.is_some() {
+            return item;
+        }
+        let Some(data_value) = item.data.clone() else {
+            return item;
+        };
+        let data = match serde_json::from_value::<CompletionResolveData>(data_value) {
+            Ok(data) => data,
+            Err(err) => {
+                tracing::debug!("Failed to parse completion resolve data: {err}");
+                return item;
+            }
+        };
+        match data {
+            CompletionResolveData::Export {
+                module,
+                symbol,
+                path,
+                doc_range,
+            } => {
+                let module_name = ModuleName::from_str(&module);
+                tracing::debug!(
+                    "Resolve completion data: module={}, symbol={}, path={:?}, doc_range={:?}",
+                    module,
+                    symbol,
+                    path,
+                    doc_range
+                );
+                if let Some(documentation) =
+                    self.documentation_for_completion_export(module_name, &symbol)
+                {
+                    item.documentation = Some(documentation);
+                } else if let Some(range) = doc_range
+                    && let Some(path_str) = path.as_deref()
+                {
+                    tracing::debug!(
+                        "Resolving completion doc from filesystem: {} {:?}",
+                        path_str,
+                        range
+                    );
+                    if let Some(documentation) = filesystem_docstring(range, path_str) {
+                        item.documentation = Some(documentation);
+                    } else {
+                        tracing::debug!(
+                            "Failed to load completion doc from filesystem: {} {:?}",
+                            path_str,
+                            range
+                        );
+                    }
+                }
+            }
+        }
+        item
     }
 
     /// Adds completions for local variables and returns true if we have added any
