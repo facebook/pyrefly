@@ -159,6 +159,7 @@ use lsp_types::request::References;
 use lsp_types::request::RegisterCapability;
 use lsp_types::request::Rename;
 use lsp_types::request::Request as _;
+use lsp_types::request::ResolveCompletionItem;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SemanticTokensRefresh;
@@ -480,6 +481,7 @@ pub fn capabilities(
         })),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![".".to_owned(), "'".to_owned(), "\"".to_owned()]),
+            resolve_provider: Some(true),
             ..Default::default()
         }),
         document_highlight_provider: Some(OneOf::Left(true)),
@@ -808,7 +810,11 @@ impl Server {
             LspEvent::LspRequest(x) => {
                 // These are messages where VS Code will use results from previous document versions,
                 // we really don't want to implicitly cancel those.
-                const ONLY_ONCE: &[&str] = &[Completion::METHOD, SignatureHelpRequest::METHOD];
+                const ONLY_ONCE: &[&str] = &[
+                    Completion::METHOD,
+                    SignatureHelpRequest::METHOD,
+                    ResolveCompletionItem::METHOD,
+                ];
 
                 let in_cancelled_requests = canceled_requests.remove(&x.id);
                 if in_cancelled_requests
@@ -913,6 +919,17 @@ impl Server {
                         self.send_response(new_response(
                             x.id,
                             self.completion(&transaction, params),
+                        ));
+                    }
+                } else if let Some(params) = as_request::<ResolveCompletionItem>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<ResolveCompletionItem>(
+                            params, &x.id,
+                        )
+                    {
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(transaction.resolve_completion_item(params)),
                         ));
                     }
                 } else if let Some(params) = as_request::<DocumentHighlightRequest>(&x) {

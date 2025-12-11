@@ -23,6 +23,7 @@ use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_server::ResponseError;
+use lsp_types::CompletionItem;
 use lsp_types::CompletionList;
 use lsp_types::CompletionResponse;
 use lsp_types::ConfigurationItem;
@@ -54,6 +55,7 @@ use lsp_types::request::InlayHintRequest;
 use lsp_types::request::References;
 use lsp_types::request::RegisterCapability;
 use lsp_types::request::Request as _;
+use lsp_types::request::ResolveCompletionItem;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::Shutdown;
@@ -482,6 +484,13 @@ impl TestClient {
                 "character": col
             }
         }))
+    }
+
+    pub fn completion_item_resolve(
+        &self,
+        item: &CompletionItem,
+    ) -> ClientRequestHandle<'_, ResolveCompletionItem> {
+        self.send_request(serde_json::to_value(item).unwrap())
     }
 
     pub fn diagnostic(
