@@ -1247,9 +1247,9 @@ impl<'a> Transaction<'a> {
                 }
                 AnyNodeRef::ExprSubscript(subscript) => {
                     let dunder_name = match subscript.ctx {
-                        ExprContext::Load => Some(dunder::GETITEM.clone()),
-                        ExprContext::Store => Some(dunder::SETITEM.clone()),
-                        ExprContext::Del => Some(dunder::DELITEM.clone()),
+                        ExprContext::Load => Some(dunder::GETITEM),
+                        ExprContext::Store => Some(dunder::SETITEM),
+                        ExprContext::Del => Some(dunder::DELITEM),
                         ExprContext::Invalid => None,
                     };
                     if let Some(dunder_name) = dunder_name
