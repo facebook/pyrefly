@@ -1949,6 +1949,14 @@ that an error is related to. Every error has exactly one kind.
 The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
 
+Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
+- ignore: the diagnostic is not emitted and does not cause a nonzero exit in the CLI
+- info: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI
+- warn: the diagnostic shows up yellow in the IDE and causes a nonzero exit in the CLI
+- error: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI
+
+The default severity for diagnostics is `error` unless otherwise noted. Diagnostics with default severity `ignore` must be explicitly enabled to be emitted.
+
 ## abstract-method-call
 
 This error is raised when code attempts to invoke a method decorated with
@@ -2333,7 +2341,9 @@ a, b, c = two_elems()
 
 ## deprecated
 
-This error occurs on usage of a deprecated class or function:
+This warning occurs on usage of a deprecated class or function.
+
+The default severity of this diagnostic is `warn`.
 
 ```python
 from warnings import deprecated
@@ -2346,13 +2356,15 @@ f()  # deprecated!
 
 Pyrefly emits this error when a class defines abstract members but is not declared abstract (for example, it does not inherit from `abc.ABC` or use `abc.ABCMeta`). Such classes cannot be instantiated because they have unimplemented abstract methods. Add `ABC` as a base class, adjust the metaclass, or provide concrete implementations to resolve the issue.
 
-This error defaults to `Ignore`, so opt in by enabling it in your configuration if you want to enforce explicit abstract base classes.
+The default severity of this diagnostic is `ignore`.
 
 ## implicit-any
 
 This error is emitted when Pyrefly infers an implicit `Any` type in your code for type variables or generic parameters that cannot be determined. This is common in gradually-typed code, but reduces type safety so we provide this error for users that want to enforce fully-typed codebases.
 
-This error is off by default. Typically, it can be fixed by providing explicit type arguments or default values for type variables.
+Typically, it can be fixed by providing explicit type arguments or default values for type variables.
+
+The default severity of this diagnostic is `ignore`.
 
 ```python
 # this only errors when first-use inference is disabled
@@ -2376,7 +2388,7 @@ do not recognize as always executing. We recognize constructors and some test
 setup methods; we will emit an error for any attributes defined by assignment
 in other methods.
 
-This error is off by default, and must be manually enabled in the configuration.
+The default severity of this diagnostic is `ignore`.
 
 ```python
 class C:
@@ -2699,6 +2711,8 @@ In this example, `os.bacarat` is treated as a module name, so failing to find it
 Pyrefly was able to find a stubs package but no corresponding source package. For example, this can
 happen if you install the `types-requests` package but forget to install `requests`.
 
+The default severity of this diagnostic is `ignore`.
+
 ## missing-source-for-stubs
 
 Pyrefly has bundled stubs for a package, but no corresponding source package was found.
@@ -2804,6 +2818,8 @@ This error is reported on an attempt to unpack an
 [open](https://typing.python.org/en/latest/spec/glossary.html#term-open) TypedDict that potentially
 has items incompatible with the TypedDict it is being unpacked into.
 
+The default severity of this diagnostic is `ignore`.
+
 Example:
 ```python
 from typing import TypedDict
@@ -2878,6 +2894,8 @@ def f(x: int) -> None:
 
 This warning is raised when `typing.cast()` is used to cast a value to a type it is already compatible with. Such casts are unnecessary and can be removed to improve code clarity.
 
+The default severity of this diagnostic is `warn`.
+
 ```python
 import typing
 
@@ -2910,13 +2928,15 @@ if "abc":
 
 ## reveal-type
 
-Pyrefly uses this error to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
+Pyrefly uses this diagnostic to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
+
+The default severity of this diagnostic is `info`.
 
 ## unannotated-attribute
 
-This error is raised when a class attribute is missing a type annotation and is initialized with the `None` literal. Without an explicit annotation, Pyrefly infers the type as `Any | None`, which reduces type safety.
+This error is raised when a class attribute is missing a type annotation and is initialized with the `None` literal. Without an explicit annotation, Pyrefly infers the type as `Any | None`, which reduces type safety. To fix it, add an explicit type annotation to the attribute.
 
-This error is off by default. To fix it, add an explicit type annotation to the attribute.
+The default severity of this diagnostic is `ignore`.
 
 ```python
 class MyClass:
@@ -2930,11 +2950,11 @@ class MyClass:
 
 ## unannotated-parameter
 
-This error is raised when a function parameter is missing a type annotation. This helps enforce fully-typed codebases by ensuring all parameters have explicit types.
+This error is raised when a function parameter is missing a type annotation. This helps enforce fully-typed codebases by ensuring all parameters have explicit types. To fix it, add a type annotation to the parameter.
 
 Note: The `self` and `cls` parameters are excluded from this check as they are implicitly typed.
 
-This error is off by default. To fix it, add a type annotation to the parameter.
+The default severity of this diagnostic is `ignore`.
 
 ```python
 def process_data(x: int, y):  # error: `process_data` is missing an annotation for parameter `y`
@@ -2947,9 +2967,9 @@ def process_data(x: int, y: int) -> int:
 
 ## unannotated-return
 
-This error is raised when a function is missing a return type annotation. This helps enforce fully-typed codebases by ensuring all functions declare their return types explicitly.
+This error is raised when a function is missing a return type annotation. This helps enforce fully-typed codebases by ensuring all functions declare their return types explicitly. To fix it, add a return type annotation to the function.
 
-This error is off by default. To fix it, add a return type annotation to the function.
+The default severity of this diagnostic is `ignore`.
 
 ```python
 def calculate_sum(x: int, y: int):  # error: `calculate_sum` is missing a return annotation
@@ -3008,6 +3028,8 @@ def where() -> None:
 This warning is raised when an identity comparison (`is` or `is not`) is made between
 literals whose comparison result is statically known.
 
+The default severity of this diagnostic is `warn`.
+
 ```python
 def test0() -> None:
     # Different literals are always different objects
@@ -3050,6 +3072,8 @@ if "hello" in 1:  # int doesn't support `in`!
 Type information for some third-party libraries is shipped in a stubs package separate from the
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
+
+The default severity of this diagnostic is `ignore`.
 
 ## unused-coroutine
 
