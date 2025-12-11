@@ -169,8 +169,8 @@ impl CompletionResolveData {
     }
 }
 
-fn completion_data_handle_path(handle: &Handle) -> Option<String> {
-    Some(handle.path().as_path().to_string_lossy().into_owned())
+fn completion_data_handle_path(handle: &Handle) -> String {
+    handle.path().as_path().to_string_lossy().into_owned()
 }
 
 fn completion_data_doc_range(range: Option<TextRange>) -> Option<(u32, u32)> {
@@ -2261,7 +2261,7 @@ impl<'a> Transaction<'a> {
             .finding()
         {
             let builtin_exports = self.get_exports(&builtin_handle);
-            let builtin_path = completion_data_handle_path(&builtin_handle);
+            let builtin_path = Some(completion_data_handle_path(&builtin_handle));
             for (name, location) in builtin_exports.iter() {
                 if let Some(identifier) = identifier
                     && SkimMatcherV2::default()
@@ -2343,7 +2343,7 @@ impl<'a> Transaction<'a> {
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
-                let path = completion_data_handle_path(&handle_for_data);
+                let path = Some(completion_data_handle_path(&handle_for_data));
                 let doc_range = completion_data_doc_range(export.docstring_range);
                 let data = CompletionResolveData::export_value(
                     handle_for_data.module(),
