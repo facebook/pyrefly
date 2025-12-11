@@ -412,6 +412,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // Assume recursive checks are true
             return Ok(());
         }
+        // HACK: pandas 2.x typeshed stubs have a bug where SequenceNotStr.index() has incorrect
+        // parameter kinds (not all position-only), causing list[str] to fail the protocol check.
+        // This is fixed in pandas 3.0 stubs. Until then, we hard-code that list/tuple satisfy
+        // SequenceNotStr. See https://github.com/pandas-dev/pandas/issues/56995
+        if protocol.has_qname("pandas._typing", "SequenceNotStr") {
+            if let Type::ClassType(got_cls) = &got {
+                if got_cls.is_builtin("list") || got_cls.is_builtin("tuple") {
+                    return Ok(());
+                }
+            }
+        }
         let protocol_members = self
             .type_order
             .get_protocol_member_names(protocol.class_object());
