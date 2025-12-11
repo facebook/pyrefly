@@ -148,7 +148,6 @@ pub enum CompletionResolveData {
         module: String,
         symbol: String,
         path: Option<String>,
-        #[serde(with = "serde_text_range_option")]
         doc_range: Option<TextRange>,
     },
 }
@@ -193,34 +192,6 @@ fn filesystem_docstring(range: TextRange, path: &str) -> Option<lsp_types::Docum
             value: cleaned,
         },
     ))
-}
-
-mod serde_text_range_option {
-    use ruff_text_size::TextRange;
-    use ruff_text_size::TextSize;
-    use serde::Deserialize;
-    use serde::Deserializer;
-    use serde::Serializer;
-
-    pub fn serialize<S>(value: &Option<TextRange>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match value {
-            Some(range) => {
-                serializer.serialize_some(&(range.start().to_u32(), range.end().to_u32()))
-            }
-            None => serializer.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<TextRange>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let opt = Option::<(u32, u32)>::deserialize(deserializer)?;
-        Ok(opt.map(|(start, end)| TextRange::new(TextSize::new(start), TextSize::new(end))))
-    }
 }
 
 const RESOLVE_EXPORT_INITIAL_GAS: Gas = Gas::new(100);
