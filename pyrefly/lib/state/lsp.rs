@@ -87,6 +87,7 @@ use crate::types::callable::Param;
 use crate::types::module::ModuleType;
 use crate::types::type_var::Restriction;
 use crate::types::types::Type;
+use pyrefly_types::literal::Lit;
 
 mod quick_fixes;
 
@@ -2628,6 +2629,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
+        in_string_literal: bool,
     ) {
         if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
@@ -2637,24 +2639,39 @@ impl<'a> Transaction<'a> {
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
-            Self::add_literal_completions_from_type(param.as_type(), completions);
+            Self::add_literal_completions_from_type(param.as_type(), completions, in_string_literal);
         }
     }
 
-    fn add_literal_completions_from_type(param_type: &Type, completions: &mut Vec<CompletionItem>) {
+    fn add_literal_completions_from_type(
+        param_type: &Type,
+        completions: &mut Vec<CompletionItem>,
+        in_string_literal: bool,
+    ) {
         match param_type {
             Type::Literal(lit) => {
+                let label = lit.to_string_escaped(true);
+                let insert_text = if in_string_literal {
+                    if let Lit::Str(s) = lit {
+                        Some(s.to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 completions.push(CompletionItem {
                     // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
-                    label: lit.to_string_escaped(true),
+                    label,
                     kind: Some(CompletionItemKind::VALUE),
                     detail: Some(format!("{param_type}")),
+                    insert_text,
                     ..Default::default()
                 });
             }
             Type::Union(box Union { members, .. }) => {
                 for member in members {
-                    Self::add_literal_completions_from_type(member, completions);
+                    Self::add_literal_completions_from_type(member, completions, in_string_literal);
                 }
             }
             _ => {}
@@ -3063,7 +3080,8 @@ impl<'a> Transaction<'a> {
                         self.add_local_variable_completions(handle, None, position, &mut result);
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
-                    self.add_literal_completions(handle, position, &mut result);
+                    let in_string_literal = nodes.iter().any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)));
+                    self.add_literal_completions(handle, position, &mut result, in_string_literal);
                     self.add_dict_key_completions(
                         handle,
                         mod_module.as_ref(),
