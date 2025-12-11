@@ -2481,22 +2481,23 @@ impl<'a> Transaction<'a> {
                 {
                     item.documentation = Some(documentation);
                 } else if let Some(range) = doc_range
-                    && let Some(path_str) = path.as_deref() {
+                    && let Some(path_str) = path.as_deref()
+                {
+                    tracing::debug!(
+                        "Resolving completion doc from filesystem: {} {:?}",
+                        path_str,
+                        range
+                    );
+                    if let Some(documentation) = filesystem_docstring(range, path_str) {
+                        item.documentation = Some(documentation);
+                    } else {
                         tracing::debug!(
-                            "Resolving completion doc from filesystem: {} {:?}",
+                            "Failed to load completion doc from filesystem: {} {:?}",
                             path_str,
                             range
                         );
-                        if let Some(documentation) = filesystem_docstring(range, path_str) {
-                            item.documentation = Some(documentation);
-                        } else {
-                            tracing::debug!(
-                                "Failed to load completion doc from filesystem: {} {:?}",
-                                path_str,
-                                range
-                            );
-                        }
                     }
+                }
             }
         }
         item
