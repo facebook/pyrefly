@@ -357,6 +357,58 @@ fn test_interpreter_change_removes_type_errors() {
     interaction.shutdown().unwrap();
 }
 
+// Only run this test on unix since windows has no way to mock a .exe without compiling something
+// (we call python with python.exe)
+#[cfg(unix)]
+#[test]
+fn test_interpreter_change_changes_existing_type_errors() {
+    let test_files_root = get_test_files_root();
+    let interpreter_path = setup_dummy_interpreter(
+        &test_files_root
+            .path()
+            .join("interpreter_with_no_site_packages"),
+    );
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("custom_interpreter/src/foo.py");
+    // Without any interpreter configured, there should be 1 import error
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(
+            test_files_root.path().join("custom_interpreter/src/foo.py"),
+            1,
+        )
+        .unwrap();
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .unwrap()
+        .send_configuration_response(json!([
+            {
+                "pythonPath": interpreter_path.to_str().unwrap()
+            }
+        ]));
+    interaction
+        .client
+        .expect_publish_diagnostics_message_contains(
+            test_files_root.path().join("custom_interpreter/src/foo.py"),
+            "interpreter_with_no_site_packages",
+        )
+        .unwrap();
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_disable_language_services() {
     let test_files_root = get_test_files_root();

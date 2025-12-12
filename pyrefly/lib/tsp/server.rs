@@ -10,8 +10,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use dupe::Dupe;
-use lsp_server::Connection;
 use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
@@ -22,7 +20,6 @@ use tsp_types::TSPRequests;
 use crate::commands::lsp::IndexingMode;
 use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::queue::LspEvent;
-use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::server::ProcessEvent;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
@@ -137,51 +134,51 @@ impl TspServer {
 
 pub fn tsp_loop(
     lsp_server: Box<dyn TspInterface>,
-    connection: Arc<Connection>,
     _initialization_params: InitializeParams,
-    lsp_queue: LspQueue,
 ) -> anyhow::Result<()> {
     eprintln!("Reading TSP messages");
-    let connection_for_dispatcher = connection.dupe();
-
     let server = TspServer::new(lsp_server);
 
-    // Start the recheck queue thread to process async tasks
-    let recheck_queue = server.inner.recheck_queue().dupe();
-    std::thread::spawn(move || {
-        recheck_queue.run_until_stopped();
-    });
+    std::thread::scope(|scope| {
+        // Start the recheck queue thread to process async tasks
+        scope.spawn(|| {
+            server
+                .inner
+                .recheck_queue()
+                .run_until_stopped(|task| server.inner.run_task(task));
+        });
 
-    let lsp_queue2 = lsp_queue.dupe();
-    std::thread::spawn(move || {
-        dispatch_lsp_events(&connection_for_dispatcher, lsp_queue2);
-    });
+        scope.spawn(|| {
+            dispatch_lsp_events(server.inner.connection(), server.inner.lsp_queue());
+        });
 
-    let mut ide_transaction_manager = TransactionManager::default();
-    let mut canceled_requests = HashSet::new();
+        let mut ide_transaction_manager = TransactionManager::default();
+        let mut canceled_requests = HashSet::new();
 
-    while let Ok((subsequent_mutation, event, queue_time)) = lsp_queue.recv() {
-        let queue_duration = queue_time.elapsed().as_secs_f32();
-        let process_start = Instant::now();
-        let event_description = event.describe();
-        match server.process_event(
-            &mut ide_transaction_manager,
-            &mut canceled_requests,
-            subsequent_mutation,
-            event,
-        )? {
-            ProcessEvent::Continue => {
-                let process_duration = process_start.elapsed().as_secs_f32();
-                info!(
-                    "Type server processed event `{}` in {:.2}s ({:.2}s waiting)",
-                    event_description, process_duration, queue_duration
-                );
+        while let Ok((subsequent_mutation, event, queue_time)) = server.inner.lsp_queue().recv() {
+            let queue_duration = queue_time.elapsed().as_secs_f32();
+            let process_start = Instant::now();
+            let event_description = event.describe();
+            match server.process_event(
+                &mut ide_transaction_manager,
+                &mut canceled_requests,
+                subsequent_mutation,
+                event,
+            )? {
+                ProcessEvent::Continue => {
+                    let process_duration = process_start.elapsed().as_secs_f32();
+                    info!(
+                        "Type server processed event `{}` in {:.2}s ({:.2}s waiting)",
+                        event_description, process_duration, queue_duration
+                    );
+                }
+                ProcessEvent::Exit => break,
             }
-            ProcessEvent::Exit => break,
         }
-    }
 
-    Ok(())
+        server.inner.recheck_queue().stop();
+        Ok(())
+    })
 }
 
 /// Generate TSP-specific server capabilities using the same capabilities as LSP

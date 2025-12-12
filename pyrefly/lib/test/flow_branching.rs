@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -721,12 +723,25 @@ match x:
 );
 
 testcase!(
-    test_crashing_match,
+    test_crashing_match_sequence,
     r#"
 match []:
     case [[1]]:
         pass
     case _:
+        pass
+"#,
+);
+
+testcase!(
+    test_crashing_match_star,
+    r#"
+match []:
+    case *x: # E: Parse error: Star pattern cannot be used here
+        pass
+    case *x | 1: # E: Parse error: Star pattern cannot be used here # E: alternative patterns bind different names
+        pass
+    case 1 | *x: # E: Parse error: Star pattern cannot be used here # E: alternative patterns bind different names
         pass
 "#,
 );
@@ -1307,4 +1322,83 @@ def test_keyword_pattern_not_special(x: float) -> None:
         case float(real=r):
             assert_type(r, float)
 "#,
+);
+
+testcase!(
+    test_pep765_break_continue_return_in_finally_3_14,
+    TestEnv::new_with_version(PythonVersion {
+        major: 3,
+        minor: 14,
+        micro: 0,
+    }),
+    r#"
+def test():
+    try:
+        pass
+    finally:
+        return # E: in a `finally` block
+
+for _ in []:
+    try:
+        pass
+    finally:
+        break # E: in a `finally` block
+for _ in []:
+    try:
+        pass
+    finally:
+        continue # E: in a `finally` block
+
+try:
+    pass
+finally:
+    def f():
+        return 42 # OK
+
+try:
+    pass
+finally:
+    def f():
+        try:
+            pass
+        finally:
+            return 42 # E: in a `finally` block
+
+try:
+    pass
+finally:
+    for _ in []:
+        try:
+            pass
+        finally:
+            break # E: in a `finally` block
+    "#,
+);
+
+testcase!(
+    test_pep765_break_continue_return_in_finally_3_13,
+    TestEnv::new_with_version(PythonVersion {
+        major: 3,
+        minor: 13,
+        micro: 0,
+    }),
+    r#"
+# For now, we won't emit a PEP765 syntax error for 3.13 and below
+def test():
+    try:
+        pass
+    finally:
+        return
+
+for _ in []:
+    try:
+        pass
+    finally:
+        break
+for _ in []:
+    try:
+        pass
+    finally:
+        continue
+    "#,
 );

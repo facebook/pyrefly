@@ -420,10 +420,20 @@ impl Handles {
                 .insert(path.dupe());
         }
 
-        let reloaded_configs = ConfigFile::query_source_db(&configs);
+        // TODO(connernilsen): wire in force logic
+        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false);
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
+            .collect();
+        let reloaded_configs = configs
+            .into_iter()
+            .map(|x| x.0)
+            .filter(|c| {
+                c.source_db
+                    .as_ref()
+                    .is_some_and(|db| reloaded_source_dbs.contains(db))
+            })
             .collect();
         (result, reloaded_configs, Vec::new())
     }

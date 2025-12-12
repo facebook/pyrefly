@@ -1,0 +1,13 @@
+from _typeshed import Incomplete
+from collections.abc import Generator
+from conans.client.tools.env import env_diff as env_diff, environment_append as environment_append
+from conans.client.tools.win import MSVS_YEAR as MSVS_YEAR, _system_registry_key as _system_registry_key, is_win64 as is_win64
+from conans.errors import ConanException as ConanException
+from conans.util.env_reader import get_env as get_env
+
+INTEL_YEAR: Incomplete
+
+def intel_installation_path(version, arch): ...
+def intel_compilervars_command(conanfile, arch: Incomplete | None = ..., compiler_version: Incomplete | None = ..., force: bool = ...): ...
+def intel_compilervars_dict(conanfile, arch: Incomplete | None = ..., compiler_version: Incomplete | None = ..., force: bool = ..., only_diff: bool = ...): ...
+def intel_compilervars(*args, **kwargs) -> Generator[None, None, None]: ...

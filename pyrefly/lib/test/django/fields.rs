@@ -23,3 +23,26 @@ def test():
     c.name = None
 "#,
 );
+
+django_testcase!(
+    test_get_foo_display,
+    r#"
+from typing import assert_type
+
+from django.db import models
+
+class Person(models.Model):
+    SHIRT_SIZES = {
+        "S": "Small",
+        "M": "Medium",
+        "L": "Large",
+    }
+    name = models.CharField(max_length=60)
+    shirt_size = models.CharField(max_length=2, choices=SHIRT_SIZES)
+
+p = Person(name="Fred Flintstone", shirt_size="L")
+p.save()
+assert_type(p.shirt_size, str) 
+assert_type(p.get_shirt_size_display(), str) 
+"#,
+);

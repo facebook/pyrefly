@@ -32,6 +32,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::facet::FacetKind;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -53,6 +54,7 @@ use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Number;
+use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -82,6 +84,10 @@ use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::module::ModuleType;
 use crate::types::types::Type;
+
+mod quick_fixes;
+
+use self::quick_fixes::extract_function::LocalRefactorCodeAction;
 
 fn default_true() -> bool {
     true
@@ -475,6 +481,7 @@ pub struct FindDefinitionItemWithDocstring {
     pub definition_range: TextRange,
     pub module: Module,
     pub docstring_range: Option<TextRange>,
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1113,6 +1120,7 @@ impl<'a> Transaction<'a> {
             definition_range: location,
             module: module_info,
             docstring_range,
+            display_name: Some(name.id.to_string()),
         })
     }
 
@@ -1137,6 +1145,7 @@ impl<'a> Transaction<'a> {
             definition_range: location,
             module: self.get_module_info(&handle)?,
             docstring_range,
+            display_name: Some(name.id.to_string()),
         })
     }
 
@@ -1161,6 +1170,7 @@ impl<'a> Transaction<'a> {
                     definition_range: definition.range,
                     module: definition.module,
                     docstring_range,
+                    display_name: Some(name.to_string()),
                 })
             } else {
                 None
@@ -1296,6 +1306,7 @@ impl<'a> Transaction<'a> {
             definition_range: TextRange::default(),
             module: module_info,
             docstring_range: self.get_module_docstring_range(&handle),
+            display_name: Some(module_name.to_string()),
         })
     }
 
@@ -1433,6 +1444,7 @@ impl<'a> Transaction<'a> {
                     module,
                     definition_range: identifier.range,
                     docstring_range,
+                    display_name: Some(identifier.id.to_string()),
                 }]
             }),
             Some(IdentifierWithContext {
@@ -1446,6 +1458,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range,
+                        display_name: Some(identifier.id.to_string()),
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1459,6 +1472,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range,
+                        display_name: Some(identifier.id.to_string()),
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1472,6 +1486,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1485,6 +1500,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1498,6 +1514,7 @@ impl<'a> Transaction<'a> {
                         definition_range: item.definition_range,
                         module: item.module,
                         docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
                     }]
                 }),
             Some(IdentifierWithContext {
@@ -1510,6 +1527,7 @@ impl<'a> Transaction<'a> {
                     definition_range: item.definition_range,
                     module: item.module.clone(),
                     docstring_range: None,
+                    display_name: Some(identifier.id.to_string()),
                 }),
             Some(IdentifierWithContext {
                 identifier,
@@ -1550,6 +1568,7 @@ impl<'a> Transaction<'a> {
                     module: module_info,
                     definition_range: qname.range(),
                     docstring_range: None,
+                    display_name: None,
                 }
             }))
         }
@@ -1730,6 +1749,14 @@ impl<'a> Transaction<'a> {
         Some(code_actions)
     }
 
+    pub fn extract_function_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_function::extract_function_code_actions(self, handle, selection)
+    }
+
     /// Determines whether a module is a third-party package.
     ///
     /// Checks if the module's path is located within any of the configured
@@ -1803,6 +1830,7 @@ impl<'a> Transaction<'a> {
                  definition_range,
                  module,
                  docstring_range: _,
+                 ..
              }| {
                 self.local_references_from_definition(handle, metadata, definition_range, &module)
             },
@@ -2844,7 +2872,8 @@ impl<'a> Transaction<'a> {
                                     _ => Some(CompletionItemKind::FIELD),
                                 };
                                 let ty = &x.ty;
-                                let detail = ty.clone().map(|t| t.as_hover_string());
+                                let detail =
+                                    ty.clone().map(|t| t.as_lsp_string(LspDisplayMode::Hover));
                                 let documentation = self.get_docstring_for_attribute(handle, x);
                                 result.push(CompletionItem {
                                     label: x.name.as_str().to_owned(),
@@ -3135,6 +3164,32 @@ impl<'a> CancellableTransaction<'a> {
         }
     }
 
+    /// Processes each transitive reverse dependency for a given definition location.
+    ///
+    /// This is a common pattern in workspace-wide
+    /// references-related features
+    fn process_rdeps_with_definition<T>(
+        &mut self,
+        sys_info: &SysInfo,
+        definition: &TextRangeWithModule,
+        mut process_fn: impl FnMut(&mut Self, &Handle, &TextRangeWithModule) -> Option<T>,
+    ) -> Result<Vec<T>, Cancelled> {
+        let candidate_handles =
+            self.compute_transitive_rdeps_for_definition(sys_info, definition)?;
+
+        let mut results = Vec::new();
+        for handle in candidate_handles {
+            // "Patched" means the definition's module path is adjusted for in-memory files
+            // to use the filesystem path instead, enabling cross-module reference finding
+            let patched_definition = self.patch_definition_for_handle(&handle, definition);
+            if let Some(result) = process_fn(self, &handle, &patched_definition) {
+                results.push(result);
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Returns Err if the request is canceled in the middle of a run.
     pub fn find_global_references_from_definition(
         &mut self,
@@ -3142,45 +3197,64 @@ impl<'a> CancellableTransaction<'a> {
         definition_kind: DefinitionMetadata,
         definition: TextRangeWithModule,
     ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
-        // General strategy:
-        // 1: Compute the set of transitive rdeps.
-        // 2. Find references in each one of them using the index computed during earlier checking
-        // 3. If this is a method definition, also search for reimplementations in child classes
-        let candidate_handles_for_references =
-            self.compute_transitive_rdeps_for_definition(sys_info, &definition)?;
+        let results = self.process_rdeps_with_definition(
+            sys_info,
+            &definition,
+            |transaction, handle, patched_definition| {
+                let mut module_refs: Vec<(Module, Vec<TextRange>)> = Vec::new();
 
-        let mut global_references = Vec::new();
-        for handle in candidate_handles_for_references {
-            let definition = self.patch_definition_for_handle(&handle, &definition);
-
-            let references = self
-                .as_ref()
-                .local_references_from_definition(
-                    &handle,
-                    definition_kind.clone(),
-                    definition.range,
-                    &definition.module,
-                )
-                .unwrap_or_default();
-            if !references.is_empty()
-                && let Some(module_info) = self.as_ref().get_module_info(&handle)
-            {
-                global_references.push((module_info, references));
-            }
-            // Step 3: Search for child class reimplementations using the parent_methods_map
-            // If this is a method definition, find all child classes that reimplement it
-            let child_implementations = self.find_child_implementations(&handle, &definition);
-            if !child_implementations.is_empty()
-                && let Some(module_info) = self.as_ref().get_module_info(&handle)
-            {
-                // Check if we already have this module in our results
-                if let Some((_, ranges)) = global_references
-                    .iter_mut()
-                    .find(|(m, _)| m.path() == module_info.path())
+                // Find local references
+                let references = transaction
+                    .as_ref()
+                    .local_references_from_definition(
+                        handle,
+                        definition_kind.clone(),
+                        patched_definition.range,
+                        &patched_definition.module,
+                    )
+                    .unwrap_or_default();
+                if !references.is_empty()
+                    && let Some(module_info) = transaction.as_ref().get_module_info(handle)
                 {
-                    ranges.extend(child_implementations);
+                    module_refs.push((module_info, references));
+                }
+
+                // Search for child class reimplementations using the parent_methods_map
+                let child_implementations =
+                    transaction.find_child_implementations(handle, patched_definition);
+                if !child_implementations.is_empty()
+                    && let Some(module_info) = transaction.as_ref().get_module_info(handle)
+                {
+                    // Check if we already have this module in our results
+                    if let Some((_, ranges)) = module_refs
+                        .iter_mut()
+                        .find(|(m, _)| m.path() == module_info.path())
+                    {
+                        ranges.extend(child_implementations);
+                    } else {
+                        module_refs.push((module_info, child_implementations));
+                    }
+                }
+
+                if module_refs.is_empty() {
+                    None
                 } else {
-                    global_references.push((module_info, child_implementations));
+                    Some(module_refs)
+                }
+            },
+        )?;
+
+        // Flatten nested results and merge by module
+        let mut global_references: Vec<(Module, Vec<TextRange>)> = Vec::new();
+        for module_refs in results {
+            for (module, ranges) in module_refs {
+                if let Some((_, existing_ranges)) = global_references
+                    .iter_mut()
+                    .find(|(m, _)| m.path() == module.path())
+                {
+                    existing_ranges.extend(ranges);
+                } else {
+                    global_references.push((module, ranges));
                 }
             }
         }
@@ -3203,26 +3277,30 @@ impl<'a> CancellableTransaction<'a> {
         sys_info: &SysInfo,
         definition: TextRangeWithModule,
     ) -> Result<Vec<TextRangeWithModule>, Cancelled> {
-        // General strategy (similar to find_global_references_from_definition):
-        // 1: Compute the set of transitive rdeps.
-        // 2: Find child implementations in each rdep using the parent_methods_map index
-        let candidate_handles_for_implementations =
-            self.compute_transitive_rdeps_for_definition(sys_info, &definition)?;
-
-        let mut all_implementations = Vec::new();
-        for handle in candidate_handles_for_implementations {
-            let definition = self.patch_definition_for_handle(&handle, &definition);
-
-            // Search for child class reimplementations using the parent_methods_map
-            let child_implementations = self.find_child_implementations(&handle, &definition);
-            if !child_implementations.is_empty()
-                && let Some(module_info) = self.as_ref().get_module_info(&handle)
-            {
-                for range in child_implementations {
-                    all_implementations.push(TextRangeWithModule::new(module_info.dupe(), range));
+        let results = self.process_rdeps_with_definition(
+            sys_info,
+            &definition,
+            |transaction, handle, patched_definition| {
+                // Search for child class reimplementations using the parent_methods_map
+                let child_implementations =
+                    transaction.find_child_implementations(handle, patched_definition);
+                if !child_implementations.is_empty()
+                    && let Some(module_info) = transaction.as_ref().get_module_info(handle)
+                {
+                    let implementations: Vec<TextRangeWithModule> = child_implementations
+                        .into_iter()
+                        .map(|range| TextRangeWithModule::new(module_info.dupe(), range))
+                        .collect();
+                    Some(implementations)
+                } else {
+                    None
                 }
-            }
-        }
+            },
+        )?;
+
+        // Flatten nested results
+        let mut all_implementations: Vec<TextRangeWithModule> =
+            results.into_iter().flatten().collect();
 
         // Sort and deduplicate implementations
         all_implementations.sort_by_key(|impl_| (impl_.module.path().dupe(), impl_.range.start()));
@@ -3230,12 +3308,228 @@ impl<'a> CancellableTransaction<'a> {
 
         Ok(all_implementations)
     }
+
+    /// Finds all incoming calls(functions that call this function) of a function across the entire codebase.
+    ///
+    /// This searches transitive reverse dependencies to find all locations where
+    /// the target function is called. For each call site, it identifies the
+    /// containing function.
+    ///
+    /// Returns a vector of tuples containing:
+    /// - Module where the call occurs
+    /// - Vector of (call_site_range, containing_function_name, containing_function_range)
+    ///
+    /// Returns Err if the request is canceled during execution.
+    pub fn find_global_incoming_calls_from_function_definition(
+        &mut self,
+        sys_info: &SysInfo,
+        definition_kind: DefinitionMetadata,
+        target_definition: &TextRangeWithModule,
+    ) -> Result<Vec<(Module, Vec<(TextRange, String, TextRange)>)>, Cancelled> {
+        // Use process_rdeps_with_definition to find references and filter to call sites in a single pass
+        let results = self.process_rdeps_with_definition(
+            sys_info,
+            target_definition,
+            |transaction, handle, patched_definition| {
+                let module_info = transaction.as_ref().get_module_info(handle)?;
+                let ast = transaction.as_ref().get_ast(handle)?;
+
+                let references = transaction
+                    .as_ref()
+                    .local_references_from_definition(
+                        handle,
+                        definition_kind.clone(),
+                        patched_definition.range,
+                        &patched_definition.module,
+                    )
+                    .unwrap_or_default();
+
+                if references.is_empty() {
+                    return None;
+                }
+
+                let ref_set: std::collections::HashSet<TextRange> =
+                    references.into_iter().collect();
+
+                let mut callers_in_file = Vec::new();
+
+                ast.visit(&mut |expr| {
+                    if let Expr::Call(call) = expr
+                        && ref_set
+                            .iter()
+                            .any(|ref_range| call.func.range().contains(ref_range.start()))
+                        && let Some((containing_func_name, containing_func_range)) =
+                            Self::find_containing_function_for_call(
+                                handle,
+                                &ast,
+                                call.range().start(),
+                            )
+                    {
+                        callers_in_file.push((
+                            call.range(),
+                            containing_func_name,
+                            containing_func_range,
+                        ));
+                    }
+                });
+
+                if callers_in_file.is_empty() {
+                    None
+                } else {
+                    Some((module_info, callers_in_file))
+                }
+            },
+        )?;
+
+        Ok(results)
+    }
+
+    /// Finds outgoing calls(functions called by) of a function, resolving across files.
+    ///
+    /// Given a function definition, this method finds all Call expressions within
+    /// that function's body and resolves each call target to its definition,
+    /// which may be in other files.
+    ///
+    /// Returns a vector of tuples containing:
+    /// - Target module (where the callee is defined)
+    /// - Vector of (call_site_range, callee_definition_range)
+    ///
+    /// Results are grouped by target module for consistency with find_global_callers_from_definition.
+    ///
+    /// Returns Err if the request is canceled during execution.
+    pub fn find_global_outgoing_calls_from_function_definition(
+        &mut self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Result<Vec<(Module, Vec<(TextRange, TextRange)>)>, Cancelled> {
+        // Resolve cursor position to function definition (handles both definitions and call sites)
+        let definitions =
+            self.as_ref()
+                .find_definition(handle, position, FindPreference::default());
+        let Some(target_def) = definitions.into_iter().next() else {
+            return Ok(Vec::new());
+        };
+
+        // Get handle for module where target function is defined (may differ from original handle)
+        let target_handle = Handle::new(
+            target_def.module.name(),
+            target_def.module.path().dupe(),
+            handle.sys_info().dupe(),
+        );
+
+        let Some(target_ast) = self.as_ref().get_ast(&target_handle) else {
+            return Ok(Vec::new());
+        };
+
+        let Some(func_def) = Self::find_function_at_position_in_ast(
+            &target_ast,
+            target_def.definition_range.start(),
+        ) else {
+            return Ok(Vec::new());
+        };
+
+        let mut callees_by_module: std::collections::HashMap<
+            ModulePath,
+            (Module, Vec<(TextRange, TextRange)>),
+        > = std::collections::HashMap::new();
+
+        for stmt in &func_def.body {
+            stmt.visit(&mut |expr| {
+                if let Expr::Call(call) = expr {
+                    let call_pos = call
+                        .func
+                        .range()
+                        .end()
+                        .checked_sub(TextSize::from(1))
+                        .unwrap_or(call.func.range().start());
+
+                    let definitions = self.as_ref().find_definition(
+                        &target_handle,
+                        call_pos,
+                        FindPreference::default(),
+                    );
+
+                    for def in definitions {
+                        let module_path = def.module.path().dupe();
+                        callees_by_module
+                            .entry(module_path)
+                            .or_insert_with(|| (def.module.clone(), Vec::new()))
+                            .1
+                            .push((call.range(), def.definition_range));
+                    }
+                }
+            });
+        }
+
+        let mut result: Vec<(Module, Vec<(TextRange, TextRange)>)> =
+            callees_by_module.into_values().collect();
+        result.sort_by_key(|(module, _)| module.path().dupe());
+
+        Ok(result)
+    }
+
+    /// Helper: Finds a function definition at a specific position in an AST.
+    ///
+    /// This is used by call hierarchy to identify the function being queried.
+    /// Returns None if no function is found at the position.
+    ///
+    /// Uses `locate_node` for efficient single-pass traversal, consistent with
+    /// other LSP position-based queries. Handles nested functions and methods.
+    pub(crate) fn find_function_at_position_in_ast(
+        ast: &ModModule,
+        position: TextSize,
+    ) -> Option<&StmtFunctionDef> {
+        let covering_nodes = Ast::locate_node(ast, position);
+
+        // Find the first StmtFunctionDef in the covering nodes
+        // This returns the innermost function containing the position
+        for node in covering_nodes.iter() {
+            if let AnyNodeRef::StmtFunctionDef(func_def) = node {
+                return Some(func_def);
+            }
+        }
+        None
+    }
+
+    /// Helper: Creates call hierarchy information for the function containing a call site.
+    ///
+    /// Given a call site position, finds the enclosing function and returns
+    /// information needed to represent it in the call hierarchy.
+    fn find_containing_function_for_call(
+        handle: &Handle,
+        ast: &ModModule,
+        position: TextSize,
+    ) -> Option<(String, TextRange)> {
+        let covering_nodes = Ast::locate_node(ast, position);
+
+        // Look through the node chain for the containing function
+        for (i, node) in covering_nodes.iter().enumerate() {
+            if let AnyNodeRef::StmtFunctionDef(func_def) = node {
+                // Check if this is a method (next node is a ClassDef)
+                if let Some(AnyNodeRef::StmtClassDef(class_def)) = covering_nodes.get(i + 1) {
+                    let name = format!(
+                        "{}.{}.{}",
+                        handle.module(),
+                        class_def.name.id,
+                        func_def.name.id
+                    );
+                    return Some((name, func_def.name.range()));
+                } else {
+                    // Top-level function
+                    let name = format!("{}.{}", handle.module(), func_def.name.id);
+                    return Some((name, func_def.name.range()));
+                }
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use ruff_python_ast::name::Name;
 
+    use super::CancellableTransaction;
     use super::Transaction;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
@@ -3293,5 +3587,88 @@ mod tests {
     fn match_summary(params: &[Param], idx: usize) -> Option<(&str, bool)> {
         Transaction::<'static>::param_name_for_positional_argument(params, idx)
             .map(|match_| (match_.name.as_str(), match_.is_vararg_repeat))
+    }
+
+    #[test]
+    fn test_find_function_at_position_in_ast() {
+        use pyrefly_python::ast::Ast;
+        use ruff_python_ast::PySourceType;
+        use ruff_text_size::TextSize;
+
+        let source = r#"
+def top_level():
+    pass
+
+class MyClass:
+    def method(self):
+        pass
+"#;
+        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
+
+        // Finds top-level function
+        let pos_in_func = TextSize::from(5);
+        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_in_func);
+        assert_eq!(result.unwrap().name.id.as_str(), "top_level");
+
+        // Finds class method
+        let pos_in_method = TextSize::from(50);
+        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_in_method);
+        assert_eq!(result.unwrap().name.id.as_str(), "method");
+    }
+
+    #[test]
+    fn test_find_function_at_position_in_ast_returns_none_outside_functions() {
+        use pyrefly_python::ast::Ast;
+        use ruff_python_ast::PySourceType;
+        use ruff_text_size::TextSize;
+
+        let source = "x = 10\n";
+        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
+
+        let pos_outside = TextSize::from(0);
+        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_outside);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_containing_function_for_call() {
+        use std::path::PathBuf;
+
+        use pyrefly_build::handle::Handle;
+        use pyrefly_python::ast::Ast;
+        use pyrefly_python::module_name::ModuleName;
+        use pyrefly_python::module_path::ModulePath;
+        use pyrefly_python::sys_info::SysInfo;
+        use ruff_python_ast::PySourceType;
+        use ruff_text_size::TextSize;
+
+        let source = r#"
+def my_function():
+    x = call()
+
+class MyClass:
+    def method(self):
+        y = call()
+"#;
+        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
+        let handle = Handle::new(
+            ModuleName::from_str("test"),
+            ModulePath::memory(PathBuf::from("test.py")),
+            SysInfo::default(),
+        );
+
+        // Returns qualified name for top-level function
+        let pos_in_func = TextSize::from(30);
+        let (name, _) =
+            CancellableTransaction::find_containing_function_for_call(&handle, &ast, pos_in_func)
+                .unwrap();
+        assert_eq!(name, "test.my_function");
+
+        // Returns qualified name for class method
+        let pos_in_method = TextSize::from(85);
+        let (name, _) =
+            CancellableTransaction::find_containing_function_for_call(&handle, &ast, pos_in_method)
+                .unwrap();
+        assert_eq!(name, "test.MyClass.method");
     }
 }

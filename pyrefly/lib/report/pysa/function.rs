@@ -19,13 +19,15 @@ use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
+use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Type;
 use pyrefly_types::types::Union;
 use pyrefly_util::thread_pool::ThreadPool;
-use rayon::prelude::*;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
@@ -44,7 +46,6 @@ use crate::report::pysa::ModuleContext;
 use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::resolve_decorator_callees;
 use crate::report::pysa::captured_variable::CapturedVariable;
-use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::get_all_classes;
@@ -715,9 +716,12 @@ impl FunctionNode {
 
     fn is_property_getter(&self) -> bool {
         match self {
-            FunctionNode::DecoratedFunction(function) => {
-                function.metadata().flags.is_property_getter
-            }
+            FunctionNode::DecoratedFunction(function) => function
+                .metadata()
+                .flags
+                .property_metadata
+                .as_ref()
+                .is_some_and(|meta| matches!(meta.role, PropertyRole::Getter)),
             FunctionNode::ClassField { .. } => false,
         }
     }
@@ -727,8 +731,9 @@ impl FunctionNode {
             FunctionNode::DecoratedFunction(function) => function
                 .metadata()
                 .flags
-                .is_property_setter_with_getter
-                .is_some(),
+                .property_metadata
+                .as_ref()
+                .is_some_and(|meta| matches!(meta.role, PropertyRole::Setter)),
             FunctionNode::ClassField { .. } => false,
         }
     }
@@ -873,7 +878,7 @@ pub fn export_all_functions(
 
 pub fn export_function_definitions(
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
-    captured_variables: &ModuleCapturedVariables,
+    captured_variables: &HashMap<FunctionRef, Vec<CapturedVariable>>,
     context: &ModuleContext,
 ) -> ModuleFunctionDefinitions<FunctionDefinition> {
     let mut function_definitions = ModuleFunctionDefinitions::new();
@@ -894,7 +899,7 @@ pub fn export_function_definitions(
 
         let captured_variables = captured_variables
             .get(&current_function)
-            .map(|set| set.iter().cloned().collect::<Vec<_>>())
+            .cloned()
             .unwrap_or_default();
 
         let decorator_callees = function.get_decorator_callees(function_base_definitions, context);

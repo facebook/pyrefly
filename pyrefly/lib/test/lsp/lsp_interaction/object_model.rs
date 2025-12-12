@@ -824,6 +824,41 @@ impl TestClient {
         })
     }
 
+    /// Wait for a publishDiagnostics notification, then check if it contains the message
+    pub fn expect_publish_diagnostics_message_contains(
+        &self,
+        path: PathBuf,
+        message: &str,
+    ) -> Result<(), LspMessageError> {
+        self.expect_message(
+            &format!(
+                "publishDiagnostics notification containing message '{message}' for file: {}",
+                path.display()
+            ),
+            |msg| {
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    let params: PublishDiagnosticsParams =
+                        serde_json::from_value(x.params).unwrap();
+                    if params.uri.to_file_path().ok().as_ref() == Some(&path)
+                        && params
+                            .diagnostics
+                            .iter()
+                            .any(|d| d.message.contains(message))
+                    {
+                        Some(())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+        )?;
+        Ok(())
+    }
+
     /// Wait for a publishDiagnostics notification, then check if it has the correct path and count
     pub fn expect_publish_diagnostics_error_count(
         &self,
@@ -1043,8 +1078,9 @@ impl LspInteraction {
             let args = LspArgs {
                 indexing_mode,
                 workspace_indexing_limit: 50,
+                build_system_blocking: false,
             };
-            let _ = run_lsp(Arc::new(conn_server), args, "pyrefly-lsp-test-version");
+            let _ = run_lsp(conn_server, args, "pyrefly-lsp-test-version");
             finish_server.notify_finished();
         });
 

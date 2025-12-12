@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use clap::Parser;
 use clap::ValueEnum;
 use lsp_server::Connection;
@@ -41,17 +39,19 @@ pub struct LspArgs {
     /// Find the struct that contains this field and add the indexing mode used by the language server
     #[arg(long, value_enum, default_value_t)]
     pub(crate) indexing_mode: IndexingMode,
+
     /// Sets the maximum number of user files for Pyrefly to index in the workspace.
     /// Note that indexing files is a performance-intensive task.
     #[arg(long, default_value_t = if cfg!(fbcode_build) {0} else {2000})]
     pub(crate) workspace_indexing_limit: usize,
+
+    /// Block for build system operations, only using fallback heuristics after checking
+    /// an up-to-date source DB. Only useful for benchmarking.
+    #[arg(long)]
+    pub(crate) build_system_blocking: bool,
 }
 
-pub fn run_lsp(
-    connection: Arc<Connection>,
-    args: LspArgs,
-    version_string: &str,
-) -> anyhow::Result<()> {
+pub fn run_lsp(connection: Connection, args: LspArgs, version_string: &str) -> anyhow::Result<()> {
     let initialization_params = match initialize_connection(&connection, &args, version_string) {
         Ok(it) => it,
         Err(e) => {
@@ -67,6 +67,7 @@ pub fn run_lsp(
         initialization_params,
         args.indexing_mode,
         args.workspace_indexing_limit,
+        args.build_system_blocking,
     )?;
     Ok(())
 }
@@ -102,7 +103,7 @@ impl LspArgs {
         // also be implemented to use sockets or HTTP.
         let (connection, io_threads) = Connection::stdio();
 
-        run_lsp(Arc::new(connection), self, version_string)?;
+        run_lsp(connection, self, version_string)?;
         io_threads.join()?;
         // We have shut down gracefully.
         eprintln!("shutting down server");

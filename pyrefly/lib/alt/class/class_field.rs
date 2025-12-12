@@ -15,6 +15,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
@@ -288,6 +289,8 @@ enum ClassFieldInner {
         is_staticmethod: bool,
         /// Django ForeignKey - triggers synthesis of _id field
         is_foreign_key: bool,
+        /// Django field with choices - triggers synthesis of get_FOO_display method
+        has_choices: bool,
     },
     /// Instance-only attributes (defined in methods, not in class body).
     #[allow(dead_code)]
@@ -332,6 +335,7 @@ impl ClassField {
         initialization: ClassFieldInitialization,
         read_only_reason: Option<ReadOnlyReason>,
         is_foreign_key: bool,
+        has_choices: bool,
         is_inherited: IsInherited,
     ) -> Self {
         Self(
@@ -343,6 +347,7 @@ impl ClassField {
                 is_classvar: false,
                 is_staticmethod: false,
                 is_foreign_key,
+                has_choices,
             },
             is_inherited,
         )
@@ -354,6 +359,7 @@ impl ClassField {
             None,
             ClassFieldInitialization::Magic,
             None,
+            false,
             false,
             IsInherited::Maybe,
         )
@@ -369,6 +375,7 @@ impl ClassField {
             Some(annotation),
             ClassFieldInitialization::Uninitialized,
             read_only_reason,
+            false,
             false,
             IsInherited::Maybe,
         )
@@ -428,6 +435,7 @@ impl ClassField {
                     is_classvar: false,
                     is_staticmethod: false,
                     is_foreign_key: false,
+                    has_choices: false,
                 },
                 IsInherited::Maybe,
             )
@@ -444,6 +452,7 @@ impl ClassField {
                 is_classvar: false,
                 is_staticmethod: false,
                 is_foreign_key: false,
+                has_choices: false,
             },
             IsInherited::Maybe,
         )
@@ -521,6 +530,7 @@ impl ClassField {
                 is_classvar,
                 is_staticmethod,
                 is_foreign_key,
+                has_choices,
             } => {
                 let mut ty = ty.clone();
                 f(&mut ty);
@@ -533,6 +543,7 @@ impl ClassField {
                         is_classvar: *is_classvar,
                         is_staticmethod: *is_staticmethod,
                         is_foreign_key: *is_foreign_key,
+                        has_choices: *has_choices,
                     },
                     self.1.clone(),
                 )
@@ -745,6 +756,17 @@ impl ClassField {
             ClassFieldInner::Method { .. } => false,
             ClassFieldInner::NestedClass { .. } => false,
             ClassFieldInner::ClassAttribute { is_foreign_key, .. } => *is_foreign_key,
+            ClassFieldInner::InstanceAttribute { .. } => false,
+        }
+    }
+
+    pub fn has_choices(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Property { .. } => false,
+            ClassFieldInner::Descriptor { .. } => false,
+            ClassFieldInner::Method { .. } => false,
+            ClassFieldInner::NestedClass { .. } => false,
+            ClassFieldInner::ClassAttribute { has_choices, .. } => *has_choices,
             ClassFieldInner::InstanceAttribute { .. } => false,
         }
     }
@@ -1553,6 +1575,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_foreign_key = metadata.is_django_model()
             && matches!(&ty, Type::ClassType(cls) if self.is_foreign_key_field(cls.class_object()));
 
+        // Check if this is a Django field with choices
+        let has_choices = if let ClassFieldDefinition::AssignedInBody {
+            value: ExprOrBinding::Expr(expr),
+            ..
+        } = field_definition
+            && let Some(call_expr) = expr.as_call_expr()
+        {
+            metadata.is_django_model() && self.has_django_field_choices(call_expr)
+        } else {
+            false
+        };
+
         let ty = if let Some(special_ty) = self.get_special_class_field_type(
             class,
             name,
@@ -1650,6 +1684,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             is_classvar: is_class_var,
                             is_staticmethod,
                             is_foreign_key,
+                            has_choices,
                         },
                         is_inherited,
                     )
@@ -1737,7 +1772,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             // We interpret `self.foo = None` to mean the type of foo is None or some unknown type.
             (None, Expr::NoneLiteral(_)) => {
-                self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::ImplicitAny), "This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.".to_owned());
+                self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::UnannotatedAttribute), "This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.".to_owned());
                 self.union(Type::None, Type::any_implicit())
             }
             (None, _) => self.expr_infer(x, errors),
@@ -2490,7 +2525,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         true
     }
 
-    fn should_check_field_for_override_consistency(&self, field_name: &Name) -> bool {
+    fn should_check_field_for_override_consistency(
+        &self,
+        field_name: &Name,
+        class_metadata: &Arc<ClassMetadata>,
+    ) -> bool {
         // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate in override checks
         if field_name == &dunder::NEW
             || field_name == &dunder::INIT
@@ -2536,6 +2575,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return false;
         }
 
+        // Django models: skip override check for `Meta` class
+        if class_metadata.is_django_model() && field_name.as_str() == "Meta" {
+            return false;
+        }
+
         true
     }
 
@@ -2552,7 +2596,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
 
-        if !self.should_check_field_for_override_consistency(field_name) {
+        let metadata = self.get_metadata_for_class(cls);
+        if !self.should_check_field_for_override_consistency(field_name, &metadata) {
             return;
         }
 
@@ -2565,7 +2610,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut got_attribute = None;
         let mut parent_attr_found = false;
         let mut parent_has_any = false;
-        let metadata = self.get_metadata_for_class(cls);
         let is_typed_dict_field = self.is_typed_dict_field(metadata.as_ref(), field_name);
 
         let bases_to_check: Box<dyn Iterator<Item = &ClassType>> = if bases.is_empty() {
@@ -2758,7 +2802,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let parent_class_fields = parent_class_object.fields();
             let parent_metadata = self.get_metadata_for_class(parent_class_object);
             for parent_field_name in parent_class_fields {
-                if !self.should_check_field_for_override_consistency(parent_field_name) {
+                if !self.should_check_field_for_override_consistency(
+                    parent_field_name,
+                    &current_class_metadata,
+                ) {
                     continue;
                 }
                 if current_class_fields.contains(parent_field_name) {
@@ -3099,14 +3146,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         metaclass: &ClassType,
         name: &Name,
     ) -> Option<ClassAttribute> {
-        self.get_class_member(metaclass.class_object(), name)
-            .map(|field| {
-                self.as_instance_attribute(
-                    name,
-                    &field,
-                    &Instance::of_metaclass(cls.clone(), metaclass),
-                )
-            })
+        let attr = self.get_class_member(metaclass.class_object(), name)?;
+        let attr = self.as_instance_attribute(
+            name,
+            &attr,
+            &Instance::of_metaclass(cls.clone(), metaclass),
+        );
+        if name == &dunder::CALL
+            && metaclass
+                .class_object()
+                .has_toplevel_qname(ModuleName::builtins().as_str(), "type")
+        {
+            return Some(ClassAttribute::read_write(
+                self.constructor_to_callable(cls.class_type()),
+            ));
+        }
+        Some(attr)
     }
 
     // When we're accessing the attribute of a string literal, we bind methods to

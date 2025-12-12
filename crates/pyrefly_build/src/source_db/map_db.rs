@@ -88,7 +88,7 @@ impl SourceDatabase for MapDatabase {
         Some(Handle::new(name.dupe(), module_path.dupe(), self.1.dupe()))
     }
 
-    fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
+    fn query_source_db(&self, _: SmallSet<ModulePathBuf>, _: bool) -> anyhow::Result<bool> {
         Ok(false)
     }
 

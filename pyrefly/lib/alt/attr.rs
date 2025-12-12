@@ -47,6 +47,8 @@ use crate::solver::solver::SubsetError;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
+use crate::types::callable::PropertyMetadata;
+use crate::types::callable::PropertyRole;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
@@ -409,6 +411,13 @@ impl InternalError {
 #[derive(Clone, Debug)]
 struct AttributeBase(Vec1<AttributeBase1>);
 
+#[derive(Clone, Debug)]
+struct PropertyAttr {
+    getter: Type,
+    setter: Option<Type>,
+    deleter: bool,
+}
+
 /// A single, "atomic" attribute base, not coming from a union or an intersection.
 /// An attribute is either found or not found by a search on this.
 #[derive(Clone, Debug)]
@@ -435,8 +444,8 @@ enum AttributeBase1 {
     /// before falling back to `Never`.
     TypeNever,
     /// Properties are handled via a special case so that we can understand
-    /// setter decorators.
-    Property(Type),
+    /// setter/deleter decorators.
+    Property(PropertyAttr),
     /// Attribute access on `Self` from inside a class
     SelfType(ClassType),
     /// Result of a super() call. See Type::SuperInstance for details on what these fields are.
@@ -467,14 +476,18 @@ pub enum ClassBase {
 }
 
 impl ClassBase {
-    pub fn class_object(&self) -> &Class {
+    pub fn class_type(&self) -> &ClassType {
         match self {
-            ClassBase::ClassDef(c) => c.class_object(),
-            ClassBase::ClassType(c) => c.class_object(),
-            ClassBase::Quantified(_, c) => c.class_object(),
-            ClassBase::SelfType(c) => c.class_object(),
-            ClassBase::Protocol(c, _) => c.class_object(),
+            ClassBase::ClassDef(c)
+            | ClassBase::ClassType(c)
+            | ClassBase::Quantified(_, c)
+            | ClassBase::SelfType(c)
+            | ClassBase::Protocol(c, _) => c,
         }
+    }
+
+    pub fn class_object(&self) -> &Class {
+        self.class_type().class_object()
     }
 
     pub fn targs(&self) -> Option<&TArgs> {
@@ -1381,7 +1394,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             }
-            AttributeBase1::Property(getter) => {
+            AttributeBase1::Property(property) => {
                 if attr_name == "setter" {
                     // When given a decorator `@some_property.setter`, instead of modeling the setter
                     // directly at the type level we just return the getter (the raw `some_property`)
@@ -1396,14 +1409,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     //
                     // TODO(stroxler): it is probably possible to synthesize a forall type here
                     // that uses a type var to propagate the setter. Investigate this option later.
-                    let mut getter = getter.clone();
+                    let mut getter = property.getter.clone();
+                    let metadata_getter = property.getter.without_property_metadata();
+                    let metadata_setter = property
+                        .setter
+                        .as_ref()
+                        .map(|setter| setter.without_property_metadata());
                     getter.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {
-                        meta.flags.is_property_setter_decorator = true;
+                        meta.flags.property_metadata = Some(PropertyMetadata {
+                            role: PropertyRole::SetterDecorator,
+                            getter: metadata_getter.clone(),
+                            setter: metadata_setter.clone(),
+                            has_deleter: property.deleter,
+                        });
                     });
                     acc.found_type(
                         // TODO(samzhou19815): Support go-to-definition for @property applied symbols
                         getter, base,
                     )
+                } else if attr_name == "deleter" {
+                    let mut getter = property.getter.clone();
+                    getter.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {
+                        meta.flags.property_metadata = Some(PropertyMetadata {
+                            role: PropertyRole::DeleterDecorator,
+                            getter: property.getter.clone(),
+                            setter: property.setter.clone(),
+                            has_deleter: true,
+                        });
+                    });
+                    acc.found_type(getter, base)
                 } else {
                     let class = self.stdlib.property();
                     match self.get_instance_attribute(class, attr_name) {
@@ -1841,7 +1875,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ClassBase::ClassType(self.stdlib.method_type().clone()),
             )),
             Type::Never(_) => acc.push(AttributeBase1::Never),
-            _ if ty.is_property_getter() => acc.push(AttributeBase1::Property(ty)),
+            _ if ty.is_property_getter() => {
+                let deleter = ty
+                    .property_metadata()
+                    .map(|meta| meta.has_deleter)
+                    .unwrap_or(false);
+                acc.push(AttributeBase1::Property(PropertyAttr {
+                    getter: ty.clone(),
+                    setter: None,
+                    deleter,
+                }));
+            }
+            _ if let Some(metadata) = ty.property_metadata()
+                && matches!(metadata.role, PropertyRole::Setter) =>
+            {
+                acc.push(AttributeBase1::Property(PropertyAttr {
+                    getter: metadata.getter.clone(),
+                    setter: Some(ty.clone()),
+                    deleter: metadata.has_deleter,
+                }));
+            }
             Type::Callable(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.function_type().clone(),
             )),

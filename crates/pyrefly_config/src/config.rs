@@ -891,10 +891,18 @@ impl ConfigFile {
         result
     }
 
+    /// Requery the source database, if one is available, for any changes that may
+    /// occur with the current open set of files.
+    ///
+    /// When `force` is true, ignore any heuristics that would exit early if the open
+    /// set of files has not changed. Should be used when a build system file
+    /// or configuration file might have changed, or if we suspect the build system
+    /// may produce changes in generated files.
     pub fn query_source_db(
         configs_to_files: &SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>>,
-    ) -> SmallSet<ArcId<ConfigFile>> {
-        let mut reloaded_configs = SmallSet::new();
+        force: bool,
+    ) -> SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>> {
+        let mut reloaded_source_dbs = SmallSet::new();
         let mut sourcedb_configs: SmallMap<_, Vec<_>> = SmallMap::new();
         for (config, files) in configs_to_files {
             let Some(source_db) = &config.source_db else {
@@ -912,7 +920,7 @@ impl ConfigFile {
                 .flat_map(|x| x.1.iter())
                 .map(|p| p.module_path_buf())
                 .collect::<SmallSet<_>>();
-            let reloaded = match source_db.requery_source_db(all_files) {
+            let reloaded = match source_db.query_source_db(all_files, force) {
                 Err(error) => {
                     error!("Error reloading source database for config: {error:?}");
                     continue;
@@ -936,12 +944,10 @@ impl ConfigFile {
                         .filter_map(|x| x.0.source.root())
                         .collect::<Vec<_>>(),
                 );
-                for (config, _) in configs_and_files {
-                    reloaded_configs.insert(config.dupe());
-                }
+                reloaded_source_dbs.insert(source_db.dupe());
             }
         }
-        reloaded_configs
+        reloaded_source_dbs
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,

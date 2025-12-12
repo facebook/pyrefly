@@ -13,7 +13,8 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::types::Type;
 use pyrefly_util::thread_pool::ThreadPool;
-use rayon::prelude::*;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::Stmt;
@@ -31,6 +32,7 @@ use crate::report::pysa::module::ModuleKey;
 use crate::report::pysa::slow_fun_monitor::slow_fun_monitor_scope;
 use crate::report::pysa::step_logger::StepLogger;
 use crate::report::pysa::types::PysaType;
+use crate::report::pysa::types::is_bound_method_like;
 use crate::report::pysa::types::preprocess_type;
 use crate::state::state::Transaction;
 
@@ -110,9 +112,11 @@ fn visit_assign_target(
             .key_to_idx_hashed_opt(Hashed::new(&Key::Definition(short_identifier)))
             .and_then(|idx| context.answers.get_idx(idx));
         if let Some(type_) = type_.as_ref()
-            && type_.ty().is_type_variable()
+            && (type_.ty().is_type_variable() || is_bound_method_like(type_.ty()))
         {
-            // Don't export type variable globals.
+            // Don't export:
+            // - Type variable, such as `T = TypeVar("T")`
+            // - Aliases to bound method, such as `inst = Random(); random = inst.random`
             return;
         }
         global_variables

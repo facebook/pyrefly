@@ -17,7 +17,6 @@ use pyrefly_types::types::Type;
 use ruff_python_ast::name::Name;
 
 use crate::report::pysa::call_graph::Target;
-use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionDefinition;
@@ -91,7 +90,7 @@ fn test_exported_functions(
 
     let reversed_override_graph =
         build_reversed_override_graph(&handles, &transaction, &module_ids);
-    let captured_variables = ModuleCapturedVariables::new();
+    let captured_variables = HashMap::new();
     let actual_function_definitions = export_function_definitions(
         &collect_function_base_definitions(
             &handles,

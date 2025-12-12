@@ -16,7 +16,7 @@ We’re excited to share that experimental support for Pydantic is now available
 
 Supporting third-party packages like Pydantic in a language server or type checker is a non-trivial challenge. Unlike the Python standard library, third-party packages may introduce their own conventions, dynamic behaviors, and runtime logic that can be difficult to analyze statically. Many type checkers either require plugins (like Mypy’s Pydantic plugin) or offer only limited support for these types of projects. At the time of writing, Mypy is currently the only other major typechecker that provides robust support for Pydantic.
 
-Read on to learn more about how this works and how to get started, or watch the [video](https://www.youtube.com/watch?v=hIFbMdUI0xA)!
+Read on to learn more about how this works and how to get started, or watch the [video](https://www.youtube.com/watch?v=zXYpSQB57YI)!
 
 ##
 
@@ -45,10 +45,10 @@ Using the code above, if you were to create a User instance, Pydantic would auto
 
 So how does Pyrefly work with Pydantic? For this initial experimental support we focused on delivering the following experiences:
 
-* **Understands models and constructs**: Pyrefly supports core Pydantic features, including `BaseModel`, `Field`, `ConfigDict`, as well as model-level configuration. No import errors or pesky red squiggles because your typechecker/language server doesn’t understand what Pydantic is.
-* **Automatic Recognition**: Pyrefly detects Pydantic models and constructs out-of-the-box. There’s no need to install plugins, add configuration files, or tweak settings. You can just write your Pydantic code and Pyrefly will handle the rest.
-* **Static Analysis That Reflects Runtime Logic:** One of the biggest challenges with Pydantic is that much of its validation and type coercion happens at runtime. Pyrefly’s static analysis engine is built to reflect Pydantic’s runtime logic as much as possible, ensuring that what you get in your IDE matches what will happen when your code runs.
-* **Immediate Feedback:** As you write and edit your models, Pyrefly provides instant type errors and warnings. This helps you catch mistakes early, reducing debugging time and improving code quality.
+- **Understands models and constructs**: Pyrefly supports core Pydantic features, including `BaseModel`, `Field`, `ConfigDict`, as well as model-level configuration. No import errors or pesky red squiggles because your typechecker/language server doesn’t understand what Pydantic is.
+- **Automatic Recognition**: Pyrefly detects Pydantic models and constructs out-of-the-box. There’s no need to install plugins, add configuration files, or tweak settings. You can just write your Pydantic code and Pyrefly will handle the rest.
+- **Static Analysis That Reflects Runtime Logic:** One of the biggest challenges with Pydantic is that much of its validation and type coercion happens at runtime. Pyrefly’s static analysis engine is built to reflect Pydantic’s runtime logic as much as possible, ensuring that what you get in your IDE matches what will happen when your code runs.
+- **Immediate Feedback:** As you write and edit your models, Pyrefly provides instant type errors and warnings. This helps you catch mistakes early, reducing debugging time and improving code quality.
 
 For the full list of supported Pydantic features check out the documentation [here](https://pyrefly.org/en/docs/pydantic/#supported-features-with-examples).
 
@@ -58,8 +58,8 @@ Let's take a closer look at how Pyrefly works differently to other type checkers
 
 Pydantic offers flexible validation modes to suit different use cases:
 
-* **Lax (Default) Mode:** In this mode, Pydantic will automatically coerce types where possible. For example, if you pass `”123”`(a string) to a field expecting an int, Pydantic will convert (i.e. coerce) it to `123` (an int). This is convenient for handling loosely-typed input, such as data from APIs or user forms.
-* **Strict Mode:** here Pydantic enforces exact types, no coercion is performed. If you pass a string to an integer field, you’ll get a validation error. This is ideal for scenarios where data integrity is paramount.
+- **Lax (Default) Mode:** In this mode, Pydantic will automatically coerce types where possible. For example, if you pass `”123”`(a string) to a field expecting an int, Pydantic will convert (i.e. coerce) it to `123` (an int). This is convenient for handling loosely-typed input, such as data from APIs or user forms.
+- **Strict Mode:** here Pydantic enforces exact types, no coercion is performed. If you pass a string to an integer field, you’ll get a validation error. This is ideal for scenarios where data integrity is paramount.
 
 The handy thing about Pyrefly is that it automatically respects your choices on this matter. It reads your model’s configuration (such as `ConfigDict` or model-level config) to determine which mode to apply. For example, in the following code we are explicitly setting the `age` field using strict mode. Pyrefly inspects this statement directly and adapts its analysis to match your intent (in this case by reporting an error if a string age is passed).
 
@@ -74,7 +74,6 @@ class User(BaseModel):
 # Pyrefly will report an error here.
 y = User(name="Alice", age="30")
 ```
-
 
 Another useful example of this can be seen with the use of extra parameters. Sometimes when writing Pydantic models you want to allow extra unspecified parameters when creating a model, and other times you want to explicitly forbid it (e.g. by using `extra=forbid`). Whether you’re using either approach or a mix of both in your code, Pyrefly can pick it up automatically from how you’ve written your Pydantic model:
 

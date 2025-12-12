@@ -333,7 +333,12 @@ impl<'a> BindingsBuilder<'a> {
                 self.finish_match_or_fork();
                 narrow_ops.unwrap_or_default()
             }
-            Pattern::MatchStar(_) => NarrowOps::new(),
+            Pattern::MatchStar(p) => {
+                if let Some(name) = &p.name {
+                    self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
+                }
+                NarrowOps::new()
+            }
         }
     }
 

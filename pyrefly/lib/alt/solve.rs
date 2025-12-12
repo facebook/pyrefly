@@ -1688,7 +1688,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         use pyrefly_python::module_path::ModulePathDetails;
         match module_path.details() {
             ModulePathDetails::BundledTypeshed(_)
-            | ModulePathDetails::BundledTypeshedThirdParty(_) => true,
+            | ModulePathDetails::BundledTypeshedThirdParty(_)
+            | ModulePathDetails::BundledThirdParty(_) => true,
             ModulePathDetails::FileSystem(path)
             | ModulePathDetails::Memory(path)
             | ModulePathDetails::Namespace(path) => {
@@ -4020,6 +4021,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                 "Type variable bounds and constraints must be concrete".to_owned(),
+            );
+        }
+        if type_form_context == TypeFormContext::TypeArgumentForType
+            && let Some(cls) = match &ty {
+                Type::ClassType(cls) | Type::SelfType(cls) => Some(cls.class_object().clone()),
+                Type::ClassDef(cls) => Some(cls.clone()),
+                _ => None,
+            }
+            && self.get_metadata_for_class(&cls).is_new_type()
+        {
+            return self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                format!(
+                    "NewType `{}` is not a class and cannot be used with `type` or `Type`",
+                    cls.name()
+                ),
             );
         }
         ty

@@ -26,6 +26,7 @@ use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_server::ResponseError;
+use lsp_types::CallHierarchyServerCapability;
 use lsp_types::CodeAction;
 use lsp_types::CodeActionKind;
 use lsp_types::CodeActionOptions;
@@ -134,6 +135,9 @@ use lsp_types::notification::DidSaveTextDocument;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
+use lsp_types::request::CallHierarchyIncomingCalls;
+use lsp_types::request::CallHierarchyOutgoingCalls;
+use lsp_types::request::CallHierarchyPrepare;
 use lsp_types::request::CodeActionRequest;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
@@ -163,6 +167,7 @@ use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
 use lsp_types::request::WorkspaceSymbolRequest;
+use pyrefly_build::SourceDatabase;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::config::ConfigSource;
 use pyrefly_python::PYTHON_EXTENSIONS;
@@ -180,6 +185,7 @@ use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::watch_pattern::WatchPattern;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use serde::Serialize;
@@ -195,7 +201,6 @@ use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::to_real_path;
-use crate::lsp::non_wasm::build_system::queue_source_db_rebuild_and_recheck;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
 use crate::lsp::non_wasm::lsp::apply_change_events;
 use crate::lsp::non_wasm::lsp::as_notification;
@@ -206,6 +211,7 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
+use crate::lsp::non_wasm::queue::HeavyTask;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
@@ -264,15 +270,19 @@ impl TypeErrorDisplayStatus {
 }
 
 /// Interface exposed for TSP to interact with the LSP server
-pub trait TspInterface {
+pub trait TspInterface: Send + Sync {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
 
     /// Get access to the state for creating transactions
-    fn state(&self) -> &Arc<State>;
+    fn state(&self) -> &State;
+
+    fn connection(&self) -> &Connection;
+
+    fn lsp_queue(&self) -> &LspQueue;
 
     /// Get access to the recheck queue for async task processing
-    fn recheck_queue(&self) -> &HeavyTaskQueue;
+    fn recheck_queue(&self) -> &HeavyTaskQueue<HeavyTask>;
 
     /// Process an LSP event and return the next step
     fn process_event<'a>(
@@ -282,10 +292,11 @@ pub trait TspInterface {
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent>;
+
+    fn run_task(&self, task: HeavyTask);
 }
 
-#[derive(Clone, Dupe)]
-struct ServerConnection(Arc<Connection>);
+struct ServerConnection(Connection);
 
 impl ServerConnection {
     fn send(&self, msg: Message) {
@@ -326,22 +337,23 @@ impl ServerConnection {
 pub struct Server {
     connection: ServerConnection,
     lsp_queue: LspQueue,
-    recheck_queue: HeavyTaskQueue,
-    find_reference_queue: HeavyTaskQueue,
-    sourcedb_queue: HeavyTaskQueue,
+    recheck_queue: HeavyTaskQueue<HeavyTask>,
+    find_reference_queue: HeavyTaskQueue<HeavyTask>,
+    sourcedb_queue: HeavyTaskQueue<HeavyTask>,
     /// Any configs whose find cache should be invalidated.
-    invalidated_configs: Arc<Mutex<SmallSet<ArcId<ConfigFile>>>>,
+    invalidated_source_dbs: Mutex<SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>>,
     initialize_params: InitializeParams,
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
-    state: Arc<State>,
+    build_system_blocking: bool,
+    state: State,
     /// This is a mapping from open notebook cells to the paths of the notebooks they belong to,
     /// which can be used to look up the notebook contents in `open_files`.
     ///
     /// Notebook cell URIs are entirely arbitrary, and any URI received from the language client
     /// should be mapped through here in case they correspond to a cell.
-    open_notebook_cells: Arc<RwLock<HashMap<Url, PathBuf>>>,
-    open_files: Arc<RwLock<HashMap<PathBuf, Arc<LspFile>>>>,
+    open_notebook_cells: RwLock<HashMap<Url, PathBuf>>,
+    open_files: RwLock<HashMap<PathBuf, Arc<LspFile>>>,
     /// Tracks URIs (including virtual/untitled ones) to synthetic on-disk paths so we can
     /// treat them like regular files throughout the server.
     unsaved_file_tracker: UnsavedFileTracker,
@@ -352,7 +364,7 @@ pub struct Server {
     /// performed with best effort up to certain limit of user files. When the workspace changes,
     /// we rely on file watchers to catch up.
     indexed_workspaces: Mutex<HashSet<PathBuf>>,
-    cancellation_handles: Arc<Mutex<HashMap<RequestId, CancellationHandle>>>,
+    cancellation_handles: Mutex<HashMap<RequestId, CancellationHandle>>,
     workspaces: Arc<Workspaces>,
     outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
@@ -369,20 +381,31 @@ pub struct Server {
 /// - priority_events includes those that should be handled as soon as possible (e.g. know that a
 ///   request is cancelled)
 /// - queued_events includes most of the other events.
-pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
+pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: &LspQueue) {
     for msg in &connection.receiver {
         match msg {
             Message::Request(x) => {
-                match connection.handle_shutdown(&x) {
-                    Ok(is_shutdown) => {
+                // Catch panics from lsp_server's handle_shutdown which may unwrap on SendError
+                // when the client disconnects abruptly
+                let shutdown_result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        connection.handle_shutdown(&x)
+                    }));
+
+                match shutdown_result {
+                    Ok(Ok(is_shutdown)) => {
                         if is_shutdown {
                             // break to ensure we send exit event
                             break;
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         error!("Error handling shutdown: {:?}", e);
                         // still exit in the case of error
+                        break;
+                    }
+                    Err(_) => {
+                        info!("Shutdown panicked (likely client disconnected abruptly), exiting");
                         break;
                     }
                 }
@@ -427,7 +450,8 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: LspQueue) {
                     };
                     lsp_queue.send(LspEvent::CancelRequest(id))
                 } else if as_notification::<Exit>(&x).is_some() {
-                    lsp_queue.send(LspEvent::Exit)
+                    // Send LspEvent::Exit and stop listening
+                    break;
                 } else {
                     info!("Unhandled notification: {x:?}");
                     Ok(())
@@ -463,7 +487,10 @@ pub fn capabilities(
         type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
         code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+            code_action_kinds: Some(vec![
+                CodeActionKind::QUICKFIX,
+                CodeActionKind::REFACTOR_EXTRACT,
+            ]),
             ..Default::default()
         })),
         completion_provider: Some(CompletionOptions {
@@ -496,6 +523,13 @@ pub fn capabilities(
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        // Call hierarchy needs indexing to find cross-file callers/callees
+        call_hierarchy_provider: match indexing_mode {
+            IndexingMode::None => None,
+            IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
+                Some(CallHierarchyServerCapability::Simple(true))
+            }
+        },
         semantic_tokens_provider: if augments_syntax_tokens {
             // We currently only return partial tokens (e.g. no tokens for keywords right now).
             // If the client doesn't support `augments_syntax_tokens` to fallback baseline
@@ -554,67 +588,73 @@ pub enum ProcessEvent {
 const PYTHON_SECTION: &str = "python";
 
 pub fn lsp_loop(
-    connection: Arc<Connection>,
+    connection: Connection,
     initialization_params: InitializeParams,
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
+    build_system_blocking: bool,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
-    let connection_for_dispatcher = connection.dupe();
     let lsp_queue = LspQueue::new();
     let server = Server::new(
         connection,
-        lsp_queue.dupe(),
+        lsp_queue,
         initialization_params,
         indexing_mode,
         workspace_indexing_limit,
+        build_system_blocking,
     );
-    let lsp_queue2 = lsp_queue.dupe();
-    std::thread::spawn(move || {
-        dispatch_lsp_events(&connection_for_dispatcher, lsp_queue2);
-    });
-    let recheck_queue = server.recheck_queue.dupe();
-    std::thread::spawn(move || {
-        recheck_queue.run_until_stopped();
-    });
-    let find_reference_queue = server.find_reference_queue.dupe();
-    std::thread::spawn(move || {
-        find_reference_queue.run_until_stopped();
-    });
-    let sourcedb_queue = server.sourcedb_queue.dupe();
-    std::thread::spawn(move || {
-        sourcedb_queue.run_until_stopped();
-    });
-    let mut ide_transaction_manager = TransactionManager::default();
-    let mut canceled_requests = HashSet::new();
-    while let Ok((subsequent_mutation, event, queue_time)) = lsp_queue.recv() {
-        let queue_duration = queue_time.elapsed().as_secs_f32();
-        let process_start = Instant::now();
-        let event_description = event.describe();
-        match server.process_event(
-            &mut ide_transaction_manager,
-            &mut canceled_requests,
-            subsequent_mutation,
-            event,
-        ) {
-            Ok(ProcessEvent::Continue) => {
-                let process_duration = process_start.elapsed().as_secs_f32();
-                info!(
-                    "Language server processed event `{}` in {:.2}s ({:.2}s waiting)",
-                    event_description, process_duration, queue_duration
-                );
-            }
-            Ok(ProcessEvent::Exit) => break,
-            Err(e) => {
-                // Log the error and continue processing the next event
-                error!("Error processing event `{}`: {:?}", event_description, e);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            dispatch_lsp_events(&server.connection.0, &server.lsp_queue);
+        });
+        scope.spawn(|| {
+            server
+                .recheck_queue
+                .run_until_stopped(|task| task.run(&server));
+        });
+        scope.spawn(|| {
+            server
+                .find_reference_queue
+                .run_until_stopped(|task| task.run(&server));
+        });
+        scope.spawn(|| {
+            server
+                .sourcedb_queue
+                .run_until_stopped(|task| task.run(&server));
+        });
+        let mut ide_transaction_manager = TransactionManager::default();
+        let mut canceled_requests = HashSet::new();
+        while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
+            let process_start = Instant::now();
+            let event_description = event.describe();
+            match server.process_event(
+                &mut ide_transaction_manager,
+                &mut canceled_requests,
+                subsequent_mutation,
+                event,
+            ) {
+                Ok(ProcessEvent::Continue) => {
+                    let process_end = Instant::now();
+                    let process_duration = (process_end - process_start).as_secs_f32();
+                    let queue_duration = (process_start - enqueue_time).as_secs_f32();
+                    info!(
+                        "Language server processed event `{}` in {:.2}s ({:.2}s waiting)",
+                        event_description, process_duration, queue_duration
+                    );
+                }
+                Ok(ProcessEvent::Exit) => break,
+                Err(e) => {
+                    // Log the error and continue processing the next event
+                    error!("Error processing event `{}`: {:?}", event_description, e);
+                }
             }
         }
-    }
-    info!("waiting for connection to close");
-    server.recheck_queue.stop();
-    server.find_reference_queue.stop();
-    server.sourcedb_queue.stop();
+        info!("waiting for connection to close");
+        server.recheck_queue.stop();
+        server.find_reference_queue.stop();
+        server.sourcedb_queue.stop();
+    });
     drop(server); // close connection
     Ok(())
 }
@@ -680,13 +720,17 @@ impl Server {
                 canceled_requests.insert(id);
             }
             LspEvent::InvalidateConfigFind => {
-                let mut lock = self.invalidated_configs.lock();
-                let invalidated_configs = std::mem::take(&mut *lock);
+                let mut lock = self.invalidated_source_dbs.lock();
+                let invalidated_source_dbs = std::mem::take(&mut *lock);
                 drop(lock);
-                if !invalidated_configs.is_empty() {
+                if !invalidated_source_dbs.is_empty() {
                     // a sourcedb rebuild completed before this, so it's okay
                     // to re-setup the file watcher right now
                     self.setup_file_watcher_if_necessary();
+                    let invalidated_configs = invalidated_source_dbs
+                        .into_iter()
+                        .flat_map(|db| self.workspaces.get_configs_for_source_db(db))
+                        .collect();
                     self.invalidate_find_for_configs(invalidated_configs);
                 }
             }
@@ -783,7 +827,11 @@ impl Server {
             LspEvent::LspRequest(x) => {
                 // These are messages where VS Code will use results from previous document versions,
                 // we really don't want to implicitly cancel those.
-                const ONLY_ONCE: &[&str] = &[Completion::METHOD, SignatureHelpRequest::METHOD];
+                const ONLY_ONCE: &[&str] = &[
+                    Completion::METHOD,
+                    SignatureHelpRequest::METHOD,
+                    GotoDefinition::METHOD,
+                ];
 
                 let in_cancelled_requests = canceled_requests.remove(&x.id);
                 if in_cancelled_requests
@@ -817,11 +865,7 @@ impl Server {
                 //
                 // Validating in-memory files is relatively cheap, since we only actually recheck open files which have
                 // changed file contents, so it's simpler to just always do it.
-                Self::validate_in_memory_for_transaction(
-                    &self.state,
-                    &self.open_files,
-                    &mut transaction,
-                );
+                self.validate_in_memory_for_transaction(&mut transaction);
 
                 info!("Handling non-canceled request {} ({})", x.method, &x.id);
                 if let Some(params) = as_request::<GotoDefinition>(&x) {
@@ -1108,6 +1152,33 @@ impl Server {
                             .unwrap_or_default();
                         self.send_response(new_response(x.id, Ok(result)));
                     }
+                } else if let Some(params) = as_request::<CallHierarchyPrepare>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<CallHierarchyPrepare>(
+                            params, &x.id,
+                        )
+                    {
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.prepare_call_hierarchy(&transaction, params)),
+                        ));
+                    }
+                } else if let Some(params) = as_request::<CallHierarchyIncomingCalls>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<CallHierarchyIncomingCalls>(
+                            params, &x.id,
+                        )
+                    {
+                        self.async_call_hierarchy_incoming_calls(x.id, &transaction, params);
+                    }
+                } else if let Some(params) = as_request::<CallHierarchyOutgoingCalls>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<CallHierarchyOutgoingCalls>(
+                            params, &x.id,
+                        )
+                    {
+                        self.async_call_hierarchy_outgoing_calls(x.id, &transaction, params);
+                    }
                 } else if &x.method == "pyrefly/textDocument/docstringRanges" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
                     let ranges = self
@@ -1148,11 +1219,12 @@ impl Server {
     }
 
     pub fn new(
-        connection: Arc<Connection>,
+        connection: Connection,
         lsp_queue: LspQueue,
         initialize_params: InitializeParams,
         indexing_mode: IndexingMode,
         workspace_indexing_limit: usize,
+        build_system_blocking: bool,
     ) -> Self {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
@@ -1168,24 +1240,25 @@ impl Server {
 
         let workspaces = Arc::new(Workspaces::new(Workspace::default(), &folders));
 
-        let config_finder = Workspaces::config_finder(&workspaces);
+        let config_finder = Workspaces::config_finder(workspaces.dupe());
         let s = Self {
             connection: ServerConnection(connection),
             lsp_queue,
             recheck_queue: HeavyTaskQueue::new("recheck_queue"),
             find_reference_queue: HeavyTaskQueue::new("find_reference_queue"),
             sourcedb_queue: HeavyTaskQueue::new("sourcedb_queue"),
-            invalidated_configs: Arc::new(Mutex::new(SmallSet::new())),
+            invalidated_source_dbs: Mutex::new(SmallSet::new()),
             initialize_params,
             indexing_mode,
             workspace_indexing_limit,
-            state: Arc::new(State::new(config_finder)),
-            open_notebook_cells: Arc::new(RwLock::new(HashMap::new())),
-            open_files: Arc::new(RwLock::new(HashMap::new())),
+            build_system_blocking,
+            state: State::new(config_finder),
+            open_notebook_cells: RwLock::new(HashMap::new()),
+            open_files: RwLock::new(HashMap::new()),
             unsaved_file_tracker: UnsavedFileTracker::new(),
             indexed_configs: Mutex::new(HashSet::new()),
             indexed_workspaces: Mutex::new(HashSet::new()),
-            cancellation_handles: Arc::new(Mutex::new(HashMap::new())),
+            cancellation_handles: Mutex::new(HashMap::new()),
             workspaces,
             outgoing_request_id: AtomicI32::new(1),
             outgoing_requests: Mutex::new(HashMap::new()),
@@ -1232,18 +1305,15 @@ impl Server {
     }
 
     /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
-    fn validate_in_memory_for_transaction(
-        state: &State,
-        open_files: &RwLock<HashMap<PathBuf, Arc<LspFile>>>,
-        transaction: &mut Transaction<'_>,
-    ) -> Vec<Handle> {
-        let handles = open_files
+    fn validate_in_memory_for_transaction(&self, transaction: &mut Transaction<'_>) -> Vec<Handle> {
+        let handles = self
+            .open_files
             .read()
             .keys()
-            .map(|x| make_open_handle(state, x))
+            .map(|x| make_open_handle(&self.state, x))
             .collect::<Vec<_>>();
         transaction.set_memory(
-            open_files
+            self.open_files
                 .read()
                 .iter()
                 .map(|x| (x.0.clone(), Some(Arc::new(x.1.to_file_contents()))))
@@ -1417,8 +1487,7 @@ impl Server {
             Ok(transaction) => transaction.as_mut(),
             Err(transaction) => transaction,
         };
-        let handles =
-            Self::validate_in_memory_for_transaction(&self.state, &self.open_files, transaction);
+        let handles = self.validate_in_memory_for_transaction(transaction);
 
         let publish = |transaction: &Transaction| {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
@@ -1481,13 +1550,6 @@ impl Server {
                 info!("Validated open files and saved non-committable transaction.");
             }
         }
-        queue_source_db_rebuild_and_recheck(
-            self.state.dupe(),
-            self.invalidated_configs.dupe(),
-            self.sourcedb_queue.dupe(),
-            self.lsp_queue.dupe(),
-            self.open_files.dupe(),
-        );
     }
 
     fn invalidate_find_for_configs(&self, invalidated_configs: SmallSet<ArcId<ConfigFile>>) {
@@ -1506,20 +1568,14 @@ impl Server {
                 IndexingMode::None => {}
                 IndexingMode::LazyNonBlockingBackground => {
                     if self.indexed_configs.lock().insert(config.dupe()) {
-                        let state = self.state.dupe();
-                        let lsp_queue = self.lsp_queue.dupe();
-                        self.recheck_queue.queue_task(Box::new(move || {
-                            Self::populate_all_project_files_in_config(config, state, lsp_queue);
+                        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
+                            server.populate_all_project_files_in_config(config);
                         }));
                     }
                 }
                 IndexingMode::LazyBlocking => {
                     if self.indexed_configs.lock().insert(config.dupe()) {
-                        Self::populate_all_project_files_in_config(
-                            config,
-                            self.state.dupe(),
-                            self.lsp_queue.dupe(),
-                        );
+                        self.populate_all_project_files_in_config(config);
                     }
                 }
             }
@@ -1543,26 +1599,14 @@ impl Server {
             IndexingMode::LazyNonBlockingBackground => {
                 indexed_workspaces.extend(roots_to_populate_files.iter().cloned());
                 drop(indexed_workspaces);
-                let state = self.state.dupe();
-                let lsp_queue = self.lsp_queue.dupe();
-                self.recheck_queue.queue_task(Box::new(move || {
-                    Self::populate_all_workspaces_files(
-                        roots_to_populate_files,
-                        state,
-                        workspace_indexing_limit,
-                        lsp_queue,
-                    );
+                self.recheck_queue.queue_task(HeavyTask::new(move |server| {
+                    server.populate_all_workspaces_files(roots_to_populate_files);
                 }));
             }
             IndexingMode::LazyBlocking => {
                 indexed_workspaces.extend(roots_to_populate_files.iter().cloned());
                 drop(indexed_workspaces);
-                Self::populate_all_workspaces_files(
-                    roots_to_populate_files,
-                    self.state.dupe(),
-                    workspace_indexing_limit,
-                    self.lsp_queue.dupe(),
-                );
+                self.populate_all_workspaces_files(roots_to_populate_files);
             }
         }
     }
@@ -1570,29 +1614,29 @@ impl Server {
     /// Perform an invalidation of elements on `State` and commit them.
     /// Runs asynchronously. Returns immediately and may wait a while for a committable transaction.
     fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + Sync + 'static) {
-        let state = self.state.dupe();
-        let lsp_queue = self.lsp_queue.dupe();
-        let cancellation_handles = self.cancellation_handles.dupe();
-        let open_files = self.open_files.dupe();
-        self.recheck_queue.queue_task(Box::new(move || {
-            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
+        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
+            let mut transaction = server
+                .state
+                .new_committable_transaction(Require::indexing(), None);
             f(transaction.as_mut());
 
-            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+            server.validate_in_memory_for_transaction(transaction.as_mut());
 
             // Commit will be blocked until there are no ongoing reads.
             // If we have some long running read jobs that can be cancelled, we should cancel them
             // to unblock committing transactions.
-            for (_, cancellation_handle) in cancellation_handles.lock().drain() {
+            for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
                 cancellation_handle.cancel();
             }
             // we have to run, not just commit to process updates
-            state.run_with_committing_transaction(transaction, &[], Require::Everything);
+            server
+                .state
+                .run_with_committing_transaction(transaction, &[], Require::Everything);
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
             info!("Invalidated state, prepare to recheck open files.");
-            let _ = lsp_queue.send(LspEvent::RecheckFinished);
+            let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
         }));
     }
 
@@ -1600,72 +1644,108 @@ impl Server {
     /// entire project to work. This blocking function should be called when we know that a project
     /// file is opened and if we intend to provide features like find-references, and should be
     /// called when config changes (currently this is a TODO).
-    fn populate_all_project_files_in_config(
-        config: ArcId<ConfigFile>,
-        state: Arc<State>,
-        lsp_queue: LspQueue,
-    ) {
+    fn populate_all_project_files_in_config(&self, config: ArcId<ConfigFile>) {
         let unknown = ModuleName::unknown();
 
         info!("Populating all files in the config ({:?}).", config.source);
-        let mut transaction = state.new_committable_transaction(Require::indexing(), None);
+        let mut transaction = self
+            .state
+            .new_committable_transaction(Require::indexing(), None);
 
         let project_path_blobs = config.get_filtered_globs(None);
         let paths = project_path_blobs.files().unwrap_or_default();
         let mut handles = Vec::new();
         for path in paths {
             let module_path = ModulePath::filesystem(path.clone());
-            let path_config = state.config_finder().python_file(unknown, &module_path);
+            let path_config = self
+                .state
+                .config_finder()
+                .python_file(unknown, &module_path);
             if config != path_config {
                 continue;
             }
-            handles.push(handle_from_module_path(&state, module_path));
+            handles.push(handle_from_module_path(&self.state, module_path));
         }
 
         info!("Prepare to check {} files.", handles.len());
         transaction.as_mut().run(&handles, Require::indexing());
-        state.commit_transaction(transaction);
+        self.state.commit_transaction(transaction);
         // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
         // the main event loop of the server. As a result, the server can do a revalidation of
         // all the in-memory files based on the fresh main State as soon as possible.
         info!("Populated all files in the project path, prepare to recheck open files.");
-        let _ = lsp_queue.send(LspEvent::RecheckFinished);
+        let _ = self.lsp_queue.send(LspEvent::RecheckFinished);
     }
 
-    fn populate_all_workspaces_files(
-        workspace_roots: Vec<PathBuf>,
-        state: Arc<State>,
-        workspace_indexing_limit: usize,
-        lsp_queue: LspQueue,
-    ) {
+    fn populate_all_workspaces_files(&self, workspace_roots: Vec<PathBuf>) {
         for workspace_root in workspace_roots {
             info!(
-                "Populating up to {workspace_indexing_limit} files in the workspace ({workspace_root:?}).",
+                "Populating up to {} files in the workspace ({workspace_root:?}).",
+                self.workspace_indexing_limit
             );
-            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
+            let mut transaction = self
+                .state
+                .new_committable_transaction(Require::indexing(), None);
 
             let includes =
                 ConfigFile::default_project_includes().from_root(workspace_root.as_path());
             let globs = FilteredGlobs::new(includes, ConfigFile::required_project_excludes(), None);
             let paths = globs
-                .files_with_limit(workspace_indexing_limit)
+                .files_with_limit(self.workspace_indexing_limit)
                 .unwrap_or_default();
             let mut handles = Vec::new();
             for path in paths {
                 handles.push(handle_from_module_path(
-                    &state,
+                    &self.state,
                     ModulePath::filesystem(path.clone()),
                 ));
             }
 
             info!("Prepare to check {} files.", handles.len());
             transaction.as_mut().run(&handles, Require::indexing());
-            state.commit_transaction(transaction);
+            self.state.commit_transaction(transaction);
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
             info!("Populated all files in the workspace, prepare to recheck open files.");
-            let _ = lsp_queue.send(LspEvent::RecheckFinished);
+            let _ = self.lsp_queue.send(LspEvent::RecheckFinished);
+        }
+    }
+
+    /// Attempts to requery any open sourced_dbs for open files, and if there are changes,
+    /// invalidate find and perform a recheck.
+    fn queue_source_db_rebuild_and_recheck(&self, force: bool) {
+        let run = move |server: &Server| {
+            let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> =
+                SmallMap::new();
+            let config_finder = server.state.config_finder();
+            let handles = server
+                .open_files
+                .read()
+                .keys()
+                .map(|x| make_open_handle(&server.state, x))
+                .collect::<Vec<_>>();
+            for handle in handles {
+                let config = config_finder.python_file(handle.module(), handle.path());
+                configs_to_paths
+                    .entry(config)
+                    .or_default()
+                    .insert(handle.path().dupe());
+            }
+            let new_invalidated_source_dbs = ConfigFile::query_source_db(&configs_to_paths, force);
+            if !new_invalidated_source_dbs.is_empty() {
+                let mut lock = server.invalidated_source_dbs.lock();
+                for db in new_invalidated_source_dbs {
+                    lock.insert(db);
+                }
+                let _ = server.lsp_queue.send(LspEvent::InvalidateConfigFind);
+            }
+        };
+
+        if self.build_system_blocking {
+            run(self);
+        } else {
+            self.sourcedb_queue.queue_task(HeavyTask::new(run));
         }
     }
 
@@ -1706,6 +1786,7 @@ impl Server {
         };
         self.version_info.lock().insert(path.clone(), version);
         self.open_files.write().insert(path.clone(), contents);
+        self.queue_source_db_rebuild_and_recheck(false);
         if !subsequent_mutation {
             // In order to improve perceived startup perf, when a file is opened, we run a
             // non-committing transaction that indexes the file with default require level Exports.
@@ -1944,13 +2025,7 @@ impl Server {
         // If no build system file was changed, then we should just not do anything. If
         // a build system file was changed, then the change should take effect soon.
         if should_requery_build_system {
-            queue_source_db_rebuild_and_recheck(
-                self.state.dupe(),
-                self.invalidated_configs.dupe(),
-                self.sourcedb_queue.dupe(),
-                self.lsp_queue.dupe(),
-                self.open_files.dupe(),
-            );
+            self.queue_source_db_rebuild_and_recheck(true);
         }
     }
 
@@ -1959,8 +2034,8 @@ impl Server {
             return;
         };
         self.version_info.lock().remove(&path);
-        let open_files = self.open_files.dupe();
-        if let Some(LspFile::Notebook(notebook)) = open_files.write().remove(&path).as_deref() {
+        if let Some(LspFile::Notebook(notebook)) = self.open_files.write().remove(&path).as_deref()
+        {
             for cell in notebook.cell_urls() {
                 self.connection
                     .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
@@ -1971,30 +2046,17 @@ impl Server {
                 .publish_diagnostics_for_uri(url.clone(), Vec::new(), None);
         }
         self.unsaved_file_tracker.forget_uri_path(&url);
-        let state = self.state.dupe();
-        let lsp_queue = self.lsp_queue.dupe();
-        let open_files = self.open_files.dupe();
-        let sourcedb_queue = self.sourcedb_queue.dupe();
-        let invalidated_configs = self.invalidated_configs.dupe();
-        let path_for_task = path.clone();
-        self.recheck_queue.queue_task(Box::new(move || {
+        self.queue_source_db_rebuild_and_recheck(false);
+        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
             // Clear out the memory associated with this file.
             // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
             // Having the extra file hanging around doesn't harm anything, but does use extra memory.
-            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
-            transaction
-                .as_mut()
-                .set_memory(vec![(path_for_task.clone(), None)]);
-            let _ =
-                Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
-            state.commit_transaction(transaction);
-            queue_source_db_rebuild_and_recheck(
-                state.dupe(),
-                invalidated_configs,
-                sourcedb_queue,
-                lsp_queue,
-                open_files.dupe(),
-            );
+            let mut transaction = server
+                .state
+                .new_committable_transaction(Require::indexing(), None);
+            transaction.as_mut().set_memory(vec![(path, None)]);
+            let _ = server.validate_in_memory_for_transaction(transaction.as_mut());
+            server.state.commit_transaction(transaction);
         }));
     }
 
@@ -2203,12 +2265,17 @@ impl Server {
             handle,
             uri,
             params.text_document_position_params.position,
+            FindPreference {
+                import_behavior: ImportBehavior::StopAtRenamedImports,
+                ..Default::default()
+            },
             move |transaction, handle, definition| {
                 let FindDefinitionItemWithDocstring {
                     metadata: _,
                     definition_range,
                     module,
                     docstring_range: _,
+                    ..
                 } = definition;
                 // find_global_implementations_from_definition returns Vec<TextRangeWithModule>
                 // but we need to return Vec<(ModuleInfo, Vec<TextRange>)> to match the helper's
@@ -2231,14 +2298,16 @@ impl Server {
                 }
                 Ok(grouped)
             },
-            move |results| {
+            move |results: Vec<(ModuleInfo, Vec<TextRange>)>| {
                 let mut lsp_targets = Vec::new();
-                for (uri, ranges) in results {
-                    for range in ranges {
-                        lsp_targets.push(Location {
-                            uri: uri.clone(),
-                            range,
-                        });
+                for (info, ranges) in results {
+                    if let Some(uri) = module_info_to_uri(&info) {
+                        for range in ranges {
+                            lsp_targets.push(Location {
+                                uri: uri.clone(),
+                                range: info.to_lsp_range(range),
+                            });
+                        }
                     }
                 }
                 if lsp_targets.is_empty() {
@@ -2305,26 +2374,63 @@ impl Server {
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let module_info = transaction.get_module_info(&handle)?;
         let range = self.from_lsp_range(uri, &module_info, params.range);
-        let code_actions = transaction
-            .local_quickfix_code_actions_sorted(&handle, range, import_format)?
-            .into_map(|(title, info, range, insert_text)| {
-                CodeActionOrCommand::CodeAction(CodeAction {
-                    title,
-                    kind: Some(CodeActionKind::QUICKFIX),
+        let mut actions = Vec::new();
+        if let Some(quickfixes) =
+            transaction.local_quickfix_code_actions_sorted(&handle, range, import_format)
+        {
+            actions.extend(
+                quickfixes
+                    .into_iter()
+                    .map(|(title, info, range, insert_text)| {
+                        CodeActionOrCommand::CodeAction(CodeAction {
+                            title,
+                            kind: Some(CodeActionKind::QUICKFIX),
+                            edit: Some(WorkspaceEdit {
+                                changes: Some(HashMap::from([(
+                                    uri.clone(),
+                                    vec![TextEdit {
+                                        range: info.to_lsp_range(range),
+                                        new_text: insert_text,
+                                    }],
+                                )])),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        })
+                    }),
+            );
+        }
+        if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
+            for action in refactors {
+                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                for (module, edit_range, new_text) in action.edits {
+                    let Some(edit_uri) = module_info_to_uri(&module) else {
+                        continue;
+                    };
+                    changes.entry(edit_uri).or_default().push(TextEdit {
+                        range: module.to_lsp_range(edit_range),
+                        new_text,
+                    });
+                }
+                if changes.is_empty() {
+                    continue;
+                }
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: action.title,
+                    kind: Some(action.kind),
                     edit: Some(WorkspaceEdit {
-                        changes: Some(HashMap::from([(
-                            uri.clone(),
-                            vec![TextEdit {
-                                range: info.to_lsp_range(range),
-                                new_text: insert_text,
-                            }],
-                        )])),
+                        changes: Some(changes),
                         ..Default::default()
                     }),
                     ..Default::default()
-                })
-            });
-        Some(code_actions)
+                }));
+            }
+        }
+        if actions.is_empty() {
+            None
+        } else {
+            Some(actions)
+        }
     }
 
     fn document_highlight(
@@ -2353,83 +2459,70 @@ impl Server {
 
     /// Compute references or implementations of a symbol at a given position. This is a non-blocking
     /// function that will send a response to the LSP client once the results are found and
-    /// transformed by `map_result`.
+    /// transformed by `transform_result`.
     ///
     /// The `find_fn` closure is called with the cancellable transaction, handle, and definition
-    /// information, and should return the results to be transformed into LSP locations.
-    fn async_find_from_definition_helper<'a, V: serde::Serialize>(
+    /// information, and should return a generic result type `T`.
+    ///
+    /// The `transform_result` closure transforms the result of type `T` into the final response
+    /// type `V` that will be sent to the LSP client.
+    fn async_find_from_definition_helper<'a, T: Send + 'static, V: serde::Serialize>(
         &'a self,
         request_id: RequestId,
         transaction: &Transaction<'a>,
         handle: Handle,
         uri: &Url,
         position: Position,
+        find_preference: FindPreference,
         find_fn: impl FnOnce(
             &mut CancellableTransaction,
             &Handle,
             FindDefinitionItemWithDocstring,
-        ) -> Result<Vec<(ModuleInfo, Vec<TextRange>)>, Cancelled>
+        ) -> Result<T, Cancelled>
         + Send
         + Sync
         + 'static,
-        map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
+        transform_result: impl FnOnce(T) -> V + Send + Sync + 'static,
     ) {
         let Some(info) = transaction.get_module_info(&handle) else {
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
         let position = self.from_lsp_position(uri, &info, position);
         let Some(definition) = transaction
-            .find_definition(
-                &handle,
-                position,
-                FindPreference {
-                    import_behavior: ImportBehavior::StopAtRenamedImports,
-                    ..Default::default()
-                },
-            )
+            .find_definition(&handle, position, find_preference)
             // TODO: handle more than 1 definition
             .into_iter()
             .next()
         else {
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
-        let state = self.state.dupe();
-        let open_files = self.open_files.dupe();
-        let cancellation_handles = self.cancellation_handles.dupe();
-
-        let connection = self.connection.dupe();
-        self.find_reference_queue.queue_task(Box::new(move || {
-            let mut transaction = state.cancellable_transaction();
-            cancellation_handles
-                .lock()
-                .insert(request_id.clone(), transaction.get_cancellation_handle());
-            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
-            match find_fn(&mut transaction, &handle, definition) {
-                Ok(results) => {
-                    let mut locations = Vec::new();
-                    for (info, ranges) in results {
-                        if let Some(uri) = module_info_to_uri(&info) {
-                            locations
-                                .push((uri, ranges.into_map(|range| info.to_lsp_range(range))));
-                        };
+        self.find_reference_queue
+            .queue_task(HeavyTask::new(move |server| {
+                let mut transaction = server.state.cancellable_transaction();
+                server
+                    .cancellation_handles
+                    .lock()
+                    .insert(request_id.clone(), transaction.get_cancellation_handle());
+                server.validate_in_memory_for_transaction(transaction.as_mut());
+                match find_fn(&mut transaction, &handle, definition) {
+                    Ok(results) => {
+                        server.cancellation_handles.lock().remove(&request_id);
+                        server.connection.send(Message::Response(new_response(
+                            request_id,
+                            Ok(Some(transform_result(results))),
+                        )));
                     }
-                    cancellation_handles.lock().remove(&request_id);
-                    connection.send(Message::Response(new_response(
-                        request_id,
-                        Ok(Some(map_result(locations))),
-                    )));
+                    Err(Cancelled) => {
+                        let message = format!("Request {request_id} is canceled");
+                        info!("{message}");
+                        server.connection.send(Message::Response(Response::new_err(
+                            request_id,
+                            ErrorCode::RequestCanceled as i32,
+                            message,
+                        )));
+                    }
                 }
-                Err(Cancelled) => {
-                    let message = format!("Request {request_id} is canceled");
-                    info!("{message}");
-                    connection.send(Message::Response(Response::new_err(
-                        request_id,
-                        ErrorCode::RequestCanceled as i32,
-                        message,
-                    )))
-                }
-            }
-        }));
+            }));
     }
 
     /// Compute references of a symbol at a given position using the standard find_global_references_from_definition
@@ -2450,12 +2543,17 @@ impl Server {
             handle,
             uri,
             position,
-            move |transaction, handle, definition| {
+            FindPreference {
+                import_behavior: ImportBehavior::StopAtRenamedImports,
+                ..Default::default()
+            },
+            |transaction, handle, definition| {
                 let FindDefinitionItemWithDocstring {
                     metadata,
                     definition_range,
                     module,
                     docstring_range: _,
+                    ..
                 } = definition;
                 transaction.find_global_references_from_definition(
                     handle.sys_info(),
@@ -2463,7 +2561,16 @@ impl Server {
                     TextRangeWithModule::new(module, definition_range),
                 )
             },
-            map_result,
+            move |results: Vec<(ModuleInfo, Vec<TextRange>)>| {
+                // Transform ModuleInfo -> Url and TextRange -> Range
+                let mut locations = Vec::new();
+                for (info, ranges) in results {
+                    if let Some(uri) = module_info_to_uri(&info) {
+                        locations.push((uri, ranges.into_map(|range| info.to_lsp_range(range))));
+                    };
+                }
+                map_result(locations)
+            },
         )
     }
 
@@ -3080,31 +3187,31 @@ impl Server {
     /// Asynchronously invalidate configuration and then validate in-memory files
     /// This ensures validate_in_memory() only runs after config invalidation completes
     fn invalidate_config_and_validate_in_memory(&self) {
-        let state = self.state.dupe();
-        let lsp_queue = self.lsp_queue.dupe();
-        let cancellation_handles = self.cancellation_handles.dupe();
-        let open_files = self.open_files.dupe();
-        self.recheck_queue.queue_task(Box::new(move || {
-            let mut transaction = state.new_committable_transaction(Require::indexing(), None);
+        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
+            let mut transaction = server
+                .state
+                .new_committable_transaction(Require::indexing(), None);
             transaction.as_mut().invalidate_config();
 
-            Self::validate_in_memory_for_transaction(&state, &open_files, transaction.as_mut());
+            server.validate_in_memory_for_transaction(transaction.as_mut());
 
             // Commit will be blocked until there are no ongoing reads.
             // If we have some long running read jobs that can be cancelled, we should cancel them
             // to unblock committing transactions.
-            for (_, cancellation_handle) in cancellation_handles.lock().drain() {
+            for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
                 cancellation_handle.cancel();
             }
             // we have to run, not just commit to process updates
-            state.run_with_committing_transaction(transaction, &[], Require::Everything);
+            server
+                .state
+                .run_with_committing_transaction(transaction, &[], Require::Everything);
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
             // Only send RecheckFinished if there are actually open files to revalidate.
-            if !open_files.read().is_empty() {
+            if !server.open_files.read().is_empty() {
                 info!("Invalidated config, prepare to recheck open files.");
-                let _ = lsp_queue.send(LspEvent::RecheckFinished);
+                let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
             } else {
                 info!("Invalidated config, but no open files to recheck.");
             }
@@ -3175,6 +3282,223 @@ impl Server {
         let notebook_cell = self.maybe_get_cell_index(uri);
         module.from_lsp_range(position, notebook_cell)
     }
+
+    /// Asynchronously finds incoming calls (callers) of a function.
+    ///
+    /// This queues work on the find_reference_queue to avoid blocking the LSP server
+    /// while searching for callers across potentially many files.
+    fn async_call_hierarchy_incoming_calls<'a>(
+        &'a self,
+        request_id: RequestId,
+        transaction: &Transaction<'a>,
+        params: lsp_types::CallHierarchyIncomingCallsParams,
+    ) {
+        let uri = params.item.uri.clone();
+
+        let Some(handle) =
+            self.make_handle_if_enabled(&uri, Some(CallHierarchyIncomingCalls::METHOD))
+        else {
+            return self.send_response(new_response::<
+                Option<Vec<lsp_types::CallHierarchyIncomingCall>>,
+            >(request_id, Ok(None)));
+        };
+
+        // The CallHierarchyItem we receive is already at the definition position
+        // (thanks to prepare_call_hierarchy doing the go-to-definition step).
+        self.async_find_from_definition_helper(
+            request_id,
+            transaction,
+            handle,
+            &uri,
+            params.item.selection_range.start,
+            FindPreference::default(),
+            |transaction, handle, definition| {
+                let target_def =
+                    TextRangeWithModule::new(definition.module.dupe(), definition.definition_range);
+
+                transaction.find_global_incoming_calls_from_function_definition(
+                    handle.sys_info(),
+                    definition.metadata.clone(),
+                    &target_def,
+                )
+            },
+            |callers| {
+                let mut incoming_calls = Vec::new();
+                for (caller_module, call_sites) in callers {
+                    for (call_range, caller_name, caller_def_range) in call_sites {
+                        let Some(caller_uri) = module_info_to_uri(&caller_module) else {
+                            continue;
+                        };
+
+                        let from = lsp_types::CallHierarchyItem {
+                            name: caller_name
+                                .split('.')
+                                .next_back()
+                                .unwrap_or(&caller_name)
+                                .to_owned(),
+                            kind: lsp_types::SymbolKind::FUNCTION,
+                            tags: None,
+                            detail: Some(caller_name),
+                            uri: caller_uri,
+                            range: caller_module.to_lsp_range(caller_def_range),
+                            selection_range: caller_module.to_lsp_range(caller_def_range),
+                            data: None,
+                        };
+
+                        incoming_calls.push(lsp_types::CallHierarchyIncomingCall {
+                            from,
+                            from_ranges: vec![caller_module.to_lsp_range(call_range)],
+                        });
+                    }
+                }
+                incoming_calls
+            },
+        );
+    }
+
+    /// Asynchronously finds outgoing calls (callees) of a function.
+    ///
+    /// This queues work on the find_reference_queue to avoid blocking the LSP server
+    /// while searching for callees across potentially many files.
+    fn async_call_hierarchy_outgoing_calls<'a>(
+        &'a self,
+        request_id: RequestId,
+        transaction: &Transaction<'a>,
+        params: lsp_types::CallHierarchyOutgoingCallsParams,
+    ) {
+        let uri = params.item.uri.clone();
+
+        let Some(handle) =
+            self.make_handle_if_enabled(&uri, Some(CallHierarchyOutgoingCalls::METHOD))
+        else {
+            return self.send_response(new_response::<
+                Option<Vec<lsp_types::CallHierarchyOutgoingCall>>,
+            >(request_id, Ok(None)));
+        };
+
+        // Clone uri for use in the transform closure
+        let uri_for_transform = uri.clone();
+
+        // The CallHierarchyItem we receive is already at the definition position
+        // (thanks to prepare_call_hierarchy doing the go-to-definition step).
+        self.async_find_from_definition_helper(
+            request_id,
+            transaction,
+            handle.dupe(),
+            &uri,
+            params.item.selection_range.start,
+            FindPreference::default(),
+            move |transaction, handle, definition| {
+                // find_global_outgoing_calls_from_function_definition expects a position
+                let position = definition.definition_range.start();
+
+                let callees = transaction
+                    .find_global_outgoing_calls_from_function_definition(handle, position)?;
+
+                // Return both the callees and the module we need for LSP range conversion
+                Ok((callees, definition.module))
+            },
+            move |(callees, source_module)| {
+                let mut outgoing_calls = Vec::new();
+                for (target_module, calls) in callees {
+                    let target_uri = lsp_types::Url::from_file_path(target_module.path().as_path())
+                        .unwrap_or_else(|()| uri_for_transform.clone());
+
+                    for (call_range, target_def_range) in calls {
+                        let target_name_short = target_module.code_at(target_def_range);
+                        let target_name = format!("{}.{}", target_module.name(), target_name_short);
+
+                        let to = lsp_types::CallHierarchyItem {
+                            name: target_name_short.to_owned(),
+                            kind: lsp_types::SymbolKind::FUNCTION,
+                            tags: None,
+                            detail: Some(target_name),
+                            uri: target_uri.clone(),
+                            range: target_module.to_lsp_range(target_def_range),
+                            selection_range: target_module.to_lsp_range(target_def_range),
+                            data: None,
+                        };
+
+                        outgoing_calls.push(lsp_types::CallHierarchyOutgoingCall {
+                            to,
+                            from_ranges: vec![source_module.to_lsp_range(call_range)],
+                        });
+                    }
+                }
+                outgoing_calls
+            },
+        );
+    }
+
+    /// Prepares the call hierarchy by validating that the symbol at the cursor is a function/method.
+    /// This can be called from anywhere within the function definition, or also on a call site of the function.
+    ///
+    /// This is the entry point for LSP Call Hierarchy. It checks if the symbol at the given
+    /// position is a callable (function or method) and returns a CallHierarchyItem if valid,
+    /// or None if the symbol is not callable.
+    fn prepare_call_hierarchy(
+        &self,
+        transaction: &Transaction<'_>,
+        params: lsp_types::CallHierarchyPrepareParams,
+    ) -> Option<Vec<lsp_types::CallHierarchyItem>> {
+        use lsp_types::CallHierarchyItem;
+        use lsp_types::SymbolKind;
+        use ruff_text_size::Ranged;
+
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, None)?;
+        let module_info = transaction.get_module_info(&handle)?;
+        let position = self.from_lsp_position(
+            uri,
+            &module_info,
+            params.text_document_position_params.position,
+        );
+
+        let definitions = transaction.find_definition(&handle, position, FindPreference::default());
+
+        for def in definitions {
+            // Get the URI for the definition's module
+            let Some(def_uri) = module_info_to_uri(&def.module) else {
+                continue;
+            };
+
+            // Get the handle for the definition's module (could be different from the current file)
+            let Some(def_handle) = self.make_handle_if_enabled(&def_uri, None) else {
+                continue;
+            };
+
+            let Some(ast) = transaction.get_ast(&def_handle) else {
+                continue;
+            };
+
+            // Look for function at the definition position, not the original cursor position
+            if let Some(func_def) =
+                crate::state::state::CancellableTransaction::find_function_at_position_in_ast(
+                    &ast,
+                    def.definition_range.start(),
+                )
+            {
+                let name = func_def.name.id.to_string();
+                let detail = Some(format!("{}.{}", def.module.name(), name));
+                let kind = SymbolKind::FUNCTION;
+
+                let range = def.module.to_lsp_range(func_def.range());
+                let selection_range = def.module.to_lsp_range(func_def.name.range());
+
+                return Some(vec![CallHierarchyItem {
+                    name,
+                    kind,
+                    tags: None,
+                    detail,
+                    uri: def_uri,
+                    range,
+                    selection_range,
+                    data: None,
+                }]);
+            }
+        }
+        None
+    }
 }
 
 impl TspInterface for Server {
@@ -3182,11 +3506,19 @@ impl TspInterface for Server {
         self.send_response(response)
     }
 
-    fn state(&self) -> &Arc<State> {
+    fn state(&self) -> &State {
         &self.state
     }
 
-    fn recheck_queue(&self) -> &HeavyTaskQueue {
+    fn connection(&self) -> &Connection {
+        &self.connection.0
+    }
+
+    fn lsp_queue(&self) -> &LspQueue {
+        &self.lsp_queue
+    }
+
+    fn recheck_queue(&self) -> &HeavyTaskQueue<HeavyTask> {
         &self.recheck_queue
     }
 
@@ -3203,5 +3535,9 @@ impl TspInterface for Server {
             subsequent_mutation,
             event,
         )
+    }
+
+    fn run_task(&self, task: HeavyTask) {
+        task.run(self)
     }
 }

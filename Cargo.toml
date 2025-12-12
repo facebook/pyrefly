@@ -5,8 +5,10 @@ displaydoc = { git = "https://github.com/yaahc/displaydoc", rev = "7dc6e324b1788
 quickcheck = { git = "https://github.com/jakoschiko/quickcheck", rev = "6ecdf5bb4b0132ce66670b4d46453aa022ea892c" }
 
 [profile.release]
+debug = true
 lto = true
 codegen-units = 1
+strip = false
 
 [workspace]
 members = [

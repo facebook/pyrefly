@@ -116,7 +116,11 @@ pub fn make_error_config(
         if warn_redundant_casts || strict {
             errors.insert(ErrorKind::RedundantCast.to_string(), Severity::Warn);
         }
-        if disallow_untyped_defs || disallow_any_generics || disallow_incomplete_defs || strict {
+        if disallow_untyped_defs || disallow_incomplete_defs || strict {
+            errors.insert(ErrorKind::UnannotatedParameter.to_string(), Severity::Error);
+            errors.insert(ErrorKind::UnannotatedReturn.to_string(), Severity::Error);
+        }
+        if disallow_any_generics || strict {
             errors.insert(ErrorKind::ImplicitAny.to_string(), Severity::Error);
         }
         if report_deprecated_as_note && errors.contains_key(&ErrorKind::Deprecated.to_string()) {

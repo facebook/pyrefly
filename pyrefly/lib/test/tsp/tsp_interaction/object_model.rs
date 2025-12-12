@@ -334,7 +334,6 @@ impl TspInteraction {
             receiver: language_server_receiver,
         };
 
-        let connection = Arc::new(connection);
         let args = args.clone();
 
         let request_idx = Arc::new(Mutex::new(0));

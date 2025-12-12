@@ -1820,6 +1820,22 @@ reveal_type(A.x)  # E: revealed type: T
     "#,
 );
 
+testcase!(
+    test_lazy_class_attribute_init,
+    r#"
+from typing import assert_type
+class C:
+    @classmethod
+    def m(cls):
+        if hasattr(cls, "foo"):
+            return cls.foo
+        retval = "foo"
+        cls.foo = retval
+        return retval
+assert_type(C.foo, str)
+    "#,
+);
+
 // See https://github.com/facebook/pyrefly/issues/1448 for what this tests
 // and discussion of approaches to handling `@functools.wraps` with return
 // type inference.

@@ -13,7 +13,6 @@ use lsp_server::RequestId;
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Location;
 use lsp_types::Url;
-use lsp_types::request::GotoDeclarationResponse;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -212,11 +211,8 @@ fn definition_in_builtins() {
     interaction
         .client
         .definition("imports_builtins/imports_builtins.py", 7, 7)
-        .expect_response_with(|response| match response {
-            Some(GotoDeclarationResponse::Scalar(x)) => {
-                x.uri.to_file_path().unwrap().ends_with("typing.py")
-            }
-            _ => false,
+        .expect_response_with(|response| {
+            expect_definition_points_to_symbol(response.as_ref(), "typing", "List")
         })
         .unwrap();
 }

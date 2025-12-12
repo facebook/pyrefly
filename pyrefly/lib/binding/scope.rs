@@ -805,7 +805,9 @@ struct ParameterUsage {
 struct ImportUsage {
     range: TextRange,
     used: bool,
-    is_star_import: bool,
+    /// Skip reporting this import as unused. This is true for star imports
+    /// and __future__ imports, which have side effects even if not explicitly used.
+    skip_unused_check: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -866,7 +868,7 @@ impl ScopeMethod {
 enum ScopeKind {
     Annotation,
     Class(ScopeClass),
-    Comprehension,
+    Comprehension { is_generator: bool },
     Function(ScopeFunction),
     Method(ScopeMethod),
     Module,
@@ -886,13 +888,16 @@ pub enum LoopExit {
 struct Loop {
     base: Flow,
     exits: Vec<(LoopExit, Flow)>,
+    /// For PEP 765: The depth of finally-blocks that this loop was created in
+    finally_depth: usize,
 }
 
 impl Loop {
-    pub fn new(base: Flow) -> Self {
+    pub fn new(base: Flow, finally_depth: usize) -> Self {
         Self {
             base,
             exits: Default::default(),
+            finally_depth,
         }
     }
 }
@@ -956,6 +961,8 @@ pub struct Scope {
     imports: SmallMap<Name, ImportUsage>,
     /// Tracking variables in the current scope (module, function, and method scopes)
     variables: SmallMap<Name, VariableUsage>,
+    /// Depth of finally blocks we're in. Resets in new function scopes (PEP 765).
+    finally_depth: usize,
 }
 
 impl Scope {
@@ -970,6 +977,7 @@ impl Scope {
             forks: Default::default(),
             imports: SmallMap::new(),
             variables: SmallMap::new(),
+            finally_depth: 0,
         }
     }
 
@@ -989,11 +997,11 @@ impl Scope {
         )
     }
 
-    pub fn comprehension(range: TextRange) -> Self {
+    pub fn comprehension(range: TextRange, is_generator: bool) -> Self {
         Self::new(
             range,
             FlowBarrier::AllowFlowChecked,
-            ScopeKind::Comprehension,
+            ScopeKind::Comprehension { is_generator },
         )
     }
 
@@ -1137,6 +1145,34 @@ impl Scopes {
     pub fn in_function_scope(&self) -> bool {
         self.iter_rev()
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
+    }
+
+    /// Enter a finally block (PEP 765).
+    pub fn enter_finally(&mut self) {
+        self.current_mut().finally_depth += 1;
+    }
+
+    /// Exit a finally block (PEP 765).
+    pub fn exit_finally(&mut self) {
+        self.current_mut().finally_depth -= 1;
+    }
+
+    /// Check if we're in a finally block at the current scope level.
+    /// This resets when entering a new function scope, so nested functions are OK.
+    pub fn in_finally(&self) -> bool {
+        self.current().finally_depth > 0
+    }
+
+    pub fn finally_depth(&self) -> usize {
+        self.current().finally_depth
+    }
+
+    /// Check if we're inside a loop that was started inside the inner-most finally block
+    pub fn loop_protects_from_finally_exit(&self) -> bool {
+        self.current()
+            .loops
+            .last()
+            .is_some_and(|l| l.finally_depth == self.current().finally_depth)
     }
 
     /// Are we currently in a class body. If so, return the keys for the class and its metadata.
@@ -1311,7 +1347,7 @@ impl Scopes {
         imports
             .into_iter()
             .filter_map(|(name, usage)| {
-                if usage.used || usage.is_star_import {
+                if usage.used || usage.skip_unused_check {
                     None
                 } else {
                     Some(UnusedImport {
@@ -1415,6 +1451,90 @@ impl Scopes {
 
     pub fn loop_depth(&self) -> usize {
         self.current().loops.len()
+    }
+
+    /// Check if a name is declared as global in the current scope.
+    /// Returns the range of the global statement if found.
+    pub fn get_global_declaration(&self, name: &str) -> Option<TextRange> {
+        if let Some(static_info) = self.current().stat.0.get(&Name::new(name))
+            && let StaticStyle::MutableCapture(MutableCapture {
+                kind: MutableCaptureKind::Global,
+                ..
+            }) = &static_info.style
+        {
+            return Some(static_info.range);
+        }
+        None
+    }
+
+    /// Check if a name has a nonlocal binding in an enclosing scope.
+    pub fn has_nonlocal_binding(&self, name: &str) -> bool {
+        let name_obj = Name::new(name);
+        // Skip the current scope and check enclosing scopes
+        for scope in self.iter_rev().skip(1) {
+            // Check if this name is defined in this scope (not as a mutable capture)
+            if let Some(static_info) = scope.stat.0.get(&name_obj) {
+                match &static_info.style {
+                    // Don't count mutable captures as nonlocal bindings
+                    StaticStyle::MutableCapture(..) => continue,
+                    // Any other definition counts as a binding
+                    _ => return true,
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if we're currently in a comprehension scope (not a generator expression).
+    pub fn in_comprehension(&self) -> bool {
+        matches!(self.current().kind, ScopeKind::Comprehension { .. })
+    }
+
+    /// Check if we're in a synchronous comprehension.
+    /// A comprehension is synchronous unless we're in an async function.
+    pub fn in_sync_comprehension(&self) -> bool {
+        if !self.in_comprehension() {
+            return false;
+        }
+        // Check if any enclosing scope is an async function
+        for scope in self.iter_rev().skip(1) {
+            if let ScopeKind::Function(func_scope) = &scope.kind {
+                return !func_scope.is_async;
+            } else if let ScopeKind::Method(method_scope) = &scope.kind {
+                return !method_scope.is_async;
+            }
+        }
+        // If we didn't find a function, it's synchronous
+        true
+    }
+
+    /// Check if we're in a generator expression scope.
+    /// Generator expressions are created for `Expr::Generator` comprehensions.
+    pub fn in_generator_expression(&self) -> bool {
+        matches!(
+            self.current().kind,
+            ScopeKind::Comprehension { is_generator: true }
+        )
+    }
+
+    /// Check if a name is a bound parameter in the current function scope.
+    pub fn is_bound_parameter(&self, name: &str) -> bool {
+        let name_obj = Name::new(name);
+        // Check the current scope and enclosing scopes for a function with this parameter
+        for scope in self.iter_rev() {
+            match &scope.kind {
+                ScopeKind::Function(func_scope) => {
+                    return func_scope.parameters.contains_key(&name_obj);
+                }
+                ScopeKind::Method(method_scope) => {
+                    return method_scope.parameters.contains_key(&name_obj);
+                }
+                // Don't look past module or class boundaries
+                ScopeKind::Module | ScopeKind::Class(_) => return false,
+                _ => {}
+            }
+        }
+        false
     }
 
     /// Track a narrow for a name in the current flow. This should result from options
@@ -1618,17 +1738,25 @@ impl Scopes {
     }
 
     pub fn register_import(&mut self, name: &Identifier) {
-        self.register_import_with_star(name, false);
+        self.register_import_internal(name, false);
     }
 
-    pub fn register_import_with_star(&mut self, name: &Identifier, is_star_import: bool) {
+    pub fn register_import_with_star(&mut self, name: &Identifier) {
+        self.register_import_internal(name, true);
+    }
+
+    pub fn register_future_import(&mut self, name: &Identifier) {
+        self.register_import_internal(name, true);
+    }
+
+    fn register_import_internal(&mut self, name: &Identifier, skip_unused_check: bool) {
         if matches!(self.current().kind, ScopeKind::Module) {
             self.current_mut().imports.insert(
                 name.id.clone(),
                 ImportUsage {
                     range: name.range,
                     used: false,
-                    is_star_import,
+                    skip_unused_check,
                 },
             );
         }
@@ -2546,12 +2674,16 @@ impl<'a> BindingsBuilder<'a> {
     /// Names in `loop_header_targets` will not get phi keys - this is used for loop
     /// variables that are unconditionally reassigned in `for` loop headers
     pub fn setup_loop(&mut self, range: TextRange, loop_header_targets: &SmallSet<Name>) {
+        let finally_depth = self.scopes.finally_depth();
         let base = mem::take(&mut self.scopes.current_mut().flow);
         // To account for possible assignments to existing names in a loop, we
         // speculatively insert phi keys upfront.
         self.scopes.current_mut().flow =
             self.insert_phi_keys(base.clone(), range, loop_header_targets);
-        self.scopes.current_mut().loops.push(Loop::new(base));
+        self.scopes
+            .current_mut()
+            .loops
+            .push(Loop::new(base, finally_depth));
     }
 
     pub fn teardown_loop(

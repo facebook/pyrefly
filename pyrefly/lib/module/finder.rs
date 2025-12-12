@@ -19,6 +19,7 @@ use vec1::Vec1;
 
 use crate::config::config::ConfigFile;
 use crate::module::bundled::BundledStub;
+use crate::module::third_party::get_bundled_third_party;
 use crate::module::typeshed::typeshed;
 use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::state::loader::FindError;
@@ -470,6 +471,37 @@ fn find_module_prefixes<'a>(
     results.iter().map(|(_, name)| *name).collect::<Vec<_>>()
 }
 
+/// This function will find either third party typeshed stubs or other third party stubs
+/// Here a decision is being made to prioritize typeshed stubs over other third party stubs that are bundled.
+/// Since we run the typeshed update script with a more regular cadence, it is more likely that
+/// these stubs will be more up to date.
+fn find_third_party_stub(
+    module: ModuleName,
+    style_filter: Option<ModuleStyle>,
+) -> Option<FindingOrError<ModulePath>> {
+    let third_party_typeshed_stub = if matches!(style_filter, Some(ModuleStyle::Interface) | None) {
+        typeshed_third_party().map_or_else(
+            |err| Some(FindingOrError::Error(FindError::not_found(err, module))),
+            |ts| ts.find(module).map(FindingOrError::new_finding),
+        )
+    } else {
+        None
+    };
+
+    if let Some(stub) = third_party_typeshed_stub {
+        return Some(stub);
+    }
+
+    if matches!(style_filter, Some(ModuleStyle::Interface) | None) {
+        get_bundled_third_party().map_or_else(
+            |err| Some(FindingOrError::Error(FindError::not_found(err, module))),
+            |ts| ts.find(module).map(FindingOrError::new_finding),
+        )
+    } else {
+        None
+    }
+}
+
 // TODO(connernilsen): change things so that we return all entries that match for a given
 // module name across all path components (search path, site package path, ...).
 // Instead, at specific times (`find_module_components`, `find_module`, `find_import_filtered`),
@@ -501,15 +533,7 @@ pub fn find_import_filtered(
     let mut namespaces_found = vec![];
     let origin = origin.map(|p| p.as_path());
     let from_real_config_file = config.from_real_config_file();
-    let typeshed_third_party_result: Option<FindingOrError<ModulePath>> =
-        if matches!(style_filter, Some(ModuleStyle::Interface) | None) {
-            typeshed_third_party().map_or_else(
-                |err| Some(FindingOrError::Error(FindError::not_found(err, module))),
-                |ts| ts.find(module).map(FindingOrError::new_finding),
-            )
-        } else {
-            None
-        };
+    let typeshed_third_party_result = find_third_party_stub(module, style_filter);
 
     let typeshed_third_party_stub = match from_real_config_file {
         true => None,
@@ -2131,6 +2155,48 @@ mod tests {
             assert!(finding.error.is_none());
         } else {
             panic!("Expected to find typeshed stub, got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_find_third_party_stub_prioritizes_typeshed_over_bundled() {
+        // 'requests' exists in typeshed third party stubs, so it should
+        // return BundledTypeshedThirdParty (typeshed is prioritized over other bundled stubs)
+        let result = find_third_party_stub(ModuleName::from_str("requests"), None);
+        assert!(result.is_some(), "Should find 'requests' stub");
+
+        if let Some(FindingOrError::Finding(finding)) = result {
+            assert!(
+                matches!(
+                    finding.finding.details(),
+                    ModulePathDetails::BundledTypeshedThirdParty(_)
+                ),
+                "Expected BundledTypeshedThirdParty for 'requests', got: {:?}",
+                finding.finding.details()
+            );
+        } else {
+            panic!("Expected Finding result for 'requests', got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_find_third_party_stub_returns_bundled_when_not_in_typeshed() {
+        // 'conans' exists only in BundledThirdParty (from third_party/stubs/conans-stubs),
+        // not in typeshed, so it should return BundledThirdParty
+        let result = find_third_party_stub(ModuleName::from_str("conans"), None);
+        assert!(result.is_some(), "Should find 'conans' stub");
+
+        if let Some(FindingOrError::Finding(finding)) = result {
+            assert!(
+                matches!(
+                    finding.finding.details(),
+                    ModulePathDetails::BundledThirdParty(_)
+                ),
+                "Expected BundledThirdParty for 'conans', got: {:?}",
+                finding.finding.details()
+            );
+        } else {
+            panic!("Expected Finding result for 'conans', got: {:?}", result);
         }
     }
 }

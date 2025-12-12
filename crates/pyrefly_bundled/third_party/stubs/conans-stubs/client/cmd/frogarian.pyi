@@ -1,0 +1,3 @@
+frogarian: str
+
+def cmd_frogarian(output) -> None: ...

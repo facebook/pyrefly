@@ -212,7 +212,11 @@ mod tests {
         assert!(pyrefly_cfg.root.errors.is_some());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
 
-        assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Error);
+        assert_eq!(
+            errors.severity(ErrorKind::UnannotatedParameter),
+            Severity::Error
+        );
+        assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Warn);
         assert_eq!(errors.severity(ErrorKind::UnboundName), Severity::Error);
     }
 

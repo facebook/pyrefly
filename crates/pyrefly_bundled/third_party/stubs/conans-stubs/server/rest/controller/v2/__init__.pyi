@@ -1,0 +1,3 @@
+from conans.model.ref import ConanFileReference as ConanFileReference, PackageReference as PackageReference
+
+def get_package_ref(name, version, username, channel, package_id, revision, p_revision): ...

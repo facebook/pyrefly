@@ -27,6 +27,7 @@ use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::config::finder::debug_log;
 use crate::module::bundled::BundledStub;
+use crate::module::third_party::BundledThirdParty;
 use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::module::typeshed_third_party::BundledTypeshedThirdParty;
 
@@ -212,6 +213,9 @@ pub fn standard_config_finder(configure: Arc<dyn ConfigConfigurer>) -> ConfigFin
                     }
                     ModulePathDetails::BundledTypeshedThirdParty(_) => {
                         return BundledTypeshedThirdParty::config();
+                    }
+                    ModulePathDetails::BundledThirdParty(_) => {
+                        return BundledThirdParty::config();
                     }
                 };
                 cache_parents

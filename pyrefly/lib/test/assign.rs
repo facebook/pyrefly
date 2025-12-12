@@ -730,7 +730,7 @@ xs[2]: str = "test" # E: Subscripts should not be annotated # E: Cannot set item
 testcase!(
     test_assign_annotated_starred,
     r#"
-*e: int = (42,)  # E: Parse error: Invalid annotated assignment target
+*e: int = (42,)  # E: Parse error: Invalid annotated assignment target # E: starred assignment target must be in a list or tuple
 "#,
 );
 
@@ -782,7 +782,7 @@ testcase!(
     test_ann_assign_invalid,
     r#"
 class A:
-    _x: bool 
+    _x: bool
     def __init__(self, x:int):
         self._x: int = x # E: `int` is not assignable to attribute `_x` with type `bool`
     "#,
@@ -795,7 +795,7 @@ int2 = int
 class A:
     _x: int2
     def __init__(self, x:int):
-        self._x: int = x 
+        self._x: int = x
     "#,
 );
 
@@ -803,7 +803,7 @@ testcase!(
     test_ann_assign_twice,
     r#"
 class A:
-    _x: bool 
+    _x: bool
     def __init__(self, x:int):
         self._x: int = x # E: `int` is not assignable to attribute `_x` with type `bool`
         self._x: bool = x # E: `int` is not assignable to attribute `_x` with type `bool`

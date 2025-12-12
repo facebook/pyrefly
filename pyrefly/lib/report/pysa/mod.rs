@@ -39,7 +39,8 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::thread_pool::ThreadPool;
-use rayon::prelude::*;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 use ruff_python_ast::name::Name;
 use serde::Serialize;
 
@@ -48,7 +49,9 @@ use crate::module::typeshed::typeshed;
 use crate::report::pysa::call_graph::CallGraph;
 use crate::report::pysa::call_graph::ExpressionIdentifier;
 use crate::report::pysa::call_graph::export_call_graphs;
-use crate::report::pysa::captured_variable::export_captured_variables;
+use crate::report::pysa::captured_variable::WholeProgramCapturedVariables;
+use crate::report::pysa::captured_variable::collect_captured_variables;
+use crate::report::pysa::captured_variable::export_captured_variables_for_module;
 use crate::report::pysa::class::ClassDefinition;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::export_all_classes;
@@ -83,6 +86,8 @@ struct PysaProjectModule {
     module_id: ModuleId,
     module_name: ModuleName,        // e.g, `foo.bar`
     source_path: ModulePathDetails, // Path to the source code
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relative_source_path: Option<PathBuf>, // Path relative to a root or search path
     info_filename: Option<PathBuf>, // Filename for info files
     #[serde(skip_serializing)]
     handle: Handle,
@@ -139,10 +144,11 @@ pub fn export_module_definitions(
     context: &ModuleContext,
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     global_variables: &WholeProgramGlobalVariables,
+    captured_variables: &WholeProgramCapturedVariables,
 ) -> PysaModuleDefinitions {
     let global_variables_exported = export_global_variables(global_variables, context);
-    let captured_variables = export_captured_variables(context);
     let class_definitions = export_all_classes(function_base_definitions, context);
+    let captured_variables = export_captured_variables_for_module(captured_variables, context);
     let function_definitions =
         export_function_definitions(function_base_definitions, &captured_variables, context);
     PysaModuleDefinitions {
@@ -172,12 +178,14 @@ pub fn export_module_call_graphs(
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     override_graph: &OverrideGraph,
     global_variables: &WholeProgramGlobalVariables,
+    captured_variables: &WholeProgramCapturedVariables,
 ) -> PysaModuleCallGraphs {
     let call_graphs = export_call_graphs(
         context,
         function_base_definitions,
         override_graph,
         global_variables,
+        captured_variables,
     )
     .into_iter()
     .map(|(function_ref, call_graph)| (function_ref.function_id, call_graph))
@@ -225,14 +233,30 @@ fn build_module_mapping(
             }
         };
 
+        let module_name = handle.module();
+        let module_path = handle.path();
+        let relative_source_path = match module_path.details() {
+            ModulePathDetails::FileSystem(path) | ModulePathDetails::Namespace(path) => module_path
+                .root_of(module_name)
+                .and_then(|root| path.as_path().strip_prefix(root).ok())
+                .map(|path| path.to_path_buf()),
+            ModulePathDetails::Memory(_) => None,
+            ModulePathDetails::BundledTypeshed(relative_path)
+            | ModulePathDetails::BundledTypeshedThirdParty(relative_path)
+            | ModulePathDetails::BundledThirdParty(relative_path) => {
+                Some(relative_path.to_path_buf())
+            }
+        };
+
         assert!(
             project_modules
                 .insert(
                     module_id,
                     PysaProjectModule {
                         module_id,
-                        module_name: handle.module(),
-                        source_path: handle.path().details().clone(),
+                        module_name,
+                        source_path: module_path.details().clone(),
+                        relative_source_path,
                         info_filename: info_filename.clone(),
                         handle: handle.clone(),
                         is_test: false,
@@ -267,6 +291,7 @@ fn write_module_definitions_files(
     module_work_list: &Vec<(Handle, ModuleId, PathBuf)>,
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     global_variables: &WholeProgramGlobalVariables,
+    captured_variables: &WholeProgramCapturedVariables,
     transaction: &Transaction,
     module_ids: &ModuleIds,
     definitions_directory: &Path,
@@ -288,6 +313,7 @@ fn write_module_definitions_files(
                                 &context,
                                 function_base_definitions,
                                 global_variables,
+                                captured_variables,
                             )
                         },
                         format!(
@@ -353,6 +379,7 @@ fn write_module_call_graph_files(
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     override_graph: &OverrideGraph,
     global_variables: &WholeProgramGlobalVariables,
+    captured_variables: &WholeProgramCapturedVariables,
     transaction: &Transaction,
     module_ids: &ModuleIds,
     call_graphs_directory: &Path,
@@ -375,6 +402,7 @@ fn write_module_call_graph_files(
                                 function_base_definitions,
                                 override_graph,
                                 global_variables,
+                                captured_variables,
                             )
                         },
                         format!("Exporting call graphs for `{}`", handle.module().as_str()),
@@ -486,6 +514,7 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
         &reversed_override_graph,
     );
     let global_variables = collect_global_variables(&handles, transaction, &module_ids);
+    let captured_variables = collect_captured_variables(&handles, transaction, &module_ids);
 
     let override_graph =
         OverrideGraph::from_reversed(&reversed_override_graph, &function_base_definitions);
@@ -494,6 +523,7 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
         &module_work_list,
         &function_base_definitions,
         &global_variables,
+        &captured_variables,
         transaction,
         &module_ids,
         &definitions_directory,
@@ -511,6 +541,7 @@ pub fn write_results(results_directory: &Path, transaction: &Transaction) -> any
         &function_base_definitions,
         &override_graph,
         &global_variables,
+        &captured_variables,
         transaction,
         &module_ids,
         &call_graphs_directory,

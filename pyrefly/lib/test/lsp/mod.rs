@@ -7,6 +7,7 @@
 
 #![cfg(test)]
 
+mod call_hierarchy;
 mod code_actions;
 mod completion;
 mod declaration;

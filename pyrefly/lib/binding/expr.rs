@@ -399,7 +399,7 @@ impl<'a> BindingsBuilder<'a> {
                         "`async` can only be used inside an async function".to_owned(),
                     );
                 }
-                self.scopes.push(Scope::comprehension(range));
+                self.scopes.push(Scope::comprehension(range, is_generator));
             }
             // Incomplete nested comprehensions can have identical iterators
             // for inner and outer loops. It is safe to overwrite it because it literally the same.
@@ -506,6 +506,8 @@ impl<'a> BindingsBuilder<'a> {
 
     /// Execute through the expr, ensuring every name has a binding.
     pub fn ensure_expr(&mut self, x: &mut Expr, usage: &mut Usage) {
+        self.with_semantic_checker(|semantic, context| semantic.visit_expr(x, context));
+
         match x {
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.

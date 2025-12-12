@@ -8,12 +8,18 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use lsp_types::Documentation;
+use lsp_types::MarkupContent;
+use lsp_types::MarkupKind;
 use lsp_types::ParameterInformation;
 use lsp_types::ParameterLabel;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureInformation;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::docstring::Docstring;
 use pyrefly_python::docstring::parse_parameter_documentation;
+use pyrefly_types::display::LspDisplayMode;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -159,6 +165,7 @@ impl Transaction<'_> {
         self.get_callables_from_call(handle, position).map(
             |(callables, chosen_overload_index, active_argument, callee_range)| {
                 let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
+                let function_docstring = self.function_docstring_for_callee(handle, callee_range);
                 let signatures = callables
                     .into_iter()
                     .map(|t| {
@@ -166,6 +173,7 @@ impl Transaction<'_> {
                             t,
                             &active_argument,
                             parameter_docs.as_ref(),
+                            function_docstring.as_ref(),
                         )
                     })
                     .collect_vec();
@@ -214,47 +222,84 @@ impl Transaction<'_> {
         if docs.is_empty() { None } else { Some(docs) }
     }
 
+    /// Extract the full docstring for a callee to display in signature help.
+    pub(crate) fn function_docstring_for_callee(
+        &self,
+        handle: &Handle,
+        callee_range: TextRange,
+    ) -> Option<Docstring> {
+        let position = callee_range.start();
+        let (docstring_range, module) = self
+            .find_definition(
+                handle,
+                position,
+                FindPreference {
+                    prefer_pyi: false,
+                    ..Default::default()
+                },
+            )
+            .into_iter()
+            .find_map(|item| {
+                item.docstring_range
+                    .map(|range| (range, item.module.clone()))
+            })
+            .or_else(|| {
+                self.find_definition(handle, position, FindPreference::default())
+                    .into_iter()
+                    .find_map(|item| {
+                        item.docstring_range
+                            .map(|range| (range, item.module.clone()))
+                    })
+            })?;
+        Some(Docstring(docstring_range, module))
+    }
+
     pub(crate) fn create_signature_information(
         type_: Type,
         active_argument: &ActiveArgument,
         parameter_docs: Option<&HashMap<String, String>>,
+        function_docstring: Option<&Docstring>,
     ) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
-        let label = type_.as_hover_string();
-        let (parameters, active_parameter) =
-            if let Some(params) = Self::normalize_singleton_function_type_into_params(type_) {
-                let active_parameter =
-                    Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);
-                (
-                    Some(
-                        params
-                            .into_iter()
-                            .map(|param| ParameterInformation {
-                                label: ParameterLabel::Simple(format!("{param}")),
-                                documentation: param
-                                    .name()
-                                    .and_then(|name| {
-                                        parameter_docs.and_then(|docs| docs.get(name.as_str()))
-                                    })
-                                    .map(|text| {
-                                        lsp_types::Documentation::MarkupContent(
-                                            lsp_types::MarkupContent {
-                                                kind: lsp_types::MarkupKind::Markdown,
-                                                value: text.clone(),
-                                            },
-                                        )
-                                    }),
+        let label = type_.as_lsp_string(LspDisplayMode::SignatureHelp);
+        let (parameters, active_parameter) = if let Some(params) =
+            Self::normalize_singleton_function_type_into_params(type_)
+        {
+            // Create a type display context for consistent parameter formatting
+            let param_types: Vec<&Type> = params.iter().map(|p| p.as_type()).collect();
+            let mut type_ctx = TypeDisplayContext::new(&param_types);
+            type_ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
+
+            let active_parameter =
+                Self::active_parameter_index(&params, active_argument).map(|idx| idx as u32);
+
+            let parameter_info: Vec<ParameterInformation> = params
+                .iter()
+                .map(|param| ParameterInformation {
+                    label: ParameterLabel::Simple(param.format_for_signature(&type_ctx)),
+                    documentation: param
+                        .name()
+                        .and_then(|name| parameter_docs.and_then(|docs| docs.get(name.as_str())))
+                        .map(|text| {
+                            lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
+                                kind: lsp_types::MarkupKind::Markdown,
+                                value: text.clone(),
                             })
-                            .collect(),
-                    ),
-                    active_parameter,
-                )
-            } else {
-                (None, None)
-            };
+                        }),
+                })
+                .collect();
+            (Some(parameter_info), active_parameter)
+        } else {
+            (None, None)
+        };
         SignatureInformation {
             label,
-            documentation: None,
+            documentation: function_docstring.map(|docstring| {
+                Documentation::MarkupContent(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: docstring.resolve(),
+                })
+            }),
             parameters,
             active_parameter,
         }

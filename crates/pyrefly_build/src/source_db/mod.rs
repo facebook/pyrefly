@@ -117,12 +117,15 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// Get the handle for the given module path, including its Python platform and version
     /// settings.
     fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle>;
-    /// Requeries this sourcedb if the set of files provided differs from the files
-    /// previously queried for. This is a blocking operation.
+    /// Queries this sourcedb for the provided set of open files. Will short-circuit querying
+    /// if there are no changes from the set of files previously queried for, unless `force`
+    /// is provided, which will unconditionally requery the source DB.
+    ///
+    /// This is a blocking operation.
     /// Returns `Err` if the shellout to the build system failed
     /// The resulting bool represents whether find caches
     /// related to this sourcedb should be invalidated.
-    fn requery_source_db(&self, files: SmallSet<ModulePathBuf>) -> anyhow::Result<bool>;
+    fn query_source_db(&self, files: SmallSet<ModulePathBuf>, force: bool) -> anyhow::Result<bool>;
     /// The source database-related configuration files a watcher should wait for
     /// changes on. Changes to one of these returned watchfiles should force
     /// a sourcedb rebuild.

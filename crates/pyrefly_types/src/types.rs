@@ -38,6 +38,8 @@ use crate::callable::FunctionKind;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
+use crate::callable::PropertyMetadata;
+use crate::callable::PropertyRole;
 use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
@@ -1095,7 +1097,10 @@ impl Type {
 
     /// Calls a `check` function on this type's function metadata if it is a function. Note that we
     /// do *not* recurse into the type to find nested function types.
-    fn check_toplevel_func_metadata<T: Default>(&self, check: &dyn Fn(&FuncMetadata) -> T) -> T {
+    pub fn check_toplevel_func_metadata<T: Default>(
+        &self,
+        check: &dyn Fn(&FuncMetadata) -> T,
+    ) -> T {
         match self {
             Type::Function(box func)
             | Type::Forall(box Forall {
@@ -1136,8 +1141,13 @@ impl Type {
         self.check_toplevel_func_metadata(&|meta| meta.flags.has_enum_member_decoration)
     }
 
+    pub fn property_metadata(&self) -> Option<PropertyMetadata> {
+        self.check_toplevel_func_metadata(&|meta| meta.flags.property_metadata.clone())
+    }
+
     pub fn is_property_getter(&self) -> bool {
-        self.check_toplevel_func_metadata(&|meta| meta.flags.is_property_getter)
+        self.property_metadata()
+            .is_some_and(|meta| matches!(meta.role, PropertyRole::Getter))
     }
 
     pub fn is_cached_property(&self) -> bool {
@@ -1145,11 +1155,30 @@ impl Type {
     }
 
     pub fn is_property_setter_decorator(&self) -> bool {
-        self.check_toplevel_func_metadata(&|meta| meta.flags.is_property_setter_decorator)
+        self.property_metadata()
+            .is_some_and(|meta| matches!(meta.role, PropertyRole::SetterDecorator))
     }
 
     pub fn is_property_setter_with_getter(&self) -> Option<Type> {
-        self.check_toplevel_func_metadata(&|meta| meta.flags.is_property_setter_with_getter.clone())
+        self.property_metadata().and_then(|meta| match meta.role {
+            PropertyRole::Setter => Some(meta.getter.clone()),
+            _ => None,
+        })
+    }
+
+    pub fn property_deleter_metadata(&self) -> Option<PropertyMetadata> {
+        self.property_metadata().and_then(|meta| match meta.role {
+            PropertyRole::DeleterDecorator => Some(meta),
+            _ => None,
+        })
+    }
+
+    pub fn without_property_metadata(&self) -> Type {
+        let mut clone = self.clone();
+        clone.transform_toplevel_func_metadata(|meta| {
+            meta.flags.property_metadata = None;
+        });
+        clone
     }
 
     pub fn is_overload(&self) -> bool {

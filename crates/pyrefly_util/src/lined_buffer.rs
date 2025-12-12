@@ -54,16 +54,20 @@ impl LinedBuffer {
         self.buffer.lines()
     }
 
-    pub fn display_pos(&self, offset: TextSize, notebook: Option<&Notebook>) -> DisplayPos {
+    /// The parser can emit ranges whose end extends past EOF (e.g. unterminated
+    /// triple-quoted strings). Clamp to the maximum valid offset so we can still
+    /// render a useful location instead of panicking (see #1698).
+    pub fn clamp_position(&self, offset: TextSize) -> TextSize {
         let buffer_len = self.buffer.len();
-        let offset = if offset.to_usize() > buffer_len {
-            // The parser can emit ranges whose end extends past EOF (e.g. unterminated
-            // triple-quoted strings). Clamp to the maximum valid offset so we can still
-            // render a useful location instead of panicking (see #1698).
+        if offset.to_usize() > buffer_len {
             TextSize::try_from(buffer_len).unwrap()
         } else {
             offset
-        };
+        }
+    }
+
+    pub fn display_pos(&self, offset: TextSize, notebook: Option<&Notebook>) -> DisplayPos {
+        let offset = self.clamp_position(offset);
         let LineColumn { line, column } = self.lines.line_column(offset, &self.buffer);
         if let Some(notebook) = notebook
             && let Some((cell, cell_line)) = self.get_cell_and_line_from_concatenated_line(
@@ -93,6 +97,10 @@ impl LinedBuffer {
     }
 
     pub fn code_at(&self, range: TextRange) -> &str {
+        let range = TextRange::new(
+            self.clamp_position(range.start()),
+            self.clamp_position(range.end()),
+        );
         match self.buffer.get(Range::<usize>::from(range)) {
             Some(code) => code,
             None => panic!(

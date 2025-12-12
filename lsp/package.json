@@ -176,6 +176,11 @@
                         "implementation": {
                             "type": "boolean",
                             "default": false
+                        },
+                        "callHierarchy": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Disable call hierarchy feature (Show Incoming/Outgoing Calls)"
                         }
                     }
                 },

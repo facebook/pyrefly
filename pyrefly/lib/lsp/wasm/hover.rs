@@ -24,6 +24,7 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
+use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
 use ruff_python_ast::Stmt;
@@ -214,9 +215,16 @@ impl HoverValue {
                     let cleaned = doc.trim().replace('\n', "  \n");
                     format!("{prefix}**Parameter `{}`**\n{}", name, cleaned)
                 });
-        let kind_formatted = self.kind.map_or("".to_owned(), |kind| {
-            format!("{} ", kind.display_for_hover())
-        });
+        let kind_formatted = self.kind.map_or_else(
+            || {
+                if self.type_.is_toplevel_callable() {
+                    "(function) ".to_owned()
+                } else {
+                    String::new()
+                }
+            },
+            |kind| format!("{} ", kind.display_for_hover()),
+        );
         let name_formatted = self
             .name
             .as_ref()
@@ -226,10 +234,10 @@ impl HoverValue {
         } else {
             String::new()
         };
-        let type_display = self
-            .display
-            .clone()
-            .unwrap_or_else(|| self.type_.as_hover_string());
+        let type_display = self.display.clone().unwrap_or_else(|| {
+            self.type_
+                .as_lsp_string_with_fallback_name(self.name.as_deref(), LspDisplayMode::Hover)
+        });
 
         Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -292,6 +300,36 @@ fn expand_callable_kwargs_for_hover<'a>(
         }
     }
 }
+
+/// If we can't determine a symbol name via go-to-definition, fall back to what the
+/// type metadata knows about the callable. This primarily handles third-party stubs
+/// where we only have typeshed information.
+fn fallback_hover_name_from_type(type_: &Type) -> Option<String> {
+    let name = type_.check_toplevel_func_metadata(&|meta| {
+        Some(meta.kind.function_name().into_owned().to_string())
+    });
+    if name.is_some() {
+        return name;
+    }
+    // Recurse through Type wrapper
+    if let Type::Type(inner) = type_ {
+        return fallback_hover_name_from_type(inner);
+    }
+    None
+}
+
+/// Extract the identifier under the cursor so we can label hover results
+/// even when go-to-definition fails.
+fn identifier_text_at(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<String> {
+    transaction
+        .identifier_at(handle, position)
+        .map(|id| id.identifier.id.to_string())
+}
+
 pub fn get_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -334,20 +372,13 @@ pub fn get_hover(
 
     // Otherwise, fall through to the existing type hover logic
     let type_ = transaction.get_type_at(handle, position)?;
-    let type_display = transaction.ad_hoc_solve(handle, {
-        let mut cloned = type_.clone();
-        move |solver| {
-            // If the type is a callable, rewrite the signature to expand TypedDict-based
-            // `**kwargs` entries, ensuring hover text shows the actual keyword names users can pass.
-            cloned.visit_toplevel_callable_mut(|c| expand_callable_kwargs_for_hover(&solver, c));
-            cloned.as_hover_string()
-        }
-    });
+    let fallback_name_from_type = fallback_hover_name_from_type(&type_);
     let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,
         module,
         docstring_range,
+        display_name,
     }) = transaction
         .find_definition(
             handle,
@@ -365,15 +396,34 @@ pub fn get_hover(
         if matches!(kind, Some(SymbolKind::Attribute)) && type_.is_toplevel_callable() {
             kind = Some(SymbolKind::Method);
         }
-        (
-            kind,
-            Some(module.code_at(definition_location).to_owned()),
-            docstring_range,
-            Some(module),
-        )
+        let name = {
+            let snippet = module.code_at(definition_location);
+            if snippet.chars().any(|c| !c.is_whitespace()) {
+                Some(snippet.to_owned())
+            } else if let Some(name) = display_name.clone() {
+                Some(name)
+            } else {
+                fallback_name_from_type.clone()
+            }
+        };
+        (kind, name, docstring_range, Some(module))
     } else {
-        (None, None, None, None)
+        (None, fallback_name_from_type, None, None)
     };
+
+    let name = name.or_else(|| identifier_text_at(transaction, handle, position));
+
+    let name_for_display = name.clone();
+    let type_display = transaction.ad_hoc_solve(handle, {
+        let mut cloned = type_.clone();
+        move |solver| {
+            cloned.visit_toplevel_callable_mut(|c| expand_callable_kwargs_for_hover(&solver, c));
+            cloned.as_lsp_string_with_fallback_name(
+                name_for_display.as_deref(),
+                LspDisplayMode::Hover,
+            )
+        }
+    });
 
     let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
         Some(Docstring(docstring, module))
@@ -489,4 +539,57 @@ fn parameter_documentation_for_callee(
     let (range, module) = docstring;
     let docs = parse_parameter_documentation(module.code_at(range));
     if docs.is_empty() { None } else { Some(docs) }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use pyrefly_types::callable::Callable;
+    use pyrefly_types::callable::FuncFlags;
+    use pyrefly_types::callable::FuncId;
+    use pyrefly_types::callable::FuncMetadata;
+    use pyrefly_types::callable::Function;
+    use pyrefly_types::callable::FunctionKind;
+    use ruff_python_ast::name::Name;
+
+    use super::*;
+
+    fn make_function_type(module_name: &str, func_name: &str) -> Type {
+        let module = Module::new(
+            ModuleName::from_str(module_name),
+            ModulePath::filesystem(PathBuf::from(format!("{module_name}.pyi"))),
+            Arc::new(String::new()),
+        );
+        let metadata = FuncMetadata {
+            kind: FunctionKind::Def(Box::new(FuncId {
+                module,
+                cls: None,
+                name: Name::new(func_name),
+            })),
+            flags: FuncFlags::default(),
+        };
+        Type::Function(Box::new(Function {
+            signature: Callable::ellipsis(Type::None),
+            metadata,
+        }))
+    }
+
+    #[test]
+    fn fallback_uses_function_metadata() {
+        let ty = make_function_type("numpy", "arange");
+        let fallback = fallback_hover_name_from_type(&ty);
+        assert_eq!(fallback.as_deref(), Some("arange"));
+    }
+
+    #[test]
+    fn fallback_recurses_through_type_wrapper() {
+        let ty = Type::Type(Box::new(make_function_type("pkg.subpkg", "run")));
+        let fallback = fallback_hover_name_from_type(&ty);
+        assert_eq!(fallback.as_deref(), Some("run"));
+    }
 }

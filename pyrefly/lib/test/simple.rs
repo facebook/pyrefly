@@ -1930,6 +1930,13 @@ def test():
 );
 
 testcase!(
+    test_parse_error_range_exceeds_buffer_no_panic,
+    r#"
+class a("""  # E: # E: # E: # E:
+    "#,
+);
+
+testcase!(
     test_yield_from_in_annotation,
     r#"
 def test():

@@ -11,6 +11,8 @@ use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
 use pyrefly_types::callable::ParamList;
+use pyrefly_types::callable::PropertyMetadata;
+use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
@@ -24,6 +26,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::class::class_field::ClassField;
 use crate::alt::class::enums::VALUE_PROP;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -310,7 +313,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn property(&self, cls: &Class, name: Name, ty: Type) -> Type {
         let signature = Callable::list(ParamList::new(vec![self.class_self_param(cls, false)]), ty);
         let mut metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), name);
-        metadata.flags.is_property_getter = true;
+        metadata.flags.property_metadata = Some(PropertyMetadata {
+            role: PropertyRole::Getter,
+            getter: Type::any_error(),
+            setter: None,
+            has_deleter: false,
+        });
         Type::Function(Box::new(Function {
             signature,
             metadata,
@@ -359,11 +367,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    /// Returns the primary key type of the related model.
-    fn get_foreign_key_id_type(&self, cls: &Class, field_name: &Name) -> Option<Type> {
-        // Get the class field
-        let class_field = self.get_field_from_current_class_only(cls, field_name)?;
+    /// Check if a Django field has a `choices` argument.
+    pub fn has_django_field_choices(&self, call_expr: &ExprCall) -> bool {
+        call_expr.arguments.keywords.iter().any(|keyword| {
+            keyword
+                .arg
+                .as_ref()
+                .is_some_and(|name| name.as_str() == CHOICES.as_str())
+        })
+    }
 
+    /// Create a get_FOO_display method signature for a field with choices.
+    /// The method takes self and returns str.
+    fn get_display_method(&self, cls: &Class, method_name: &Name) -> ClassSynthesizedField {
+        let params = vec![self.class_self_param(cls, false)];
+        let ret = self.stdlib.str().clone().to_type();
+        ClassSynthesizedField::new(Type::Function(Box::new(Function {
+            signature: Callable::list(ParamList::new(params), ret),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), method_name.clone()),
+        })))
+    }
+
+    /// Returns the primary key type of the related model.
+    fn get_foreign_key_id_type(&self, class_field: &ClassField) -> Option<Type> {
         // Check if this is a ForeignKey field using the cached metadata
         if !class_field.is_foreign_key() {
             return None;
@@ -413,10 +439,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         // Synthesize `<field_name>_id` fields for ForeignKey fields
+        // and `get_<field_name>_display()` methods for fields with choices
         for field_name in cls.fields() {
-            if let Some(fk_id_type) = self.get_foreign_key_id_type(cls, field_name) {
+            let Some(class_field) = self.get_field_from_current_class_only(cls, field_name) else {
+                continue;
+            };
+            if let Some(fk_id_type) = self.get_foreign_key_id_type(&class_field) {
                 let id_field_name = Name::new(format!("{}_id", field_name));
                 fields.insert(id_field_name, ClassSynthesizedField::new(fk_id_type));
+            }
+            if class_field.has_choices() {
+                let method_name = Name::new(format!("get_{}_display", field_name));
+                fields.insert(
+                    method_name.clone(),
+                    self.get_display_method(cls, &method_name),
+                );
             }
         }
 

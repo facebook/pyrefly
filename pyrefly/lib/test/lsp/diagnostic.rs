@@ -150,6 +150,34 @@ def foo() -> str:
 }
 
 #[test]
+fn test_future_import_not_reported_as_unused() {
+    let code = r#"
+from __future__ import annotations
+
+def foo() -> str:
+    return "hello"
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_import_diagnostics(&state, handle);
+    assert_eq!(report, "No unused imports");
+}
+
+#[test]
+fn test_future_import_with_alias_not_reported_as_unused() {
+    let code = r#"
+from __future__ import annotations as _annotations
+
+def foo() -> str:
+    return "hello"
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_import_diagnostics(&state, handle);
+    assert_eq!(report, "No unused imports");
+}
+
+#[test]
 fn test_generator_with_send() {
     let code = r#"
 from typing import Generator

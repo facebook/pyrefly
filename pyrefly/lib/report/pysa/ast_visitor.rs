@@ -113,7 +113,7 @@ impl Scopes {
         &self,
         module_id: ModuleId,
         module_name: ModuleName,
-        flags: ScopeExportedFunctionFlags,
+        flags: &ScopeExportedFunctionFlags,
     ) -> Option<FunctionRef> {
         Self::current_exported_function_impl(self.stack.iter().rev(), module_id, module_name, flags)
     }
@@ -122,7 +122,7 @@ impl Scopes {
         mut iterator: impl Iterator<Item = &'a Scope>,
         module_id: ModuleId,
         module_name: ModuleName,
-        flags: ScopeExportedFunctionFlags,
+        flags: &ScopeExportedFunctionFlags,
     ) -> Option<FunctionRef> {
         match iterator.next().unwrap() {
             Scope::TopLevel => {
@@ -206,39 +206,6 @@ impl Scopes {
                 }
                 ExportFunctionDecorators::Ignore => None,
             },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScopeId(TextRange);
-
-impl ScopeId {
-    pub fn top_level() -> Self {
-        ScopeId(TextRange::default())
-    }
-
-    pub fn from_scopes(scopes: &Scopes) -> Self {
-        let mut iterator = scopes.stack.iter().rev();
-        loop {
-            match iterator.next().unwrap() {
-                Scope::TopLevel => return ScopeId::top_level(),
-                Scope::ExportedFunction { location, .. } => return ScopeId(*location),
-                Scope::ExportedClass { location, .. } => return ScopeId(*location),
-                Scope::NonExportedFunction { location, .. } => return ScopeId(*location),
-                Scope::NonExportedClass { location, .. } => return ScopeId(*location),
-                Scope::FunctionDecorators
-                | Scope::FunctionTypeParams
-                | Scope::FunctionParameters
-                | Scope::FunctionReturnAnnotation
-                | Scope::ClassDecorators
-                | Scope::ClassTypeParams
-                | Scope::ClassArguments => {
-                    // These are not true "semantic" scopes.
-                    // We need to skip the parent scope, which is the wrapping function/class scope.
-                    iterator.next().unwrap();
-                }
-            }
         }
     }
 }

@@ -359,10 +359,10 @@ lhs @ rhs
 13 | lhs @ rhs
          ^
 ```python
-(method) __matmul__: (
+(method) __matmul__: def __matmul__(
     self: Matrix,
     other: Matrix
-) -> Matrix
+) -> Matrix: ...
 ```
 "#
         .trim(),
@@ -420,5 +420,34 @@ z: list[int] = []
         report.contains("builtins.pyi"),
         "Expected links to builtins.pyi, got: {}",
         report
+    );
+}
+
+#[test]
+fn constant_kind_for_caps_test() {
+    let code = r#"
+XYZ = 5
+# ^
+xyz = 5
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | XYZ = 5
+      ^
+```python
+(constant) XYZ: Literal[5]
+```
+
+4 | xyz = 5
+      ^
+```python
+(variable) xyz: Literal[5]
+```
+"#
+        .trim(),
+        report.trim(),
     );
 }

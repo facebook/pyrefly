@@ -8,6 +8,7 @@
 #![cfg(test)]
 
 mod basic;
+mod call_hierarchy;
 mod completion;
 mod configuration;
 mod definition;

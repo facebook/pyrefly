@@ -272,6 +272,14 @@ impl<'a> BindingsBuilder<'a> {
     /// If this is the top level, report a type error about the invalid return
     /// and also create a binding to ensure we type check the expression.
     fn record_return(&mut self, mut x: StmtReturn) {
+        // PEP 765: Disallow return in finally block (Python 3.14+)
+        if self.sys_info.version().at_least(3, 14) && self.scopes.in_finally() {
+            self.error(
+                x.range(),
+                ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                "`return` in a `finally` block will silence exceptions".to_owned(),
+            );
+        }
         let mut ret = self.declare_current_idx(Key::ReturnExplicit(x.range()));
         self.ensure_expr_opt(x.value.as_deref_mut(), ret.usage());
         if let Err((ret, oops_top_level)) = self.scopes.record_or_reject_return(ret, x) {
@@ -299,6 +307,8 @@ impl<'a> BindingsBuilder<'a> {
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
+        self.with_semantic_checker(|semantic, context| semantic.visit_stmt(&x, context));
+
         match x {
             Stmt::FunctionDef(x) => {
                 self.function_def(x, parent);
@@ -862,7 +872,9 @@ impl<'a> BindingsBuilder<'a> {
                 }
 
                 self.finish_exhaustive_fork();
+                self.scopes.enter_finally();
                 self.stmts(x.finalbody, parent);
+                self.scopes.exit_finally();
             }
             Stmt::Assert(x) => {
                 self.assert(x.range(), *x.test, x.msg.map(|m| *m));
@@ -982,10 +994,32 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::Pass(_) => { /* no-op */ }
-            Stmt::Break(_) => {
+            Stmt::Break(x) => {
+                // PEP 765: Disallow break in finally block if not inside a nested loop
+                if self.sys_info.version().at_least(3, 14)
+                    && self.scopes.in_finally()
+                    && !self.scopes.loop_protects_from_finally_exit()
+                {
+                    self.error(
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "`break` in a `finally` block will silence exceptions".to_owned(),
+                    );
+                }
                 self.add_loop_exitpoint(LoopExit::Break);
             }
-            Stmt::Continue(_) => {
+            Stmt::Continue(x) => {
+                // PEP 765: Disallow continue in finally block if not inside a nested loop
+                if self.sys_info.version().at_least(3, 14)
+                    && self.scopes.in_finally()
+                    && !self.scopes.loop_protects_from_finally_exit()
+                {
+                    self.error(
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "`continue` in a `finally` block will silence exceptions".to_owned(),
+                    );
+                }
                 self.add_loop_exitpoint(LoopExit::Continue);
             }
             Stmt::IpyEscapeCommand(x) => {
@@ -1020,14 +1054,11 @@ impl<'a> BindingsBuilder<'a> {
                     };
                     let key = self.insert_binding(key, val);
                     // Register the imported name from wildcard imports
-                    self.scopes.register_import_with_star(
-                        &Identifier {
-                            node_index: AtomicNodeIndex::default(),
-                            id: name.into_key().clone(),
-                            range: x.range,
-                        },
-                        true,
-                    );
+                    self.scopes.register_import_with_star(&Identifier {
+                        node_index: AtomicNodeIndex::default(),
+                        id: name.into_key().clone(),
+                        range: x.range,
+                    });
                     self.bind_name(
                         name.key(),
                         key,
@@ -1082,7 +1113,13 @@ impl<'a> BindingsBuilder<'a> {
                         Binding::Type(Type::any_explicit())
                     }
                 };
-                self.scopes.register_import(&asname);
+                // __future__ imports have side effects even if not explicitly used,
+                // so we skip the unused import check for them.
+                if m == ModuleName::future() {
+                    self.scopes.register_future_import(&asname);
+                } else {
+                    self.scopes.register_import(&asname);
+                }
                 self.bind_definition(&asname, val, FlowStyle::Import(m, x.name.id));
             }
         }

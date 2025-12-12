@@ -1,0 +1,13 @@
+from _typeshed import Incomplete
+from conans.errors import ConanException as ConanException
+from conans.util.log import logger as logger
+
+class ReturnHandlerPlugin:
+    name: str
+    api: int
+    exception_mapping: Incomplete
+    def __init__(self, exception_mapping) -> None: ...
+    def setup(self, app) -> None: ...
+    def apply(self, callback, _): ...
+
+def get_response_from_exception(excep, exception_mapping): ...

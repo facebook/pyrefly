@@ -349,6 +349,26 @@ impl Deprecation {
     }
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
+)]
+pub enum PropertyRole {
+    Getter,
+    Setter,
+    SetterDecorator,
+    DeleterDecorator,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
+)]
+pub struct PropertyMetadata {
+    pub role: PropertyRole,
+    pub getter: Type,
+    pub setter: Option<Type>,
+    pub has_deleter: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct FuncFlags {
@@ -357,18 +377,10 @@ pub struct FuncFlags {
     pub is_classmethod: bool,
     /// A function decorated with `@deprecated`
     pub deprecation: Option<Deprecation>,
-    /// A function decorated with `@property`
-    pub is_property_getter: bool,
+    /// Metadata for `@property`, `@foo.setter`, and `@foo.deleter`.
+    pub property_metadata: Option<PropertyMetadata>,
     /// A function decorated with `functools.cached_property` or equivalent.
     pub is_cached_property: bool,
-    /// A `foo.setter` function, where `foo` is some `@property`-decorated function.
-    /// When used to decorate a function, turns the decorated function into a property setter.
-    pub is_property_setter_decorator: bool,
-    /// If None, this is a function decorated with `@foo.setter`, where `foo` is
-    /// a property (i.e. a function decoratoed with `@property`)
-    ///
-    /// The stored type is `foo` (the getter).
-    pub is_property_setter_with_getter: Option<Type>,
     pub has_enum_member_decoration: bool,
     pub is_override: bool,
     pub has_final_decoration: bool,
@@ -496,6 +508,10 @@ pub enum FunctionKind {
     CallbackProtocol(Box<ClassType>),
     TotalOrdering,
     DisjointBase,
+    /// `numba.jit()`
+    NumbaJit,
+    /// `numba.njit()`
+    NumbaNjit,
 }
 
 impl Callable {
@@ -782,6 +798,27 @@ impl Param {
             _ => false,
         }
     }
+
+    /// Format a parameter for display using the proper type display infrastructure.
+    /// This ensures consistent formatting with default values, position-only markers, etc.
+    ///
+    /// This is similar to the `Display` impl, but allows passing in a `TypeDisplayContext`
+    /// for context-aware formatting (e.g., disambiguating types with the same name).
+    pub fn format_for_signature(&self, type_ctx: &crate::display::TypeDisplayContext) -> String {
+        use pyrefly_util::display::Fmt;
+
+        use crate::type_output::DisplayOutput;
+
+        format!(
+            "{}",
+            Fmt(|f| {
+                let mut output = DisplayOutput::new(type_ctx, f);
+                self.fmt_with_type(&mut output, &|ty, o| {
+                    type_ctx.fmt_helper_generic(ty, false, o)
+                })
+            })
+        )
+    }
 }
 
 impl Display for Param {
@@ -819,6 +856,8 @@ impl FunctionKind {
             ("abc", None, "abstractmethod") => Self::AbstractMethod,
             ("functools", None, "total_ordering") => Self::TotalOrdering,
             ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
+            ("numba", None, "jit") => Self::NumbaJit,
+            ("numba", None, "njit") => Self::NumbaNjit,
             _ => Self::Def(Box::new(FuncId {
                 module,
                 cls,
@@ -846,6 +885,8 @@ impl FunctionKind {
             Self::AbstractMethod => ModuleName::abc(),
             Self::TotalOrdering => ModuleName::functools(),
             Self::DisjointBase => ModuleName::typing(),
+            Self::NumbaJit => ModuleName::from_str("numba"),
+            Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Def(func_id) => func_id.module.name().dupe(),
         }
     }
@@ -869,6 +910,8 @@ impl FunctionKind {
             Self::AbstractMethod => Cow::Owned(Name::new_static("abstractmethod")),
             Self::TotalOrdering => Cow::Owned(Name::new_static("total_ordering")),
             Self::DisjointBase => Cow::Owned(Name::new_static("disjoint_base")),
+            Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
+            Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
         }
     }
@@ -888,6 +931,8 @@ impl FunctionKind {
             Self::AssertType => None,
             Self::RevealType => None,
             Self::RuntimeCheckable => None,
+            Self::NumbaJit => None,
+            Self::NumbaNjit => None,
             Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
             Self::AbstractMethod => None,
             Self::TotalOrdering => None,
@@ -903,6 +948,14 @@ impl FunctionKind {
             self.function_name().as_ref(),
             current_module,
         )
+    }
+
+    /// Does this decorator require special-casing to be signature-preserving?
+    pub fn is_signature_preserving_decorator(&self) -> bool {
+        match self {
+            Self::NumbaJit | Self::NumbaNjit => true,
+            _ => false,
+        }
     }
 }
 

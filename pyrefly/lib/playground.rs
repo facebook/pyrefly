@@ -91,7 +91,7 @@ impl SourceDatabase for PlaygroundSourceDatabase {
         Some(Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
     }
 
-    fn requery_source_db(&self, _: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
+    fn query_source_db(&self, _: SmallSet<ModulePathBuf>, _: bool) -> anyhow::Result<bool> {
         Ok(false)
     }
 

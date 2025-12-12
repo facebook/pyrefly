@@ -5,10 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use clap::Parser;
-use dupe::Dupe;
 use lsp_server::Connection;
 use lsp_server::ProtocolError;
 use lsp_types::InitializeParams;
@@ -32,7 +29,7 @@ pub struct TspArgs {
     pub(crate) workspace_indexing_limit: usize,
 }
 
-pub fn run_tsp(connection: Arc<Connection>, args: TspArgs) -> anyhow::Result<()> {
+pub fn run_tsp(connection: Connection, args: TspArgs) -> anyhow::Result<()> {
     let initialization_params = match initialize_tsp_connection(&connection, &args) {
         Ok(it) => it,
         Err(e) => {
@@ -43,15 +40,16 @@ pub fn run_tsp(connection: Arc<Connection>, args: TspArgs) -> anyhow::Result<()>
     // Create an LSP server instance for the TSP server to use.
     let lsp_queue = LspQueue::new();
     let lsp_server = Box::new(crate::lsp::non_wasm::server::Server::new(
-        connection.dupe(),
-        lsp_queue.dupe(),
+        connection,
+        lsp_queue,
         initialization_params.clone(),
         args.indexing_mode,
         args.workspace_indexing_limit,
+        false,
     ));
 
     // Reuse the existing lsp_loop but with TSP initialization
-    tsp_loop(lsp_server, connection, initialization_params, lsp_queue)?;
+    tsp_loop(lsp_server, initialization_params)?;
     Ok(())
 }
 
@@ -84,7 +82,7 @@ impl TspArgs {
         // also be implemented to use sockets or HTTP.
         let (connection, io_threads) = Connection::stdio();
 
-        run_tsp(Arc::new(connection), self)?;
+        run_tsp(connection, self)?;
         io_threads.join()?;
         // We have shut down gracefully.
         eprintln!("shutting down TSP server");

@@ -251,6 +251,7 @@ impl ConfigFinder {
             ModulePathDetails::Namespace(x) => f(Some(&x.absolutize())),
             ModulePathDetails::BundledTypeshed(_) => f(None),
             ModulePathDetails::BundledTypeshedThirdParty(_) => f(None),
+            ModulePathDetails::BundledThirdParty(_) => f(None),
         }
     }
 

@@ -14,6 +14,7 @@ use lsp_types::Position;
 use lsp_types::TextDocumentIdentifier;
 use lsp_types::request::Request;
 use pyrefly_build::handle::Handle;
+use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::display::TypeDisplayContext;
 use serde::Deserialize;
 use serde::Serialize;
@@ -53,7 +54,7 @@ pub fn provide_type(
         let text_size = info.from_lsp_position(position, None);
         if let Some(ty) = transaction.get_type_at(handle, text_size) {
             let mut c = TypeDisplayContext::new(&[&ty]);
-            c.set_display_mode_to_hover();
+            c.set_lsp_display_mode(LspDisplayMode::Hover);
             c.always_display_module_name();
             contents.push(MarkupContent {
                 kind: MarkupKind::PlainText,

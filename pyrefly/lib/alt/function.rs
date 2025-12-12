@@ -65,6 +65,8 @@ use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
+use crate::types::callable::PropertyMetadata;
+use crate::types::callable::PropertyRole;
 use crate::types::callable::Required;
 use crate::types::class::ClassKind;
 use crate::types::keywords::DataclassTransformMetadata;
@@ -317,6 +319,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
+        if let Some(metadata) = def
+            .metadata()
+            .flags
+            .property_metadata
+            .as_ref()
+            .filter(|meta| matches!(meta.role, PropertyRole::DeleterDecorator))
+        {
+            ty = metadata
+                .setter
+                .clone()
+                .unwrap_or_else(|| metadata.getter.clone());
+            ty.transform_toplevel_func_metadata(|meta| {
+                if let Some(property) = &mut meta.flags.property_metadata {
+                    property.has_deleter = true;
+                }
+            });
+        }
+
         if def.is_stub()
             && self.module().path().style() != ModuleStyle::Interface
             && let Some(cls) = def.defining_cls()
@@ -326,6 +346,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 meta.flags.is_abstract_method = true;
             });
         }
+
+        let sanitized = ty.without_property_metadata();
+        ty.transform_toplevel_func_metadata(|meta| {
+            if let Some(property) = &mut meta.flags.property_metadata {
+                match property.role {
+                    PropertyRole::Getter => {
+                        property.getter = sanitized.clone();
+                    }
+                    PropertyRole::Setter => {
+                        property.setter = Some(sanitized.clone());
+                    }
+                    _ => {}
+                }
+            }
+        });
 
         ty
     }
@@ -457,9 +492,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .get(&Key::ReturnType(ShortIdentifier::new(&stmt.name)))
             .arc_clone_ty();
         // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
-        let has_return_annotation_or_infers_return = self
-            .bindings()
-            .function_has_return_annotation_or_infers_return(&stmt.name);
+        let has_return_annotation = self.bindings().function_has_return_annotation(&stmt.name);
         if stmt.is_async
             && def.metadata.flags.is_abstract_method
             && !self.behaves_like_any(&ret)
@@ -476,11 +509,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             ret = coroutine_ret;
         }
-        if !has_return_annotation_or_infers_return {
+        if !has_return_annotation {
             self.error(
                 errors,
                 stmt.name.range(),
-                ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                ErrorInfo::Kind(ErrorKind::UnannotatedReturn),
                 format!("`{}` is missing a return annotation", stmt.name),
             );
         }
@@ -490,7 +523,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     p.name().range(),
-                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    ErrorInfo::Kind(ErrorKind::UnannotatedParameter),
                     format!(
                         "`{}` is missing an annotation for parameter `{name}`",
                         stmt.name
@@ -551,6 +584,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &'a self,
         decorator: &'a Decorator,
     ) -> Option<SpecialDecorator<'a>> {
+        if decorator
+            .ty
+            .property_metadata()
+            .is_some_and(|meta| matches!(meta.role, PropertyRole::DeleterDecorator))
+        {
+            return Some(SpecialDecorator::PropertyDeleter(&decorator.ty));
+        }
         match decorator.ty.callee_kind() {
             Some(CalleeKind::Function(FunctionKind::Overload)) => Some(SpecialDecorator::Overload),
             Some(CalleeKind::Class(ClassKind::StaticMethod(name))) => {
@@ -571,7 +611,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ if let Some(deprecation) = &decorator.deprecation => {
                 Some(SpecialDecorator::Deprecated(deprecation))
             }
-            _ if decorator.ty.is_property_setter_decorator() => {
+            _ if decorator
+                .ty
+                .property_metadata()
+                .is_some_and(|meta| matches!(meta.role, PropertyRole::SetterDecorator)) =>
+            {
                 Some(SpecialDecorator::PropertySetter(&decorator.ty))
             }
             _ if let Type::KwCall(call) = &decorator.ty
@@ -609,11 +653,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 true
             }
             SpecialDecorator::Property(_) => {
-                flags.is_property_getter = true;
+                flags.property_metadata = Some(PropertyMetadata {
+                    role: PropertyRole::Getter,
+                    getter: Type::any_error(),
+                    setter: None,
+                    has_deleter: false,
+                });
                 true
             }
             SpecialDecorator::CachedProperty(_) => {
-                flags.is_property_getter = true;
+                flags.property_metadata = Some(PropertyMetadata {
+                    role: PropertyRole::Getter,
+                    getter: Type::any_error(),
+                    setter: None,
+                    has_deleter: false,
+                });
                 flags.is_cached_property = true;
                 true
             }
@@ -634,16 +688,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 true
             }
             SpecialDecorator::PropertySetter(decorator) => {
-                // When the `setter` attribute is accessed on a property, we return the type
-                // of the raw getter function, but with the `is_property_setter_decorator`
-                // flag set to true; the type does does not accurately model the runtime
-                // (calling the `.setter` decorator does not invoke a getter function),
-                // but makes it convenient to construct the property getter and setter
-                // in our class field logic.
-                //
-                // See AnswersSolver::lookup_attr_from_attribute_base
-                // for details.
-                flags.is_property_setter_with_getter = Some((*decorator).clone());
+                if let Some(metadata) = decorator.property_metadata() {
+                    flags.property_metadata = Some(PropertyMetadata {
+                        role: PropertyRole::Setter,
+                        getter: metadata.getter.clone(),
+                        setter: metadata.setter.clone(),
+                        has_deleter: metadata.has_deleter,
+                    });
+                }
+                true
+            }
+            SpecialDecorator::PropertyDeleter(decorator) => {
+                flags.property_metadata = decorator.property_metadata();
                 true
             }
             SpecialDecorator::DataclassTransformCall(kws) => {
@@ -1065,6 +1121,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        // Check if this is a decorator that's special-cased to preserve the decorated function's signature
+        if let Type::KwCall(call) = &decorator
+            && call.func_metadata.kind.is_signature_preserving_decorator()
+        {
+            return decoratee;
+        }
         // Preserve function metadata, so things like method binding still work.
         let call_target =
             self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);

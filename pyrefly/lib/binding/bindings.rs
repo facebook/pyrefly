@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -30,6 +31,10 @@ use ruff_python_ast::Stmt;
 use ruff_python_ast::TypeParam;
 use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
+use ruff_python_parser::semantic_errors::SemanticSyntaxChecker;
+use ruff_python_parser::semantic_errors::SemanticSyntaxContext;
+use ruff_python_parser::semantic_errors::SemanticSyntaxError;
+use ruff_python_parser::semantic_errors::SemanticSyntaxErrorKind;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -197,6 +202,8 @@ pub struct BindingsBuilder<'a> {
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
+    semantic_checker: SemanticSyntaxChecker,
+    semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -355,11 +362,12 @@ impl Bindings {
         }
     }
 
-    pub fn function_has_return_annotation_or_infers_return(&self, name: &Identifier) -> bool {
+    pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
         let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
         if let Binding::ReturnType(box r) = b {
-            r.kind.has_return_annotation() || r.kind.should_infer_return()
+            r.kind.has_return_annotation()
         } else if let Binding::Type(_) = b {
+            // This happens when we have an un-annotated return & the inference behavior is "skip and infer Any"
             false
         } else {
             panic!(
@@ -401,6 +409,8 @@ impl Bindings {
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
+            semantic_checker: SemanticSyntaxChecker::new(),
+            semantic_syntax_errors: RefCell::new(Vec::new()),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -425,6 +435,18 @@ impl Bindings {
         let unused_imports = builder.scopes.collect_module_unused_imports();
         builder.record_unused_imports(unused_imports);
         let scope_trace = builder.scopes.finish();
+
+        let semantic_errors = builder.semantic_syntax_errors.into_inner();
+        for error in semantic_errors {
+            if Self::should_emit_semantic_syntax_error(&error) {
+                builder.errors.add(
+                    error.range,
+                    ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                    vec1![error.to_string()],
+                );
+            }
+        }
+
         let exported = exports.exports(lookup);
         for (name, exportable) in scope_trace.exportables().into_iter_hashed() {
             let binding = match exportable {
@@ -454,6 +476,43 @@ impl Bindings {
             unused_imports: builder.unused_imports,
             unused_variables: builder.unused_variables,
         }))
+    }
+
+    fn should_emit_semantic_syntax_error(error: &SemanticSyntaxError) -> bool {
+        // TODO: enable and add tests for the other semantic syntax errors
+        match error.kind {
+            SemanticSyntaxErrorKind::BreakOutsideLoop
+            | SemanticSyntaxErrorKind::ContinueOutsideLoop
+            | SemanticSyntaxErrorKind::SingleStarredAssignment
+            | SemanticSyntaxErrorKind::DifferentMatchPatternBindings
+            | SemanticSyntaxErrorKind::IrrefutableCasePattern(_) => true,
+            SemanticSyntaxErrorKind::LateFutureImport
+            | SemanticSyntaxErrorKind::InvalidStarExpression
+            | SemanticSyntaxErrorKind::ReboundComprehensionVariable
+            | SemanticSyntaxErrorKind::DuplicateTypeParameter
+            | SemanticSyntaxErrorKind::MultipleCaseAssignment(_)
+            | SemanticSyntaxErrorKind::WriteToDebug(_)
+            | SemanticSyntaxErrorKind::InvalidExpression(_, _)
+            | SemanticSyntaxErrorKind::DuplicateMatchKey(_)
+            | SemanticSyntaxErrorKind::DuplicateMatchClassAttribute(_)
+            | SemanticSyntaxErrorKind::LoadBeforeGlobalDeclaration { .. }
+            | SemanticSyntaxErrorKind::LoadBeforeNonlocalDeclaration { .. }
+            | SemanticSyntaxErrorKind::AsyncComprehensionInSyncComprehension(_)
+            | SemanticSyntaxErrorKind::YieldOutsideFunction(_)
+            | SemanticSyntaxErrorKind::ReturnOutsideFunction
+            | SemanticSyntaxErrorKind::AwaitOutsideAsyncFunction(_)
+            | SemanticSyntaxErrorKind::DuplicateParameter(_)
+            | SemanticSyntaxErrorKind::NonlocalDeclarationAtModuleLevel
+            | SemanticSyntaxErrorKind::NonlocalAndGlobal(_)
+            | SemanticSyntaxErrorKind::AnnotatedGlobal(_)
+            | SemanticSyntaxErrorKind::AnnotatedNonlocal(_)
+            | SemanticSyntaxErrorKind::YieldFromInAsyncFunction
+            | SemanticSyntaxErrorKind::NonModuleImportStar(_)
+            | SemanticSyntaxErrorKind::MultipleStarredExpressions
+            | SemanticSyntaxErrorKind::FutureFeatureNotDefined(_)
+            | SemanticSyntaxErrorKind::GlobalParameter(_)
+            | SemanticSyntaxErrorKind::NonlocalWithoutBinding(_) => false,
+        }
     }
 }
 
@@ -1465,5 +1524,82 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {}
             }
         }
+    }
+
+    pub fn with_semantic_checker(&mut self, f: impl FnOnce(&mut SemanticSyntaxChecker, &Self)) {
+        let mut checker = std::mem::take(&mut self.semantic_checker);
+        f(&mut checker, self);
+        self.semantic_checker = checker;
+    }
+}
+
+impl<'a> SemanticSyntaxContext for BindingsBuilder<'a> {
+    fn python_version(&self) -> ruff_python_ast::PythonVersion {
+        ruff_python_ast::PythonVersion {
+            major: self.sys_info.version().major as u8,
+            minor: self.sys_info.version().minor as u8,
+        }
+    }
+
+    fn source(&self) -> &str {
+        self.module_info.contents()
+    }
+
+    fn future_annotations_or_stub(&self) -> bool {
+        self.module_info.source_type() == ruff_python_ast::PySourceType::Stub
+    }
+
+    fn report_semantic_error(&self, error: SemanticSyntaxError) {
+        self.semantic_syntax_errors.borrow_mut().push(error);
+    }
+
+    fn global(&self, name: &str) -> Option<TextRange> {
+        self.scopes.get_global_declaration(name)
+    }
+
+    fn has_nonlocal_binding(&self, name: &str) -> bool {
+        self.scopes.has_nonlocal_binding(name)
+    }
+
+    fn in_async_context(&self) -> bool {
+        self.scopes.is_in_async_def()
+    }
+
+    fn in_await_allowed_context(&self) -> bool {
+        // await is allowed in functions, lambdas, and notebooks
+        self.scopes.in_function_scope() || self.in_notebook()
+    }
+
+    fn in_yield_allowed_context(&self) -> bool {
+        // yield is allowed in functions and lambdas, but not in comprehensions or classes
+        self.scopes.in_function_scope()
+    }
+
+    fn in_sync_comprehension(&self) -> bool {
+        self.scopes.in_sync_comprehension()
+    }
+
+    fn in_module_scope(&self) -> bool {
+        self.scopes.in_module_or_class_top_level() && !self.scopes.in_class_body()
+    }
+
+    fn in_function_scope(&self) -> bool {
+        self.scopes.in_function_scope()
+    }
+
+    fn in_generator_scope(&self) -> bool {
+        self.scopes.in_generator_expression()
+    }
+
+    fn in_notebook(&self) -> bool {
+        self.module_info.source_type() == ruff_python_ast::PySourceType::Ipynb
+    }
+
+    fn in_loop_context(&self) -> bool {
+        self.scopes.loop_depth() > 0
+    }
+
+    fn is_bound_parameter(&self, name: &str) -> bool {
+        self.scopes.is_bound_parameter(name)
     }
 }

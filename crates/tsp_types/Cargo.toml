@@ -2,7 +2,7 @@
 
 [package]
 name = "tsp_types"
-version = "0.44.2"
+version = "0.45.2"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"

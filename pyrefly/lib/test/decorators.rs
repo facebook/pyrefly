@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -614,7 +615,7 @@ def my_func[T](x: T) -> T:
     return x
 
 def test():
-    assert_type(my_func, List[Any]) 
+    assert_type(my_func, List[Any])
 "#,
 );
 
@@ -653,5 +654,32 @@ def my_func[T](x: T) -> T:
     return x
 
 reveal_type(my_func)  # E: revealed type: (object) -> None
+"#,
+);
+
+testcase!(
+    test_numba_jit_decorators_preserve_signature,
+    TestEnv::one_with_path(
+        "numba",
+        "numba.pyi",
+        r#"
+def jit(*args, **kwargs): ...
+def njit(*args, **kwargs): ...
+"#,
+    ),
+    r#"
+import numba
+from typing import assert_type
+
+@numba.jit(nopython=True)
+def test1(a: int, b: int) -> int:
+    return a + b
+
+@numba.njit(cache=True)
+def test2(a: int, b: int) -> int:
+    return a + b
+
+assert_type(test1(1, 2), int)
+assert_type(test2(1, 2), int)
 "#,
 );

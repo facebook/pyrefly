@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -15,7 +14,6 @@ use crossbeam_channel::RecvError;
 use crossbeam_channel::Select;
 use crossbeam_channel::SendError;
 use crossbeam_channel::Sender;
-use dupe::Dupe;
 use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
@@ -29,6 +27,7 @@ use lsp_types::DidSaveTextDocumentParams;
 use tracing::debug;
 use tracing::info;
 
+use crate::lsp::non_wasm::server::Server;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidOpenNotebookDocumentParams;
@@ -118,10 +117,7 @@ impl LspEvent {
     }
 }
 
-#[derive(Clone, Dupe)]
-pub struct LspQueue(Arc<LspQueueInner>);
-
-struct LspQueueInner {
+pub struct LspQueue {
     /// The next id to use for a new event.
     id: AtomicUsize,
     /// The index of the last event we are aware of that is a mutation. 0 = unknown.
@@ -138,32 +134,30 @@ struct LspQueueInner {
 
 impl LspQueue {
     pub fn new() -> Self {
-        Self(Arc::new(LspQueueInner {
+        Self {
             id: AtomicUsize::new(1),
             last_mutation: AtomicUsize::new(0),
             normal: crossbeam_channel::unbounded(),
             priority: crossbeam_channel::unbounded(),
-        }))
+        }
     }
 
     #[allow(clippy::result_large_err)]
     pub fn send(&self, x: LspEvent) -> Result<(), SendError<LspEvent>> {
         let kind = x.kind();
-        let id = self.0.id.fetch_add(1, Ordering::Relaxed);
+        let id = self.id.fetch_add(1, Ordering::Relaxed);
         if kind == LspEventKind::Mutation {
             // This is gently dubious, as we might race condition and it might not really be the last
             // mutation. But it's good enough for now.
-            self.0.last_mutation.store(id, Ordering::Relaxed);
+            self.last_mutation.store(id, Ordering::Relaxed);
         }
         if kind == LspEventKind::Priority {
-            self.0
-                .priority
+            self.priority
                 .0
                 .send((id, x, Instant::now()))
                 .map_err(|x| SendError(x.0.1))
         } else {
-            self.0
-                .normal
+            self.normal
                 .0
                 .send((id, x, Instant::now()))
                 .map_err(|x| SendError(x.0.1))
@@ -179,88 +173,94 @@ impl LspQueue {
         let mut event_receiver_selector = Select::new_biased();
         // Biased selector will pick the receiver with lower index over higher ones,
         // so we register priority_events_receiver first.
-        let priority_receiver_index = event_receiver_selector.recv(&self.0.priority.1);
-        let queued_events_receiver_index = event_receiver_selector.recv(&self.0.normal.1);
+        let priority_receiver_index = event_receiver_selector.recv(&self.priority.1);
+        let queued_events_receiver_index = event_receiver_selector.recv(&self.normal.1);
 
         let selected = event_receiver_selector.select();
         let (id, x, queue_time) = match selected.index() {
-            i if i == priority_receiver_index => selected.recv(&self.0.priority.1)?,
-            i if i == queued_events_receiver_index => selected.recv(&self.0.normal.1)?,
+            i if i == priority_receiver_index => selected.recv(&self.priority.1)?,
+            i if i == queued_events_receiver_index => selected.recv(&self.normal.1)?,
             _ => unreachable!(),
         };
-        let mut last_mutation = self.0.last_mutation.load(Ordering::Relaxed);
+        let mut last_mutation = self.last_mutation.load(Ordering::Relaxed);
         if id == last_mutation {
-            self.0.last_mutation.store(0, Ordering::Relaxed);
+            self.last_mutation.store(0, Ordering::Relaxed);
             last_mutation = 0;
         }
         Ok((last_mutation != 0, x, queue_time))
     }
 }
 
-pub struct HeavyTask(Box<dyn FnOnce() + Send + Sync + 'static>, Instant);
+pub struct HeavyTask(Box<dyn FnOnce(&Server) + Send + Sync + 'static>);
 
-struct HeavyTaskQueueInner {
-    task_sender: Sender<HeavyTask>,
-    task_receiver: Receiver<HeavyTask>,
+impl HeavyTask {
+    pub fn new(f: impl FnOnce(&Server) + Send + Sync + 'static) -> Self {
+        Self(Box::new(f))
+    }
+
+    pub fn run(self, server: &Server) {
+        self.0(server)
+    }
+}
+
+/// A queue for heavy tasks that should be run in the background thread.
+pub struct HeavyTaskQueue<T> {
+    task_sender: Sender<(T, Instant)>,
+    task_receiver: Receiver<(T, Instant)>,
     stop_sender: Sender<()>,
     stop_receiver: Receiver<()>,
     queue_name: String,
 }
 
-/// A queue for heavy tasks that should be run in the background thread.
-#[derive(Clone, Dupe)]
-pub struct HeavyTaskQueue(Arc<HeavyTaskQueueInner>);
-
-impl HeavyTaskQueue {
+impl<T> HeavyTaskQueue<T> {
     pub fn new(queue_name: &str) -> Self {
         let queue_name = queue_name.to_owned();
         let (task_sender, task_receiver) = crossbeam_channel::unbounded();
         let (stop_sender, stop_receiver) = crossbeam_channel::unbounded();
-        Self(Arc::new(HeavyTaskQueueInner {
+        Self {
             task_sender,
             task_receiver,
             stop_sender,
             stop_receiver,
             queue_name,
-        }))
+        }
     }
 
-    pub fn queue_task(&self, f: Box<dyn FnOnce() + Send + Sync + 'static>) {
-        self.0
-            .task_sender
-            .send(HeavyTask(f, Instant::now()))
+    pub fn queue_task(&self, task: T) {
+        self.task_sender
+            .send((task, Instant::now()))
             .expect("Failed to queue heavy task");
-        debug!("Enqueued task on {} heavy task queue", self.0.queue_name);
+        debug!("Enqueued task on {} heavy task queue", self.queue_name);
     }
 
-    pub fn run_until_stopped(&self) {
+    pub fn run_until_stopped(&self, f: impl Fn(T)) {
         let mut receiver_selector = Select::new_biased();
         // Biased selector will pick the receiver with lower index over higher ones,
         // so we register priority_events_receiver first.
-        let stop_receiver_index = receiver_selector.recv(&self.0.stop_receiver);
-        let task_receiver_index = receiver_selector.recv(&self.0.task_receiver);
+        let stop_receiver_index = receiver_selector.recv(&self.stop_receiver);
+        let task_receiver_index = receiver_selector.recv(&self.task_receiver);
         loop {
             let selected = receiver_selector.select();
             match selected.index() {
                 i if i == stop_receiver_index => {
                     selected
-                        .recv(&self.0.stop_receiver)
+                        .recv(&self.stop_receiver)
                         .expect("Failed to receive stop signal");
                     return;
                 }
                 i if i == task_receiver_index => {
-                    let task = selected
-                        .recv(&self.0.task_receiver)
+                    let (task, enqueued) = selected
+                        .recv(&self.task_receiver)
                         .expect("Failed to receive heavy task");
-                    let queue_duration = task.1.elapsed().as_secs_f32();
-                    debug!("Dequeued task on {} heavy task queue", self.0.queue_name);
+                    debug!("Dequeued task on {} heavy task queue", self.queue_name);
                     let task_start = Instant::now();
-                    (task.0)();
+                    f(task);
+                    let task_end = Instant::now();
                     info!(
                         "Ran task on {} heavy task queue. Queue time: {:.2}, task time: {:.2}",
-                        self.0.queue_name,
-                        queue_duration,
-                        task_start.elapsed().as_secs_f32()
+                        self.queue_name,
+                        (task_start - enqueued).as_secs_f32(),
+                        (task_end - task_start).as_secs_f32()
                     );
                 }
                 _ => unreachable!(),
@@ -270,9 +270,6 @@ impl HeavyTaskQueue {
 
     /// Make `run_until_stopped` exit after finishing the current task.
     pub fn stop(&self) {
-        self.0
-            .stop_sender
-            .send(())
-            .expect("Failed to stop the queue");
+        self.stop_sender.send(()).expect("Failed to stop the queue");
     }
 }

@@ -5,13 +5,15 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use dupe::Dupe;
+use dupe::Dupe as _;
 use lsp_types::Url;
 use lsp_types::WorkspaceFoldersChangeEvent;
+use pyrefly_build::SourceDatabase;
 use pyrefly_config::config::FallbackSearchPath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::arc_id::WeakArcId;
@@ -123,6 +125,15 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
             error.print();
         }
         let config = ArcId::new(config);
+
+        if let Some(source_db) = &config.source_db {
+            self.0
+                .source_db_config_map
+                .lock()
+                .entry(source_db.dupe())
+                .or_default()
+                .insert(config.downgrade());
+        }
 
         self.0.loaded_configs.insert(config.downgrade());
 
@@ -281,6 +292,8 @@ pub struct Workspaces {
     default: RwLock<Workspace>,
     pub workspaces: RwLock<SmallMap<PathBuf, Workspace>>,
     pub loaded_configs: Arc<WeakConfigCache>,
+    source_db_config_map:
+        Mutex<HashMap<ArcId<Box<dyn SourceDatabase + 'static>>, HashSet<WeakArcId<ConfigFile>>>>,
 }
 
 impl Workspaces {
@@ -294,6 +307,7 @@ impl Workspaces {
                     .collect(),
             ),
             loaded_configs: Arc::new(WeakConfigCache::new()),
+            source_db_config_map: Mutex::new(HashMap::new()),
         }
     }
 
@@ -315,8 +329,8 @@ impl Workspaces {
         f(workspace.unwrap_or((None, &default_workspace)))
     }
 
-    pub fn config_finder(workspaces: &Arc<Workspaces>) -> ConfigFinder {
-        standard_config_finder(Arc::new(WorkspaceConfigConfigurer(workspaces.dupe())))
+    pub fn config_finder(workspaces: Arc<Workspaces>) -> ConfigFinder {
+        standard_config_finder(Arc::new(WorkspaceConfigConfigurer(workspaces)))
     }
 
     pub fn roots(&self) -> Vec<PathBuf> {
@@ -500,6 +514,31 @@ impl Workspaces {
                 self.default.write().search_path = Some(search_paths);
             }
         }
+    }
+
+    pub fn get_configs_for_source_db(
+        &self,
+        source_db: ArcId<Box<dyn SourceDatabase + 'static>>,
+    ) -> SmallSet<ArcId<ConfigFile>> {
+        let mut map = self.source_db_config_map.lock();
+        let mut result = SmallSet::new();
+        let Some(sourcedb_configs) = map.get_mut(&source_db) else {
+            return result;
+        };
+
+        sourcedb_configs.retain(|config| {
+            if let Some(c) = config.upgrade() {
+                result.insert(c);
+                true
+            } else {
+                false
+            }
+        });
+        if sourcedb_configs.is_empty() {
+            map.remove(&source_db);
+        }
+
+        result
     }
 }
 

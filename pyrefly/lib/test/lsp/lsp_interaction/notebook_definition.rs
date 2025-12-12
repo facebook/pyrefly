@@ -5,11 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::request::GotoDeclarationResponse;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::util::expect_definition_points_to_symbol;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -28,14 +28,11 @@ fn test_notebook_definition_import() {
     interaction.open_notebook("notebook.ipynb", vec!["from typing import List"]);
 
     // Jump to definition of "List"
-    // Check that the response uri ends with "typing.py"
+    // Check that the response points to List in typing.pyi
     interaction
         .definition_cell("notebook.ipynb", "cell1", 0, 20)
-        .expect_response_with(|response| match response {
-            Some(GotoDeclarationResponse::Scalar(loc)) => {
-                loc.uri.to_file_path().unwrap().ends_with("typing.pyi")
-            }
-            _ => false,
+        .expect_response_with(|response| {
+            expect_definition_points_to_symbol(response.as_ref(), "typing.pyi", "List =")
         })
         .unwrap();
 

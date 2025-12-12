@@ -762,7 +762,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && (matches!(
                     m.kind,
                     FunctionKind::Dataclass | FunctionKind::DataclassTransform
-                ) || m.flags.dataclass_transform_metadata.is_some())
+                ) || m.kind.is_signature_preserving_decorator()
+                    || m.flags.dataclass_transform_metadata.is_some())
             {
                 Some(m.clone())
             } else {

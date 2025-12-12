@@ -712,3 +712,12 @@ def decode(s: str):
         i = j + 1
     "#,
 );
+
+testcase!(
+    test_break_continue_outside_of_loop,
+    r#"
+def test():
+    break # E: `break` outside loop
+    continue # E: `continue` outside loop
+    "#,
+);

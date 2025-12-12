@@ -1,0 +1,3 @@
+# License: BSD 3 clause
+
+def show_versions(): ...

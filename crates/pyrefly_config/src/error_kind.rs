@@ -179,7 +179,7 @@ pub enum ErrorKind {
     /// e.g. calling `super(Y, x)` on an object `x` that does not match the class `Y`.
     InvalidSuperCall,
     /// Incorrect Python syntax, construct is not allowed in this position.
-    /// In many cases a syntax error will also be reported.
+    /// In many cases a parse error will also be reported.
     InvalidSyntax,
     /// An error related to type alias usage or definition.
     InvalidTypeAlias,
@@ -232,6 +232,12 @@ pub enum ErrorKind {
     RedundantCondition,
     /// Raised by a call to reveal_type().
     RevealType,
+    /// An attribute is missing a type annotation and is initialized with the `None` literal.
+    UnannotatedAttribute,
+    /// A function parameter is missing a type annotation.
+    UnannotatedParameter,
+    /// A function is missing a return type annotation.
+    UnannotatedReturn,
     /// Attempting to use a name that may be unbound or uninitialized
     UnboundName,
     /// An error caused by a keyword argument used in the wrong place.
@@ -288,6 +294,7 @@ impl ErrorKind {
     }
 
     pub fn default_severity(self) -> Severity {
+        // IMPORTANT: When updating these, also update error-kinds.mdx in the docs
         match self {
             ErrorKind::RevealType => Severity::Info,
             ErrorKind::Deprecated => Severity::Warn,
@@ -298,6 +305,9 @@ impl ErrorKind {
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
+            ErrorKind::UnannotatedParameter => Severity::Ignore,
+            ErrorKind::UnannotatedReturn => Severity::Ignore,
+            ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
             _ => Severity::Error,

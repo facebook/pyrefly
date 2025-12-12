@@ -6,6 +6,7 @@
  */
 
 use std::collections::VecDeque;
+use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,6 +75,8 @@ struct Inner {
     /// target pointing to the "regular package" contains a real `__init__` file on
     /// disk. Otherwise, the key will point to a synthesized package's directory.
     package_lookup: SmallMap<ModulePathBuf, SmallSet<Target>>,
+    /// Is this module known by the build system?
+    known_modules: SmallSet<ModuleName>,
 }
 
 impl Inner {
@@ -82,6 +85,7 @@ impl Inner {
             db: SmallMap::new(),
             path_lookup: SmallMap::new(),
             package_lookup: SmallMap::new(),
+            known_modules: SmallSet::new(),
         }
     }
 }
@@ -121,7 +125,15 @@ impl QuerySourceDatabase {
         drop(read);
         let mut path_lookup: SmallMap<ModulePathBuf, Target> = SmallMap::new();
         let mut package_lookup: SmallMap<ModulePathBuf, SmallSet<Target>> = SmallMap::new();
+        let mut known_modules: SmallSet<ModuleName> = SmallSet::new();
         for (target, manifest) in new_db.iter() {
+            known_modules.extend(
+                manifest
+                    .srcs
+                    .keys()
+                    .copied()
+                    .chain(manifest.packages.keys().copied()),
+            );
             for source in manifest.srcs.values().flatten() {
                 if let Some(old_target) = path_lookup.get_mut(source) {
                     let new_target = (&*old_target).min(target);
@@ -140,9 +152,13 @@ impl QuerySourceDatabase {
             }
         }
         let mut write = self.inner.write();
-        write.db = new_db;
-        write.path_lookup = path_lookup;
-        write.package_lookup = package_lookup;
+        // force dropping write before exiting and dropping other large data structures
+        // by binding the replaced data and explicitly dropping `write`
+        let _old_db = mem::replace(&mut write.db, new_db);
+        let _old_path_lookup = mem::replace(&mut write.path_lookup, path_lookup);
+        let _old_package_lookup = mem::replace(&mut write.package_lookup, package_lookup);
+        let _old_known_modules = mem::replace(&mut write.known_modules, known_modules);
+        drop(write);
         debug!("Finished updating source DB with Buck response");
         true
     }
@@ -241,6 +257,9 @@ impl SourceDatabase for QuerySourceDatabase {
     ) -> Option<ModulePath> {
         let origin = ModulePathBuf::from_path(origin?);
         let read = self.inner.read();
+        if !read.known_modules.contains(&module) {
+            return None;
+        }
         if let Some(start_target) = read.path_lookup.get(&origin)
             && let Some(result) =
                 self.lookup_from_target(&read, module, *start_target, style_filter)
@@ -310,10 +329,10 @@ impl SourceDatabase for QuerySourceDatabase {
         ))
     }
 
-    fn requery_source_db(&self, files: SmallSet<ModulePathBuf>) -> anyhow::Result<bool> {
+    fn query_source_db(&self, files: SmallSet<ModulePathBuf>, force: bool) -> anyhow::Result<bool> {
         let new_includes = files.into_iter().map(Include::path).collect();
         let mut includes = self.includes.lock();
-        if *includes == new_includes {
+        if *includes == new_includes && !force {
             debug!("Not querying Buck source DB, since no inputs have changed");
             return Ok(false);
         }
