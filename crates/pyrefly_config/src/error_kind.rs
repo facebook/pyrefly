@@ -249,6 +249,10 @@ pub enum ErrorKind {
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
     /// or between literals whose comparison result is statically known.
     UnnecessaryComparison,
+    /// A return or yield statement that can never be reached.
+    /// This occurs when a return/yield follows a statement that always exits,
+    /// such as return, raise, break, or continue.
+    UnreachableStatement,
     /// Attempting to use a feature that is not yet supported.
     Unsupported,
     /// Attempting to `del` something that cannot be deleted

@@ -272,6 +272,14 @@ impl<'a> BindingsBuilder<'a> {
     /// If this is the top level, report a type error about the invalid return
     /// and also create a binding to ensure we type check the expression.
     fn record_return(&mut self, mut x: StmtReturn) {
+        // Check if this return is unreachable (comes after a terminating statement)
+        if self.scopes.has_flow_terminated() {
+            self.error(
+                x.range(),
+                ErrorInfo::Kind(ErrorKind::UnreachableStatement),
+                "This `return` statement is unreachable".to_owned(),
+            );
+        }
         // PEP 765: Disallow return in finally block (Python 3.14+)
         if self.sys_info.version().at_least(3, 14) && self.scopes.in_finally() {
             self.error(
