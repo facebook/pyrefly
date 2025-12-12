@@ -245,7 +245,7 @@ fn collect_identifier_refs(
 
 #[derive(Clone, Debug)]
 /// Context information for extracting a method from a class.
-/// 
+///
 /// Contains details about where and how to insert the extracted method,
 /// as well as relevant naming and formatting information.
 struct MethodContext {
@@ -432,7 +432,7 @@ fn indent_and_line_start(source: &str, position: TextSize) -> (String, TextSize)
         .take_while(|c| c.is_whitespace())
         .collect();
     let insert_position =
-        TextSize::try_from(line_start).unwrap_or_else(|_| TextSize::new(line_start as u32));
+        TextSize::try_from(line_start).unwrap_or_else(|_| TextSize::new(u32::MAX));
     (indent, insert_position)
 }
 

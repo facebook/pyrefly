@@ -453,6 +453,119 @@ class Processor:
 }
 
 #[test]
+fn extract_function_method_without_self_usage_still_adds_receiver() {
+    let code = r#"
+class Processor:
+    def process(self, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            squared_value = item * item
+            print(item)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    let (module_info, actions, _) = compute_extract_actions(code);
+    assert_eq!(2, actions.len(), "expected helper and method actions");
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected = r#"
+class Processor:
+    def extracted_method(self, item):
+        squared_value = item * item
+        print(item)
+
+    def process(self, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            self.extracted_method(item)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_method_preserves_custom_receiver_name() {
+    let code = r#"
+class Processor:
+    def consume(this, item):
+        print(item)
+
+    def process(this, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            squared_value = item * item
+            this.consume(squared_value)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    let (module_info, actions, _) = compute_extract_actions(code);
+    assert_eq!(2, actions.len(), "expected helper and method actions");
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected = r#"
+class Processor:
+    def consume(this, item):
+        print(item)
+
+    def extracted_method(this, item):
+        squared_value = item * item
+        this.consume(squared_value)
+
+    def process(this, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            this.extracted_method(item)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_nested_class_method_action() {
+    let code = r#"
+class Outer:
+    class Inner:
+        def consume(self, item):
+            print(item)
+
+        def process(self, data_list):
+            for item in data_list:
+                # EXTRACT-START
+                squared_value = item * item
+                self.consume(squared_value)
+                # EXTRACT-END
+            return len(data_list)
+"#;
+    let (module_info, actions, titles) = compute_extract_actions(code);
+    assert_eq!(2, actions.len(), "expected helper and method actions");
+    assert!(
+        titles
+            .get(1)
+            .is_some_and(|title| title.contains("method `extracted_method` on `Inner`")),
+        "expected method action scoped to Inner"
+    );
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected = r#"
+class Outer:
+    class Inner:
+        def consume(self, item):
+            print(item)
+
+        def extracted_method(self, item):
+            squared_value = item * item
+            self.consume(squared_value)
+
+        def process(self, data_list):
+            for item in data_list:
+                # EXTRACT-START
+                self.extracted_method(item)
+                # EXTRACT-END
+            return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn extract_function_staticmethod_falls_back_to_helper() {
     let code = r#"
 class Processor:
@@ -487,6 +600,49 @@ def extracted_function(item):
 class Processor:
     @staticmethod
     def process(item):
+        # EXTRACT-START
+        squared_value = extracted_function(item)
+        # EXTRACT-END
+        return squared_value
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_classmethod_falls_back_to_helper() {
+    let code = r#"
+class Processor:
+    @classmethod
+    def process(cls, item):
+        # EXTRACT-START
+        squared_value = item * item
+        print(squared_value)
+        # EXTRACT-END
+        return squared_value
+"#;
+    let (module_info, actions, titles) = compute_extract_actions(code);
+    assert_eq!(
+        1,
+        actions.len(),
+        "expected only module-scope helper extract action"
+    );
+    assert!(
+        titles
+            .first()
+            .is_some_and(|title| title.contains("Extract into helper `")),
+        "expected helper extraction title, got {:?}",
+        titles
+    );
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def extracted_function(item):
+    squared_value = item * item
+    print(squared_value)
+    return squared_value
+
+class Processor:
+    @classmethod
+    def process(cls, item):
         # EXTRACT-START
         squared_value = extracted_function(item)
         # EXTRACT-END
