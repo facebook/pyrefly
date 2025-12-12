@@ -1696,7 +1696,7 @@ impl<'a> Transaction<'a> {
                     if error_range.contains_range(range) {
                         let unknown_name = module_info.code_at(error_range);
                         for handle_to_import_from in self.search_exports_exact(unknown_name) {
-                            let (position, insert_text, _) = insert_import_edit(
+                            let import_edit = insert_import_edit(
                                 &ast,
                                 self.config_finder(),
                                 handle.dupe(),
@@ -1704,9 +1704,18 @@ impl<'a> Transaction<'a> {
                                 unknown_name,
                                 import_format,
                             );
-                            let range = TextRange::at(position, TextSize::new(0));
-                            let title = format!("Insert import: `{}`", insert_text.trim());
-                            code_actions.push((title, module_info.dupe(), range, insert_text));
+                            // If the symbol was already imported we get an empty edit; skip it.
+                            if import_edit.insert_text.is_empty() {
+                                continue;
+                            }
+                            let range = TextRange::at(import_edit.position, TextSize::new(0));
+                            let title = format!("Insert import: `{}`", import_edit.display_text);
+                            code_actions.push((
+                                title,
+                                module_info.dupe(),
+                                range,
+                                import_edit.insert_text,
+                            ));
                         }
 
                         for module_name in self.search_modules_fuzzy(unknown_name) {
@@ -2263,9 +2272,11 @@ impl<'a> Transaction<'a> {
             && let Some(ast) = self.get_ast(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
-            for (handle_to_import_from, name, export) in
-                self.search_exports_fuzzy(identifier.as_str())
-            {
+            let search_results = self.search_exports_fuzzy(identifier.as_str());
+            for (handle_to_import_from, name, export) in search_results {
+                if !identifier.as_str().starts_with('_') && name.starts_with('_') {
+                    continue;
+                }
                 // Using handle itself doesn't always work because handles can be made separately and have different hashes
                 if handle_to_import_from.module() == handle.module()
                     || handle_to_import_from.module() == ModuleName::builtins()
@@ -2273,8 +2284,8 @@ impl<'a> Transaction<'a> {
                     continue;
                 }
                 let module_description = handle_to_import_from.module().as_str().to_owned();
-                let (insert_text, additional_text_edits, imported_module) = {
-                    let (position, insert_text, module_name) = insert_import_edit(
+                let (detail_text, additional_text_edits, imported_module) = {
+                    let import_edit = insert_import_edit(
                         &ast,
                         self.config_finder(),
                         handle.dupe(),
@@ -2282,17 +2293,25 @@ impl<'a> Transaction<'a> {
                         &name,
                         import_format,
                     );
+                    if import_edit.insert_text.is_empty() {
+                        continue;
+                    }
                     let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                        new_text: insert_text.clone(),
+                        range: module_info
+                            .to_lsp_range(TextRange::at(import_edit.position, TextSize::new(0))),
+                        new_text: import_edit.insert_text.clone(),
                     };
-                    (insert_text, Some(vec![import_text_edit]), module_name)
+                    (
+                        Some(import_edit.insert_text.clone()),
+                        Some(vec![import_text_edit]),
+                        import_edit.module_name,
+                    )
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
                 completions.push(CompletionItem {
                     label: name,
-                    detail: Some(insert_text),
+                    detail: detail_text,
                     kind: export
                         .symbol_kind
                         .map_or(Some(CompletionItemKind::VARIABLE), |k| {
