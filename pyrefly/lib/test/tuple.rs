@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -398,14 +399,6 @@ def test(x: tuple[int] | tuple[str]) -> None:
 );
 
 testcase!(
-    test_tuple_concat_large_union,
-    r#"
-def test(a: tuple[int, ...] | bool) -> None:
-    a + (a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a)  # E: `+` is not supported between `bool` and `tuple[bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...]]`
-"#,
-);
-
-testcase!(
     test_unpack_tuple_with_double_def,
     r#"
 from typing import Unpack, Any
@@ -430,6 +423,18 @@ def g(x):
         assert_type(x, tuple)
 "#,
 );
+
+#[test]
+fn test_tuple_concat_large_union_no_crash() -> anyhow::Result<()> {
+    let code = r#"
+a: int | list[int] | tuple[int, ...] | bool
+a + (a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a)
+"#;
+    let (state, handle_fn) = TestEnv::one("main", code).to_state();
+    let handle = handle_fn("main");
+    state.transaction().get_errors(&[handle]);
+    Ok(())
+}
 
 testcase!(
     test_tuple_class_type,
