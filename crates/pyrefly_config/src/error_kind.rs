@@ -162,6 +162,8 @@ pub enum ErrorKind {
     /// Error caused by incorrect usage of a decorator.
     /// e.g. using @final on a top-level function
     InvalidDecorator,
+    /// Attempting to use an enum member in a class pattern.
+    InvalidEnumPattern,
     /// An error caused by incorrect inheritance in a class or type definition.
     /// e.g. a metaclass that is not a subclass of `type`.
     InvalidInheritance,
@@ -216,6 +218,8 @@ pub enum ErrorKind {
     NotCallable,
     /// Attempting to use a non-iterable value as an iterable.
     NotIterable,
+    /// Matching on an enum without covering all possible cases.
+    NonExhaustiveMatch,
     /// Unpacking an open TypedDict that may contain a bad key via inheritance.
     OpenUnpacking,
     /// An error related to parsing or syntax.
@@ -310,6 +314,7 @@ impl ErrorKind {
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::NonExhaustiveMatch => Severity::Warn,
             _ => Severity::Error,
         }
     }

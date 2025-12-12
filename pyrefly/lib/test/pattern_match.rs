@@ -99,3 +99,36 @@ def f0(x: int | str):
             assert_type(x, str)  # E: assert_type(int | str, str)
 "#,
 );
+
+testcase!(
+    test_non_exhaustive_enum_match_warning,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+    BLUE = "blue"
+
+def describe(color: Color) -> str:
+    match color:  # E: Match on `Color` is not exhaustive; missing cases: Color.BLUE
+        case Color.RED:
+            return "danger"
+    return "cool"
+"#,
+);
+
+testcase!(
+    test_enum_member_class_pattern_error,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+
+def render(color: Color) -> str:
+    match color:
+        case Color.RED():  # E: Enum member `Color.RED` cannot be used as a class pattern; match the member directly
+            return "danger"
+    return "ok"
+"#,
+);

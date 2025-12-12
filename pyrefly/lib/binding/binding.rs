@@ -1255,6 +1255,28 @@ pub enum LinkedKey {
 }
 
 #[derive(Clone, Debug)]
+pub struct MatchStmtInfo {
+    pub subject: Idx<Key>,
+    pub range: TextRange,
+    pub cases: Box<[MatchCaseInfo]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MatchCaseInfo {
+    pub pattern_range: TextRange,
+    pub has_guard: bool,
+    pub is_irrefutable: bool,
+    pub value_patterns: Box<[Expr]>,
+    pub class_patterns: Box<[MatchClassPatternInfo]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MatchClassPatternInfo {
+    pub cls_expr: Expr,
+    pub range: TextRange,
+}
+
+#[derive(Clone, Debug)]
 pub enum FirstUse {
     /// We are still awaiting a first use
     Undetermined,
@@ -1369,6 +1391,8 @@ pub enum Binding {
     TypeAliasType(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>),
     /// An entry in a MatchMapping. The Key looks up the value being matched, the Expr is the key we're extracting.
     PatternMatchMapping(Expr, Idx<Key>),
+    /// Metadata for a match statement, used for exhaustiveness checks.
+    MatchStmt(Box<MatchStmtInfo>),
     /// An entry in a MatchClass. The Key looks up the value being matched, the Expr is the class name.
     /// Positional patterns index into __match_args__, and keyword patterns match an attribute name.
     PatternMatchClassPositional(Box<Expr>, usize, Idx<Key>, TextRange),
@@ -1619,6 +1643,14 @@ impl DisplayWith<Bindings> for Binding {
                     ctx.display(*binding_key),
                 )
             }
+            Self::MatchStmt(info) => {
+                write!(
+                    f,
+                    "MatchStmt({}, {} cases)",
+                    m.display(&info.range),
+                    info.cases.len()
+                )
+            }
             Self::PatternMatchClassPositional(class, idx, key, range) => {
                 write!(
                     f,
@@ -1785,6 +1817,7 @@ impl Binding {
             | Binding::PatternMatchMapping(_, _)
             | Binding::PatternMatchClassPositional(_, _, _, _)
             | Binding::PatternMatchClassKeyword(_, _, _)
+            | Binding::MatchStmt(_)
             | Binding::ExceptionHandler(_, _)
             | Binding::SuperInstance(_, _)
             | Binding::AssignToAttribute(_, _)

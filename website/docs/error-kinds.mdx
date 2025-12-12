@@ -540,6 +540,26 @@ def f() -> None:
   pass
 ```
 
+## invalid-enum-pattern
+
+Enum members are values, not classes. Using a class pattern such as `case Color.RED():`
+attempts to treat the member as a type and will never match at runtime. Match the member
+directly instead.
+
+```python
+from enum import Enum
+
+class Color(Enum):
+  RED = "red"
+
+def render(color: Color) -> str:
+  match color:
+    case Color.RED():  # invalid-enum-pattern
+      return "danger"
+    case Color.RED:
+      return "danger"
+```
+
 ## invalid-inheritance
 
 An error caused by incorrect inheritance in a class or type definition.
@@ -815,6 +835,24 @@ def f(x: int | str) -> int | str:
     return x
 
 f(1.0)
+```
+
+## non-exhaustive-match
+
+Pyrefly warns when a `match` statement over an `Enum` attempts to enumerate the members
+but forgets at least one case. Add the missing members or a default arm.
+
+```python
+from enum import Enum
+
+class Color(Enum):
+  RED = "red"
+  BLUE = "blue"
+
+def describe(color: Color) -> str:
+  match color:  # non-exhaustive-match
+    case Color.RED:
+      return "danger"
 ```
 
 ## not-a-type
