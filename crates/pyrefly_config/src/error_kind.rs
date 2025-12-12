@@ -209,6 +209,8 @@ pub enum ErrorKind {
     NoAccess,
     /// Attempting to call an overloaded function, but none of the signatures match.
     NoMatchingOverload,
+    /// Matching on an enum without covering all possible cases.
+    NonExhaustiveMatch,
     /// Attempting to use something that isn't a type where a type is expected.
     /// This is a very general error and should be used sparingly.
     NotAType,
@@ -218,8 +220,6 @@ pub enum ErrorKind {
     NotCallable,
     /// Attempting to use a non-iterable value as an iterable.
     NotIterable,
-    /// Matching on an enum without covering all possible cases.
-    NonExhaustiveMatch,
     /// Unpacking an open TypedDict that may contain a bad key via inheritance.
     OpenUnpacking,
     /// An error related to parsing or syntax.
