@@ -412,3 +412,19 @@ class A:
 A(x=0)
     "#,
 );
+
+testcase!(
+    test_dataclass_transform_allows_required_after_default,
+    r#"
+from typing import dataclass_transform, Any
+def field(**kwargs) -> Any: ...
+@dataclass_transform(field_specifiers=(field,))
+def define(cls): ...
+@define
+class Config:
+    size: int = 768
+    name: str
+    rate: float = 0.001
+Config(name="test")
+    "#,
+);

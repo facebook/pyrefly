@@ -784,6 +784,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
+                        enforce_field_ordering: true
                     });
                 }
                 // `@dataclass(...)`
@@ -804,6 +805,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
+                        enforce_field_ordering: true
                     });
                 }
                 _ => {}
@@ -817,6 +819,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 alias_keyword,
                 init_defaults,
                 default_can_be_positional,
+                enforce_field_ordering: false
             });
         }
         dataclass_metadata

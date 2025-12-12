@@ -453,6 +453,8 @@ pub struct DataclassMetadata {
     pub init_defaults: InitDefaults,
     /// Whether a default can be passed positionally to field specifier calls
     pub default_can_be_positional: bool,
+    /// Whether to enforce that fields without defaults cannot follow fields with defaults.
+    pub enforce_field_ordering: bool,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

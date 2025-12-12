@@ -543,7 +543,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     || (field_flags.init_by_name && field_flags.init_by_alias.is_some());
                 let is_kw_only = field_flags.is_kw_only();
                 if !is_kw_only {
-                    if !has_default
+                    if dataclass.enforce_field_ordering
+                        && !has_default
                         && has_seen_default
                         && let Some(range) = cls.field_decl_range(&name)
                     {
