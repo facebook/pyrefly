@@ -244,10 +244,18 @@ fn collect_identifier_refs(
 }
 
 #[derive(Clone, Debug)]
+/// Context information for extracting a method from a class.
+/// 
+/// Contains details about where and how to insert the extracted method,
+/// as well as relevant naming and formatting information.
 struct MethodContext {
+    /// Name of the class from which the method is being extracted.
     class_name: String,
+    /// Name of the receiver variable (typically `self`).
     receiver_name: String,
+    /// Byte offset in the source code where the extracted method should be inserted.
     insert_position: TextSize,
+    /// Indentation string to use for the method definition line.
     method_indent: String,
 }
 
