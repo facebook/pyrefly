@@ -31,6 +31,7 @@ mod object_model;
 mod provide_type;
 mod references;
 mod rename;
+mod semantic_tokens;
 mod type_definition;
 mod unsaved_file;
 mod util;

@@ -790,3 +790,44 @@ token-type: variable, token-modifiers: [readonly]
 "#,
     );
 }
+
+/// Test for https://github.com/facebook/pyrefly/issues/1811
+/// Semantic tokens should work even when starting with Require::indexing()
+/// which doesn't keep bindings. The transaction should upgrade to Everything
+/// when semantic tokens are requested.
+#[test]
+fn semantic_tokens_with_imports_requires_bindings() {
+    let code = r#"
+from json import decoder
+from typing import Literal
+
+x = decoder
+"#;
+    // This uses Require::indexing() which doesn't keep bindings by default.
+    // The fix in 5446172c57b8b8812995e66faace84f907ceaba6 ensures that
+    // semantic_tokens transaction upgrades to Require::Everything to load bindings.
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 5, length: 4, text: json
+token-type: namespace
+
+line: 1, column: 17, length: 7, text: decoder
+token-type: namespace
+
+line: 2, column: 5, length: 6, text: typing
+token-type: namespace
+
+line: 2, column: 19, length: 7, text: Literal
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 4, column: 0, length: 1, text: x
+token-type: namespace
+
+line: 4, column: 4, length: 7, text: decoder
+token-type: namespace
+"#,
+    );
+}
+
