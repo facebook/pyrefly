@@ -404,6 +404,98 @@ class Processor:
 }
 
 #[test]
+fn extract_function_produces_method_action() {
+    let code = r#"
+class Processor:
+    def consume(self, item):
+        print(item)
+
+    def process(self, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            squared_value = item * item
+            if squared_value > 10:
+                self.consume(squared_value)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    let (module_info, actions, titles) = compute_extract_actions(code);
+    assert_eq!(
+        2,
+        actions.len(),
+        "expected both helper and method extract actions"
+    );
+    assert!(
+        titles
+            .get(1)
+            .is_some_and(|title| title.contains("method `extracted_method` on `Processor`")),
+        "expected second action to target method scope"
+    );
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected = r#"
+class Processor:
+    def consume(self, item):
+        print(item)
+
+    def extracted_method(self, item):
+        squared_value = item * item
+        if squared_value > 10:
+            self.consume(squared_value)
+
+    def process(self, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            self.extracted_method(item)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_staticmethod_falls_back_to_helper() {
+    let code = r#"
+class Processor:
+    @staticmethod
+    def process(item):
+        # EXTRACT-START
+        squared_value = item * item
+        print(squared_value)
+        # EXTRACT-END
+        return squared_value
+"#;
+    let (module_info, actions, titles) = compute_extract_actions(code);
+    assert_eq!(
+        1,
+        actions.len(),
+        "expected only module-scope helper extract action"
+    );
+    assert!(
+        titles
+            .first()
+            .is_some_and(|title| title.contains("Extract into helper `")),
+        "expected helper extraction title, got {:?}",
+        titles
+    );
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def extracted_function(item):
+    squared_value = item * item
+    print(squared_value)
+    return squared_value
+
+class Processor:
+    @staticmethod
+    def process(item):
+        # EXTRACT-START
+        squared_value = extracted_function(item)
+        # EXTRACT-END
+        return squared_value
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn extract_function_rejects_empty_selection() {
     let code = r#"
 def sink(values):
