@@ -1050,7 +1050,7 @@ impl Server {
                         self.send_response(new_response(
                             x.id,
                             Ok(self
-                                .semantic_tokens_full(&transaction, params)
+                                .semantic_tokens_full(&mut transaction, params)
                                 .unwrap_or(default_response)),
                         ));
                     }
@@ -1067,7 +1067,7 @@ impl Server {
                         self.send_response(new_response(
                             x.id,
                             Ok(self
-                                .semantic_tokens_ranged(&transaction, params)
+                                .semantic_tokens_ranged(&mut transaction, params)
                                 .unwrap_or(default_response)),
                         ));
                     }
@@ -2752,12 +2752,13 @@ impl Server {
 
     fn semantic_tokens_full(
         &self,
-        transaction: &Transaction<'_>,
+        transaction: &mut Transaction<'_>,
         params: SemanticTokensParams,
     ) -> Option<SemanticTokensResult> {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensFullRequest::METHOD))?;
+        transaction.run(&[handle.dupe()], Require::Everything);
         Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
@@ -2768,12 +2769,13 @@ impl Server {
 
     fn semantic_tokens_ranged(
         &self,
-        transaction: &Transaction<'_>,
+        transaction: &mut Transaction<'_>,
         params: SemanticTokensRangeParams,
     ) -> Option<SemanticTokensRangeResult> {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD))?;
+        transaction.run(&[handle.dupe()], Require::Everything);
         let module_info = transaction.get_module_info(&handle)?;
         let range = self.from_lsp_range(uri, &module_info, params.range);
         Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
