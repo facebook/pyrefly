@@ -702,6 +702,24 @@ def check[T](new: T, old: T) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/40
+testcase!(
+    test_nested_function_captures_narrowed_variable,
+    r#"
+from typing import Callable
+
+class Foo:
+    _window_function: Callable[[str], int] | None
+
+    def foo(self) -> None:
+        if window_function := self._window_function:
+            def bar() -> int:
+                return window_function("foo")
+
+            bar()
+"#,
+);
+
 testcase!(
     test_dunder_all_mutated_without_def,
     r#"
