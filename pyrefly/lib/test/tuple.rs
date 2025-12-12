@@ -398,6 +398,14 @@ def test(x: tuple[int] | tuple[str]) -> None:
 );
 
 testcase!(
+    test_tuple_concat_large_union,
+    r#"
+def test(a: tuple[int, ...] | bool) -> None:
+    a + (a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a)  # E: `+` is not supported between `bool` and `tuple[bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...], bool | tuple[int, ...]]`
+"#,
+);
+
+testcase!(
     test_unpack_tuple_with_double_def,
     r#"
 from typing import Unpack, Any
