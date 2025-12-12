@@ -1764,6 +1764,8 @@ impl Server {
             ));
         }
         version_info.insert(file_path.clone(), version);
+        // drop this to avoid deadlock
+        drop(version_info);
         let mut lock = self.open_files.write();
         let Some(original) = lock.get_mut(&file_path) else {
             return Err(anyhow::anyhow!(
@@ -1833,6 +1835,7 @@ impl Server {
             notebook_document.metadata = Some(metadata.clone());
         }
         version_info.insert(file_path.clone(), version);
+        drop(version_info);
         notebook_document.version = version;
         // Changes to cells
         if let Some(change) = &params.change.cells {
