@@ -12,6 +12,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Int;
+use ruff_python_ast::MatchCase;
 use ruff_python_ast::Number;
 use ruff_python_ast::Pattern;
 use ruff_python_ast::PatternKeyword;
@@ -22,6 +23,9 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExpect;
+use crate::binding::binding::MatchCaseInfo;
+use crate::binding::binding::MatchClassPatternInfo;
+use crate::binding::binding::MatchStmtInfo;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::UnpackedPosition;
@@ -38,6 +42,54 @@ use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::graph::index::Idx;
 use crate::types::facet::FacetKind;
+
+fn collect_match_pattern_metadata(
+    pattern: &Pattern,
+    value_exprs: &mut Vec<Expr>,
+    class_patterns: &mut Vec<MatchClassPatternInfo>,
+) {
+    match pattern {
+        Pattern::MatchValue(value) => {
+            value_exprs.push((*value.value).clone());
+        }
+        Pattern::MatchSingleton(singleton) => {
+            value_exprs.push(Ast::pattern_match_singleton_to_expr(singleton));
+        }
+        Pattern::MatchAs(as_pattern) => {
+            if let Some(inner) = &as_pattern.pattern {
+                collect_match_pattern_metadata(inner, value_exprs, class_patterns);
+            }
+        }
+        Pattern::MatchOr(or_pattern) => {
+            for inner in &or_pattern.patterns {
+                collect_match_pattern_metadata(inner, value_exprs, class_patterns);
+            }
+        }
+        Pattern::MatchSequence(sequence) => {
+            for inner in &sequence.patterns {
+                collect_match_pattern_metadata(inner, value_exprs, class_patterns);
+            }
+        }
+        Pattern::MatchMapping(mapping) => {
+            for inner in &mapping.patterns {
+                collect_match_pattern_metadata(inner, value_exprs, class_patterns);
+            }
+        }
+        Pattern::MatchClass(class_pattern) => {
+            class_patterns.push(MatchClassPatternInfo {
+                cls_expr: (*class_pattern.cls).clone(),
+                range: class_pattern.cls.range(),
+            });
+            for inner in &class_pattern.arguments.patterns {
+                collect_match_pattern_metadata(inner, value_exprs, class_patterns);
+            }
+            for keyword in &class_pattern.arguments.keywords {
+                collect_match_pattern_metadata(&keyword.pattern, value_exprs, class_patterns);
+            }
+        }
+        Pattern::MatchStar(_) => {}
+    }
+}
 
 impl<'a> BindingsBuilder<'a> {
     // Traverse a pattern and bind all the names; key is the reference for the value that's being matched on
@@ -359,24 +411,39 @@ impl<'a> BindingsBuilder<'a> {
         // x is bound to Narrow(x, Eq(None)) in the first case, and the negation, Narrow(x, NotEq(None)),
         // is carried over to the fallback case.
         let mut negated_prev_ops = NarrowOps::new();
+        let mut case_summaries = Vec::new();
         for case in x.cases {
+            let MatchCase {
+                pattern,
+                guard,
+                body,
+                range: case_range,
+                ..
+            } = case;
             self.start_branch();
-            if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
+            let pattern_range = pattern.range();
+            let case_is_irrefutable = pattern.is_wildcard() || pattern.is_irrefutable();
+            if case_is_irrefutable {
                 exhaustive = true;
             }
+            let mut value_patterns = Vec::new();
+            let mut class_patterns = Vec::new();
+            collect_match_pattern_metadata(&pattern, &mut value_patterns, &mut class_patterns);
             self.bind_narrow_ops(
                 &negated_prev_ops,
-                NarrowUseLocation::Start(case.range),
+                NarrowUseLocation::Start(case_range),
                 &Usage::Narrowing(None),
             );
             let mut new_narrow_ops =
-                self.bind_pattern(match_narrowing_subject.clone(), case.pattern, subject_idx);
+                self.bind_pattern(match_narrowing_subject.clone(), pattern, subject_idx);
             self.bind_narrow_ops(
                 &new_narrow_ops,
-                NarrowUseLocation::Span(case.range),
+                NarrowUseLocation::Span(case_range),
                 &Usage::Narrowing(None),
             );
-            if let Some(mut guard) = case.guard {
+            let guard_expr = guard;
+            let has_guard = guard_expr.is_some();
+            if let Some(mut guard) = guard_expr {
                 self.ensure_expr(&mut guard, &mut Usage::Narrowing(None));
                 let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));
                 self.bind_narrow_ops(
@@ -388,7 +455,14 @@ impl<'a> BindingsBuilder<'a> {
                 new_narrow_ops.and_all(guard_narrow_ops)
             }
             negated_prev_ops.and_all(new_narrow_ops.negate());
-            self.stmts(case.body, parent);
+            self.stmts(body, parent);
+            case_summaries.push(MatchCaseInfo {
+                pattern_range,
+                has_guard,
+                is_irrefutable: case_is_irrefutable,
+                value_patterns: value_patterns.into_boxed_slice(),
+                class_patterns: class_patterns.into_boxed_slice(),
+            });
             self.finish_branch();
         }
         if exhaustive {
@@ -396,5 +470,13 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             self.finish_non_exhaustive_fork(&negated_prev_ops);
         }
+        self.insert_binding(
+            Key::Anon(x.range),
+            Binding::MatchStmt(Box::new(MatchStmtInfo {
+                subject: subject_idx,
+                range: x.range,
+                cases: case_summaries.into_boxed_slice(),
+            })),
+        );
     }
 }
