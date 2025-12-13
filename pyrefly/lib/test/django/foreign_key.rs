@@ -6,6 +6,9 @@
  */
 
 use crate::django_testcase;
+use crate::test::django::util::django_env;
+use crate::test::util::TestEnv;
+use crate::testcase;
 
 django_testcase!(
     test_foreign_key_basic,
@@ -22,7 +25,7 @@ class Article(models.Model):
 
 article = Article()
 assert_type(article.reporter, Reporter)
-assert_type(article.reporter.full_name, str) 
+assert_type(article.reporter.full_name, str)
 assert_type(article.reporter_id, int)
 
 class B(Article):
@@ -30,8 +33,8 @@ class B(Article):
 
 b = B()
 
-assert_type(b.reporter, Reporter) 
-assert_type(b.reporter.full_name, str) 
+assert_type(b.reporter, Reporter)
+assert_type(b.reporter.full_name, str)
 assert_type(b.reporter_id, int)
 "#,
 );
@@ -55,7 +58,6 @@ assert_type(article.reporter_id, int | None)
 );
 
 django_testcase!(
-    bug = "id suffix needs to be generated; support forward references",
     test_foreign_key_string_literal,
     r#"
 from typing import assert_type
@@ -68,14 +70,47 @@ class Reporter(models.Model):
     full_name = models.CharField(max_length=70)
 
 article = Article()
-assert_type(article.reporter, Reporter) # E: assert_type(Any, Reporter) failed
-assert_type(article.reporter.full_name, str) # E: assert_type(Any, str) failed
-assert_type(article.reporter_id, int) # E: assert_type(Any, int) failed # E:  Object of class `Article` has no attribute `reporter_id`
+assert_type(article.reporter, Reporter)
+assert_type(article.reporter.full_name, str)
+assert_type(article.reporter_id, int)
+"#,
+);
+
+fn django_env_with_model_import() -> TestEnv {
+    let mut env = django_env();
+    env.add(
+        "reporter",
+        r#"
+from django.db import models
+
+class Reporter(models.Model):
+    full_name = models.CharField(max_length=70)
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_foreign_key_string_literal_imported,
+    django_env_with_model_import(),
+    r#"
+from typing import assert_type, TYPE_CHECKING
+from django.db import models
+
+if TYPE_CHECKING:
+    from .reporter import Reporter
+
+class Article(models.Model):
+    reporter = models.ForeignKey('Reporter', on_delete=models.CASCADE)
+
+article = Article()
+assert_type(article.reporter, Reporter)
+assert_type(article.reporter.full_name, str)
+assert_type(article.reporter_id, int)
 "#,
 );
 
 django_testcase!(
-    bug = "support self references",
     test_foreign_key_self_reference,
     r#"
 from typing import assert_type
@@ -87,10 +122,10 @@ class Person(models.Model):
     parent = models.ForeignKey('self', null=True, on_delete=models.CASCADE)
 
 person = Person()
-assert_type(person.parent, Person | None) # E: assert_type(Any | None, Person | None) failed 
+assert_type(person.parent, Person | None)
+assert_type(person.parent_id, int | None)
 if person.parent:
-    assert_type(person.parent.name, str) # E: assert_type(Any, str) failed
-
+    assert_type(person.parent.name, str)
 "#,
 );
 
