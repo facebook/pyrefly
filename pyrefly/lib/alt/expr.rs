@@ -1207,6 +1207,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         false
     }
 
+    fn type_has_optional_typed_dict_key(&self, ty: &Type, key: &Name) -> bool {
+        match ty {
+            Type::TypedDict(typed_dict) | Type::PartialTypedDict(typed_dict) => {
+                let fields = self.typed_dict_fields(typed_dict);
+                fields.get(key).map_or(false, |field| !field.required)
+            }
+            Type::Union(union) => union
+                .members
+                .iter()
+                .any(|member| self.type_has_optional_typed_dict_key(member, key)),
+            Type::Intersect(box (members, fallback)) => {
+                members
+                    .iter()
+                    .any(|member| self.type_has_optional_typed_dict_key(member, key))
+                    || self.type_has_optional_typed_dict_key(fallback, key)
+            }
+            Type::Var(var) => {
+                let forced = self.solver().force_var(var.clone());
+                self.type_has_optional_typed_dict_key(&forced, key)
+            }
+            Type::Type(box inner) | Type::TypeGuard(box inner) | Type::TypeIs(box inner) => {
+                self.type_has_optional_typed_dict_key(inner, key)
+            }
+            _ => false,
+        }
+    }
+
+    fn warn_if_optional_typed_dict_key_access(
+        &self,
+        base: &TypeInfo,
+        key: &str,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let key_facet = FacetKind::Key(key.to_string());
+        if base.type_at_facet(&key_facet).is_some() {
+            return;
+        }
+        let key_name = Name::new(key.to_string());
+        if !self.type_has_optional_typed_dict_key(base.ty(), &key_name) {
+            return;
+        }
+        errors.add(
+            range,
+            ErrorInfo::Kind(ErrorKind::NotRequiredKeyAccess),
+            vec1![format!(
+                "TypedDict key `{}` may be missing; guard this access with `'{}' in obj` or `obj.get('{}')`",
+                key, key, key
+            )],
+        );
+    }
+
     pub fn attr_infer_for_type(
         &self,
         base: &Type,
@@ -1255,7 +1307,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
             }
             Expr::StringLiteral(ExprStringLiteral { value: key, .. }) => {
-                TypeInfo::at_facet(base, &FacetKind::Key(key.to_string()), || {
+                let key_str = key.to_string();
+                self.warn_if_optional_typed_dict_key_access(base, &key_str, slice.range(), errors);
+                TypeInfo::at_facet(base, &FacetKind::Key(key_str.clone()), || {
                     self.subscript_infer_for_type(base.ty(), slice, range, errors)
                 })
             }

@@ -74,6 +74,8 @@ pub enum AtomicNarrowOp {
     TypeNotEq(Expr),
     In(Expr),
     NotIn(Expr),
+    HasKey(Name),
+    NotHasKey(Name),
     /// Used to narrow tuple types based on length
     LenEq(Expr),
     LenNotEq(Expr),
@@ -151,6 +153,8 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::TypeNotEq(expr) => write!(f, "TypeNotEq({})", expr.display_with(ctx)),
             AtomicNarrowOp::In(expr) => write!(f, "In({})", expr.display_with(ctx)),
             AtomicNarrowOp::NotIn(expr) => write!(f, "NotIn({})", expr.display_with(ctx)),
+            AtomicNarrowOp::HasKey(key) => write!(f, "HasKey({key})"),
+            AtomicNarrowOp::NotHasKey(key) => write!(f, "NotHasKey({key})"),
             AtomicNarrowOp::LenEq(expr) => write!(f, "LenEq({})", expr.display_with(ctx)),
             AtomicNarrowOp::LenNotEq(expr) => write!(f, "LenNotEq({})", expr.display_with(ctx)),
             AtomicNarrowOp::LenGt(expr) => write!(f, "LenGt({})", expr.display_with(ctx)),
@@ -218,6 +222,8 @@ impl AtomicNarrowOp {
             Self::NotEq(v) => Self::Eq(v.clone()),
             Self::In(v) => Self::NotIn(v.clone()),
             Self::NotIn(v) => Self::In(v.clone()),
+            Self::HasKey(k) => Self::NotHasKey(k.clone()),
+            Self::NotHasKey(k) => Self::HasKey(k.clone()),
             Self::LenEq(v) => Self::LenNotEq(v.clone()),
             Self::LenGt(v) => Self::LenLte(v.clone()),
             Self::LenGte(v) => Self::LenLt(v.clone()),
@@ -436,6 +442,35 @@ impl NarrowOps {
         narrow_ops
     }
 
+    fn from_membership_comparison(left: &Expr, cmp_op: &CmpOp, right: &Expr) -> Option<Self> {
+        match cmp_op {
+            CmpOp::In | CmpOp::NotIn => {}
+            _ => return None,
+        }
+        let Expr::StringLiteral(ExprStringLiteral { value, .. }) = left else {
+            return None;
+        };
+        let key = Name::new(value.to_string());
+        let op = if matches!(cmp_op, CmpOp::In) {
+            AtomicNarrowOp::HasKey(key.clone())
+        } else {
+            AtomicNarrowOp::NotHasKey(key.clone())
+        };
+        let mut narrow_ops = Self::new();
+        for subject in expr_to_subjects(right) {
+            narrow_ops.and_all(Self::from_single_narrow_op_for_subject(
+                subject,
+                op.clone(),
+                right.range(),
+            ));
+        }
+        if narrow_ops.0.is_empty() {
+            None
+        } else {
+            Some(narrow_ops)
+        }
+    }
+
     pub fn from_expr(builder: &BindingsBuilder, test: Option<&Expr>) -> Self {
         Self::from_expr_helper(builder, test, SmallSet::new())
     }
@@ -492,10 +527,18 @@ impl NarrowOps {
                         getattr_name = Some(Name::new(value.to_string()));
                     }
                 }
+                let mut left_for_membership = left;
+                let mut membership_narrows = Vec::new();
                 let mut ops = cmp_ops
                     .iter()
                     .zip(comparators)
                     .filter_map(|(cmp_op, right)| {
+                        if let Some(extra) =
+                            Self::from_membership_comparison(left_for_membership, cmp_op, right)
+                        {
+                            membership_narrows.push(extra);
+                        }
+                        left_for_membership = right;
                         let range = right.range();
                         let op = match (cmp_op, special_export) {
                             (CmpOp::Is | CmpOp::Eq, Some(SpecialExport::BuiltinsType)) => {
@@ -549,6 +592,9 @@ impl NarrowOps {
                         let mut narrow_ops = NarrowOps::from_single_narrow_op(left, op, range);
                         for (op, range) in ops {
                             narrow_ops.and_all(NarrowOps::from_single_narrow_op(left, op, range));
+                        }
+                        for extra in membership_narrows {
+                            narrow_ops.and_all(extra);
                         }
                         narrow_ops
                     }
