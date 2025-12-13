@@ -74,7 +74,9 @@ pub enum AtomicNarrowOp {
     TypeNotEq(Expr),
     In(Expr),
     NotIn(Expr),
+    /// Indicates a `'key' in <subject>` guard where `<subject>` is the name/facet being narrowed.
     HasKey(Name),
+    /// Indicates a `'key' not in <subject>` guard.
     NotHasKey(Name),
     /// Used to narrow tuple types based on length
     LenEq(Expr),
@@ -338,16 +340,18 @@ impl NarrowOps {
             .0
     }
 
-    fn and(&mut self, name: Name, op: NarrowOp, range: TextRange) {
-        let existing_op = self.get_or_placeholder(name, range);
-        existing_op.and(op)
-    }
-
     pub fn and_all(&mut self, other: Self) {
         let mut seen = SmallSet::new();
         for (name, (op, range)) in other.0 {
             seen.insert(name.clone());
-            self.and(name, op, range);
+            match self.0.entry(name) {
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().0.and(op);
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert((op, range));
+                }
+            }
         }
         // For names present in `self` but not `other`, `And` their narrows with a placeholder
         let unmerged_names: Vec<_> = self
@@ -442,16 +446,12 @@ impl NarrowOps {
         narrow_ops
     }
 
-    fn from_membership_comparison(left: &Expr, cmp_op: CmpOp, right: &Expr) -> Option<Self> {
-        match cmp_op {
-            CmpOp::In | CmpOp::NotIn => {}
-            _ => return None,
-        }
+    fn from_membership_comparison(left: &Expr, right: &Expr, is_positive: bool) -> Option<Self> {
         let Expr::StringLiteral(ExprStringLiteral { value, .. }) = left else {
             return None;
         };
         let key = Name::new(value.to_string());
-        let op = if matches!(cmp_op, CmpOp::In) {
+        let op = if is_positive {
             AtomicNarrowOp::HasKey(key.clone())
         } else {
             AtomicNarrowOp::NotHasKey(key.clone())
@@ -533,12 +533,16 @@ impl NarrowOps {
                     .iter()
                     .zip(comparators)
                     .filter_map(|(cmp_op, right)| {
-                        if let Some(extra) =
-                            Self::from_membership_comparison(left_for_membership, *cmp_op, right)
+                        if special_export.is_none()
+                            && matches!(cmp_op, CmpOp::In | CmpOp::NotIn)
+                            && let Some(extra) = Self::from_membership_comparison(
+                                left_for_membership,
+                                right,
+                                matches!(cmp_op, CmpOp::In),
+                            )
                         {
                             membership_narrows.push(extra);
                         }
-                        left_for_membership = right;
                         let range = right.range();
                         let op = match (cmp_op, special_export) {
                             (CmpOp::Is | CmpOp::Eq, Some(SpecialExport::BuiltinsType)) => {
@@ -584,6 +588,7 @@ impl NarrowOps {
                                 return None;
                             }
                         };
+                        left_for_membership = right;
                         Some((op, range))
                     });
                 match ops.next() {
@@ -594,7 +599,16 @@ impl NarrowOps {
                             narrow_ops.and_all(NarrowOps::from_single_narrow_op(left, op, range));
                         }
                         for extra in membership_narrows {
-                            narrow_ops.and_all(extra);
+                            for (name, (op, range)) in extra.0 {
+                                match narrow_ops.0.entry(name) {
+                                    Entry::Occupied(mut entry) => {
+                                        entry.get_mut().0.and(op);
+                                    }
+                                    Entry::Vacant(entry) => {
+                                        entry.insert((op, range));
+                                    }
+                                }
+                            }
                         }
                         narrow_ops
                     }
