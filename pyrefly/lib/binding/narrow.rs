@@ -442,7 +442,7 @@ impl NarrowOps {
         narrow_ops
     }
 
-    fn from_membership_comparison(left: &Expr, cmp_op: &CmpOp, right: &Expr) -> Option<Self> {
+    fn from_membership_comparison(left: &Expr, cmp_op: CmpOp, right: &Expr) -> Option<Self> {
         match cmp_op {
             CmpOp::In | CmpOp::NotIn => {}
             _ => return None,
@@ -534,7 +534,7 @@ impl NarrowOps {
                     .zip(comparators)
                     .filter_map(|(cmp_op, right)| {
                         if let Some(extra) =
-                            Self::from_membership_comparison(left_for_membership, cmp_op, right)
+                            Self::from_membership_comparison(left_for_membership, *cmp_op, right)
                         {
                             membership_narrows.push(extra);
                         }
