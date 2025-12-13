@@ -460,6 +460,11 @@ impl Flow {
     }
 }
 
+/// Bound names can accumulate facet narrows from long assignment chains (e.g. huge
+/// literal dictionaries). Limiting how many consecutive narrows we remember keeps
+/// the flow graph shallow enough to avoid recursive explosions in the solver.
+const MAX_FLOW_NARROW_DEPTH: usize = 512;
+
 /// Flow information about a name. At least one of `narrow` and `value` will always
 /// be non-None (although in some cases the value may have FlowStyle::Uninitialized,
 /// meaning we track a type but are aware that the name is not bound at this point,
@@ -471,6 +476,8 @@ struct FlowInfo {
     /// The most recent narrow for this name, if any. Always set to `None` when
     /// `value` is re-bound.
     narrow: Option<FlowNarrow>,
+    /// How many consecutive narrows have been recorded since the last value assignment.
+    narrow_depth: usize,
     /// An idx used to wrap loop Phi with our guess at the type above the loop.
     /// - Always set to our current inferred type when a flow info is created
     /// - Updated whenever we update the inferred type outside of all loops, but not inside
@@ -501,6 +508,7 @@ impl FlowInfo {
         Self {
             value: Some(FlowValue { idx, style }),
             narrow: None,
+            narrow_depth: 0,
             loop_prior: idx,
         }
     }
@@ -509,6 +517,7 @@ impl FlowInfo {
         Self {
             value: None,
             narrow: Some(FlowNarrow { idx }),
+            narrow_depth: 1,
             loop_prior: idx,
         }
     }
@@ -518,6 +527,7 @@ impl FlowInfo {
             value: Some(FlowValue { idx, style }),
             // Note that any existing narrow is wiped when a new value is bound.
             narrow: None,
+            narrow_depth: 0,
             loop_prior: if in_loop { self.loop_prior } else { idx },
         }
     }
@@ -526,8 +536,14 @@ impl FlowInfo {
         Self {
             value: self.value.clone(),
             narrow: Some(FlowNarrow { idx }),
+            narrow_depth: self.narrow_depth.saturating_add(1),
             loop_prior: if in_loop { self.loop_prior } else { idx },
         }
+    }
+
+    fn clear_narrow(&mut self) {
+        self.narrow = None;
+        self.narrow_depth = 0;
     }
 
     fn idx(&self) -> Idx<Key> {
@@ -1548,7 +1564,11 @@ impl Scopes {
                 e.insert(FlowInfo::new_narrow(idx));
             }
             Entry::Occupied(mut e) => {
-                *e.get_mut() = e.get().updated_narrow(idx, in_loop);
+                let mut info = e.get().clone();
+                if info.narrow_depth >= MAX_FLOW_NARROW_DEPTH {
+                    info.clear_narrow();
+                }
+                *e.get_mut() = info.updated_narrow(idx, in_loop);
             }
         }
     }
@@ -2514,6 +2534,7 @@ impl<'a> BindingsBuilder<'a> {
                 FlowInfo {
                     value: None,
                     narrow: Some(FlowNarrow { idx: merged_idx }),
+                    narrow_depth: 1,
                     loop_prior: merged_loop_prior(merged_idx),
                 }
             }
@@ -2537,6 +2558,7 @@ impl<'a> BindingsBuilder<'a> {
                         ),
                     }),
                     narrow: Some(FlowNarrow { idx: merged_idx }),
+                    narrow_depth: 1,
                     loop_prior: merged_loop_prior(merged_idx),
                 }
             }
@@ -2560,6 +2582,7 @@ impl<'a> BindingsBuilder<'a> {
                         ),
                     }),
                     narrow: None,
+                    narrow_depth: 0,
                     loop_prior: merged_loop_prior(merged_idx),
                 }
             }
