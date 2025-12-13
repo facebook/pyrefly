@@ -649,6 +649,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // `hasattr` and `getattr` are handled in `narrow`
             AtomicNarrowOp::HasAttr(_) => ty.clone(),
             AtomicNarrowOp::NotHasAttr(_) => ty.clone(),
+            AtomicNarrowOp::HasKey(_) => ty.clone(),
+            AtomicNarrowOp::NotHasKey(_) => ty.clone(),
             AtomicNarrowOp::GetAttr(_, _) => ty.clone(),
             AtomicNarrowOp::NotGetAttr(_, _) => ty.clone(),
             AtomicNarrowOp::TypeGuard(t, arguments) => {
@@ -781,6 +783,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    fn narrow_typed_dict_key(
+        &self,
+        type_info: &TypeInfo,
+        subject: Option<&FacetSubject>,
+        key: &Name,
+        range: TextRange,
+        is_negative: bool,
+    ) -> TypeInfo {
+        let key_facet = FacetKind::Key(key.to_string());
+        let facets = match subject {
+            Some(facet_subject) => {
+                let mut new_facets = facet_subject.chain.facets().clone();
+                new_facets.push(key_facet);
+                new_facets
+            }
+            None => Vec1::new(key_facet),
+        };
+        let chain = FacetChain::new(facets);
+        let value_ty = if is_negative {
+            Type::never()
+        } else {
+            self.get_facet_chain_type(type_info, &chain, range)
+        };
+        type_info.with_narrow(chain.facets(), value_ty)
+    }
+
     fn narrowable_for_facet_chain(
         &self,
         base: &TypeInfo,
@@ -873,6 +901,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> TypeInfo {
         match op {
+            NarrowOp::Atomic(subject, AtomicNarrowOp::HasKey(key)) => {
+                self.narrow_typed_dict_key(type_info, subject.as_ref(), key, range, false)
+            }
+            NarrowOp::Atomic(subject, AtomicNarrowOp::NotHasKey(key)) => {
+                self.narrow_typed_dict_key(type_info, subject.as_ref(), key, range, true)
+            }
             NarrowOp::Atomic(subject, AtomicNarrowOp::HasAttr(attr)) => {
                 let base_ty = match subject {
                     Some(facet_subject) => {

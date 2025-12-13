@@ -242,6 +242,35 @@ def use2(mapping: TD) -> None:
 );
 
 testcase!(
+    test_typeddict_in_literal_key_narrow,
+    r#"
+from typing import TypedDict, NotRequired, assert_type
+
+class TD(TypedDict):
+    foo: NotRequired[int]
+
+def use(mapping: TD) -> None:
+    if "foo" in mapping:
+        assert_type(mapping["foo"], int)
+    else:
+        mapping["foo"]  # E: TypedDict key `foo` may be missing; guard this access with `'foo' in obj` or `obj.get('foo')`
+"#,
+);
+
+testcase!(
+    test_typeddict_not_required_key_warning,
+    r#"
+from typing import TypedDict, NotRequired
+
+class TD(TypedDict):
+    foo: NotRequired[int]
+
+def bad(mapping: TD) -> int:
+    return mapping["foo"]  # E: TypedDict key `foo` may be missing; guard this access with `'foo' in obj` or `obj.get('foo')`
+"#,
+);
+
+testcase!(
     test_non_dict_get_does_not_narrow,
     r#"
 from typing import assert_type
