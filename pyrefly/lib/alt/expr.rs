@@ -1211,7 +1211,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match ty {
             Type::TypedDict(typed_dict) | Type::PartialTypedDict(typed_dict) => {
                 let fields = self.typed_dict_fields(typed_dict);
-                fields.get(key).map_or(false, |field| !field.required)
+                fields.get(key).is_some_and(|field| !field.required)
             }
             Type::Union(union) => union
                 .members
@@ -1224,7 +1224,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     || self.type_has_optional_typed_dict_key(fallback, key)
             }
             Type::Var(var) => {
-                let forced = self.solver().force_var(var.clone());
+                let forced = self.solver().force_var(*var);
                 self.type_has_optional_typed_dict_key(&forced, key)
             }
             Type::Type(box inner) | Type::TypeGuard(box inner) | Type::TypeIs(box inner) => {
@@ -1241,11 +1241,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        let key_facet = FacetKind::Key(key.to_string());
+        let key_facet = FacetKind::Key(key.to_owned());
         if base.type_at_facet(&key_facet).is_some() {
             return;
         }
-        let key_name = Name::new(key.to_string());
+        let key_name = Name::new(key);
         if !self.type_has_optional_typed_dict_key(base.ty(), &key_name) {
             return;
         }
