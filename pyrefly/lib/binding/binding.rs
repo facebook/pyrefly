@@ -1384,7 +1384,13 @@ pub enum Binding {
     SuperInstance(SuperStyle, TextRange),
     /// The result of assigning to an attribute. This operation cannot change the *type* of the
     /// name to which we are assigning, but it *can* change the live attribute narrows.
-    AssignToAttribute(ExprAttribute, Box<ExprOrBinding>),
+    AssignToAttribute {
+        attr: ExprAttribute,
+        value: Box<ExprOrBinding>,
+        /// Some contexts (like initializing a `Final` field inside `__init__`) are allowed to
+        /// write to otherwise read-only attributes.
+        allow_read_only: bool,
+    },
     /// The result of assigning to a subscript, used for narrowing.
     AssignToSubscript(ExprSubscript, Box<ExprOrBinding>),
     /// A placeholder binding, used to force the solving of some other `K::Value` (for
@@ -1657,13 +1663,18 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, "SuperInstance::Implicit({}, {v})", ctx.display(*k))
             }
             Self::SuperInstance(SuperStyle::Any, _range) => write!(f, "SuperInstance::Any"),
-            Self::AssignToAttribute(attr, x) => {
+            Self::AssignToAttribute {
+                attr,
+                value,
+                allow_read_only,
+            } => {
                 write!(
                     f,
-                    "AssignToAttribute({}, {}, {})",
+                    "AssignToAttribute({}, {}, {}, allow_read_only={})",
                     m.display(&attr.value),
                     attr.attr,
-                    x.display_with(ctx)
+                    value.display_with(ctx),
+                    allow_read_only
                 )
             }
             Self::AssignToSubscript(subscript, x) => {
@@ -1787,7 +1798,7 @@ impl Binding {
             | Binding::PatternMatchClassKeyword(_, _, _)
             | Binding::ExceptionHandler(_, _)
             | Binding::SuperInstance(_, _)
-            | Binding::AssignToAttribute(_, _)
+            | Binding::AssignToAttribute { .. }
             | Binding::UsageLink(_)
             | Binding::SelfTypeLiteral(..)
             | Binding::AssignToSubscript(_, _)

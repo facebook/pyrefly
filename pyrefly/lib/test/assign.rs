@@ -408,6 +408,25 @@ b.x += 1  # E: Cannot set field `x`
 );
 
 testcase!(
+    test_assign_final_instance,
+    r#"
+from typing import Final
+
+class A:
+    x: Final[int]
+
+    def __init__(self) -> None:
+        self.x = 1
+
+    def mutate(self) -> None:
+        self.x = 2  # E: Cannot set field `x`
+
+a = A()
+a.x = 3  # E: Cannot set field `x`
+    "#,
+);
+
+testcase!(
     test_aug_assign_integer,
     r#"
 def f(x: int):

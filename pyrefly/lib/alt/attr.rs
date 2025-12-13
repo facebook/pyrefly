@@ -727,6 +727,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         got: &ExprOrBinding,
         range: TextRange,
         errors: &ErrorCollector,
+        allow_read_only: bool,
     ) -> Option<Type> {
         let ty;
         let got = match got {
@@ -744,6 +745,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             errors,
             None,
             "attr::check_assign_to_attribute_and_infer_narrow",
+            allow_read_only,
         )
     }
 
@@ -850,6 +852,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
+        allow_read_only: bool,
     ) -> Option<Type> {
         // If we hit anything other than a simple, read-write attribute then we will not infer
         // a type for narrowing.
@@ -940,6 +943,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         context,
                         &mut should_narrow,
                         &mut narrowed_types,
+                        allow_read_only,
                     );
                 }
             }

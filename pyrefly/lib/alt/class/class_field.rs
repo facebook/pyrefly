@@ -1853,22 +1853,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         field_definition: &ClassFieldDefinition,
     ) -> Option<ReadOnlyReason> {
         if let Some(ann) = annotation {
-            // TODO: enable this for Final attrs that aren't initialized on the class;
-            // this is a hack to avoid throwing errors when the attribute is set in
-            // `__init__` because so far we lack the hooks to special-case that.
-            let is_class_body_init = !matches!(
-                field_definition,
-                ClassFieldDefinition::DeclaredByAnnotation { .. }
-                    | ClassFieldDefinition::DeclaredWithoutAnnotation
-                    | ClassFieldDefinition::DefinedInMethod {
-                        method: MethodThatSetsAttr {
-                            instance_or_class: MethodSelfKind::Instance,
-                            ..
-                        },
-                        ..
-                    }
-            );
-            if ann.is_final() && is_class_body_init {
+            if ann.is_final() {
                 return Some(ReadOnlyReason::Final);
             }
             if ann.has_qualifier(&Qualifier::ReadOnly) {
@@ -3483,6 +3468,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         should_narrow: &mut bool,
         narrowed_types: &mut Vec<Type>,
+        allow_read_only: bool,
     ) {
         match class_attr {
             ClassAttribute::NoAccess(e) => {
@@ -3494,7 +3480,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 *should_narrow = false;
             }
-            ClassAttribute::ReadOnly(_, reason) => {
+            ClassAttribute::ReadOnly(attr_ty, reason) => {
                 // In pydantic, if a non-frozen model inherits from a frozen model,
                 // attributes of the frozen model are no longer readonly.
                 let should_raise_error = if let Some(instance_class) = instance_class {
@@ -3508,12 +3494,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     true
                 };
 
-                if should_raise_error {
+                if allow_read_only && matches!(reason, ReadOnlyReason::Final) {
+                    self.check_set_read_write_and_infer_narrow(
+                        attr_ty,
+                        attr_name,
+                        got,
+                        range,
+                        errors,
+                        context,
+                        *should_narrow,
+                        narrowed_types,
+                    );
+                } else if should_raise_error {
                     let msg = vec1![
                         format!("Cannot set field `{attr_name}`"),
                         reason.error_message()
                     ];
                     errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
+                    *should_narrow = false;
+                } else {
                     *should_narrow = false;
                 }
             }

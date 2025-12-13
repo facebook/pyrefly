@@ -1449,6 +1449,39 @@ impl Scopes {
         false
     }
 
+    pub fn method_that_sets_attr(&self, x: &ExprAttribute) -> Option<MethodThatSetsAttr> {
+        let mut method_name: Option<Name> = None;
+        let mut receiver_kind = MethodSelfKind::Instance;
+        for scope in self.iter_rev() {
+            match &scope.kind {
+                ScopeKind::Method(method_scope) if method_name.is_none() => {
+                    if let Some(self_name) = &method_scope.self_name
+                        && matches!(&*x.value, Expr::Name(name) if name.id == self_name.id)
+                    {
+                        method_name = Some(method_scope.name.id.clone());
+                        receiver_kind = method_scope.receiver_kind;
+                    } else {
+                        return None;
+                    }
+                }
+                ScopeKind::Class(class_scope) => {
+                    if let Some(method_name) = &method_name {
+                        return Some(MethodThatSetsAttr {
+                            method_name: method_name.clone(),
+                            recognized_attribute_defining_method: is_attribute_defining_method(
+                                method_name,
+                                &class_scope.name.id,
+                            ),
+                            instance_or_class: receiver_kind,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     pub fn loop_depth(&self) -> usize {
         self.current().loops.len()
     }
