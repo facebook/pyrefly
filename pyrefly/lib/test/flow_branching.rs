@@ -5,9 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fmt::Write;
+
 use pyrefly_python::sys_info::PythonVersion;
 
 use crate::test::util::TestEnv;
+use crate::test::util::testcase_for_macro;
 use crate::testcase;
 
 testcase!(
@@ -1222,6 +1225,19 @@ def test_oops() -> None:
     assert val, "oops"
 "#,
 );
+
+#[test]
+fn test_many_subscript_assignments_do_not_stack_overflow() -> anyhow::Result<()> {
+    let mut contents =
+        String::from("new_val: dict[str, int] = {}\nvalues: dict[str, dict[str, int]] = {}\n");
+    for i in 0..600 {
+        writeln!(&mut contents, "values[\"K{i}\"] = {{}}").unwrap();
+    }
+    for i in 0..600 {
+        writeln!(&mut contents, "values[\"K{i}\"][\"K{i}\"] = {i}").unwrap();
+    }
+    testcase_for_macro(TestEnv::new(), &contents, file!(), line!())
+}
 
 // Regression test for a stack overflow we had at one point.
 testcase!(
