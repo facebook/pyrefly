@@ -1209,7 +1209,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn type_has_optional_typed_dict_key(&self, ty: &Type, key: &Name) -> bool {
         match ty {
-            Type::TypedDict(typed_dict) | Type::PartialTypedDict(typed_dict) => {
+            Type::TypedDict(typed_dict) | Type::PartialTypedDict(typed_dict)
+                if matches!(typed_dict, TypedDict::TypedDict(_)) =>
+            {
                 let fields = self.typed_dict_fields(typed_dict);
                 fields.get(key).is_some_and(|field| !field.required)
             }
