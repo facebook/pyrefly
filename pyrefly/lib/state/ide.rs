@@ -89,10 +89,9 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             {
                 current_idx = bindings.key_to_idx(&key);
             }
-            Binding::AssignToAttribute(attribute, _)
-                if let Some(key) =
-                    base_key_of_assign_target(&Expr::Attribute(attribute.clone())) =>
-            {
+            Binding::AssignToAttribute {
+                attr: attribute, ..
+            } if let Some(key) = base_key_of_assign_target(&Expr::Attribute(attribute.clone())) => {
                 current_idx = bindings.key_to_idx(&key);
             }
             _ => {

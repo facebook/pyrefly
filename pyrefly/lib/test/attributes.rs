@@ -420,7 +420,7 @@ class A:
     def __init__(self):
         self.x: Final = 0
 def f(a: A):
-    assert_type(a.x, Literal[0])  # E: assert_type(int, Literal[0])
+    assert_type(a.x, Literal[0])
     "#,
 );
 
