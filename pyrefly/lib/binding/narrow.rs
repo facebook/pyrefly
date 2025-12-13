@@ -1008,27 +1008,26 @@ where
                 }
                 _ => None,
             }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::NumberLiteral(ExprNumberLiteral {
+        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr {
+            if let Expr::NumberLiteral(ExprNumberLiteral {
                 value: Number::Int(idx),
                 ..
             }) = &**slice
-            && let Some(idx) = idx.as_usize()
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    rev_chain.push(FacetKind::Index(idx));
-                    rev_chain.reverse();
-                    Some((Ast::expr_name_identifier(name.clone()), rev_chain))
+                && let Some(idx) = idx.as_usize()
+            {
+                match &*subscript.value {
+                    Expr::Name(name) => {
+                        rev_chain.push(FacetKind::Index(idx));
+                        rev_chain.reverse();
+                        Some((Ast::expr_name_identifier(name.clone()), rev_chain))
+                    }
+                    parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
+                        rev_chain.push(FacetKind::Index(idx));
+                        f(parent, rev_chain, resolver)
+                    }
+                    _ => None,
                 }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(FacetKind::Index(idx));
-                    f(parent, rev_chain, resolver)
-                }
-                _ => None,
-            }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr {
-            if let Some(key) = resolver(slice) {
+            } else if let Some(key) = resolver(slice) {
                 match &*subscript.value {
                     Expr::Name(name) => {
                         rev_chain.push(FacetKind::Key(key));
@@ -1042,17 +1041,15 @@ where
                     _ => None,
                 }
             } else {
-                None
-            }
-        } else if let Expr::Subscript(subscript) = expr {
-            // The subscript does not contain an integer or string literal, so we drop everything that we encountered so far
-            match &*subscript.value {
-                Expr::Name(name) => Some((Ast::expr_name_identifier(name.clone()), Vec::new())),
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.clear();
-                    f(parent, rev_chain, resolver)
+                // The subscript does not contain an integer or string literal, so we drop everything that we encountered so far
+                match &*subscript.value {
+                    Expr::Name(name) => Some((Ast::expr_name_identifier(name.clone()), Vec::new())),
+                    parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
+                        rev_chain.clear();
+                        f(parent, rev_chain, resolver)
+                    }
+                    _ => None,
                 }
-                _ => None,
             }
         } else {
             None
