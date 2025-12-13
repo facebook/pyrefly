@@ -216,6 +216,8 @@ pub enum ErrorKind {
     NotCallable,
     /// Attempting to use a non-iterable value as an iterable.
     NotIterable,
+    /// Accessing a `NotRequired` TypedDict key without first proving it exists.
+    NotRequiredKeyAccess,
     /// Unpacking an open TypedDict that may contain a bad key via inheritance.
     OpenUnpacking,
     /// An error related to parsing or syntax.
@@ -300,6 +302,7 @@ impl ErrorKind {
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::RedundantCast => Severity::Warn,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
+            ErrorKind::NotRequiredKeyAccess => Severity::Warn,
             // TODO(rechen): re-enable this once we figure out how to make it less noisy.
             ErrorKind::UntypedImport => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
