@@ -8,6 +8,7 @@
 use std::fmt;
 
 use pyrefly_python::ast::Ast;
+use pyrefly_types::literal::Lit;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
@@ -38,6 +39,8 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::BindingAnnotation;
+use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::scope::NameReadInfo;
@@ -398,9 +401,14 @@ impl NarrowOps {
         }
     }
 
-    pub fn from_single_narrow_op(left: &Expr, op: AtomicNarrowOp, range: TextRange) -> Self {
+    pub fn from_single_narrow_op(
+        builder: &BindingsBuilder,
+        left: &Expr,
+        op: AtomicNarrowOp,
+        range: TextRange,
+    ) -> Self {
         let mut narrow_ops = Self::new();
-        for subject in expr_to_subjects(left) {
+        for subject in expr_to_subjects(builder, left) {
             let (name, prop) = match subject {
                 NarrowingSubject::Name(name) => (name, None),
                 NarrowingSubject::Facets(name, facets) => (name, Some(facets)),
@@ -546,9 +554,12 @@ impl NarrowOps {
                 match ops.next() {
                     None => Self::new(),
                     Some((op, range)) => {
-                        let mut narrow_ops = NarrowOps::from_single_narrow_op(left, op, range);
+                        let mut narrow_ops =
+                            NarrowOps::from_single_narrow_op(builder, left, op, range);
                         for (op, range) in ops {
-                            narrow_ops.and_all(NarrowOps::from_single_narrow_op(left, op, range));
+                            narrow_ops.and_all(NarrowOps::from_single_narrow_op(
+                                builder, left, op, range,
+                            ));
                         }
                         narrow_ops
                     }
@@ -589,7 +600,12 @@ impl NarrowOps {
                 && arguments.args.len() == 1
                 && arguments.keywords.is_empty() =>
             {
-                Self::from_single_narrow_op(&arguments.args[0], AtomicNarrowOp::IsTruthy, *range)
+                Self::from_single_narrow_op(
+                    builder,
+                    &arguments.args[0],
+                    AtomicNarrowOp::IsTruthy,
+                    *range,
+                )
             }
             Expr::Call(ExprCall {
                 node_index: _,
@@ -603,6 +619,7 @@ impl NarrowOps {
                     &arguments.args[1] =>
             {
                 Self::from_single_narrow_op(
+                    builder,
                     &arguments.args[0],
                     AtomicNarrowOp::HasAttr(Name::new(value.to_string())),
                     *range,
@@ -620,6 +637,7 @@ impl NarrowOps {
                     &arguments.args[1] =>
             {
                 Self::from_single_narrow_op(
+                    builder,
                     &arguments.args[0],
                     AtomicNarrowOp::GetAttr(
                         Name::new(value.to_string()),
@@ -636,7 +654,7 @@ impl NarrowOps {
                 // When the guard is something like `x.get("key")`, we narrow it like `x["key"]` if `x` resolves to a dict
                 // in the answers step.
                 // This cannot be a TypeGuard/TypeIs function call, since the first argument is a string literal
-                Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range())
+                Self::from_single_narrow_op(builder, e, AtomicNarrowOp::IsTruthy, e.range())
             }
             Expr::Call(ExprCall {
                 node_index: _,
@@ -647,6 +665,7 @@ impl NarrowOps {
                 // This may be a function call that narrows the type of its first argument. Record
                 // it as a possible narrowing operation that we'll resolve in the answers phase.
                 Self::from_single_narrow_op(
+                    builder,
                     &posargs[0],
                     AtomicNarrowOp::Call(Box::new((**func).clone()), args.clone()),
                     *range,
@@ -654,6 +673,7 @@ impl NarrowOps {
             }
             Expr::Named(named) => {
                 let mut target_narrow = Self::from_single_narrow_op(
+                    builder,
                     &named.target,
                     AtomicNarrowOp::IsTruthy,
                     named.target.range(),
@@ -704,7 +724,7 @@ impl NarrowOps {
                     ops
                 }
             }
-            e => Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range()),
+            e => Self::from_single_narrow_op(builder, e, AtomicNarrowOp::IsTruthy, e.range()),
         }
     }
 
@@ -776,8 +796,108 @@ impl NarrowOps {
 /// Given an expression, determine whether it is a chain of properties (attribute/concrete index) rooted at a name,
 /// and if so, return the name and the chain of properties.
 /// For example: x.y.[0].z
-pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, FacetChain)> {
-    fn f(expr: &Expr, mut rev_chain: Vec<FacetKind>) -> Option<(Identifier, FacetChain)> {
+fn literal_string_from_expr(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::StringLiteral(ExprStringLiteral { value, .. }) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn literal_string_from_type(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Literal(Lit::Str(value)) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn is_literal_constructor(expr: &Expr) -> bool {
+    match expr {
+        Expr::Name(name) => name.id.as_str() == "Literal",
+        Expr::Attribute(attr) => attr.attr.id.as_str() == "Literal",
+        _ => false,
+    }
+}
+
+fn literal_annotation_args(slice: &Expr) -> Vec<&Expr> {
+    match slice {
+        Expr::Tuple(t) => t.elts.iter().collect(),
+        Expr::List(t) => t.elts.iter().collect(),
+        other => vec![other],
+    }
+}
+
+fn literal_string_from_annotation_expr(expr: &Expr) -> Option<String> {
+    let Expr::Subscript(subscript) = expr else {
+        return None;
+    };
+    if !is_literal_constructor(&subscript.value) {
+        return None;
+    }
+    let args = literal_annotation_args(&subscript.slice);
+    if args.len() != 1 {
+        return None;
+    }
+    match args[0] {
+        Expr::StringLiteral(ExprStringLiteral { value, .. }) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn literal_string_from_name_annotation(
+    builder: &BindingsBuilder,
+    name: &Identifier,
+) -> Option<String> {
+    let name_read = builder.scopes.look_up_name_for_read(Hashed::new(&name.id));
+    let (_, binding) = match name_read {
+        NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx)?,
+        _ => return None,
+    };
+    let binding = binding?;
+    match binding {
+        Binding::NameAssign {
+            annotation: Some((_, ann_idx)),
+            ..
+        } => builder
+            .get_annotation_by_idx(*ann_idx)
+            .and_then(literal_string_from_binding_annotation),
+        Binding::FunctionParameter(FunctionParameter::Annotated(ann_idx)) => builder
+            .get_annotation_by_idx(*ann_idx)
+            .and_then(literal_string_from_binding_annotation),
+        _ => None,
+    }
+}
+
+fn literal_string_from_expr_with_builder(builder: &BindingsBuilder, expr: &Expr) -> Option<String> {
+    literal_string_from_expr(expr).or_else(|| match expr {
+        Expr::Name(name) => {
+            literal_string_from_name_annotation(builder, &Ast::expr_name_identifier(name.clone()))
+        }
+        _ => None,
+    })
+}
+
+fn literal_string_from_binding_annotation(annotation: &BindingAnnotation) -> Option<String> {
+    match annotation {
+        BindingAnnotation::Type(_, ty) => literal_string_from_type(ty),
+        BindingAnnotation::AnnotateExpr(_, expr, _) => literal_string_from_annotation_expr(expr),
+    }
+}
+
+pub(crate) fn identifier_and_chain_for_expr_with_resolver<F>(
+    expr: &Expr,
+    resolver: &mut F,
+) -> Option<(Identifier, FacetChain)>
+where
+    F: FnMut(&Expr) -> Option<String>,
+{
+    fn f<F>(
+        expr: &Expr,
+        mut rev_chain: Vec<FacetKind>,
+        resolver: &mut F,
+    ) -> Option<(Identifier, FacetChain)>
+    where
+        F: FnMut(&Expr) -> Option<String>,
+    {
         if let Expr::Attribute(attr) = expr {
             match &*attr.value {
                 Expr::Name(name) => {
@@ -791,7 +911,7 @@ pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, FacetCh
                 }
                 parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
                     rev_chain.push(FacetKind::Attribute(attr.attr.id.clone()));
-                    f(parent, rev_chain)
+                    f(parent, rev_chain, resolver)
                 }
                 _ => None,
             }
@@ -813,41 +933,68 @@ pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, FacetCh
                 }
                 parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
                     rev_chain.push(FacetKind::Index(idx));
-                    f(parent, rev_chain)
+                    f(parent, rev_chain, resolver)
                 }
                 _ => None,
             }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = &**slice
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    let mut final_chain =
-                        Vec1::from_vec_push(rev_chain, FacetKind::Key(key.to_string()));
-                    final_chain.reverse();
-                    Some((
-                        Ast::expr_name_identifier(name.clone()),
-                        FacetChain::new(final_chain),
-                    ))
+        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr {
+            if let Some(key) = resolver(slice) {
+                match &*subscript.value {
+                    Expr::Name(name) => {
+                        let mut final_chain = Vec1::from_vec_push(rev_chain, FacetKind::Key(key));
+                        final_chain.reverse();
+                        Some((
+                            Ast::expr_name_identifier(name.clone()),
+                            FacetChain::new(final_chain),
+                        ))
+                    }
+                    parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
+                        rev_chain.push(FacetKind::Key(key));
+                        f(parent, rev_chain, resolver)
+                    }
+                    _ => None,
                 }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(FacetKind::Key(key.to_string()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
+            } else {
+                None
             }
         } else {
             None
         }
     }
-    f(expr, Vec::new())
+    f(expr, Vec::new(), resolver)
+}
+
+pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, FacetChain)> {
+    identifier_and_chain_for_expr_with_resolver(expr, &mut literal_string_from_expr)
+}
+
+pub fn identifier_and_chain_for_expr_with_builder(
+    builder: &BindingsBuilder,
+    expr: &Expr,
+) -> Option<(Identifier, FacetChain)> {
+    identifier_and_chain_for_expr_with_resolver(expr, &mut |expr| {
+        literal_string_from_expr_with_builder(builder, expr)
+    })
 }
 
 /// Similar to identifier_and_chain_for_expr, except if we encounter a non-concrete subscript in the chain
 /// we only return the prefix before that location.
 /// For example: w.x[y].z -> w.x
-pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
-    fn f(expr: &Expr, mut rev_chain: Vec<FacetKind>) -> Option<(Identifier, Vec<FacetKind>)> {
+pub(crate) fn identifier_and_chain_prefix_for_expr_with_resolver<F>(
+    expr: &Expr,
+    resolver: &mut F,
+) -> Option<(Identifier, Vec<FacetKind>)>
+where
+    F: FnMut(&Expr) -> Option<String>,
+{
+    fn f<F>(
+        expr: &Expr,
+        mut rev_chain: Vec<FacetKind>,
+        resolver: &mut F,
+    ) -> Option<(Identifier, Vec<FacetKind>)>
+    where
+        F: FnMut(&Expr) -> Option<String>,
+    {
         if let Expr::Attribute(attr) = expr {
             match &*attr.value {
                 Expr::Name(name) => {
@@ -857,7 +1004,7 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
                 }
                 parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
                     rev_chain.push(FacetKind::Attribute(attr.attr.id.clone()));
-                    f(parent, rev_chain)
+                    f(parent, rev_chain, resolver)
                 }
                 _ => None,
             }
@@ -876,24 +1023,26 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
                 }
                 parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
                     rev_chain.push(FacetKind::Index(idx));
-                    f(parent, rev_chain)
+                    f(parent, rev_chain, resolver)
                 }
                 _ => None,
             }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = &**slice
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    rev_chain.push(FacetKind::Key(key.to_string()));
-                    rev_chain.reverse();
-                    Some((Ast::expr_name_identifier(name.clone()), rev_chain))
+        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr {
+            if let Some(key) = resolver(slice) {
+                match &*subscript.value {
+                    Expr::Name(name) => {
+                        rev_chain.push(FacetKind::Key(key));
+                        rev_chain.reverse();
+                        Some((Ast::expr_name_identifier(name.clone()), rev_chain))
+                    }
+                    parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
+                        rev_chain.push(FacetKind::Key(key));
+                        f(parent, rev_chain, resolver)
+                    }
+                    _ => None,
                 }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(FacetKind::Key(key.to_string()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
+            } else {
+                None
             }
         } else if let Expr::Subscript(subscript) = expr {
             // The subscript does not contain an integer or string literal, so we drop everything that we encountered so far
@@ -901,7 +1050,7 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
                 Expr::Name(name) => Some((Ast::expr_name_identifier(name.clone()), Vec::new())),
                 parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
                     rev_chain.clear();
-                    f(parent, rev_chain)
+                    f(parent, rev_chain, resolver)
                 }
                 _ => None,
             }
@@ -909,7 +1058,11 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
             None
         }
     }
-    f(expr, Vec::new())
+    f(expr, Vec::new(), resolver)
+}
+
+pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
+    identifier_and_chain_prefix_for_expr_with_resolver(expr, &mut literal_string_from_expr)
 }
 
 // Handle narrowing on `dict.get("key")`. During solving, if the resolved
@@ -949,12 +1102,14 @@ fn dict_get_subject_for_call_expr(call_expr: &ExprCall) -> Option<NarrowingSubje
     None
 }
 
-pub fn expr_to_subjects(expr: &Expr) -> Vec<NarrowingSubject> {
-    fn f(expr: &Expr, res: &mut Vec<NarrowingSubject>) {
+pub fn expr_to_subjects(builder: &BindingsBuilder, expr: &Expr) -> Vec<NarrowingSubject> {
+    fn f(builder: &BindingsBuilder, expr: &Expr, res: &mut Vec<NarrowingSubject>) {
         match expr {
             Expr::Name(name) => res.push(NarrowingSubject::Name(name.id.clone())),
             Expr::Attribute(_) | Expr::Subscript(_) => {
-                if let Some((identifier, facets)) = identifier_and_chain_for_expr(expr) {
+                if let Some((identifier, facets)) =
+                    identifier_and_chain_for_expr_with_builder(builder, expr)
+                {
                     res.push(NarrowingSubject::Facets(
                         identifier.id,
                         FacetSubject {
@@ -970,13 +1125,13 @@ pub fn expr_to_subjects(expr: &Expr) -> Vec<NarrowingSubject> {
                 }
             }
             Expr::Named(ExprNamed { target, value, .. }) => {
-                f(target, res);
-                f(value, res);
+                f(builder, target, res);
+                f(builder, value, res);
             }
             _ => {}
         }
     }
     let mut res = Vec::new();
-    f(expr, &mut res);
+    f(builder, expr, &mut res);
     res
 }

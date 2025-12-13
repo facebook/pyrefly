@@ -1238,6 +1238,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    pub(crate) fn literal_string_key_from_expr(&self, expr: &Expr) -> Option<String> {
+        if let Expr::StringLiteral(ExprStringLiteral { value, .. }) = expr {
+            return Some(value.to_string());
+        }
+        let swallower = self.error_swallower();
+        match self.expr_infer(expr, &swallower) {
+            Type::Literal(Lit::Str(value)) => Some(value.to_string()),
+            _ => None,
+        }
+    }
+
     pub fn subscript_infer(
         &self,
         base: &TypeInfo,
@@ -1245,22 +1256,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        match slice {
-            Expr::NumberLiteral(ExprNumberLiteral {
-                value: Number::Int(idx),
-                ..
-            }) if let Some(idx) = idx.as_usize() => {
-                TypeInfo::at_facet(base, &FacetKind::Index(idx), || {
-                    self.subscript_infer_for_type(base.ty(), slice, range, errors)
-                })
-            }
-            Expr::StringLiteral(ExprStringLiteral { value: key, .. }) => {
-                TypeInfo::at_facet(base, &FacetKind::Key(key.to_string()), || {
-                    self.subscript_infer_for_type(base.ty(), slice, range, errors)
-                })
-            }
-            _ => TypeInfo::of_ty(self.subscript_infer_for_type(base.ty(), slice, range, errors)),
+        if let Expr::NumberLiteral(ExprNumberLiteral {
+            value: Number::Int(idx),
+            ..
+        }) = slice
+            && let Some(idx) = idx.as_usize()
+        {
+            return TypeInfo::at_facet(base, &FacetKind::Index(idx), || {
+                self.subscript_infer_for_type(base.ty(), slice, range, errors)
+            });
         }
+        if let Some(key) = self.literal_string_key_from_expr(slice) {
+            return TypeInfo::at_facet(base, &FacetKind::Key(key), || {
+                self.subscript_infer_for_type(base.ty(), slice, range, errors)
+            });
+        }
+        TypeInfo::of_ty(self.subscript_infer_for_type(base.ty(), slice, range, errors))
     }
 
     /// When interpreted as static types (as opposed to when accounting for runtime
