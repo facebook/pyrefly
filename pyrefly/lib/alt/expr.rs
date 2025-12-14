@@ -1238,6 +1238,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    /// Try to recover a literal string from `expr`, either syntactically or by inferring a `Literal["..."]` type.
+    /// Used so TypedDict/index narrowing works when the key expression is a Literal-typed variable.
     pub(crate) fn literal_string_key_from_expr(&self, expr: &Expr) -> Option<String> {
         if let Expr::StringLiteral(ExprStringLiteral { value, .. }) = expr {
             return Some(value.to_string());

@@ -635,6 +635,8 @@ impl<'a> BindingsBuilder<'a> {
         self.table.get::<K>().0.idx_to_key(idx)
     }
 
+    /// Return the `BindingAnnotation` stored at `idx`, if it still exists.
+    /// Used by literal-key detection to recover the concrete type of an annotated name.
     pub fn get_annotation_by_idx(&self, idx: Idx<KeyAnnotation>) -> Option<&BindingAnnotation> {
         let annotations = self.table.get::<KeyAnnotation>();
         annotations.1.get(idx)

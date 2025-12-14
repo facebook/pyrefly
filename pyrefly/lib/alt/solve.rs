@@ -2246,27 +2246,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .arc_clone();
                     type_info.update_for_assignment(chain.facets(), narrowed);
                     type_info
+                } else if let Some((identifier, facets)) =
+                    identifier_and_chain_prefix_for_expr_with_resolver(&expr, &mut literal_resolver)
+                {
+                    // If the chain contains an unknown subscript index, we clear narrowing for
+                    // all indexes of its parent.
+                    let mut type_info = self
+                        .get(&Key::BoundName(ShortIdentifier::new(&identifier)))
+                        .arc_clone();
+                    type_info.invalidate_all_indexes_for_assignment(&facets);
+                    type_info
                 } else {
-                    let mut literal_resolver =
-                        |expr: &Expr| self.literal_string_key_from_expr(expr);
-                    if let Some((identifier, facets)) =
-                        identifier_and_chain_prefix_for_expr_with_resolver(
-                            &expr,
-                            &mut literal_resolver,
-                        )
-                    {
-                        // If the chain contains an unknown subscript index, we clear narrowing for
-                        // all indexes of its parent.
-                        let mut type_info = self
-                            .get(&Key::BoundName(ShortIdentifier::new(&identifier)))
-                            .arc_clone();
-                        type_info.invalidate_all_indexes_for_assignment(&facets);
-                        type_info
-                    } else {
-                        // Placeholder: in this case, we're assigning to an anonymous base and the
-                        // type info will not propagate anywhere.
-                        TypeInfo::of_ty(Type::never())
-                    }
+                    // Placeholder: in this case, we're assigning to an anonymous base and the
+                    // type info will not propagate anywhere.
+                    TypeInfo::of_ty(Type::never())
                 }
             }
             Binding::PossibleLegacyTParam(key, range_if_scoped_params_exist) => {

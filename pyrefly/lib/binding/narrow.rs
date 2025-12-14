@@ -796,6 +796,7 @@ impl NarrowOps {
 /// Given an expression, determine whether it is a chain of properties (attribute/concrete index) rooted at a name,
 /// and if so, return the name and the chain of properties.
 /// For example: x.y.[0].z
+/// Return a literal string encoded directly in `expr` (e.g. `"foo"`).
 fn literal_string_from_expr(expr: &Expr) -> Option<String> {
     match expr {
         Expr::StringLiteral(ExprStringLiteral { value, .. }) => Some(value.to_string()),
@@ -883,6 +884,10 @@ fn literal_string_from_binding_annotation(annotation: &BindingAnnotation) -> Opt
     }
 }
 
+/// Internal helper that accepts a literal resolver callback so callers can plug in builder/solver logic.
+/// Given an expression, determine whether it is a chain of properties (attribute/concrete index) rooted at a name,
+/// and if so, return the name and the chain of properties.
+/// For example: x.y.[0].z
 pub(crate) fn identifier_and_chain_for_expr_with_resolver<F>(
     expr: &Expr,
     resolver: &mut F,
@@ -968,6 +973,8 @@ pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, FacetCh
     identifier_and_chain_for_expr_with_resolver(expr, &mut literal_string_from_expr)
 }
 
+/// Builder-aware variant of `identifier_and_chain_for_expr` that can resolve literal keys
+/// from names annotated with `Literal["key"]`.
 pub fn identifier_and_chain_for_expr_with_builder(
     builder: &BindingsBuilder,
     expr: &Expr,
@@ -980,6 +987,8 @@ pub fn identifier_and_chain_for_expr_with_builder(
 /// Similar to identifier_and_chain_for_expr, except if we encounter a non-concrete subscript in the chain
 /// we only return the prefix before that location.
 /// For example: w.x[y].z -> w.x
+/// Variant of `identifier_and_chain_prefix_for_expr` that allows a custom literal resolver,
+/// so builders/solvers can plug in logic that resolves Literal-typed variables.
 pub(crate) fn identifier_and_chain_prefix_for_expr_with_resolver<F>(
     expr: &Expr,
     resolver: &mut F,
