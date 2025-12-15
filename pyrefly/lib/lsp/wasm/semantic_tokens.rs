@@ -70,6 +70,8 @@ impl Transaction<'_> {
         let legends = SemanticTokensLegends::new();
         let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), handle.sys_info());
         let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
+        // process AST first to create tokens for local definitions
+        builder.process_ast(&ast, &|range| self.get_type_trace(handle, range));
         for NamedBinding {
             definition_handle,
             definition_export,
@@ -81,10 +83,14 @@ impl Transaction<'_> {
                 ..
             } = definition_export
             {
-                builder.process_key(&key, definition_handle.module(), symbol_kind)
+                builder.process_key(
+                    &key,
+                    definition_handle.module(),
+                    symbol_kind,
+                    handle.module(),
+                )
             }
         }
-        builder.process_ast(&ast, &|range| self.get_type_trace(handle, range));
         Some(legends.convert_tokens_into_lsp_semantic_tokens(
             &builder.all_tokens_sorted(),
             module_info,
