@@ -1402,3 +1402,105 @@ for _ in []:
         continue
     "#,
 );
+
+// Tests for issue #1706: unbound-name should consider range() with nonzero literal
+// and non-empty literal containers as definitely executing at least once
+testcase!(
+    test_for_range_nonzero_literal_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in range(3):
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_range_one_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in range(1):
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_list_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in [1, 2, 3]:
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_tuple_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in (1, 2, 3):
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_set_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in {1, 2, 3}:
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+// These should still produce errors because the loop may not execute
+testcase!(
+    test_for_range_zero_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in range(0):
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_empty_list_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in []:
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_dynamic_range_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo(n: int):
+    for _ in range(n):
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_dynamic_list_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo(xs: list[int]):
+    for _ in xs:
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);

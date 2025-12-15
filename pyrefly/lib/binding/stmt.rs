@@ -13,7 +13,11 @@ use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprNumberLiteral;
+use ruff_python_ast::ExprSet;
+use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
@@ -56,6 +60,53 @@ use crate::state::loader::FindingOrError;
 use crate::types::alias::resolve_typeshed_alias;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
+
+/// Checks if an iterable expression is guaranteed to be non-empty and thus
+/// the for-loop body will definitely execute at least once.
+///
+/// Returns true for:
+/// - `range(N)` where N is a positive integer literal
+/// - Non-empty list literals like `[1, 2, 3]`
+/// - Non-empty tuple literals like `(1, 2, 3)`
+/// - Non-empty set literals like `{1, 2, 3}`
+fn is_definitely_nonempty_iterable(iter: &Expr) -> bool {
+    match iter {
+        // Check for range(N) where N is a positive integer literal
+        Expr::Call(ExprCall {
+            func, arguments, ..
+        }) => {
+            // Check if the function is `range`
+            if let Expr::Name(ExprName { id, .. }) = &**func {
+                if id.as_str() == "range" && arguments.keywords.is_empty() {
+                    // range(stop) - positive stop means at least one iteration
+                    // range(start, stop) - we only handle range(stop) for simplicity
+                    if let [arg] = &*arguments.args {
+                        if let Expr::NumberLiteral(ExprNumberLiteral { value, .. }) = arg {
+                            if let Some(n) = value.as_int().and_then(|i| i.as_i64()) {
+                                return n > 0;
+                            }
+                        }
+                        // Also handle negative literals like range(-5) which iterate 0 times
+                        if let Expr::UnaryOp(unary) = arg {
+                            if matches!(unary.op, ruff_python_ast::UnaryOp::USub) {
+                                // range(-N) always iterates 0 times
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        }
+        // Check for non-empty list literals
+        Expr::List(ExprList { elts, .. }) => !elts.is_empty(),
+        // Check for non-empty tuple literals
+        Expr::Tuple(ExprTuple { elts, .. }) => !elts.is_empty(),
+        // Check for non-empty set literals
+        Expr::Set(ExprSet { elts, .. }) => !elts.is_empty(),
+        _ => false,
+    }
+}
 
 impl<'a> BindingsBuilder<'a> {
     fn assert(&mut self, assert_range: TextRange, mut test: Expr, msg: Option<Expr>) {
@@ -665,6 +716,9 @@ impl<'a> BindingsBuilder<'a> {
                 Ast::expr_lvalue(&x.target, &mut |name| {
                     loop_header_targets.insert(name.id.clone());
                 });
+                // Check if the iterable is definitely non-empty before binding
+                // (must be done before x.iter is moved)
+                let loop_definitely_runs = is_definitely_nonempty_iterable(&x.iter);
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
                     Binding::IterableValue(ann, expr.clone(), IsAsync::new(x.is_async))
                 });
@@ -673,7 +727,14 @@ impl<'a> BindingsBuilder<'a> {
                 // targets - which get re-bound each iteration - are excluded from the loop Phi logic.
                 self.setup_loop(x.range, &loop_header_targets);
                 self.stmts(x.body, parent);
-                self.teardown_loop(x.range, &NarrowOps::new(), x.orelse, parent, false);
+                self.teardown_loop(
+                    x.range,
+                    &NarrowOps::new(),
+                    x.orelse,
+                    parent,
+                    false,
+                    loop_definitely_runs,
+                );
             }
             Stmt::While(mut x) => {
                 self.setup_loop(x.range, &SmallSet::new());
@@ -691,7 +752,15 @@ impl<'a> BindingsBuilder<'a> {
                 );
                 self.insert_binding(KeyExpect(x.test.range()), BindingExpect::Bool(*x.test));
                 self.stmts(x.body, parent);
-                self.teardown_loop(x.range, &narrow_ops, x.orelse, parent, is_while_true);
+                // For while True: loops, the loop body definitely runs at least once
+                self.teardown_loop(
+                    x.range,
+                    &narrow_ops,
+                    x.orelse,
+                    parent,
+                    is_while_true,
+                    is_while_true,
+                );
             }
             Stmt::If(x) => {
                 let mut exhaustive = false;

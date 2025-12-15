@@ -638,9 +638,10 @@ impl FlowStyle {
                     // we have to be lax about whether boolean ops define new names
                     match merge_style {
                         MergeStyle::BoolOp => FlowStyle::Other,
-                        MergeStyle::Loop | MergeStyle::Exclusive | MergeStyle::Inclusive => {
-                            FlowStyle::PossiblyUninitialized
-                        }
+                        MergeStyle::Loop
+                        | MergeStyle::LoopDefinitelyRuns
+                        | MergeStyle::Exclusive
+                        | MergeStyle::Inclusive => FlowStyle::PossiblyUninitialized,
                     }
                 }
             }
@@ -2334,6 +2335,11 @@ enum MergeStyle {
     /// This is a loopback merge for the top of a loop; the base flow is part of the
     /// merge.
     Loop,
+    /// This is a loopback merge for a loop that definitely runs at least once
+    /// (e.g., `for _ in range(3)` or `for _ in [1, 2, 3]`). The base flow is NOT
+    /// counted as a branch for the purpose of determining if names are always defined,
+    /// since the loop body will always execute at least once.
+    LoopDefinitelyRuns,
     /// This is a fork in which the current flow should be discarded - for example
     /// the end of an `if` statement with an `else` branch.
     ///
@@ -2443,10 +2449,19 @@ impl<'a> BindingsBuilder<'a> {
     ) -> FlowInfo {
         let base_idx = merge_item.base.as_ref().map(|base| base.idx());
         let mut flow_infos = merge_item.branches;
+        // Track the number of branch values before adding base (for LoopDefinitelyRuns)
+        let n_branch_flow_infos = flow_infos.len();
+        // Track if base has a value for this name (for LoopDefinitelyRuns init check)
+        let base_has_value = merge_item
+            .base
+            .as_ref()
+            .map_or(false, |b| b.value.is_some());
         // If this is a loop, we want to use the current default in any phis we produce,
-        // and the base flow is part of the merge.
-        let loop_prior = if matches!(merge_style, MergeStyle::Loop)
-            && let Some(base) = merge_item.base
+        // and the base flow is part of the merge for type inference purposes.
+        let loop_prior = if matches!(
+            merge_style,
+            MergeStyle::Loop | MergeStyle::LoopDefinitelyRuns
+        ) && let Some(base) = merge_item.base
         {
             let loop_prior = base.loop_prior;
             flow_infos.push(base);
@@ -2499,7 +2514,14 @@ impl<'a> BindingsBuilder<'a> {
             }
             branch_idxs.insert(branch_idx);
         }
-        let this_name_always_defined = n_values == n_branches;
+        // For LoopDefinitelyRuns, a name is always defined if:
+        // - It was defined before the loop (base_has_value), OR
+        // - It's defined in all loop body branches (since the loop definitely runs at least once)
+        // For regular loops and other merges, a name is always defined if it's in all branches.
+        let this_name_always_defined = match merge_style {
+            MergeStyle::LoopDefinitelyRuns => base_has_value || n_branch_flow_infos == n_branches,
+            _ => n_values == n_branches,
+        };
         match value_idxs.len() {
             // If there are no values, then this name isn't assigned at all
             // and is only narrowed (it's most likely a capture, but could be
@@ -2574,14 +2596,21 @@ impl<'a> BindingsBuilder<'a> {
         merge_style: MergeStyle,
     ) {
         // Include the current flow in the merge if the merge style calls for it.
-        if matches!(merge_style, MergeStyle::Loop | MergeStyle::Inclusive) {
+        if matches!(
+            merge_style,
+            MergeStyle::Loop | MergeStyle::LoopDefinitelyRuns | MergeStyle::Inclusive
+        ) {
             branches.push(mem::take(&mut self.scopes.current_mut().flow));
         }
 
         // Short circuit when there is only one flow. Note that we can never short
         // circuit for loops, because (a) we need to merge with the base flow, and
         // (b) we have already promised the phi keys so we'll panic if we short-circuit.
-        if !matches!(merge_style, MergeStyle::Loop) && branches.len() == 1 {
+        if !matches!(
+            merge_style,
+            MergeStyle::Loop | MergeStyle::LoopDefinitelyRuns
+        ) && branches.len() == 1
+        {
             self.scopes.current_mut().flow = branches.pop().unwrap();
             return;
         }
@@ -2592,14 +2621,20 @@ impl<'a> BindingsBuilder<'a> {
         // we'll use the terminated branches.
         let (terminated_branches, live_branches): (Vec<_>, Vec<_>) =
             branches.into_iter().partition(|flow| flow.has_terminated);
-        let has_terminated = live_branches.is_empty() && !matches!(merge_style, MergeStyle::Loop);
+        let has_terminated = live_branches.is_empty()
+            && !matches!(
+                merge_style,
+                MergeStyle::Loop | MergeStyle::LoopDefinitelyRuns
+            );
         let flows = if has_terminated {
             terminated_branches
         } else {
             live_branches
         };
 
-        // For a loop, we merge the base so there's one extra branch being merged.
+        // For a regular loop, we merge the base so there's one extra branch being merged.
+        // For LoopDefinitelyRuns, we don't count the base as an extra branch because we
+        // know the loop body will definitely execute at least once.
         let n_branches = flows.len()
             + if matches!(merge_style, MergeStyle::Loop) {
                 1
@@ -2693,6 +2728,7 @@ impl<'a> BindingsBuilder<'a> {
         orelse: Vec<Stmt>,
         parent: &NestingContext,
         is_while_true: bool,
+        loop_definitely_runs: bool,
     ) {
         let finished_loop = self.scopes.finish_loop();
         let (breaks, other_exits): (Vec<Flow>, Vec<Flow>) = finished_loop
@@ -2711,7 +2747,13 @@ impl<'a> BindingsBuilder<'a> {
         // it is as long as it's different from the loop's range.
         let other_range = TextRange::new(range.start(), range.start());
         // Create the loopback merge, which is the flow at the top of the loop.
-        self.merge_flow(finished_loop.base, other_exits, range, MergeStyle::Loop);
+        // Use LoopDefinitelyRuns when we know the loop will execute at least once.
+        let merge_style = if loop_definitely_runs {
+            MergeStyle::LoopDefinitelyRuns
+        } else {
+            MergeStyle::Loop
+        };
+        self.merge_flow(finished_loop.base, other_exits, range, merge_style);
         // When control falls off the end of a loop (either the `while` test fails or the loop
         // finishes), we're at the loopback flow but the test (if there is one) is negated.
         self.bind_narrow_ops(
