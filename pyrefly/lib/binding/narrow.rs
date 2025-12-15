@@ -388,14 +388,8 @@ impl NarrowOps {
     }
 
     fn or(&mut self, name: Name, op: NarrowOp, range: TextRange) {
-        match self.0.entry(name) {
-            Entry::Occupied(mut entry) => {
-                entry.get_mut().0.or(op);
-            }
-            Entry::Vacant(entry) => {
-                entry.insert((op, range));
-            }
-        }
+        let existing_op = self.get_or_placeholder(name, range);
+        existing_op.or(op)
     }
 
     pub fn or_all(&mut self, other: Self) {
