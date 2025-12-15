@@ -133,7 +133,6 @@ impl TestAssertion {
             }
             Self::AssertIsNone if let Some(arg0) = args.first() => {
                 Some(NarrowOps::from_single_narrow_op(
-                    builder,
                     arg0,
                     AtomicNarrowOp::Is(Expr::NoneLiteral(ExprNoneLiteral {
                         node_index: AtomicNodeIndex::default(),
@@ -144,7 +143,6 @@ impl TestAssertion {
             }
             Self::AssertIsNotNone if let Some(arg0) = args.first() => {
                 Some(NarrowOps::from_single_narrow_op(
-                    builder,
                     arg0,
                     AtomicNarrowOp::IsNot(Expr::NoneLiteral(ExprNoneLiteral {
                         node_index: AtomicNodeIndex::default(),
@@ -158,7 +156,6 @@ impl TestAssertion {
                     && let Some(arg1) = args.get(1) =>
             {
                 Some(NarrowOps::from_single_narrow_op(
-                    builder,
                     arg0,
                     AtomicNarrowOp::IsInstance(arg1.clone()),
                     arg0.range(),
@@ -169,7 +166,6 @@ impl TestAssertion {
                     && let Some(arg1) = args.get(1) =>
             {
                 Some(NarrowOps::from_single_narrow_op(
-                    builder,
                     arg0,
                     AtomicNarrowOp::IsNotInstance(arg1.clone()),
                     arg0.range(),
@@ -180,7 +176,6 @@ impl TestAssertion {
                     && let Some(arg1) = args.get(1) =>
             {
                 Some(NarrowOps::from_single_narrow_op(
-                    builder,
                     arg0,
                     AtomicNarrowOp::Eq(arg1.clone()),
                     arg0.range(),
@@ -191,7 +186,6 @@ impl TestAssertion {
                     && let Some(arg1) = args.get(1) =>
             {
                 Some(NarrowOps::from_single_narrow_op(
-                    builder,
                     arg0,
                     AtomicNarrowOp::NotEq(arg1.clone()),
                     arg0.range(),
@@ -202,7 +196,6 @@ impl TestAssertion {
                     && let Some(arg1) = args.get(1) =>
             {
                 Some(NarrowOps::from_single_narrow_op(
-                    builder,
                     arg0,
                     AtomicNarrowOp::Is(arg1.clone()),
                     arg0.range(),
@@ -213,7 +206,6 @@ impl TestAssertion {
                     && let Some(arg1) = args.get(1) =>
             {
                 Some(NarrowOps::from_single_narrow_op(
-                    builder,
                     arg0,
                     AtomicNarrowOp::IsNot(arg1.clone()),
                     arg0.range(),
@@ -224,7 +216,6 @@ impl TestAssertion {
                     && let Some(arg1) = args.get(1) =>
             {
                 Some(NarrowOps::from_single_narrow_op(
-                    builder,
                     arg0,
                     AtomicNarrowOp::In(arg1.clone()),
                     arg0.range(),
@@ -235,7 +226,6 @@ impl TestAssertion {
                     && let Some(arg1) = args.get(1) =>
             {
                 Some(NarrowOps::from_single_narrow_op(
-                    builder,
                     arg0,
                     AtomicNarrowOp::NotIn(arg1.clone()),
                     arg0.range(),

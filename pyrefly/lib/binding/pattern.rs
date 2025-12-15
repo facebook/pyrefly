@@ -347,7 +347,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(&mut x.subject, subject.usage());
         let subject_idx =
             self.insert_binding_current(subject, Binding::Expr(None, *x.subject.clone()));
-        let match_narrowing_subject = expr_to_subjects(self, &x.subject).first().cloned();
+        let match_narrowing_subject = expr_to_subjects(&x.subject).first().cloned();
         let mut exhaustive = false;
         self.start_fork(x.range);
         // Type narrowing operations that are carried over from one case to the next. For example, in:

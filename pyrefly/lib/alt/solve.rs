@@ -93,9 +93,9 @@ use crate::binding::binding::SuperStyle;
 use crate::binding::binding::TypeParameter;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::narrow::identifier_and_chain_for_expr;
-use crate::binding::narrow::identifier_and_chain_for_expr_with_resolver;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr_with_resolver;
+use crate::binding::narrow::identifier_and_facet_subject_for_expr;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -2237,16 +2237,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(assigned_ty)
                 };
                 let expr = Expr::Subscript(subscript.clone());
-                let mut literal_resolver = |expr: &Expr| self.literal_string_key_from_expr(expr);
-                if let Some((identifier, chain)) =
-                    identifier_and_chain_for_expr_with_resolver(&expr, &mut literal_resolver)
+                if let Some((identifier, subject)) = identifier_and_facet_subject_for_expr(&expr)
+                    && let Some(chain) = self.resolve_facet_subject_chain(&subject)
                 {
                     let mut type_info = self
                         .get(&Key::BoundName(ShortIdentifier::new(&identifier)))
                         .arc_clone();
                     type_info.update_for_assignment(chain.facets(), narrowed);
-                    type_info
-                } else if let Some((identifier, facets)) =
+                    return type_info;
+                }
+                let mut literal_resolver = |expr: &Expr| self.literal_string_key_from_expr(expr);
+                if let Some((identifier, facets)) =
                     identifier_and_chain_prefix_for_expr_with_resolver(&expr, &mut literal_resolver)
                 {
                     // If the chain contains an unknown subscript index, we clear narrowing for
