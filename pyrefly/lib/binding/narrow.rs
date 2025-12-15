@@ -74,9 +74,10 @@ pub enum AtomicNarrowOp {
     TypeNotEq(Expr),
     In(Expr),
     NotIn(Expr),
-    /// Indicates a `'key' in <subject>` guard where `<subject>` is the name/facet being narrowed.
+    /// Unlike `In`, which models `<value> in <container>`, this tracks a `'key' in <subject>`
+    /// guard where `<subject>` is the dict-like name/facet being narrowed.
     HasKey(Name),
-    /// Indicates a `'key' not in <subject>` guard.
+    /// The negated version of `HasKey`, representing `'key' not in <subject>`.
     NotHasKey(Name),
     /// Used to narrow tuple types based on length
     LenEq(Expr),
@@ -340,10 +341,13 @@ impl NarrowOps {
             .0
     }
 
-    pub fn and_all(&mut self, other: Self) {
-        let mut seen = SmallSet::new();
+    fn and(&mut self, name: Name, op: NarrowOp, range: TextRange) {
+        let existing_op = self.get_or_placeholder(name, range);
+        existing_op.and(op)
+    }
+
+    pub fn and_all_without_placeholder(&mut self, other: Self) {
         for (name, (op, range)) in other.0 {
-            seen.insert(name.clone());
             match self.0.entry(name) {
                 Entry::Occupied(mut entry) => {
                     entry.get_mut().0.and(op);
@@ -352,6 +356,14 @@ impl NarrowOps {
                     entry.insert((op, range));
                 }
             }
+        }
+    }
+
+    pub fn and_all(&mut self, other: Self) {
+        let mut seen = SmallSet::new();
+        for (name, (op, range)) in other.0 {
+            seen.insert(name.clone());
+            self.and(name, op, range);
         }
         // For names present in `self` but not `other`, `And` their narrows with a placeholder
         let unmerged_names: Vec<_> = self
@@ -376,8 +388,14 @@ impl NarrowOps {
     }
 
     fn or(&mut self, name: Name, op: NarrowOp, range: TextRange) {
-        let existing_op = self.get_or_placeholder(name, range);
-        existing_op.or(op)
+        match self.0.entry(name) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().0.or(op);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert((op, range));
+            }
+        }
     }
 
     pub fn or_all(&mut self, other: Self) {
@@ -458,7 +476,7 @@ impl NarrowOps {
         };
         let mut narrow_ops = Self::new();
         for subject in expr_to_subjects(right) {
-            narrow_ops.and_all(Self::from_single_narrow_op_for_subject(
+            narrow_ops.and_all_without_placeholder(Self::from_single_narrow_op_for_subject(
                 subject,
                 op.clone(),
                 right.range(),
@@ -533,16 +551,6 @@ impl NarrowOps {
                     .iter()
                     .zip(comparators)
                     .filter_map(|(cmp_op, right)| {
-                        if special_export.is_none()
-                            && matches!(cmp_op, CmpOp::In | CmpOp::NotIn)
-                            && let Some(extra) = Self::from_membership_comparison(
-                                left_for_membership,
-                                right,
-                                matches!(cmp_op, CmpOp::In),
-                            )
-                        {
-                            membership_narrows.push(extra);
-                        }
                         let range = right.range();
                         let op = match (cmp_op, special_export) {
                             (CmpOp::Is | CmpOp::Eq, Some(SpecialExport::BuiltinsType)) => {
@@ -582,8 +590,26 @@ impl NarrowOps {
                             }
                             (CmpOp::Eq, _) => AtomicNarrowOp::Eq(right.clone()),
                             (CmpOp::NotEq, _) => AtomicNarrowOp::NotEq(right.clone()),
-                            (CmpOp::In, None) => AtomicNarrowOp::In(right.clone()),
-                            (CmpOp::NotIn, None) => AtomicNarrowOp::NotIn(right.clone()),
+                            (CmpOp::In, None) => {
+                                if let Some(extra) = Self::from_membership_comparison(
+                                    left_for_membership,
+                                    right,
+                                    true,
+                                ) {
+                                    membership_narrows.push(extra);
+                                }
+                                AtomicNarrowOp::In(right.clone())
+                            }
+                            (CmpOp::NotIn, None) => {
+                                if let Some(extra) = Self::from_membership_comparison(
+                                    left_for_membership,
+                                    right,
+                                    false,
+                                ) {
+                                    membership_narrows.push(extra);
+                                }
+                                AtomicNarrowOp::NotIn(right.clone())
+                            }
                             _ => {
                                 return None;
                             }

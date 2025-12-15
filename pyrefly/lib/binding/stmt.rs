@@ -737,7 +737,7 @@ impl<'a> BindingsBuilder<'a> {
                         NarrowUseLocation::Span(range),
                         &Usage::Narrowing(None),
                     );
-                    negated_prev_ops.and_all(new_narrow_ops.negate());
+                    negated_prev_ops.and_all_without_placeholder(new_narrow_ops.negate());
                     self.stmts(body, parent);
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {

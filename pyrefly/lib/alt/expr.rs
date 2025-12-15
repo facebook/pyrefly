@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::cell::Cell;
 use std::cell::LazyCell;
 use std::fmt;
 use std::fmt::Display;
@@ -1280,19 +1279,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
             }
             Expr::StringLiteral(ExprStringLiteral { value: key, .. }) => {
-                let used_fallback = Cell::new(false);
-                let type_info = TypeInfo::at_facet(base, &FacetKind::Key(key.to_string()), || {
-                    used_fallback.set(true);
+                let key_str = key.to_string();
+                let key_facet = FacetKind::Key(key_str.clone());
+                let should_warn = base.type_at_facet(&key_facet).is_none();
+                let prev = self.replace_warn_optional_typed_dict_key(should_warn);
+                let type_info = TypeInfo::at_facet(base, &key_facet, || {
                     self.subscript_infer_for_type(base.ty(), slice, range, errors)
                 });
-                if !used_fallback.get()
+                self.set_warn_optional_typed_dict_key(prev);
+                if !should_warn
                     && type_info.ty().is_never()
                     && self.type_may_be_typed_dict(base.ty())
                 {
-                    // The key facet was already narrowed (e.g., via `'foo' not in obj`),
-                    // so `subscript_infer_for_type` did not run. Execute it now for its
-                    // diagnostics side effects while keeping the narrowed type (`Never`).
+                    let prev = self.replace_warn_optional_typed_dict_key(true);
                     let _ = self.subscript_infer_for_type(base.ty(), slice, range, errors);
+                    self.set_warn_optional_typed_dict_key(prev);
                 }
                 type_info
             }
@@ -2226,7 +2227,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::TypedDict(typed_dict) => {
                     let key_ty = self.expr_infer(slice, errors);
-                    let warn_about_optional = matches!(typed_dict, TypedDict::TypedDict(_));
+                    let warn_about_optional = matches!(typed_dict, TypedDict::TypedDict(_))
+                        && self.warn_optional_typed_dict_key_enabled();
                     self.distribute_over_union(&key_ty, |ty| match ty {
                         Type::Literal(Lit::Str(field_name)) => {
                             let fields = self.typed_dict_fields(&typed_dict);

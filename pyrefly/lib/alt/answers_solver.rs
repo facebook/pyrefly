@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::fmt;
@@ -403,6 +404,7 @@ pub struct AnswersSolver<'a, Ans: LookupAnswer> {
     pub uniques: &'a UniqueFactory,
     pub recurser: &'a VarRecurser,
     pub stdlib: &'a Stdlib,
+    warn_optional_typed_dict_key: Cell<bool>,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -427,6 +429,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             recurser,
             current,
             thread_state,
+            warn_optional_typed_dict_key: Cell::new(false),
         }
     }
 
@@ -451,6 +454,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn base_errors(&self) -> &ErrorCollector {
         self.base_errors
+    }
+
+    pub fn replace_warn_optional_typed_dict_key(&self, value: bool) -> bool {
+        self.warn_optional_typed_dict_key.replace(value)
+    }
+
+    pub fn set_warn_optional_typed_dict_key(&self, value: bool) {
+        self.warn_optional_typed_dict_key.set(value);
+    }
+
+    pub fn warn_optional_typed_dict_key_enabled(&self) -> bool {
+        self.warn_optional_typed_dict_key.get()
     }
 
     pub fn module(&self) -> &ModuleInfo {
