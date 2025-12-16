@@ -198,63 +198,95 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let call_keywords = keywords.map(CallKeyword::new);
         let obj_name = Name::new_static("obj");
 
-        let obj_ty = match args.first() {
-            Some(first) => self.expr_infer(first, errors),
-            None => Type::Any(AnyStyle::Implicit),
+        if args.is_empty() {
+            return self.callable_infer(
+                Callable::list(
+                    ParamList::new(vec![
+                        Param::PosOnly(
+                            Some(obj_name.clone()),
+                            Type::Any(AnyStyle::Implicit),
+                            Required::Required,
+                        ),
+                        Param::Kwargs(None, Type::Any(AnyStyle::Implicit)),
+                    ]),
+                    Type::Any(AnyStyle::Implicit),
+                ),
+                Some(&FunctionKind::DataclassReplace),
+                None,
+                None,
+                &call_args,
+                &call_keywords,
+                range,
+                errors,
+                errors,
+                None,
+                None,
+                None,
+            );
+        }
+
+        let obj_expr = &args[0];
+        let obj_ty = self.expr_infer(obj_expr, errors);
+
+        let is_dataclass = |cls: &ClassType| {
+            let cls_metadata = self.get_metadata_for_class(cls.class_object());
+            cls_metadata.dataclass_metadata().is_some_and(|m| {
+                m.field_specifiers.iter().any(|k| {
+                    matches!(
+                        k,
+                        CalleeKind::Function(FunctionKind::DataclassField)
+                            | CalleeKind::Class(ClassKind::DataclassField)
+                    )
+                })
+            })
         };
-        let mut dataclass_types = SmallSet::new();
+
         let mut saw_any = false;
+        let mut saw_dataclass = false;
         let mut saw_non_dataclass = false;
-        self.distribute_over_union(&obj_ty, |ty| {
-            match ty {
-                Type::Any(_) => saw_any = true,
-                Type::ClassType(cls) => {
-                    let cls_metadata = self.get_metadata_for_class(cls.class_object());
-                    let allow_dataclass = cls_metadata.dataclass_metadata().is_some_and(|m| {
-                        m.field_specifiers.iter().any(|k| {
-                            matches!(
-                                k,
-                                CalleeKind::Function(FunctionKind::DataclassField)
-                                    | CalleeKind::Class(ClassKind::DataclassField)
-                            )
-                        })
-                    });
-                    if allow_dataclass {
-                        dataclass_types.insert(cls.clone());
-                    } else {
-                        saw_non_dataclass = true;
-                    }
-                }
-                _ => saw_non_dataclass = true,
-            }
-            ty.clone()
+        self.map_over_union(&obj_ty, |ty| match ty {
+            Type::Any(_) => saw_any = true,
+            Type::ClassType(cls) if is_dataclass(cls) => saw_dataclass = true,
+            _ => saw_non_dataclass = true,
         });
 
-        let metadata = FuncMetadata {
-            kind: FunctionKind::DataclassReplace,
-            flags: Default::default(),
-        };
-
-        if dataclass_types.is_empty() {
-            if !saw_any {
-                self.error(
-                    errors,
-                    args.first().map(|x| x.range()).unwrap_or(range),
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                    "dataclasses.replace() should be called on dataclass instances".to_owned(),
-                );
-            }
+        if saw_any {
             return self.callable_infer(
                 Callable::list(
                     ParamList::new(vec![
                         Param::PosOnly(Some(obj_name.clone()), obj_ty.clone(), Required::Required),
                         Param::Kwargs(None, Type::Any(AnyStyle::Implicit)),
                     ]),
-                    if saw_any {
-                        Type::Any(AnyStyle::Implicit)
-                    } else {
-                        Type::any_error()
-                    },
+                    Type::Any(AnyStyle::Implicit),
+                ),
+                Some(&FunctionKind::DataclassReplace),
+                None,
+                None,
+                &call_args,
+                &call_keywords,
+                range,
+                errors,
+                errors,
+                None,
+                None,
+                None,
+            );
+        }
+
+        if !saw_dataclass {
+            self.error(
+                errors,
+                obj_expr.range(),
+                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                "dataclasses.replace() should be called on dataclass instances".to_owned(),
+            );
+            return self.callable_infer(
+                Callable::list(
+                    ParamList::new(vec![
+                        Param::PosOnly(Some(obj_name.clone()), obj_ty.clone(), Required::Required),
+                        Param::Kwargs(None, Type::Any(AnyStyle::Implicit)),
+                    ]),
+                    Type::any_error(),
                 ),
                 Some(&FunctionKind::DataclassReplace),
                 None,
@@ -273,7 +305,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if saw_non_dataclass {
             self.error(
                 errors,
-                args.first().map(|x| x.range()).unwrap_or(range),
+                obj_expr.range(),
                 ErrorInfo::Kind(ErrorKind::InvalidArgument),
                 format!(
                     "dataclasses.replace() expects a dataclass instance; got {}",
@@ -283,105 +315,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Type::any_error();
         }
 
-        let mut overloads = Vec::new();
-        for dt in &dataclass_types {
-            if let Some(function) = self.build_replace_function(&obj_name, dt, &metadata, errors) {
-                overloads.push(function);
-            }
-        }
-        if overloads.is_empty() {
-            return Type::any_error();
-        }
-
-        // Validate that every provided keyword is accepted by all overloads unless any overload
-        // uses **kwargs.
-        let allowed_common = overloads
-            .iter()
-            .map(|ov| self.allowed_replace_keywords(&ov.1.signature))
-            .try_fold(None, |acc: Option<SmallSet<Name>>, (allowed, allow_any)| {
-                if allow_any {
-                    return Err(());
-                }
-                Ok(Some(match acc {
-                    None => allowed,
-                    Some(existing) => {
-                        let mut intersection = SmallSet::new();
-                        for name in existing {
-                            if allowed.contains(&name) {
-                                intersection.insert(name);
-                            }
-                        }
-                        intersection
-                    }
-                }))
-            });
-        if let Ok(Some(allowed)) = allowed_common {
-            for kw in keywords {
-                if let Some(id) = &kw.arg
-                    && !allowed.contains(&id.id)
-                {
-                    self.error(
-                        errors,
-                        kw.range,
-                        ErrorInfo::Kind(ErrorKind::UnexpectedKeyword),
-                        format!(
-                            "Unexpected keyword argument `{}` in function `dataclasses.replace`",
-                            id.id
-                        ),
-                    );
+        // For unions of dataclasses, typecheck each member individually. We treat the first argument
+        // as the member type to avoid rejecting `A | B` as not assignable to `A`.
+        self.distribute_over_union(&obj_ty, |ty| match ty {
+            Type::ClassType(cls) if is_dataclass(cls) => {
+                let Some(callable) = self.build_replace_callable(&obj_name, cls, errors) else {
                     return Type::any_error();
-                }
+                };
+                let obj_ty = ty.clone();
+                let mut member_args = Vec::with_capacity(args.len());
+                member_args.push(CallArg::ty(&obj_ty, obj_expr.range()));
+                member_args.extend(args[1..].map(CallArg::expr_maybe_starred));
+                self.callable_infer(
+                    callable,
+                    Some(&FunctionKind::DataclassReplace),
+                    None,
+                    None,
+                    &member_args,
+                    &call_keywords,
+                    range,
+                    errors,
+                    errors,
+                    None,
+                    None,
+                    None,
+                )
             }
-        }
-
-        if overloads.len() == 1 {
-            let func = overloads.pop().unwrap();
-            return self.callable_infer(
-                func.1.signature,
-                Some(&FunctionKind::DataclassReplace),
-                func.0.as_deref(),
-                None,
-                &call_args,
-                &call_keywords,
-                range,
-                errors,
-                errors,
-                None,
-                None,
-                None,
-            );
-        }
-
-        let Ok(overloads) = Vec1::try_from_vec(overloads) else {
-            return Type::any_error();
-        };
-        let (ret, sig) = self.call_overloads(
-            overloads,
-            metadata,
-            None,
-            &call_args,
-            &call_keywords,
-            range,
-            errors,
-            None,
-            None,
-            None,
-        );
-        self.callable_infer(
-            sig,
-            Some(&FunctionKind::DataclassReplace),
-            None,
-            None,
-            &call_args,
-            &call_keywords,
-            range,
-            errors,
-            errors,
-            None,
-            None,
-            None,
-        );
-        ret
+            _ => Type::any_error(),
+        })
     }
 
     fn build_replace_callable(
@@ -450,49 +411,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ParamList::new(params),
             dataclass_type.clone().to_type(),
         ))
-    }
-
-    fn build_replace_function(
-        &self,
-        obj_name: &Name,
-        dataclass_type: &ClassType,
-        metadata: &FuncMetadata,
-        errors: &ErrorCollector,
-    ) -> Option<TargetWithTParams<Function>> {
-        self.build_replace_callable(obj_name, dataclass_type, errors)
-            .map(|signature| {
-                TargetWithTParams(
-                    None,
-                    Function {
-                        signature,
-                        metadata: metadata.clone(),
-                    },
-                )
-            })
-    }
-
-    fn allowed_replace_keywords(&self, callable: &Callable) -> (SmallSet<Name>, bool) {
-        let mut allowed = SmallSet::new();
-        let mut allow_any = false;
-        match &callable.params {
-            Params::List(params) => {
-                for param in params.items() {
-                    match param {
-                        Param::KwOnly(name, ..) => {
-                            allowed.insert(name.clone());
-                        }
-                        Param::Kwargs(_, _) => {
-                            allow_any = true;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {
-                allow_any = true;
-            }
-        }
-        (allowed, allow_any)
     }
 
     pub fn validate_frozen_dataclass_inheritance(

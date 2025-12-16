@@ -254,7 +254,7 @@ replace(b, item="wrong")  # E: Argument `Literal['wrong']` is not assignable to 
 );
 
 testcase!(
-    test_replace_union_of_two_dataclasses_rejects_bad_kw,
+    test_replace_union_two_dataclasses_rejects_kw_not_in_all_members,
     r#"
 from dataclasses import dataclass, replace
 from typing import Union
@@ -268,7 +268,39 @@ class B:
     y: int
 
 def f(obj: Union[A, B]):
-    replace(obj, z=1)  # E: Unexpected keyword argument `z` in function `dataclasses.replace`
+    replace(obj, x=1)  # E: Unexpected keyword argument `x` in function `dataclasses.replace`
+    "#,
+);
+
+testcase!(
+    test_replace_union_two_dataclasses_accepts_shared_kw,
+    r#"
+from dataclasses import dataclass, replace
+from typing import Union
+
+@dataclass
+class A:
+    x: int
+
+@dataclass
+class B:
+    x: int
+    y: str
+
+def f(obj: Union[A, B]):
+    replace(obj, x=1)
+    "#,
+);
+
+testcase!(
+    test_replace_any_object_allows_any_keywords,
+    r#"
+from dataclasses import replace
+from typing import Any
+
+def f(obj: Any):
+    replace(obj, z=1)
+    replace(obj, **{"z": 2})
     "#,
 );
 
