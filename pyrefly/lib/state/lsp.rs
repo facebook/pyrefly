@@ -1794,6 +1794,14 @@ impl<'a> Transaction<'a> {
         quick_fixes::extract_function::extract_function_code_actions(self, handle, selection)
     }
 
+    pub fn extract_variable_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_variable::extract_variable_code_actions(self, handle, selection)
+    }
+
     /// Determines whether a module is a third-party package.
     ///
     /// Checks if the module's path is located within any of the configured

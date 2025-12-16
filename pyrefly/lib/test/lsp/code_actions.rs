@@ -124,6 +124,34 @@ fn apply_first_extract_action(code: &str) -> Option<String> {
     Some(apply_refactor_edits_for_module(&module_info, edits))
 }
 
+fn compute_extract_variable_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = find_marked_range(module_info.contents());
+    let actions = transaction
+        .extract_variable_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_first_extract_variable_action(code: &str) -> Option<String> {
+    let (module_info, actions, _) = compute_extract_variable_actions(code);
+    let edits = actions.first()?;
+    Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
 fn assert_no_extract_action(code: &str) {
     let (_, actions, _) = compute_extract_actions(code);
     assert!(
@@ -645,6 +673,64 @@ class Outer:
                 self.extracted_method(item)
                 # EXTRACT-END
             return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_variable_basic_refactor() {
+    let code = r#"
+def process(data):
+    total = 0
+    for item in data:
+        total += (
+            # EXTRACT-START
+            item * item + 1
+            # EXTRACT-END
+        )
+    return total
+"#;
+    let updated =
+        apply_first_extract_variable_action(code).expect("expected extract variable action");
+    let expected = r#"
+def process(data):
+    total = 0
+    for item in data:
+        extracted_value = item * item + 1
+        total += (
+            # EXTRACT-START
+            extracted_value
+            # EXTRACT-END
+        )
+    return total
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_variable_name_increments_when_taken() {
+    let code = r#"
+def compute():
+    extracted_value = 10
+    result = (
+        # EXTRACT-START
+        4 * 5
+        # EXTRACT-END
+    )
+    return result
+"#;
+    let updated =
+        apply_first_extract_variable_action(code).expect("expected extract variable action");
+    let expected = r#"
+def compute():
+    extracted_value = 10
+    extracted_value_2 = 4 * 5
+    result = (
+        # EXTRACT-START
+        extracted_value_2
+        # EXTRACT-END
+    )
+    return result
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
