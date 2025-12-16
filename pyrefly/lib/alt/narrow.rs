@@ -155,6 +155,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.intersect_with_fallback(left, right, &Type::never)
     }
 
+    fn intersect_subclass_type(&self, left: &Type, right: &Type) -> Type {
+        if let Some(allowed) = self.allowed_type_for_typevar(left) {
+            let right_type_form = Type::type_form(right.clone());
+            if self.is_subset_eq(&right_type_form, &allowed) {
+                return right.clone();
+            } else {
+                return Type::never();
+            }
+        } else if left.is_type_variable() {
+            return right.clone();
+        }
+        self.intersect(left, right)
+    }
+
+    fn allowed_type_for_typevar(&self, ty: &Type) -> Option<Type> {
+        match ty {
+            Type::Quantified(q) if q.is_type_var() => Some(q.restriction().as_type(self.stdlib)),
+            Type::TypeVar(tv) => Some(tv.restriction().as_type(self.stdlib)),
+            Type::Var(v) => self.allowed_type_for_typevar(&self.solver().force_var(*v)),
+            _ => None,
+        }
+    }
+
     /// Calculate the intersection of a number of types
     pub fn intersects(&self, ts: &[Type]) -> Type {
         match ts {
@@ -242,12 +265,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for right in self.as_class_info(right.clone()) {
             if matches!(left, Type::ClassDef(_)) && matches!(right, Type::ClassDef(_)) {
                 res.push(self.intersect(left, &right))
-            } else if let Some(left) = self.untype_opt(left.clone(), range, errors)
-                && let Some(right) = self.unwrap_class_object_silently(&right)
-            {
-                res.push(Type::type_form(self.intersect(&left, &right)))
             } else {
-                res.push(left.clone())
+                if let Some(left_ty) = self.untype_opt(left.clone(), range, errors) {
+                    if let Some(right_ty) = self.unwrap_class_object_silently(&right) {
+                        res.push(Type::type_form(
+                            self.intersect_subclass_type(&left_ty, &right_ty),
+                        ));
+                        continue;
+                    }
+                } else if left.is_type_variable()
+                    && let Some(right_ty) = self.unwrap_class_object_silently(&right)
+                {
+                    res.push(Type::type_form(right_ty));
+                    continue;
+                }
+                res.push(left.clone());
             }
         }
         self.unions(res)
