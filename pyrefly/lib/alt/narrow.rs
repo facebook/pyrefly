@@ -275,9 +275,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 } else if left.is_type_variable()
                     && let Some(right_ty) = self.unwrap_class_object_silently(&right)
+                    && let Some(allowed) = self.allowed_type_for_typevar(left)
                 {
-                    res.push(Type::type_form(right_ty));
-                    continue;
+                    let rhs_type_form = Type::type_form(right_ty.clone());
+                    if self.is_subset_eq(&rhs_type_form, &allowed) {
+                        res.push(Type::type_form(right_ty));
+                        continue;
+                    }
                 }
                 res.push(left.clone());
             }
