@@ -886,44 +886,37 @@ impl<'a> Transaction<'a> {
             Type::ClassType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
             Type::SelfType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
             Type::Union(box Union { members, .. }) => {
-                let mut converted = Vec::with_capacity(members.len());
-                for member in members {
-                    let Some(callable) = Self::callable_type_from_value(solver, member) else {
-                        return None;
-                    };
-                    converted.push(callable);
-                }
-                if converted.is_empty() {
-                    None
-                } else if converted.len() == 1 {
-                    converted.into_iter().next()
-                } else {
-                    Some(solver.unions(converted))
-                }
+                Self::callable_type_from_list(solver, members)
             }
             Type::TypeAlias(alias) => Self::callable_type_from_value(solver, alias.as_type()),
             Type::Type(box inner) => Self::callable_type_from_value(solver, inner),
             Type::Quantified(box quantified) => match quantified.restriction {
                 Restriction::Bound(bound) => Self::callable_type_from_value(solver, bound),
-                Restriction::Constraints(options) => {
-                    let mut converted = Vec::with_capacity(options.len());
-                    for option in options {
-                        let Some(callable) = Self::callable_type_from_value(solver, option) else {
-                            return None;
-                        };
-                        converted.push(callable);
-                    }
-                    if converted.is_empty() {
-                        None
-                    } else if converted.len() == 1 {
-                        converted.into_iter().next()
-                    } else {
-                        Some(solver.unions(converted))
-                    }
-                }
+                Restriction::Constraints(options) => Self::callable_type_from_list(solver, options),
                 Restriction::Unrestricted => None,
             },
             _ => None,
+        }
+    }
+
+    /// Convert a collection of types into a single callable union, returning `None` if the list
+    /// was empty or any member failed to coerce into a callable.
+    fn callable_type_from_list(
+        solver: &AnswersSolver<TransactionHandle<'_>>,
+        types: Vec<Type>,
+    ) -> Option<Type> {
+        if types.is_empty() {
+            return None;
+        }
+        let mut converted = Vec::with_capacity(types.len());
+        for ty in types {
+            let callable = Self::callable_type_from_value(solver, ty)?;
+            converted.push(callable);
+        }
+        if converted.len() == 1 {
+            converted.into_iter().next()
+        } else {
+            Some(solver.unions(converted))
         }
     }
 
