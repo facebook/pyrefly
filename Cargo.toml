@@ -11,6 +11,7 @@ codegen-units = 1
 strip = false
 
 [profile.release-with-debug]
+inherits = "release"
 debug = true
 lto = true
 codegen-units = 1
