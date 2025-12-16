@@ -9,8 +9,6 @@ use dupe::Dupe;
 use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
-use pyrefly_util::visit::Visit;
-use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -21,6 +19,12 @@ use crate::state::lsp::quick_fixes::extract_function::LocalRefactorCodeAction;
 
 const DEFAULT_VARIABLE_PREFIX: &str = "extracted_value";
 
+/// Builds extract-variable refactor actions for the supplied selection.
+///
+/// Returns `None` when the selection is not a single, non-empty expression or the
+/// expression cannot be safely rewritten into a variable binding. Otherwise,
+/// returns a single [`LocalRefactorCodeAction`] that inserts a binding above the
+/// enclosing statement and replaces the selection with the new identifier.
 pub(crate) fn extract_variable_code_actions(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -42,7 +46,7 @@ pub(crate) fn extract_variable_code_actions(
     }
     let statement_range = find_enclosing_statement_range(ast.as_ref(), expression_range)?;
     let (statement_indent, insert_position) =
-        line_indent_and_start(module_info.contents(), statement_range.start());
+        line_indent_and_start(module_info.contents(), statement_range.start())?;
     let variable_name = generate_variable_name(module_info.contents());
     let assignment = format!("{statement_indent}{variable_name} = {expression_text}\n");
     let replacement_text = format!("{leading_ws}{variable_name}{trailing_ws}");
@@ -89,13 +93,9 @@ fn split_selection<'a>(
 }
 
 fn is_exact_expression(ast: &ModModule, selection: TextRange) -> bool {
-    let mut matches = false;
-    ast.visit(&mut |expr: &Expr| {
-        if expr.range() == selection {
-            matches = true;
-        }
-    });
-    matches
+    Ast::locate_node(ast, selection.start())
+        .into_iter()
+        .any(|node| node.as_expr_ref().is_some() && node.range() == selection)
 }
 
 fn find_enclosing_statement_range(ast: &ModModule, selection: TextRange) -> Option<TextRange> {
@@ -110,7 +110,7 @@ fn find_enclosing_statement_range(ast: &ModModule, selection: TextRange) -> Opti
     None
 }
 
-fn line_indent_and_start(source: &str, position: TextSize) -> (String, TextSize) {
+fn line_indent_and_start(source: &str, position: TextSize) -> Option<(String, TextSize)> {
     let mut idx = position.to_usize();
     if idx > source.len() {
         idx = source.len();
@@ -121,11 +121,10 @@ fn line_indent_and_start(source: &str, position: TextSize) -> (String, TextSize)
         .unwrap_or(0);
     let indent = source[line_start..idx]
         .chars()
-        .take_while(|c| c.is_whitespace())
+        .take_while(|c| *c == ' ' || *c == '\t')
         .collect();
-    let insert_position =
-        TextSize::try_from(line_start).unwrap_or_else(|_| TextSize::new(u32::MAX));
-    (indent, insert_position)
+    let insert_position = TextSize::try_from(line_start).ok()?;
+    Some((indent, insert_position))
 }
 
 fn generate_variable_name(source: &str) -> String {
@@ -136,7 +135,9 @@ fn generate_variable_name(source: &str) -> String {
         } else {
             format!("{DEFAULT_VARIABLE_PREFIX}_{counter}")
         };
-        if !source.contains(&candidate) {
+        let check_space = format!("{candidate} =");
+        let check_tab = format!("{candidate}\t=");
+        if !source.contains(&check_space) && !source.contains(&check_tab) {
             return candidate;
         }
         counter += 1;

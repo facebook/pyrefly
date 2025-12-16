@@ -152,6 +152,15 @@ fn apply_first_extract_variable_action(code: &str) -> Option<String> {
     Some(apply_refactor_edits_for_module(&module_info, edits))
 }
 
+fn assert_no_extract_variable_action(code: &str) {
+    let (_, actions, _) = compute_extract_variable_actions(code);
+    assert!(
+        actions.is_empty(),
+        "expected no extract-variable actions, found {}",
+        actions.len()
+    );
+}
+
 fn assert_no_extract_action(code: &str) {
     let (_, actions, _) = compute_extract_actions(code);
     assert!(
@@ -733,6 +742,42 @@ def compute():
     return result
 "#;
     assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_variable_rejects_empty_selection() {
+    let code = r#"
+def sink(values):
+    # EXTRACT-START
+    # EXTRACT-END
+    return values
+"#;
+    assert_no_extract_variable_action(code);
+}
+
+#[test]
+fn extract_variable_rejects_whitespace_selection() {
+    let code = r#"
+def sink(values):
+    return (
+        # EXTRACT-START
+
+        # EXTRACT-END
+    )
+"#;
+    assert_no_extract_variable_action(code);
+}
+
+#[test]
+fn extract_variable_requires_exact_expression() {
+    let code = r#"
+def sink(values):
+    # EXTRACT-START
+    value = values[0]
+    # EXTRACT-END
+    return value
+"#;
+    assert_no_extract_variable_action(code);
 }
 
 #[test]

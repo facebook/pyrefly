@@ -87,7 +87,7 @@ use crate::types::types::Type;
 
 mod quick_fixes;
 
-use self::quick_fixes::extract_function::LocalRefactorCodeAction;
+pub(crate) use self::quick_fixes::extract_function::LocalRefactorCodeAction;
 
 fn default_true() -> bool {
     true

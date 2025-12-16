@@ -238,6 +238,7 @@ use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::ImportBehavior;
+use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
@@ -2412,7 +2413,7 @@ impl Server {
                     }),
             );
         }
-        if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
+        let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
             for action in refactors {
                 let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
                 for (module, edit_range, new_text) in action.edits {
@@ -2437,32 +2438,12 @@ impl Server {
                     ..Default::default()
                 }));
             }
+        };
+        if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
-            for action in refactors {
-                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-                for (module, edit_range, new_text) in action.edits {
-                    let Some(edit_uri) = module_info_to_uri(&module) else {
-                        continue;
-                    };
-                    changes.entry(edit_uri).or_default().push(TextEdit {
-                        range: module.to_lsp_range(edit_range),
-                        new_text,
-                    });
-                }
-                if changes.is_empty() {
-                    continue;
-                }
-                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: action.title,
-                    kind: Some(action.kind),
-                    edit: Some(WorkspaceEdit {
-                        changes: Some(changes),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }));
-            }
+            push_refactor_actions(refactors);
         }
         if actions.is_empty() {
             None

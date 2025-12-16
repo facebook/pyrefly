@@ -370,7 +370,7 @@ fn method_context_from_function(
     }
     let receiver_name = first_parameter_name(&function_def.parameters)?;
     let (method_indent, insert_position) =
-        indent_and_line_start(source, function_def.range().start());
+        indent_and_line_start(source, function_def.range().start())?;
     Some(MethodContext {
         class_name: class_def.name.id.to_string(),
         receiver_name,
@@ -418,7 +418,7 @@ fn detect_block_indent(selection_text: &str) -> String {
     String::new()
 }
 
-fn indent_and_line_start(source: &str, position: TextSize) -> (String, TextSize) {
+fn indent_and_line_start(source: &str, position: TextSize) -> Option<(String, TextSize)> {
     let mut idx = position.to_usize();
     if idx > source.len() {
         idx = source.len();
@@ -429,11 +429,10 @@ fn indent_and_line_start(source: &str, position: TextSize) -> (String, TextSize)
         .unwrap_or(0);
     let indent = source[line_start..idx]
         .chars()
-        .take_while(|c| c.is_whitespace())
+        .take_while(|c| *c == ' ' || *c == '\t')
         .collect();
-    let insert_position =
-        TextSize::try_from(line_start).unwrap_or_else(|_| TextSize::new(u32::MAX));
-    (indent, insert_position)
+    let insert_position = TextSize::try_from(line_start).ok()?;
+    Some((indent, insert_position))
 }
 
 fn build_helper_text(
