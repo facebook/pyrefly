@@ -153,6 +153,7 @@ impl Transaction<'_> {
         } else {
             answers
                 .get_type_trace(callee_range)
+                .map(|t| self.coerce_type_to_callable(handle, t))
                 .map(|t| (vec![t], 0, active_argument, callee_range))
         }
     }

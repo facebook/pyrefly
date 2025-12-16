@@ -252,6 +252,27 @@ Signature Help Result: active=0
 }
 
 #[test]
+fn signature_help_for_callable_instance() {
+    let code = r#"
+class Greeter:
+    def __call__(self, name: str, times: int = 1) -> str: ...
+
+g = Greeter()
+g(
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("def __call__(self: Greeter, name: str, times: int = 1) -> str: ..."),
+        "Expected signature help to show __call__ signature, got: {report}"
+    );
+    assert!(
+        report.contains("parameters=[name: str, times: int = 1]"),
+        "Expected signature help parameters, got: {report}"
+    );
+}
+
+#[test]
 fn simple_function_nested_test() {
     let code = r#"
 def f(a: str) -> None: ...

@@ -126,6 +126,31 @@ takes(foo=1, bar="x", baz=None)
 }
 
 #[test]
+fn hover_on_callable_instance_uses_dunder_call_signature() {
+    let code = r#"
+class Greeter:
+    def __call__(self, name: str, repeat: int = 1) -> str: ...
+
+greeter = Greeter()
+greeter("hi")
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("__call__"),
+        "Expected hover to refer to __call__, got: {report}"
+    );
+    assert!(
+        report.contains("name: str"),
+        "Expected hover to show parameter 'name', got: {report}"
+    );
+    assert!(
+        report.contains("repeat: int = 1"),
+        "Expected hover to show optional parameter, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_inline_ignore_comment() {
     let code = r#"
 a: int = "test"  # pyrefly: ignore

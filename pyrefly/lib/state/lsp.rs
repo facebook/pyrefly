@@ -66,6 +66,7 @@ use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
 
 use crate::ModuleInfo;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
@@ -81,8 +82,10 @@ use crate::state::lsp_attributes::AttributeContext;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
+use crate::state::state::TransactionHandle;
 use crate::types::callable::Param;
 use crate::types::module::ModuleType;
+use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
 mod quick_fixes;
@@ -743,23 +746,23 @@ impl<'a> Transaction<'a> {
                     }
                 };
 
-                if self.get_bindings(handle)?.is_valid_key(&key) {
-                    if let Some(ExprCall {
-                        node_index: _,
-                        range: _,
-                        func,
-                        arguments,
-                    }) = &self.callee_at(handle, position)
-                        && func.range() == id.range
-                        && let Some(ret) = self.get_chosen_overload_trace(handle, arguments.range)
-                    {
-                        Some(ret)
-                    } else {
-                        self.get_type(handle, &key)
-                    }
-                } else {
-                    None
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
                 }
+                let mut ty = self.get_type(handle, &key)?;
+                let call_args_range = self.callee_at(handle, position).and_then(
+                    |ExprCall {
+                         func, arguments, ..
+                     }| (func.range() == id.range).then_some(arguments.range),
+                );
+                if let Some(arguments_range) = call_args_range {
+                    if let Some(ret) = self.get_chosen_overload_trace(handle, arguments_range) {
+                        return Some(ret);
+                    }
+                    ty = self.coerce_type_to_callable(handle, ty);
+                }
+                Some(ty)
             }
             Some(IdentifierWithContext {
                 identifier: _,
@@ -859,6 +862,68 @@ impl<'a> Transaction<'a> {
                 }
             }
             None => self.type_from_expression_at(handle, position),
+        }
+    }
+
+    pub(crate) fn coerce_type_to_callable(&self, handle: &Handle, ty: Type) -> Type {
+        if ty.is_toplevel_callable() {
+            return ty;
+        }
+        let original = ty.clone();
+        self.ad_hoc_solve(handle, |solver| Self::callable_type_from_value(&solver, ty))
+            .and_then(|callable| callable)
+            .unwrap_or(original)
+    }
+
+    fn callable_type_from_value(
+        solver: &AnswersSolver<TransactionHandle<'_>>,
+        ty: Type,
+    ) -> Option<Type> {
+        if ty.is_toplevel_callable() {
+            return Some(ty);
+        }
+        match ty {
+            Type::ClassType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
+            Type::SelfType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
+            Type::Union(box Union { members, .. }) => {
+                let mut converted = Vec::with_capacity(members.len());
+                for member in members {
+                    let Some(callable) = Self::callable_type_from_value(solver, member) else {
+                        return None;
+                    };
+                    converted.push(callable);
+                }
+                if converted.is_empty() {
+                    None
+                } else if converted.len() == 1 {
+                    converted.into_iter().next()
+                } else {
+                    Some(solver.unions(converted))
+                }
+            }
+            Type::TypeAlias(alias) => Self::callable_type_from_value(solver, alias.as_type()),
+            Type::Type(box inner) => Self::callable_type_from_value(solver, inner),
+            Type::Quantified(box quantified) => match quantified.restriction {
+                Restriction::Bound(bound) => Self::callable_type_from_value(solver, bound),
+                Restriction::Constraints(options) => {
+                    let mut converted = Vec::with_capacity(options.len());
+                    for option in options {
+                        let Some(callable) = Self::callable_type_from_value(solver, option) else {
+                            return None;
+                        };
+                        converted.push(callable);
+                    }
+                    if converted.is_empty() {
+                        None
+                    } else if converted.len() == 1 {
+                        converted.into_iter().next()
+                    } else {
+                        Some(solver.unions(converted))
+                    }
+                }
+                Restriction::Unrestricted => None,
+            },
+            _ => None,
         }
     }
 
