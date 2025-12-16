@@ -18,6 +18,7 @@ use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprBoolOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprCompare;
@@ -49,7 +50,7 @@ use crate::types::facet::FacetKind;
 use crate::types::types::Type;
 
 assert_words!(AtomicNarrowOp, 11);
-assert_words!(NarrowOp, 13);
+assert_words!(NarrowOp, 16);
 
 #[derive(Clone, Debug)]
 pub enum AtomicNarrowOp {
@@ -181,7 +182,11 @@ impl DisplayWith<ModuleInfo> for NarrowOp {
         match self {
             Self::Atomic(prop, op) => match prop {
                 None => write!(f, "{}", op.display_with(ctx)),
-                Some(prop) => write!(f, "[{}] {}", prop.chain, op.display_with(ctx)),
+                Some(prop) => {
+                    write!(f, "[")?;
+                    prop.fmt_chain(f, ctx)?;
+                    write!(f, "] {}", op.display_with(ctx))
+                }
             },
             Self::And(ops) => {
                 write!(
@@ -249,8 +254,30 @@ pub enum FacetOrigin {
 
 #[derive(Clone, Debug)]
 pub struct FacetSubject {
-    pub chain: FacetChain,
+    pub resolved: Vec<FacetKind>,
+    pub pending: Option<Box<Expr>>,
     pub origin: FacetOrigin,
+}
+
+impl FacetSubject {
+    pub fn to_chain(&self) -> Option<FacetChain> {
+        if self.pending.is_some() {
+            return None;
+        }
+        Vec1::try_from_vec(self.resolved.clone())
+            .ok()
+            .map(FacetChain::new)
+    }
+
+    fn fmt_chain(&self, f: &mut fmt::Formatter<'_>, ctx: &ModuleInfo) -> fmt::Result {
+        for facet in &self.resolved {
+            write!(f, "{facet}")?;
+        }
+        if let Some(pending) = self.pending.as_deref() {
+            write!(f, "[{}]", pending.display_with(ctx))?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -265,16 +292,21 @@ impl NarrowingSubject {
             Self::Name(name) => Self::Facets(
                 name.clone(),
                 FacetSubject {
-                    chain: FacetChain::new(Vec1::new(prop)),
+                    resolved: vec![prop],
+                    pending: None,
                     origin: FacetOrigin::Direct,
                 },
             ),
             Self::Facets(name, facets) => {
-                let props = Vec1::from_vec_push(facets.chain.facets().to_vec(), prop);
+                let mut resolved = facets.resolved.clone();
+                if facets.pending.is_none() {
+                    resolved.push(prop);
+                }
                 Self::Facets(
                     name.clone(),
                     FacetSubject {
-                        chain: FacetChain::new(props),
+                        resolved,
+                        pending: facets.pending.clone(),
                         origin: facets.origin,
                     },
                 )
@@ -773,81 +805,123 @@ impl NarrowOps {
     }
 }
 
-/// Given an expression, determine whether it is a chain of properties (attribute/concrete index) rooted at a name,
-/// and if so, return the name and the chain of properties.
-/// For example: x.y.[0].z
-pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, FacetChain)> {
-    fn f(expr: &Expr, mut rev_chain: Vec<FacetKind>) -> Option<(Identifier, FacetChain)> {
-        if let Expr::Attribute(attr) = expr {
-            match &*attr.value {
-                Expr::Name(name) => {
-                    let mut final_chain =
-                        Vec1::from_vec_push(rev_chain, FacetKind::Attribute(attr.attr.id.clone()));
-                    final_chain.reverse();
-                    Some((
-                        Ast::expr_name_identifier(name.clone()),
-                        FacetChain::new(final_chain),
-                    ))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(FacetKind::Attribute(attr.attr.id.clone()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
+/// Given an expression, determine whether it is a chain of properties (attribute/concrete index)
+/// rooted at a name, and if so, return the name and the facets (allowing a trailing unresolved subscript).
+/// For example: x.y[0].z, or x["key"], or x[key] (pending facet).
+pub(crate) fn identifier_and_facet_subject_for_expr(
+    expr: &Expr,
+) -> Option<(Identifier, FacetSubject)> {
+    #[derive(Clone)]
+    enum FacetStep<'a> {
+        Attribute(&'a ExprAttribute),
+        Subscript(&'a ExprSubscript),
+    }
+
+    fn collect_steps<'a>(expr: &'a Expr, steps: &mut Vec<FacetStep<'a>>) -> Option<Identifier> {
+        match expr {
+            Expr::Name(name) => Some(Ast::expr_name_identifier(name.clone())),
+            Expr::Attribute(attr) => {
+                let ident = collect_steps(&attr.value, steps)?;
+                steps.push(FacetStep::Attribute(attr));
+                Some(ident)
             }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::NumberLiteral(ExprNumberLiteral {
-                value: Number::Int(idx),
-                ..
-            }) = &**slice
-            && let Some(idx) = idx.as_usize()
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    let mut final_chain = Vec1::from_vec_push(rev_chain, FacetKind::Index(idx));
-                    final_chain.reverse();
-                    Some((
-                        Ast::expr_name_identifier(name.clone()),
-                        FacetChain::new(final_chain),
-                    ))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(FacetKind::Index(idx));
-                    f(parent, rev_chain)
-                }
-                _ => None,
+            Expr::Subscript(subscript) => {
+                let ident = collect_steps(&subscript.value, steps)?;
+                steps.push(FacetStep::Subscript(subscript));
+                Some(ident)
             }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = &**slice
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    let mut final_chain =
-                        Vec1::from_vec_push(rev_chain, FacetKind::Key(key.to_string()));
-                    final_chain.reverse();
-                    Some((
-                        Ast::expr_name_identifier(name.clone()),
-                        FacetChain::new(final_chain),
-                    ))
-                }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(FacetKind::Key(key.to_string()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else {
-            None
+            _ => None,
         }
     }
-    f(expr, Vec::new())
+
+    fn literal_facet_from_expr(expr: &Expr) -> Option<FacetKind> {
+        match expr {
+            Expr::StringLiteral(ExprStringLiteral { value, .. }) => {
+                Some(FacetKind::Key(value.to_string()))
+            }
+            Expr::NumberLiteral(ExprNumberLiteral {
+                value: Number::Int(idx),
+                ..
+            }) => idx.as_usize().map(FacetKind::Index),
+            _ => None,
+        }
+    }
+
+    let mut steps = Vec::new();
+    let identifier = collect_steps(expr, &mut steps)?;
+    if steps.is_empty() {
+        return None;
+    }
+    let mut resolved = Vec::new();
+    let mut pending = None;
+    for (idx, step) in steps.iter().enumerate() {
+        match step {
+            FacetStep::Attribute(attr) => {
+                if pending.is_some() {
+                    return None;
+                }
+                resolved.push(FacetKind::Attribute(attr.attr.id.clone()));
+            }
+            FacetStep::Subscript(subscript) => {
+                if pending.is_some() {
+                    return None;
+                }
+                if let Some(facet) = literal_facet_from_expr(&subscript.slice) {
+                    resolved.push(facet);
+                } else if idx == steps.len() - 1 {
+                    pending = Some(subscript.slice.clone());
+                } else {
+                    return None;
+                }
+            }
+        }
+    }
+    if resolved.is_empty() && pending.is_none() {
+        return None;
+    }
+    Some((
+        identifier,
+        FacetSubject {
+            resolved,
+            pending,
+            origin: FacetOrigin::Direct,
+        },
+    ))
+}
+
+pub fn identifier_and_chain_for_expr(expr: &Expr) -> Option<(Identifier, FacetChain)> {
+    let (identifier, subject) = identifier_and_facet_subject_for_expr(expr)?;
+    subject.to_chain().map(|chain| (identifier, chain))
+}
+
+fn literal_string_from_expr(expr: &Expr) -> Option<String> {
+    if let Expr::StringLiteral(ExprStringLiteral { value, .. }) = expr {
+        Some(value.to_string())
+    } else {
+        None
+    }
 }
 
 /// Similar to identifier_and_chain_for_expr, except if we encounter a non-concrete subscript in the chain
 /// we only return the prefix before that location.
 /// For example: w.x[y].z -> w.x
-pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
-    fn f(expr: &Expr, mut rev_chain: Vec<FacetKind>) -> Option<(Identifier, Vec<FacetKind>)> {
+/// Variant of `identifier_and_chain_prefix_for_expr` that allows a custom literal resolver,
+/// so builders/solvers can plug in logic that resolves Literal-typed variables.
+pub(crate) fn identifier_and_chain_prefix_for_expr_with_resolver<F>(
+    expr: &Expr,
+    resolver: &mut F,
+) -> Option<(Identifier, Vec<FacetKind>)>
+where
+    F: FnMut(&Expr) -> Option<String>,
+{
+    fn f<F>(
+        expr: &Expr,
+        mut rev_chain: Vec<FacetKind>,
+        resolver: &mut F,
+    ) -> Option<(Identifier, Vec<FacetKind>)>
+    where
+        F: FnMut(&Expr) -> Option<String>,
+    {
         if let Expr::Attribute(attr) = expr {
             match &*attr.value {
                 Expr::Name(name) => {
@@ -857,59 +931,62 @@ pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, 
                 }
                 parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
                     rev_chain.push(FacetKind::Attribute(attr.attr.id.clone()));
-                    f(parent, rev_chain)
+                    f(parent, rev_chain, resolver)
                 }
                 _ => None,
             }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::NumberLiteral(ExprNumberLiteral {
+        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr {
+            if let Expr::NumberLiteral(ExprNumberLiteral {
                 value: Number::Int(idx),
                 ..
             }) = &**slice
-            && let Some(idx) = idx.as_usize()
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    rev_chain.push(FacetKind::Index(idx));
-                    rev_chain.reverse();
-                    Some((Ast::expr_name_identifier(name.clone()), rev_chain))
+                && let Some(idx) = idx.as_usize()
+            {
+                match &*subscript.value {
+                    Expr::Name(name) => {
+                        rev_chain.push(FacetKind::Index(idx));
+                        rev_chain.reverse();
+                        Some((Ast::expr_name_identifier(name.clone()), rev_chain))
+                    }
+                    parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
+                        rev_chain.push(FacetKind::Index(idx));
+                        f(parent, rev_chain, resolver)
+                    }
+                    _ => None,
                 }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(FacetKind::Index(idx));
-                    f(parent, rev_chain)
+            } else if let Some(key) = resolver(slice) {
+                match &*subscript.value {
+                    Expr::Name(name) => {
+                        rev_chain.push(FacetKind::Key(key));
+                        rev_chain.reverse();
+                        Some((Ast::expr_name_identifier(name.clone()), rev_chain))
+                    }
+                    parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
+                        rev_chain.push(FacetKind::Key(key));
+                        f(parent, rev_chain, resolver)
+                    }
+                    _ => None,
                 }
-                _ => None,
-            }
-        } else if let Expr::Subscript(subscript @ ExprSubscript { slice, .. }) = expr
-            && let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = &**slice
-        {
-            match &*subscript.value {
-                Expr::Name(name) => {
-                    rev_chain.push(FacetKind::Key(key.to_string()));
-                    rev_chain.reverse();
-                    Some((Ast::expr_name_identifier(name.clone()), rev_chain))
+            } else {
+                // The subscript does not contain an integer or string literal, so we drop everything that we encountered so far
+                match &*subscript.value {
+                    Expr::Name(name) => Some((Ast::expr_name_identifier(name.clone()), Vec::new())),
+                    parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
+                        rev_chain.clear();
+                        f(parent, rev_chain, resolver)
+                    }
+                    _ => None,
                 }
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.push(FacetKind::Key(key.to_string()));
-                    f(parent, rev_chain)
-                }
-                _ => None,
-            }
-        } else if let Expr::Subscript(subscript) = expr {
-            // The subscript does not contain an integer or string literal, so we drop everything that we encountered so far
-            match &*subscript.value {
-                Expr::Name(name) => Some((Ast::expr_name_identifier(name.clone()), Vec::new())),
-                parent @ (Expr::Attribute(_) | Expr::Subscript(_)) => {
-                    rev_chain.clear();
-                    f(parent, rev_chain)
-                }
-                _ => None,
             }
         } else {
             None
         }
     }
-    f(expr, Vec::new())
+    f(expr, Vec::new(), resolver)
+}
+
+pub fn identifier_and_chain_prefix_for_expr(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
+    identifier_and_chain_prefix_for_expr_with_resolver(expr, &mut literal_string_from_expr)
 }
 
 // Handle narrowing on `dict.get("key")`. During solving, if the resolved
@@ -927,11 +1004,13 @@ fn dict_get_subject_for_call_expr(call_expr: &ExprCall) -> Option<NarrowingSubje
         let key = value.to_string();
         if let Some((identifier, facets)) = identifier_and_chain_for_expr(&attr.value) {
             // x.y.z.get("key")
-            let props = Vec1::from_vec_push(facets.facets().to_vec(), FacetKind::Key(key.clone()));
+            let mut resolved = facets.facets().to_vec();
+            resolved.push(FacetKind::Key(key.clone()));
             return Some(NarrowingSubject::Facets(
                 identifier.id,
                 FacetSubject {
-                    chain: FacetChain::new(props),
+                    resolved,
+                    pending: None,
                     origin: FacetOrigin::GetMethod,
                 },
             ));
@@ -940,7 +1019,8 @@ fn dict_get_subject_for_call_expr(call_expr: &ExprCall) -> Option<NarrowingSubje
             return Some(NarrowingSubject::Facets(
                 name.id.clone(),
                 FacetSubject {
-                    chain: FacetChain::new(Vec1::new(FacetKind::Key(key))),
+                    resolved: vec![FacetKind::Key(key)],
+                    pending: None,
                     origin: FacetOrigin::GetMethod,
                 },
             ));
@@ -954,14 +1034,8 @@ pub fn expr_to_subjects(expr: &Expr) -> Vec<NarrowingSubject> {
         match expr {
             Expr::Name(name) => res.push(NarrowingSubject::Name(name.id.clone())),
             Expr::Attribute(_) | Expr::Subscript(_) => {
-                if let Some((identifier, facets)) = identifier_and_chain_for_expr(expr) {
-                    res.push(NarrowingSubject::Facets(
-                        identifier.id,
-                        FacetSubject {
-                            chain: facets,
-                            origin: FacetOrigin::Direct,
-                        },
-                    ));
+                if let Some((identifier, subject)) = identifier_and_facet_subject_for_expr(expr) {
+                    res.push(NarrowingSubject::Facets(identifier.id, subject));
                 }
             }
             Expr::Call(call) => {
