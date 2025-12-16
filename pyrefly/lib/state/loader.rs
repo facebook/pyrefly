@@ -51,6 +51,7 @@ impl FindError {
         path: Vec<ImportLookupPathPart>,
         module: ModuleName,
         config_source: &ConfigSource,
+        suggestion: Option<ModuleName>,
     ) -> FindError {
         let config_suffix = match config_source {
             ConfigSource::File(p) => format!(" (from config in `{}`)", p.display()),
@@ -78,6 +79,9 @@ impl FindError {
             format!("Looked in these locations{config_suffix}:")
         }];
         explanation.extend(nonempty_paths);
+        if let Some(suggested) = suggestion {
+            explanation.push(format!("Did you mean `{suggested}`?"));
+        }
         FindError::NotFound(module, Arc::new(explanation))
     }
 
