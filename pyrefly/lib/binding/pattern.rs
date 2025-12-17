@@ -387,7 +387,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.insert_binding(Key::Anon(guard.range()), Binding::Expr(None, *guard));
                 new_narrow_ops.and_all(guard_narrow_ops)
             }
-            negated_prev_ops.and_all(new_narrow_ops.negate());
+            negated_prev_ops.and_all_without_placeholder(new_narrow_ops.negate());
             self.stmts(case.body, parent);
             self.finish_branch();
         }

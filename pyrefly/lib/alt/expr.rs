@@ -1238,6 +1238,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    fn type_may_be_typed_dict(&self, ty: &Type) -> bool {
+        match ty {
+            Type::TypedDict(_) | Type::PartialTypedDict(_) => true,
+            Type::Union(union) => union
+                .members
+                .iter()
+                .any(|member| self.type_may_be_typed_dict(member)),
+            Type::Intersect(box (members, fallback)) => {
+                members
+                    .iter()
+                    .any(|member| self.type_may_be_typed_dict(member))
+                    || self.type_may_be_typed_dict(fallback)
+            }
+            Type::Var(var) => {
+                let forced = self.solver().force_var(*var);
+                self.type_may_be_typed_dict(&forced)
+            }
+            Type::Type(box inner) | Type::TypeGuard(box inner) | Type::TypeIs(box inner) => {
+                self.type_may_be_typed_dict(inner)
+            }
+            _ => false,
+        }
+    }
+
     pub fn subscript_infer(
         &self,
         base: &TypeInfo,
@@ -1255,9 +1279,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
             }
             Expr::StringLiteral(ExprStringLiteral { value: key, .. }) => {
-                TypeInfo::at_facet(base, &FacetKind::Key(key.to_string()), || {
+                let key_str = key.to_string();
+                let key_facet = FacetKind::Key(key_str.clone());
+                let should_warn = base.type_at_facet(&key_facet).is_none();
+                let prev = self.replace_warn_optional_typed_dict_key(should_warn);
+                let type_info = TypeInfo::at_facet(base, &key_facet, || {
                     self.subscript_infer_for_type(base.ty(), slice, range, errors)
-                })
+                });
+                self.set_warn_optional_typed_dict_key(prev);
+                if !should_warn
+                    && type_info.ty().is_never()
+                    && self.type_may_be_typed_dict(base.ty())
+                {
+                    let prev = self.replace_warn_optional_typed_dict_key(true);
+                    let _ = self.subscript_infer_for_type(base.ty(), slice, range, errors);
+                    self.set_warn_optional_typed_dict_key(prev);
+                }
+                type_info
             }
             _ => TypeInfo::of_ty(self.subscript_infer_for_type(base.ty(), slice, range, errors)),
         }
@@ -2189,10 +2227,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::TypedDict(typed_dict) => {
                     let key_ty = self.expr_infer(slice, errors);
+                    let warn_about_optional = matches!(typed_dict, TypedDict::TypedDict(_))
+                        && self.warn_optional_typed_dict_key_enabled();
                     self.distribute_over_union(&key_ty, |ty| match ty {
                         Type::Literal(Lit::Str(field_name)) => {
                             let fields = self.typed_dict_fields(&typed_dict);
-                            if let Some(field) = fields.get(&Name::new(field_name)) {
+                            let key_name = Name::new(field_name);
+                            if let Some(field) = fields.get(&key_name) {
+                                if warn_about_optional && !field.required {
+                                    errors.add(
+                                        slice.range(),
+                                        ErrorInfo::Kind(ErrorKind::NotRequiredKeyAccess),
+                                        vec1![format!(
+                                            "TypedDict key `{}` may be missing; guard this access with `'{}' in obj` or `obj.get('{}')`",
+                                            key_name, key_name, key_name
+                                        )],
+                                    );
+                                }
                                 field.ty.clone()
                             } else if let ExtraItems::Extra(extra) =
                                 self.typed_dict_extra_items(&typed_dict)
@@ -2205,7 +2256,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     field_name
                                 )];
                                 if let Some(suggestion) = best_suggestion(
-                                    &Name::new(field_name),
+                                    &key_name,
                                     fields.keys().map(|candidate| (candidate, 0usize)),
                                 ) {
                                     msg.push(format!("Did you mean `{suggestion}`?"));
