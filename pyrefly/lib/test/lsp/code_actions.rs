@@ -184,6 +184,40 @@ my_export
 }
 
 #[test]
+fn prefer_public_stdlib_module_for_reexports() {
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", "BytesIO\n# ^")], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+1 | BytesIO
+      ^
+Code Actions Results:
+# Title: Insert import: `from io import BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+from io import BytesIO
+BytesIO
+# ^
+# Title: Insert import: `from _io import BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+from _io import BytesIO
+BytesIO
+# ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn insertion_test_module_import() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[("my_module", "my_export = 3\n"), ("b", "my_module\n# ^")],

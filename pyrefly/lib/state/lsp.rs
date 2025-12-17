@@ -1718,7 +1718,7 @@ impl<'a> Transaction<'a> {
                                 &ast,
                                 self.config_finder(),
                                 handle.dupe(),
-                                handle_to_import_from,
+                                handle_to_import_from.dupe(),
                                 unknown_name,
                                 import_format,
                             );
@@ -1730,12 +1730,19 @@ impl<'a> Transaction<'a> {
                                 if is_deprecated { " (deprecated)" } else { "" }
                             );
 
+                            let is_private_import = handle_to_import_from
+                                .module()
+                                .components()
+                                .last()
+                                .is_some_and(|component| component.as_str().starts_with('_'));
+
                             code_actions.push((
                                 title,
                                 module_info.dupe(),
                                 range,
                                 insert_text,
                                 is_deprecated,
+                                is_private_import,
                             ));
                         }
 
@@ -1750,12 +1757,17 @@ impl<'a> Transaction<'a> {
                                     import_regular_import_edit(&ast, module_handle);
                                 let range = TextRange::at(position, TextSize::new(0));
                                 let title = format!("Insert import: `{}`", insert_text.trim());
+                                let is_private_import = module_name
+                                    .components()
+                                    .last()
+                                    .is_some_and(|component| component.as_str().starts_with('_'));
                                 code_actions.push((
                                     title,
                                     module_info.dupe(),
                                     range,
                                     insert_text,
                                     false,
+                                    is_private_import,
                                 ));
                             }
                         }
@@ -1767,21 +1779,29 @@ impl<'a> Transaction<'a> {
 
         // Sort code actions: non-deprecated first, then alphabetically
         code_actions.sort_by(
-            |(title1, _, _, _, is_deprecated1), (title2, _, _, _, is_deprecated2)| match (
-                is_deprecated1,
-                is_deprecated2,
-            ) {
-                (true, false) => Ordering::Greater,
-                (false, true) => Ordering::Less,
-                _ => title1.cmp(title2),
+            |(title1, _, _, _, is_deprecated1, is_private1),
+             (title2, _, _, _, is_deprecated2, is_private2)| {
+                match (is_private1, is_private2) {
+                    (true, false) => Ordering::Greater,
+                    (false, true) => Ordering::Less,
+                    _ => match (is_deprecated1, is_deprecated2) {
+                        (true, false) => Ordering::Greater,
+                        (false, true) => Ordering::Less,
+                        _ => title1.cmp(title2),
+                    },
+                }
             },
         );
+
+        code_actions.dedup_by(|a, b| a.3 == b.3);
 
         // Drop the deprecated flag and return
         Some(
             code_actions
                 .into_iter()
-                .map(|(title, module, range, insert_text, _)| (title, module, range, insert_text))
+                .map(|(title, module, range, insert_text, _, _)| {
+                    (title, module, range, insert_text)
+                })
                 .collect(),
         )
     }
@@ -3017,20 +3037,56 @@ impl<'a> Transaction<'a> {
         (result, is_incomplete)
     }
 
+    fn export_from_location(
+        &self,
+        handle: &Handle,
+        export_name: &Name,
+        location: &ExportLocation,
+    ) -> Option<(Handle, Export)> {
+        match location {
+            ExportLocation::ThisModule(export) => Some((handle.dupe(), export.clone())),
+            ExportLocation::OtherModule(module, original_name) => {
+                let target_name = original_name.clone().unwrap_or_else(|| export_name.clone());
+                self.resolve_named_import(handle, *module, target_name, FindPreference::default())
+            }
+        }
+    }
+
+    fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
+        let canonical_components = canonical.module().components();
+        let canonical_component = canonical_components
+            .last()
+            .map(|name| name.as_str())
+            .unwrap_or("");
+        let original_components = original.module().components();
+        let original_component = original_components
+            .last()
+            .map(|name| name.as_str())
+            .unwrap_or("");
+        canonical_component.starts_with('_')
+            && canonical_component.trim_start_matches('_') == original_component
+    }
+
     pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
         self.search_exports(|handle, exports| {
-            if let Some(export_location) = exports.get(&Name::new(name)) {
-                match export_location {
-                    ExportLocation::ThisModule(export) => vec![(handle.dupe(), export.clone())],
-                    // Re-exported modules like `foo` in `from from_module import foo`
-                    // should likely be ignored in autoimport suggestions
-                    // because the original export in from_module will show it.
-                    // The current strategy will prevent intended re-exports from showing up in
-                    // result list, but it's better than showing thousands of likely bad results.
-                    ExportLocation::OtherModule(..) => Vec::new(),
+            let name = Name::new(name);
+            match exports.get(&name) {
+                Some(location) => {
+                    if let Some((canonical_handle, export)) =
+                        self.export_from_location(handle, &name, location)
+                    {
+                        let mut results = vec![(canonical_handle.dupe(), export.clone())];
+                        if canonical_handle != *handle
+                            && Self::should_include_reexport(handle, &canonical_handle)
+                        {
+                            results.push((handle.dupe(), export));
+                        }
+                        results
+                    } else {
+                        Vec::new()
+                    }
                 }
-            } else {
-                Vec::new()
+                None => Vec::new(),
             }
         })
     }
@@ -3040,13 +3096,21 @@ impl<'a> Transaction<'a> {
             let matcher = SkimMatcherV2::default().smart_case();
             let mut results = Vec::new();
             for (name, location) in exports.iter() {
-                let name = name.as_str();
-                if let Some(score) = matcher.fuzzy_match(name, pattern) {
-                    match location {
-                        ExportLocation::OtherModule(..) => {}
-                        ExportLocation::ThisModule(export) => {
-                            results.push((score, handle.dupe(), name.to_owned(), export.clone()));
-                        }
+                let name_str = name.as_str();
+                if let Some(score) = matcher.fuzzy_match(name_str, pattern)
+                    && let Some((canonical_handle, export)) =
+                        self.export_from_location(handle, name, location)
+                {
+                    results.push((
+                        score,
+                        canonical_handle.dupe(),
+                        name_str.to_owned(),
+                        export.clone(),
+                    ));
+                    if canonical_handle != *handle
+                        && Self::should_include_reexport(handle, &canonical_handle)
+                    {
+                        results.push((score, handle.dupe(), name_str.to_owned(), export));
                     }
                 }
             }
