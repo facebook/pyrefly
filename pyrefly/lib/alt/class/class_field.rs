@@ -2598,9 +2598,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         let is_override = class_field.is_override();
-        if matches!(class_field.1, IsInherited::No) && !is_override {
-            return;
-        }
+        let is_not_inherited = matches!(class_field.1, IsInherited::No);
+        // If the field is newly defined (not inherited) and doesn't have @override,
+        // we only need to check for MissingOverrideDecorator (skip consistency checks).
+        let only_check_missing_override = is_not_inherited && !is_override;
 
         let metadata = self.get_metadata_for_class(cls);
         if !self.should_check_field_for_override_consistency(field_name, &metadata) {
@@ -2631,7 +2632,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let parent_metadata = self.get_metadata_for_class(parent_cls);
             parent_has_any = parent_has_any || parent_metadata.has_base_any();
             // Don't allow overriding a namedtuple element
-            if let Some(named_tuple_metadata) = parent_metadata.named_tuple_metadata()
+            if !only_check_missing_override
+                && let Some(named_tuple_metadata) = parent_metadata.named_tuple_metadata()
                 && named_tuple_metadata.elements.contains(field_name)
             {
                 self.error(
@@ -2645,6 +2647,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 continue;
             };
             parent_attr_found = true;
+            // If we're only checking for MissingOverrideDecorator, we don't need
+            // to do the consistency checks - just finding that a parent attribute
+            // exists is enough.
+            if only_check_missing_override {
+                continue;
+            }
             let want_class_field = Arc::unwrap_or_clone(want_field);
             if want_class_field.is_final() {
                 self.error(
@@ -2784,6 +2792,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         field_name,
                     ),
                 );
+        }
+        // Check for missing @override decorator when overriding a parent attribute.
+        // This error is emitted when a method overrides a parent but doesn't have @override.
+        // Since this error has Severity::Ignore by default, it won't be shown unless enabled.
+        if !is_override && parent_attr_found && !parent_has_any {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::MissingOverrideDecorator),
+                format!(
+                    "Class member `{}.{}` overrides a member in a parent class but is missing an `@override` decorator",
+                    cls.name(),
+                    field_name,
+                ),
+            );
         }
     }
 

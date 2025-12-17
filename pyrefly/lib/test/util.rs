@@ -111,6 +111,7 @@ pub struct TestEnv {
     unannotated_attribute_error: bool,
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
+    missing_override_decorator_error: bool,
     default_require_level: Require,
 }
 
@@ -131,6 +132,7 @@ impl TestEnv {
             unannotated_attribute_error: false,
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
+            missing_override_decorator_error: false,
             default_require_level: Require::Exports,
         }
     }
@@ -191,6 +193,11 @@ impl TestEnv {
 
     pub fn enable_open_unpacking_error(mut self) -> Self {
         self.open_unpacking_error = true;
+        self
+    }
+
+    pub fn enable_missing_override_decorator_error(mut self) -> Self {
+        self.missing_override_decorator_error = true;
         self
     }
 
@@ -289,6 +296,9 @@ impl TestEnv {
         }
         if self.open_unpacking_error {
             errors.set_error_severity(ErrorKind::OpenUnpacking, Severity::Error);
+        }
+        if self.missing_override_decorator_error {
+            errors.set_error_severity(ErrorKind::MissingOverrideDecorator, Severity::Error);
         }
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for (name, path, _) in self.modules.iter() {

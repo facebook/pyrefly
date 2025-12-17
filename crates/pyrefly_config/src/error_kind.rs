@@ -199,6 +199,8 @@ pub enum ErrorKind {
     MissingImport,
     /// Accessing an attribute that does not exist on a module.
     MissingModuleAttribute,
+    /// A method overrides a parent class method but does not have the `@override` decorator.
+    MissingOverrideDecorator,
     /// The source code for an imported package is missing.
     MissingSource,
     /// We are using bundled stubs for a package but the source code is missing.
@@ -309,6 +311,7 @@ impl ErrorKind {
             ErrorKind::UnannotatedReturn => Severity::Ignore,
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
+            ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
             _ => Severity::Error,
         }
