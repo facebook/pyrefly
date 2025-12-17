@@ -287,6 +287,21 @@ In Jupyter Lab, once you install the [jupyterlab-lsp](https://jupyterlab-lsp.rea
 Notebook support is experimental. Please report any bugs on our Github.
 
 ---
+### [Call Hierarchy](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_prepareCallHierarchy)
+
+See all incoming functions calls to a particular function, as well as all outgoing function calls from a function. Call Hierarchy provides a full picture of
+how a particular function is used within a call stack.
+
+<video
+  src="/videos/call-hierarchy.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
 
 ## Planned features
 
@@ -3475,7 +3490,7 @@ import TabItem from '@theme/TabItem';
     pyrefly check --summarize-errors
     ```
   </TabItem>
-  <TabItem value="uv" label="UV">
+  <TabItem value="uv" label="uv">
     ```
     uvx pyrefly init
     uvx pyrefly check --summarize-errors
