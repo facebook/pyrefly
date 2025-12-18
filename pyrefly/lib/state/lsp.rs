@@ -2660,11 +2660,34 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn typed_dict_get_string_literal(call: &ExprCall) -> Option<(Expr, ExprStringLiteral)> {
+    fn type_contains_typed_dict(ty: &Type) -> bool {
+        match ty {
+            Type::TypedDict(_) | Type::PartialTypedDict(_) => true,
+            Type::Union(box Union { members, .. }) => {
+                members.iter().any(Self::type_contains_typed_dict)
+            }
+            _ => false,
+        }
+    }
+
+    fn expr_has_typed_dict_type(&self, handle: &Handle, expr: &Expr) -> bool {
+        self.get_type_trace(handle, expr.range())
+            .map(|ty| Self::type_contains_typed_dict(&ty))
+            .unwrap_or(false)
+    }
+
+    fn typed_dict_get_string_literal(
+        &self,
+        handle: &Handle,
+        call: &ExprCall,
+    ) -> Option<(Expr, ExprStringLiteral)> {
         let Expr::Attribute(attr) = call.func.as_ref() else {
             return None;
         };
         if attr.attr.id.as_str() != "get" {
+            return None;
+        }
+        if !self.expr_has_typed_dict_type(handle, attr.value.as_ref()) {
             return None;
         }
         if let Some(Expr::StringLiteral(lit)) = call.arguments.args.first() {
@@ -2684,6 +2707,8 @@ impl<'a> Transaction<'a> {
     }
 
     fn dict_key_string_literal_at(
+        &self,
+        handle: &Handle,
         module: &ModModule,
         position: TextSize,
     ) -> Option<(Expr, ExprStringLiteral)> {
@@ -2698,7 +2723,7 @@ impl<'a> Transaction<'a> {
                         None
                     }
                 }
-                AnyNodeRef::ExprCall(call) => Self::typed_dict_get_string_literal(call),
+                AnyNodeRef::ExprCall(call) => self.typed_dict_get_string_literal(handle, call),
                 _ => None,
             };
             let Some((base_expr, literal)) = candidate else {
@@ -2797,7 +2822,8 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        let Some((base_expr, string_lit)) = Self::dict_key_string_literal_at(module, position)
+        let Some((base_expr, string_lit)) =
+            self.dict_key_string_literal_at(handle, module, position)
         else {
             return;
         };
