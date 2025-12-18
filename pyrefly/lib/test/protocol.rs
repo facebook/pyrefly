@@ -767,3 +767,21 @@ class C(P): # E: Final class `C` cannot have unimplemented abstract members: `x`
 c = C()  # E: Cannot instantiate `C` because the following members are abstract: `x`
 "#,
 );
+
+testcase!(
+    test_check_protocol_upper_bound,
+    r#"
+from typing import Protocol
+class A(Protocol):
+    x: int
+class B:
+    x: int
+class C:
+    pass
+def f[T: A](a: T) -> T:
+    return a
+def g(b: B, c: C):
+    f(b)
+    f(c)  # E: `C` is not assignable to upper bound `A`
+    "#,
+);

@@ -408,10 +408,20 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
         let recursive_check = (got.clone(), Type::ClassType(protocol.clone()));
-        if !self.recursive_assumptions.insert(recursive_check) {
+        if !self.recursive_assumptions.insert(recursive_check.clone()) {
             // Assume recursive checks are true
             return Ok(());
         }
+        let res = self.is_subset_protocol_inner(got, protocol);
+        self.recursive_assumptions.shift_remove(&recursive_check);
+        res
+    }
+
+    fn is_subset_protocol_inner(
+        &mut self,
+        got: Type,
+        protocol: ClassType,
+    ) -> Result<(), SubsetError> {
         // TODO: Remove this once pandas 2.x is no longer supported.
         // This is fixed in pandas 3.0 stubs. Until then, we hard-code that list/tuple satisfy
         // SequenceNotStr. See https://github.com/pandas-dev/pandas/issues/56995
