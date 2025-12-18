@@ -14,6 +14,7 @@ use pyrefly_python::docstring::Docstring;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::visit::Visit;
 use regex::Regex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
@@ -23,6 +24,7 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -402,13 +404,39 @@ impl<'a> BindingsBuilder<'a> {
                 && let Stmt::Expr(expr_stmt) = next_stmt
                 && matches!(&*expr_stmt.value, Expr::StringLiteral(_))
             {
-                field_docstrings.insert(stmt.range(), next_stmt.range());
+                let docstring_range = next_stmt.range();
+                let mut target_ranges = Vec::new();
+                Self::collect_field_docstring_target_ranges(stmt, &mut target_ranges);
+                for range in target_ranges {
+                    field_docstrings.insert(range, docstring_range);
+                }
             }
 
             i += 1;
         }
 
         field_docstrings
+    }
+
+    fn collect_field_docstring_target_ranges(stmt: &Stmt, ranges: &mut Vec<TextRange>) {
+        match stmt {
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    Self::collect_ranges_from_expr(target, ranges);
+                }
+            }
+            Stmt::AnnAssign(ann_assign) => {
+                Self::collect_ranges_from_expr(&ann_assign.target, ranges);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_ranges_from_expr(expr: &Expr, ranges: &mut Vec<TextRange>) {
+        if let Expr::Name(name) = expr {
+            ranges.push(name.range);
+        }
+        expr.recurse(&mut |e| Self::collect_ranges_from_expr(e, ranges));
     }
 
     fn extract_string_literals(

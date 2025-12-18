@@ -341,6 +341,29 @@ foo(x=1, y="hello")
 }
 
 #[test]
+fn hover_shows_docstring_for_dataclass_field() {
+    let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Widget:
+    name: str
+    """Name of the widget."""
+    box: str
+    """The box containing the widget."""
+
+widget = Widget("foo", "bar")
+widget.box
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("The box containing the widget."),
+        "Expected dataclass field docstring to appear in hover, got: {report}"
+    );
+}
+
+#[test]
 fn hover_parameter_doc_with_complex_types() {
     let code = r#"
 from typing import Optional, List, Dict
