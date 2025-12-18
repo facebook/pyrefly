@@ -34,6 +34,7 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::facet::FacetKind;
+use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::SliceExt;
@@ -2645,7 +2646,11 @@ impl<'a> Transaction<'a> {
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
-            Self::add_literal_completions_from_type(param.as_type(), completions, in_string_literal);
+            Self::add_literal_completions_from_type(
+                param.as_type(),
+                completions,
+                in_string_literal,
+            );
         }
     }
 
@@ -2656,6 +2661,7 @@ impl<'a> Transaction<'a> {
     ) {
         match param_type {
             Type::Literal(lit) => {
+                // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
                 let label = lit.to_string_escaped(true);
                 let insert_text = if in_string_literal {
                     if let Lit::Str(s) = lit {
@@ -2667,7 +2673,6 @@ impl<'a> Transaction<'a> {
                     label.clone()
                 };
                 completions.push(CompletionItem {
-                    // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
                     label,
                     kind: Some(CompletionItemKind::VALUE),
                     detail: Some(format!("{param_type}")),
@@ -3086,7 +3091,9 @@ impl<'a> Transaction<'a> {
                         self.add_local_variable_completions(handle, None, position, &mut result);
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
-                    let in_string_literal = nodes.iter().any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)));
+                    let in_string_literal = nodes
+                        .iter()
+                        .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)));
                     self.add_literal_completions(handle, position, &mut result, in_string_literal);
                     self.add_dict_key_completions(
                         handle,
