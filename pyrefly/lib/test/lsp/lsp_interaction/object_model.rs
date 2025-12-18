@@ -1014,6 +1014,7 @@ impl TestClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn untyped_import_diagnostic_response(
         package_name: &str,
         line: u32,

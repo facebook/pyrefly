@@ -7,13 +7,13 @@
 
 use lsp_server::Message;
 use lsp_server::Notification;
+use lsp_types::DocumentDiagnosticReportResult;
 use lsp_types::Url;
 use pyrefly_config::environment::environment::PythonEnvironment;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::object_model::TestClient;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -935,7 +935,7 @@ fn test_missing_source_for_stubs_diagnostic() {
 }
 
 #[test]
-fn test_missing_source_with_config_diagnostic_returns_untyped_import_error() {
+fn test_missing_source_with_config_diagnostic_has_errors() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
@@ -955,9 +955,30 @@ fn test_missing_source_with_config_diagnostic_returns_untyped_import_error() {
     interaction
         .client
         .diagnostic("missing_source_with_config/test.py")
-        .expect_response(TestClient::untyped_import_diagnostic_response(
-            "requests", 5, 7, 15, 2,
-        ))
+        .expect_response_with(|response| {
+            if let DocumentDiagnosticReportResult::Report(report) = response
+                && let lsp_types::DocumentDiagnosticReport::Full(full) = report
+            {
+                let items = &full.full_document_diagnostic_report.items;
+                if items.len() != 1 {
+                    return false;
+                }
+                let item = &items[0];
+                return item.code
+                    == Some(lsp_types::NumberOrString::String(
+                        "missing-import".to_owned(),
+                    ))
+                    && item
+                        .message
+                        .starts_with("Could not find import of `requests`")
+                    && item.range.start.line == 5
+                    && item.range.start.character == 7
+                    && item.range.end.line == 5
+                    && item.range.end.character == 15
+                    && item.severity == Some(lsp_types::DiagnosticSeverity::ERROR);
+            }
+            false
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -984,9 +1005,35 @@ fn test_untyped_import_diagnostic() {
     interaction
         .client
         .diagnostic("untyped_import_with_source/test.py")
-        .expect_response(TestClient::untyped_import_diagnostic_response(
-            "boto3", 5, 7, 12, 1,
-        ))
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "untyped-import",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
+                    },
+                    "message": "Missing type stubs for `boto3`\n  Hint: install the `boto3-stubs` package",
+                    "range": {
+                        "start": {"line": 5, "character": 7},
+                        "end": {"line": 5, "character": 12}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                },
+                {
+                    "code": "unused-import",
+                    "message": "Import `boto3` is unused",
+                    "range": {
+                        "start": {"line": 5, "character": 7},
+                        "end": {"line": 5, "character": 12}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        }))
         .unwrap();
 
     interaction.shutdown().unwrap();
