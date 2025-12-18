@@ -769,6 +769,32 @@ os.perkeo  # missing-attribute
 In this example, `os.bacarat` is treated as a module name, so failing to find it results in an `missing-import`.
 `from os import joker` does not tell us if `joker` is a module, class, function, etc., so it is treated as the more general `missing-module-attribute`.
 
+## missing-override-decorator
+
+A method overrides a parent class method but does not have the `@override` decorator.
+
+This error supports strict override enforcement as specified in the [typing spec](https://typing.python.org/en/latest/spec/class-compat.html#strict-enforcement-per-project). When enabled, it requires all overriding methods to be explicitly marked with `@typing.override`.
+
+```python
+from typing import override
+
+class Base:
+    def foo(self) -> None: ...
+
+class Derived(Base):
+    def foo(self) -> None: ...  # missing-override-decorator
+
+    @override
+    def foo(self) -> None: ...  # OK
+```
+
+The default severity of this diagnostic is `ignore`. To enable strict override enforcement, set the severity to `error` in your configuration:
+
+```toml
+[tool.pyrefly]
+errors = { missing-override-decorator = "error" }
+```
+
 ## missing-source
 
 Pyrefly was able to find a stubs package but no corresponding source package. For example, this can
