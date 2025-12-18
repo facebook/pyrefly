@@ -104,6 +104,7 @@ pub enum OriginKind {
     ForIter,
     ForNext,
     ReprCall,
+    StrCallToDunderMethod,
 }
 
 impl std::fmt::Display for OriginKind {
@@ -121,6 +122,7 @@ impl std::fmt::Display for OriginKind {
             Self::ForIter => write!(f, "for-iter"),
             Self::ForNext => write!(f, "for-next"),
             Self::ReprCall => write!(f, "repr-call"),
+            Self::StrCallToDunderMethod => write!(f, "str-call-to-dunder-method"),
         }
     }
 }
@@ -2689,6 +2691,21 @@ impl<'a> CallGraphVisitor<'a> {
         );
     }
 
+    fn resolve_and_register_str(&mut self, call: &ExprCall, argument: &Expr) {
+        let argument_type = self.module_context.answers.get_type_trace(argument.range());
+        let object_type = self.module_context.stdlib.object().clone().to_type();
+        let callees = if let Some(argument_type) = argument_type {
+            self.resolve_stringify_call(argument_type, dunder::STR, argument.range(), &object_type)
+        } else {
+            CallCallees::new_unresolved(UnresolvedReason::UnresolvedMagicDunderAttrDueToNoBase)
+        };
+        let expression_identifier = ExpressionIdentifier::ArtificialCall(Origin {
+            kind: OriginKind::StrCallToDunderMethod,
+            location: self.pysa_location(call.range()),
+        });
+        self.add_callees(expression_identifier, ExpressionCallees::Call(callees));
+    }
+
     fn resolve_and_register_call(
         &mut self,
         call: &ExprCall,
@@ -2709,7 +2726,7 @@ impl<'a> CallGraphVisitor<'a> {
         // The pattern matching here must match exactly with different pattern
         // matches under `preprocess_statement` in callGraphBuilder.ml
         match callee.as_ref() {
-            Expr::Name(name) if name.id == "getattr" => {
+            Expr::Name(name) if name.id == "getattr" && call.arguments.len() == 3 => {
                 let base = call.arguments.find_positional(0);
                 let attribute = call.arguments.find_positional(1);
                 let default_value = call.arguments.find_positional(2);
@@ -2727,10 +2744,17 @@ impl<'a> CallGraphVisitor<'a> {
                     _ => {}
                 }
             }
-            Expr::Name(name) if name.id == "repr" => {
+            Expr::Name(name) if name.id == "repr" && call.arguments.len() == 1 => {
                 let argument = call.arguments.find_positional(0);
                 match argument {
                     Some(argument) => self.resolve_and_register_repr(call, argument, return_type),
+                    _ => (),
+                }
+            }
+            Expr::Name(name) if name.id == "str" && call.arguments.len() == 1 => {
+                let argument = call.arguments.find_positional(0);
+                match argument {
+                    Some(argument) => self.resolve_and_register_str(call, argument),
                     _ => (),
                 }
             }
@@ -2883,20 +2907,15 @@ impl<'a> CallGraphVisitor<'a> {
         self.add_callees(identifier, ExpressionCallees::Call(callees))
     }
 
-    fn resolve_interpolation(
-        &mut self,
-        interpolation: &InterpolatedElement,
+    fn resolve_stringify_call(
+        &self,
         callee_class: Type,
+        callee_name: Name,
         expression_range: TextRange,
         object_type: &Type,
     ) -> CallCallees<FunctionRef> {
         let mut callee_class = callee_class;
-        let mut callee_name = match interpolation.conversion {
-            ConversionFlag::None => dunder::FORMAT,
-            ConversionFlag::Str => dunder::STR,
-            ConversionFlag::Ascii => dunder::ASCII,
-            ConversionFlag::Repr => dunder::REPR,
-        };
+        let mut callee_name = callee_name;
         loop {
             let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
                 /* base */ Some(&callee_class),
@@ -2904,7 +2923,7 @@ impl<'a> CallGraphVisitor<'a> {
                 expression_range,
                 /* callee_expr */ None,
                 /* unknown_callee_as_direct_call */ true,
-                "resolve_interpolation",
+                "resolve_stringify_call",
                 /* exclude_object_methods */ true,
             );
             let should_redirect = callees.unresolved
@@ -2921,6 +2940,22 @@ impl<'a> CallGraphVisitor<'a> {
                 return callees;
             }
         }
+    }
+
+    fn resolve_interpolation(
+        &mut self,
+        interpolation: &InterpolatedElement,
+        callee_class: Type,
+        expression_range: TextRange,
+        object_type: &Type,
+    ) -> CallCallees<FunctionRef> {
+        let callee_name = match interpolation.conversion {
+            ConversionFlag::None => dunder::FORMAT,
+            ConversionFlag::Str => dunder::STR,
+            ConversionFlag::Ascii => dunder::ASCII,
+            ConversionFlag::Repr => dunder::REPR,
+        };
+        self.resolve_stringify_call(callee_class, callee_name, expression_range, object_type)
     }
 
     fn resolve_and_register_fstring(&mut self, fstring: &ExprFString) {
