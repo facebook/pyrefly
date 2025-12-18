@@ -49,7 +49,6 @@ use ruff_python_ast::ExprContext;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
-use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
@@ -2661,32 +2660,69 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn subscript_string_literal_at(
+    fn typed_dict_get_string_literal(call: &ExprCall) -> Option<(Expr, ExprStringLiteral)> {
+        let Expr::Attribute(attr) = call.func.as_ref() else {
+            return None;
+        };
+        if attr.attr.id.as_str() != "get" {
+            return None;
+        }
+        if let Some(Expr::StringLiteral(lit)) = call.arguments.args.first() {
+            return Some((attr.value.as_ref().clone(), lit.clone()));
+        }
+        for keyword in &call.arguments.keywords {
+            if keyword
+                .arg
+                .as_ref()
+                .is_some_and(|identifier| identifier.id.as_str() == "key")
+                && let Expr::StringLiteral(lit) = &keyword.value
+            {
+                return Some((attr.value.as_ref().clone(), lit.clone()));
+            }
+        }
+        None
+    }
+
+    fn dict_key_string_literal_at(
         module: &ModModule,
         position: TextSize,
-    ) -> Option<(ExprSubscript, ExprStringLiteral)> {
+    ) -> Option<(Expr, ExprStringLiteral)> {
         let nodes = Ast::locate_node(module, position);
-        let mut best: Option<(u8, TextSize, ExprSubscript, ExprStringLiteral)> = None;
+        let mut best: Option<(u8, TextSize, Expr, ExprStringLiteral)> = None;
         for node in nodes {
-            if let AnyNodeRef::ExprSubscript(sub) = node
-                && let Expr::StringLiteral(lit) = sub.slice.as_ref()
-            {
-                let (priority, dist) = Self::string_literal_priority(position, lit.range());
-                let should_update = match &best {
-                    Some((best_prio, best_dist, _, _)) => {
-                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
-                    }
-                    None => true,
-                };
-                if should_update {
-                    best = Some((priority, dist, sub.clone(), lit.clone()));
-                    if priority == 0 && dist == TextSize::from(0) {
-                        break;
-                    }
+            let candidate = match node {
+                AnyNodeRef::ExprSubscript(sub)
+                    if matches!(sub.slice.as_ref(), Expr::StringLiteral(_)) =>
+                {
+                    Some((
+                        sub.value.as_ref().clone(),
+                        match sub.slice.as_ref() {
+                            Expr::StringLiteral(lit) => lit.clone(),
+                            _ => unreachable!(),
+                        },
+                    ))
+                }
+                AnyNodeRef::ExprCall(call) => Self::typed_dict_get_string_literal(call),
+                _ => None,
+            };
+            let Some((base_expr, literal)) = candidate else {
+                continue;
+            };
+            let (priority, dist) = Self::string_literal_priority(position, literal.range());
+            let should_update = match &best {
+                Some((best_prio, best_dist, _, _)) => {
+                    priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                }
+                None => true,
+            };
+            if should_update {
+                best = Some((priority, dist, base_expr, literal));
+                if priority == 0 && dist == TextSize::from(0) {
+                    break;
                 }
             }
         }
-        best.map(|(_, _, sub, lit)| (sub, lit))
+        best.map(|(_, _, base_expr, literal)| (base_expr, literal))
     }
 
     fn string_literal_priority(position: TextSize, range: TextRange) -> (u8, TextSize) {
@@ -2765,7 +2801,7 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        let Some((subscript, string_lit)) = Self::subscript_string_literal_at(module, position)
+        let Some((base_expr, string_lit)) = Self::dict_key_string_literal_at(module, position)
         else {
             return;
         };
@@ -2780,13 +2816,14 @@ impl<'a> Transaction<'a> {
         if position < lower_bound || position > literal_range.end() {
             return;
         }
-        let base_expr = subscript.value.as_ref();
+        let base_expr = base_expr;
         let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
 
         if let Some(bindings) = self.get_bindings(handle) {
-            let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
+            let base_info = if let Some((identifier, facets)) = Self::expression_facets(&base_expr)
+            {
                 Some((identifier, facets))
-            } else if let Expr::Name(name) = base_expr {
+            } else if let Expr::Name(name) = &base_expr {
                 Some((Ast::expr_name_identifier(name.clone()), Vec::new()))
             } else {
                 None
