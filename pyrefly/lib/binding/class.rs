@@ -23,6 +23,7 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -402,13 +403,44 @@ impl<'a> BindingsBuilder<'a> {
                 && let Stmt::Expr(expr_stmt) = next_stmt
                 && matches!(&*expr_stmt.value, Expr::StringLiteral(_))
             {
-                field_docstrings.insert(stmt.range(), next_stmt.range());
+                let docstring_range = next_stmt.range();
+                let mut target_ranges = Vec::new();
+                Self::collect_field_docstring_target_ranges(stmt, &mut target_ranges);
+                for range in target_ranges {
+                    field_docstrings.insert(range, docstring_range);
+                }
             }
 
             i += 1;
         }
 
         field_docstrings
+    }
+
+    fn collect_field_docstring_target_ranges(stmt: &Stmt, ranges: &mut Vec<TextRange>) {
+        match stmt {
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    Self::collect_ranges_from_expr(target, ranges);
+                }
+            }
+            Stmt::AnnAssign(ann_assign) => {
+                Self::collect_ranges_from_expr(&ann_assign.target, ranges);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_ranges_from_expr(expr: &Expr, ranges: &mut Vec<TextRange>) {
+        match expr {
+            Expr::Name(name) => ranges.push(name.range),
+            Expr::Tuple(ExprTuple { elts, .. }) | Expr::List(ExprList { elts, .. }) => {
+                for elt in elts {
+                    Self::collect_ranges_from_expr(elt, ranges);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn extract_string_literals(
