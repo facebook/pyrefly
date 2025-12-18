@@ -119,7 +119,7 @@ async fn run_check(
     }
 }
 
-#[derive(Debug, Clone, ValueEnum, Default)]
+#[derive(Debug, Clone, ValueEnum, Default, PartialEq, Eq)]
 enum OutputFormat {
     /// Minimal text output, one line per error
     MinText,
@@ -128,6 +128,8 @@ enum OutputFormat {
     FullText,
     /// JSON output
     Json,
+    /// Emit GitHub Actions workflow commands
+    Github,
     /// Only show error count, omitting individual errors
     OmitErrors,
 }
@@ -375,6 +377,7 @@ impl OutputFormat {
             Self::MinText => Self::write_error_text_to_file(path, relative_to, errors, false),
             Self::FullText => Self::write_error_text_to_file(path, relative_to, errors, true),
             Self::Json => Self::write_error_json_to_file(path, relative_to, errors),
+            Self::Github => Self::write_error_github_to_file(path, relative_to, errors),
             Self::OmitErrors => Ok(()),
         }
     }
@@ -384,23 +387,54 @@ impl OutputFormat {
             Self::MinText => Self::write_error_text_to_console(relative_to, errors, false),
             Self::FullText => Self::write_error_text_to_console(relative_to, errors, true),
             Self::Json => Self::write_error_json_to_console(relative_to, errors),
+            Self::Github => Self::write_error_github_to_console(relative_to, errors),
             Self::OmitErrors => Ok(()),
         }
     }
+
+    fn write_error_github(
+        writer: &mut impl Write,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
+        for error in errors {
+            if let Some(command) = github_actions_command(error, relative_to) {
+                writeln!(writer, "{command}")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn buffered_write_error_github(
+        writer: impl Write,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
+        let mut writer = BufWriter::new(writer);
+        Self::write_error_github(&mut writer, relative_to, errors)?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    fn write_error_github_to_file(
+        path: &Path,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
+        let file = File::create(path)?;
+        Self::buffered_write_error_github(file, relative_to, errors)
+    }
+
+    fn write_error_github_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+        Self::buffered_write_error_github(stdout(), relative_to, errors)
+    }
 }
 
-fn emit_github_actions_annotations(relative_to: &Path, errors: &[Error]) {
-    if !matches!(
+fn should_emit_github_annotations() -> bool {
+    matches!(
         std::env::var("GITHUB_ACTIONS"),
         Ok(value) if value.eq_ignore_ascii_case("true")
-    ) {
-        return;
-    }
-    for error in errors {
-        if let Some(command) = github_actions_command(error, relative_to) {
-            println!("{command}");
-        }
-    }
+    )
 }
 
 fn github_actions_command(error: &Error, relative_to: &Path) -> Option<String> {
@@ -529,6 +563,16 @@ mod tests {
             "line1%0Aline2%0D%25 done"
         );
         assert_eq!(escape_workflow_property("file:name,py"), "file%3Aname%2Cpy");
+    }
+
+    #[test]
+    fn github_output_format_writes_commands() {
+        let errors = vec![sample_error(vec1!["bad".into()])];
+        let mut buf = Vec::new();
+        OutputFormat::write_error_github(&mut buf, Path::new("/repo"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("::error file=foo.py"));
+        assert!(output.ends_with("::bad\n"));
     }
 }
 
@@ -912,7 +956,9 @@ impl CheckArgs {
                 .output_format
                 .write_errors_to_console(relative_to.as_path(), &shown_errors)?;
         }
-        emit_github_actions_annotations(relative_to.as_path(), &shown_errors);
+        if should_emit_github_annotations() && self.output.output_format != OutputFormat::Github {
+            OutputFormat::Github.write_errors_to_console(relative_to.as_path(), &shown_errors)?;
+        }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
             print_error_counts(&shown_errors, limit);
