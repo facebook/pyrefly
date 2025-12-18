@@ -554,7 +554,9 @@ impl<'a> DefinitionsBuilder<'a> {
                 }
             }
             Stmt::TypeAlias(x) => {
-                self.named_in_expr(&x.value);
+                // Note: We don't call named_in_expr here because named expressions
+                // are not allowed inside type aliases (PEP 695). Type aliases create
+                // their own scope, so any walrus operators would be scoped there anyway.
                 if matches!(&*x.name, Expr::Name(_)) {
                     self.expr_lvalue(&x.name)
                 }
@@ -826,8 +828,9 @@ match (x7 := 42):
     case int(): pass
 (x8 := 42)[y] = 42
 assert (x9 := 42), (x10 := "oops")
-type y = (x11 := int)
 # Named expressions inside expression-level scopes should not appear in definitions.
+# This includes type aliases which create their own scope (PEP 695).
+type y = (x11 := int)
 lambda x: (z := 42)
 {z := "str" for _ in [1]}
 {(z := "str"):1 for _ in [1]}
@@ -838,7 +841,7 @@ lambda x: (z := 42)
         assert_definition_names(
             &defs,
             &[
-                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
+                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
             ],
         );
     }
