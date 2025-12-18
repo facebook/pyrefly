@@ -897,12 +897,17 @@ fn test_missing_source_for_stubs_diagnostic() {
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(Some(json!([
-                {"pyrefly": {"displayTypeErrors": "force-on"}}
-            ]))),
+            configuration: Some(None),
             ..Default::default()
         })
         .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
     interaction
         .client
@@ -991,12 +996,17 @@ fn test_untyped_import_diagnostic() {
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(Some(json!([
-                {"pyrefly": {"displayTypeErrors": "force-on"}}
-            ]))),
+            configuration: Some(None),
             ..Default::default()
         })
         .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
     interaction
         .client
