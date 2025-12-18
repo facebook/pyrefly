@@ -7,6 +7,7 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -55,8 +56,10 @@ use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
 use crate::types::class::Class;
+use crate::types::class::ClassDefIndex;
 use crate::types::stdlib::Stdlib;
 use crate::types::type_info::TypeInfo;
+use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -378,6 +381,7 @@ pub struct ThreadState {
     stack: CalcStack,
     /// For debugging only: thread-global that allows us to control debug logging across components.
     debug: RefCell<bool>,
+    placeholder_class_tparams: RefCell<HashMap<ClassDefIndex, Arc<TParams>>>,
 }
 
 impl ThreadState {
@@ -386,6 +390,7 @@ impl ThreadState {
             cycles: Cycles::new(),
             stack: CalcStack::new(),
             debug: RefCell::new(false),
+            placeholder_class_tparams: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -459,6 +464,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn stack(&self) -> &CalcStack {
         &self.thread_state.stack
+    }
+
+    pub fn placeholder_class_tparams(&self, class_idx: ClassDefIndex) -> Option<Arc<TParams>> {
+        self.thread_state
+            .placeholder_class_tparams
+            .borrow()
+            .get(&class_idx)
+            .cloned()
+    }
+
+    pub fn insert_placeholder_class_tparams(
+        &self,
+        class_idx: ClassDefIndex,
+        tparams: Arc<TParams>,
+    ) {
+        self.thread_state
+            .placeholder_class_tparams
+            .borrow_mut()
+            .insert(class_idx, tparams);
+    }
+
+    pub fn remove_placeholder_class_tparams(&self, class_idx: ClassDefIndex) {
+        self.thread_state
+            .placeholder_class_tparams
+            .borrow_mut()
+            .remove(&class_idx);
     }
 
     fn cycles(&self) -> &Cycles {

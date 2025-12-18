@@ -459,7 +459,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &mut parent_param_hints,
             errors,
         );
-        let mut tparams = self.scoped_type_params(def.type_params.as_deref());
+        let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
         let legacy_tparams = legacy_tparams
             .iter()
             .filter_map(|key| self.get_idx(*key).deref().parameter().cloned());

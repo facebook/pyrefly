@@ -128,6 +128,8 @@ impl<'a> BindingsBuilder<'a> {
 
         self.scopes.push(Scope::annotation(x.range));
 
+        let has_scoped_type_params = x.type_params.is_some();
+        let scoped_type_params_clone = x.type_params.clone();
         let scoped_type_param_names = x
             .type_params
             .as_mut()
@@ -304,15 +306,17 @@ impl<'a> BindingsBuilder<'a> {
             FlowStyle::ClassDef,
         );
 
-        // Insert a `KeyTParams` / `BindingTParams` pair, but only if there is at least
-        // one generic base class - otherwise, it is not possible that legacy tparams are used.
+        // Insert a `KeyTParams` / `BindingTParams` pair if there are scoped type parameters or legacy
+        // tparams that require binding.
         let legacy_tparams = legacy_tparam_collector.lookup_keys();
-        let tparams_require_binding = !legacy_tparams.is_empty();
-        if tparams_require_binding {
-            let scoped_type_params = mem::take(&mut x.type_params);
+        let needs_tparams_binding = has_scoped_type_params || !legacy_tparams.is_empty();
+        let tparams_require_binding = needs_tparams_binding;
+        if needs_tparams_binding {
+            let scoped_type_params = scoped_type_params_clone.clone();
             self.insert_binding(
                 KeyTParams(class_indices.def_index),
                 BindingTParams {
+                    def_index: class_indices.def_index,
                     name: x.name.clone(),
                     scoped_type_params,
                     generic_bases: bases

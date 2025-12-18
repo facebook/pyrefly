@@ -102,7 +102,7 @@ assert_words!(Binding, 11);
 assert_words!(BindingExpect, 11);
 assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 23);
-assert_words!(BindingTParams, 10);
+assert_words!(BindingTParams, 11);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 11);
 assert_bytes!(BindingClassMro, 4);
@@ -1967,6 +1967,7 @@ impl DisplayWith<Bindings> for BindingClass {
 /// Binding for a class.
 #[derive(Clone, Debug)]
 pub struct BindingTParams {
+    pub def_index: ClassDefIndex,
     pub name: Identifier,
     pub scoped_type_params: Option<Box<TypeParams>>,
     pub generic_bases: Box<[BaseClassGeneric]>,

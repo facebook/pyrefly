@@ -1362,23 +1362,79 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    pub fn scoped_type_params(&self, x: Option<&TypeParams>) -> Vec<TParam> {
+    fn quantified_from_type_parameter(
+        &self,
+        tp: &TypeParameter,
+        errors: &ErrorCollector,
+    ) -> Quantified {
+        let restriction = if let Some(bound) = &tp.bound {
+            let bound_ty = self.expr_untype(bound, TypeFormContext::TypeVarConstraint, errors);
+            Restriction::Bound(bound_ty)
+        } else if let Some((constraints, range)) = &tp.constraints {
+            if constraints.len() < 2 {
+                self.error(
+                    errors,
+                    *range,
+                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                    format!(
+                        "Expected at least 2 constraints in TypeVar `{}`, got {}",
+                        tp.name,
+                        constraints.len(),
+                    ),
+                );
+                Restriction::Unrestricted
+            } else {
+                let constraint_tys = constraints.map(|constraint| {
+                    self.expr_untype(constraint, TypeFormContext::TypeVarConstraint, errors)
+                });
+                Restriction::Constraints(constraint_tys)
+            }
+        } else {
+            Restriction::Unrestricted
+        };
+        let mut default_ty = None;
+        if let Some(default_expr) = &tp.default {
+            let default = self.expr_untype(
+                default_expr,
+                TypeFormContext::quantified_kind_default(tp.kind),
+                errors,
+            );
+            default_ty = Some(self.validate_type_var_default(
+                &tp.name,
+                tp.kind,
+                &default,
+                default_expr.range(),
+                &restriction,
+                errors,
+            ));
+        }
+        Quantified::new(tp.unique, tp.name.clone(), tp.kind, default_ty, restriction)
+    }
+
+    pub fn scoped_type_params(
+        &self,
+        x: Option<&TypeParams>,
+        errors: &ErrorCollector,
+    ) -> Vec<TParam> {
         match x {
             Some(x) => {
-                let get_quantified = |t: &Type| match t {
-                    Type::QuantifiedValue(q) => (**q).clone(),
-                    _ => unreachable!(
-                        "{}:{:?}: Expected a QuantifiedValue, got {}",
-                        self.module().path().as_path().display(),
-                        x.range(),
-                        t
-                    ),
-                };
                 let mut params = Vec::new();
                 for raw_param in x.type_params.iter() {
                     let name = raw_param.name();
-                    let quantified =
-                        get_quantified(self.get(&Key::Definition(ShortIdentifier::new(name))).ty());
+                    let key = Key::Definition(ShortIdentifier::new(name));
+                    let idx = self.bindings().key_to_idx(&key);
+                    let binding = self.bindings().get(idx);
+                    let quantified = match binding {
+                        Binding::TypeParameter(tp) => {
+                            self.quantified_from_type_parameter(tp, errors)
+                        }
+                        _ => unreachable!(
+                            "{}:{:?}: Expected a TypeParameter binding, got {:?}",
+                            self.module().path().as_path().display(),
+                            x.range(),
+                            binding
+                        ),
+                    };
                     params.push(TParam {
                         quantified,
                         variance: PreInferenceVariance::PUndefined,
@@ -1816,6 +1872,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn solve_tparams(&self, binding: &BindingTParams, errors: &ErrorCollector) -> Arc<TParams> {
         self.calculate_class_tparams(
+            binding.def_index,
             &binding.name,
             binding.scoped_type_params.as_deref(),
             &binding.generic_bases,
@@ -3418,57 +3475,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             Binding::Type(x) => x.clone(),
             Binding::Global(global) => global.as_type(self.stdlib),
-            Binding::TypeParameter(box TypeParameter {
-                name,
-                unique,
-                kind,
-                bound,
-                default,
-                constraints,
-            }) => {
-                let restriction = if let Some(bound) = bound {
-                    let bound_ty =
-                        self.expr_untype(bound, TypeFormContext::TypeVarConstraint, errors);
-                    Restriction::Bound(bound_ty)
-                } else if let Some((constraints, range)) = constraints {
-                    if constraints.len() < 2 {
-                        self.error(
-                            errors,
-                            *range,
-                            ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
-                            format!(
-                                "Expected at least 2 constraints in TypeVar `{}`, got {}",
-                                name,
-                                constraints.len(),
-                            ),
-                        );
-                        Restriction::Unrestricted
-                    } else {
-                        let constraint_tys = constraints.map(|constraint| {
-                            self.expr_untype(constraint, TypeFormContext::TypeVarConstraint, errors)
-                        });
-                        Restriction::Constraints(constraint_tys)
-                    }
-                } else {
-                    Restriction::Unrestricted
-                };
-                let mut default_ty = None;
-                if let Some(default_expr) = default {
-                    let default = self.expr_untype(
-                        default_expr,
-                        TypeFormContext::quantified_kind_default(*kind),
-                        errors,
-                    );
-                    default_ty = Some(self.validate_type_var_default(
-                        name,
-                        *kind,
-                        &default,
-                        default_expr.range(),
-                        &restriction,
-                        errors,
-                    ));
-                }
-                Quantified::new(*unique, name.clone(), *kind, default_ty, restriction).to_value()
+            Binding::TypeParameter(tp) => {
+                self.quantified_from_type_parameter(tp, errors).to_value()
             }
             Binding::Module(m, path, prev) => {
                 let prev = prev
@@ -3504,7 +3512,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let params_range = params.as_ref().map_or(expr.range(), |x| x.range);
                         Forallable::TypeAlias(*ta).forall(self.validated_tparams(
                             params_range,
-                            self.scoped_type_params(params.as_ref()),
+                            self.scoped_type_params(params.as_ref(), errors),
                             TParamsSource::TypeAlias,
                             errors,
                         ))

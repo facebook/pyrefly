@@ -72,7 +72,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let precomputed_tparams = if tparams_require_binding {
             None
         } else {
-            Some(self.calculate_class_tparams_no_legacy(name, x.type_params.as_deref(), errors))
+            Some(self.calculate_class_tparams_no_legacy(
+                def_index,
+                name,
+                x.type_params.as_deref(),
+                errors,
+            ))
         };
         Class::new(
             def_index,
