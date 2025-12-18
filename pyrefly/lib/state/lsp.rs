@@ -2816,7 +2816,6 @@ impl<'a> Transaction<'a> {
         if position < lower_bound || position > literal_range.end() {
             return;
         }
-        let base_expr = base_expr;
         let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
 
         if let Some(bindings) = self.get_bindings(handle) {
