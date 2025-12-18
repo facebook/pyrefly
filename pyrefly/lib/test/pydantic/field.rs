@@ -200,3 +200,26 @@ class B(BaseModel):
     x: int = Field(default_factory=lambda: 'oops')  # E: `str` is not assignable to `int`
     "#,
 );
+
+pydantic_testcase!(
+    bug = "support Annotated (https://github.com/facebook/pyrefly/issues/1890)",
+    test_annotated_field_with_defaults,
+    r#"
+from typing import Annotated
+from pydantic import BaseModel, Field
+
+class House(BaseModel):
+    street: str
+    city: str
+    zipcode: str
+    notes: Annotated[str, Field(default="")]
+    extra_fields: Annotated[dict, Field(default_factory=dict)]
+    something: dict = Field(default_factory=dict)
+
+house = House( # E: Missing argument `notes` in function `House.__init__` # E: Missing argument `extra_fields` in function `House.__init__` 
+    street="House Street",
+    city="House City",
+    zipcode="House Zipcode",
+)
+    "#,
+);
