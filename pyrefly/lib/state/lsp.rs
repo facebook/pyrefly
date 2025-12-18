@@ -2653,19 +2653,19 @@ impl<'a> Transaction<'a> {
                 let label = lit.to_string_escaped(true);
                 let insert_text = if in_string_literal {
                     if let Lit::Str(s) = lit {
-                        Some(s.to_string())
+                        s.to_string()
                     } else {
-                        None
+                        label.clone()
                     }
                 } else {
-                    None
+                    label.clone()
                 };
                 completions.push(CompletionItem {
                     // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
                     label,
                     kind: Some(CompletionItemKind::VALUE),
                     detail: Some(format!("{param_type}")),
-                    insert_text,
+                    insert_text: Some(insert_text),
                     ..Default::default()
                 });
             }

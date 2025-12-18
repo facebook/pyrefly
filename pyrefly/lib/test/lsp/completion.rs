@@ -1322,8 +1322,8 @@ foo(
 5 | foo(
         ^
 Completion Results:
-- (Value) 'bar': Literal['bar']
-- (Value) 'foo': Literal['foo']
+- (Value) 'bar': Literal['bar'] inserting `'bar'`
+- (Value) 'foo': Literal['foo'] inserting `'foo'`
 - (Variable) x=: Literal['bar', 'foo']
 "#
         .trim(),
@@ -1381,7 +1381,6 @@ Completion Results:
     );
 }
 
-// todo(kylei): provide editttext to remove the quotes
 #[test]
 fn completion_literal_do_not_duplicate_quotes() {
     let code = r#"
