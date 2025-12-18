@@ -2691,16 +2691,12 @@ impl<'a> Transaction<'a> {
         let mut best: Option<(u8, TextSize, Expr, ExprStringLiteral)> = None;
         for node in nodes {
             let candidate = match node {
-                AnyNodeRef::ExprSubscript(sub)
-                    if matches!(sub.slice.as_ref(), Expr::StringLiteral(_)) =>
-                {
-                    Some((
-                        sub.value.as_ref().clone(),
-                        match sub.slice.as_ref() {
-                            Expr::StringLiteral(lit) => lit.clone(),
-                            _ => unreachable!(),
-                        },
-                    ))
+                AnyNodeRef::ExprSubscript(sub) => {
+                    if let Expr::StringLiteral(lit) = sub.slice.as_ref() {
+                        Some((sub.value.as_ref().clone(), lit.clone()))
+                    } else {
+                        None
+                    }
                 }
                 AnyNodeRef::ExprCall(call) => Self::typed_dict_get_string_literal(call),
                 _ => None,
