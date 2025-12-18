@@ -64,7 +64,7 @@ pub(crate) fn extract_variable_code_actions(
     Some(vec![action])
 }
 
-fn split_selection<'a>(
+pub(super) fn split_selection<'a>(
     selection_text: &'a str,
     selection_range: TextRange,
 ) -> Option<(&'a str, &'a str, &'a str, TextRange)> {
@@ -92,7 +92,7 @@ fn split_selection<'a>(
     ))
 }
 
-fn is_exact_expression(ast: &ModModule, selection: TextRange) -> bool {
+pub(super) fn is_exact_expression(ast: &ModModule, selection: TextRange) -> bool {
     Ast::locate_node(ast, selection.start())
         .into_iter()
         .any(|node| node.as_expr_ref().is_some() && node.range() == selection)
@@ -110,7 +110,10 @@ fn find_enclosing_statement_range(ast: &ModModule, selection: TextRange) -> Opti
     None
 }
 
-fn line_indent_and_start(source: &str, position: TextSize) -> Option<(String, TextSize)> {
+pub(super) fn line_indent_and_start(
+    source: &str,
+    position: TextSize,
+) -> Option<(String, TextSize)> {
     let mut idx = position.to_usize();
     if idx > source.len() {
         idx = source.len();

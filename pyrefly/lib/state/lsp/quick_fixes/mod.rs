@@ -5,5 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub(crate) mod extract_field;
 pub(crate) mod extract_function;
 pub(crate) mod extract_variable;
