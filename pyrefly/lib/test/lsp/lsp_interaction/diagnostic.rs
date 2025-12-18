@@ -13,6 +13,7 @@ use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::object_model::TestClient;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -884,6 +885,108 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
             ),
             create_version_validator(version),
         )
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_missing_source_for_stubs_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([
+                {"pyrefly": {"displayTypeErrors": "force-on"}}
+            ]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("missing_source_for_stubs/test.py");
+
+    interaction
+        .client
+        .diagnostic("missing_source_for_stubs/test.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "missing-source-for-stubs",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#missing-source-for-stubs"
+                    },
+                    "message": "Stubs for `requests` are bundled with Pyrefly but the source files for the package are not found.",
+                    "range": {
+                        "start": {"line": 5, "character": 7},
+                        "end": {"line": 5, "character": 15}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_missing_source_with_config_diagnostic_returns_untyped_import_error() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([
+                {"pyrefly": {"displayTypeErrors": "force-on"}}
+            ]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("missing_source_with_config/test.py");
+
+    interaction
+        .client
+        .diagnostic("missing_source_with_config/test.py")
+        .expect_response(TestClient::untyped_import_diagnostic_response(
+            "requests", 5, 7, 15, 2,
+        ))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_untyped_import_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([
+                {"pyrefly": {"displayTypeErrors": "force-on"}}
+            ]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("untyped_import_with_source/test.py");
+
+    interaction
+        .client
+        .diagnostic("untyped_import_with_source/test.py")
+        .expect_response(TestClient::untyped_import_diagnostic_response(
+            "boto3", 5, 7, 12, 1,
+        ))
         .unwrap();
 
     interaction.shutdown().unwrap();

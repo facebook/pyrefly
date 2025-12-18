@@ -1014,6 +1014,33 @@ impl TestClient {
         Ok(())
     }
 
+    pub fn untyped_import_diagnostic_response(
+        package_name: &str,
+        line: u32,
+        start_character: u32,
+        end_character: u32,
+        severity: u32,
+    ) -> Value {
+        json!({
+            "items": [
+                {
+                    "code": "untyped-import",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
+                    },
+                    "message": format!("Missing type stubs for `{}`\n  Hint: install the `{}-stubs` package", package_name, package_name),
+                    "range": {
+                        "start": {"line": line, "character": start_character},
+                        "end": {"line": line, "character": end_character}
+                    },
+                    "severity": severity,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        })
+    }
+
     /// Helper function to merge JSON values, with the source taking precedence
     fn merge_json(target: &mut Value, source: &Value) {
         if let (Some(target_obj), Some(source_obj)) = (target.as_object_mut(), source.as_object()) {

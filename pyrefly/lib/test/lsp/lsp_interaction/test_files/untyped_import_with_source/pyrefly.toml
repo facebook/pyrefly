@@ -1,0 +1,4 @@
+search-path = ["."]
+
+[errors]
+untyped-import = "error"
