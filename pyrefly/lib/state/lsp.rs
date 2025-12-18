@@ -866,34 +866,40 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// If `ty` represents a callable instance (e.g., a class with `__call__`), return the
+    /// bound `__call__` signature. Otherwise, return the type unchanged.
+    ///
+    /// This enables IDE features like hover and signature help to show parameter lists
+    /// when calling instances that implement `__call__`, matching Python's runtime behavior.
+    ///
+    /// Note that we should only use this when we already know the value is being used as a
+    /// callee, since this drops the original type information in favor of a callable type.
     pub(crate) fn coerce_type_to_callable(&self, handle: &Handle, ty: Type) -> Type {
         if ty.is_toplevel_callable() {
             return ty;
         }
         let original = ty.clone();
-        self.ad_hoc_solve(handle, |solver| Self::callable_type_from_value(&solver, ty))
+        self.ad_hoc_solve(handle, |solver| Self::callable_from_type(&solver, ty))
             .and_then(|callable| callable)
             .unwrap_or(original)
     }
 
-    fn callable_type_from_value(
-        solver: &AnswersSolver<TransactionHandle<'_>>,
-        ty: Type,
-    ) -> Option<Type> {
+    /// Extract a callable type from `ty` by invoking the solver to find its `__call__` method.
+    /// Recursively walks through type wrappers (Union, TypeAlias, Type, Quantified).
+    /// Returns `None` if the type is not callable.
+    fn callable_from_type(solver: &AnswersSolver<TransactionHandle<'_>>, ty: Type) -> Option<Type> {
         if ty.is_toplevel_callable() {
             return Some(ty);
         }
         match ty {
             Type::ClassType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
             Type::SelfType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
-            Type::Union(box Union { members, .. }) => {
-                Self::callable_type_from_list(solver, members)
-            }
-            Type::TypeAlias(alias) => Self::callable_type_from_value(solver, alias.as_type()),
-            Type::Type(box inner) => Self::callable_type_from_value(solver, inner),
+            Type::Union(box Union { members, .. }) => Self::callable_from_types(solver, members),
+            Type::TypeAlias(alias) => Self::callable_from_type(solver, alias.as_type()),
+            Type::Type(box inner) => Self::callable_from_type(solver, inner),
             Type::Quantified(box quantified) => match quantified.restriction {
-                Restriction::Bound(bound) => Self::callable_type_from_value(solver, bound),
-                Restriction::Constraints(options) => Self::callable_type_from_list(solver, options),
+                Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
+                Restriction::Constraints(options) => Self::callable_from_types(solver, options),
                 Restriction::Unrestricted => None,
             },
             _ => None,
@@ -902,7 +908,7 @@ impl<'a> Transaction<'a> {
 
     /// Convert a collection of types into a single callable union, returning `None` if the list
     /// was empty or any member failed to coerce into a callable.
-    fn callable_type_from_list(
+    fn callable_from_types(
         solver: &AnswersSolver<TransactionHandle<'_>>,
         types: Vec<Type>,
     ) -> Option<Type> {
@@ -911,7 +917,7 @@ impl<'a> Transaction<'a> {
         }
         let mut converted = Vec::with_capacity(types.len());
         for ty in types {
-            let callable = Self::callable_type_from_value(solver, ty)?;
+            let callable = Self::callable_from_type(solver, ty)?;
             converted.push(callable);
         }
         if converted.len() == 1 {

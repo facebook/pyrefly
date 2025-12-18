@@ -606,3 +606,27 @@ xyz = 5
         report.trim(),
     );
 }
+
+#[test]
+fn hover_on_callable_instance_attribute_access() {
+    let code = r#"
+class Greeter:
+    attr: int = 1
+    def __call__(self, name: str) -> str: ...
+
+greeter = Greeter()
+greeter.attr
+#^^^^^^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // Should show Greeter type (variable), NOT the __call__ signature
+    // The cursor is on 'greeter', usage is attribute access, not call.
+    // However, get_hover usually tries to resolve the expression.
+    // If we hover on 'greeter' in 'greeter.attr', we expect 'Greeter'.
+    // If we hover on 'attr', we expect 'int'.
+    // The test framework extracts the range marked by ^.
+    assert!(
+        report.contains("variable") || report.contains("parameter") || report.contains("Greeter")
+    );
+    assert!(!report.contains("__call__"));
+}
