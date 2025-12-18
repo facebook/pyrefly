@@ -200,3 +200,25 @@ class B(BaseModel):
     x: int = Field(default_factory=lambda: 'oops')  # E: `str` is not assignable to `int`
     "#,
 );
+
+pydantic_testcase!(
+    test_annotated_field_with_defaults,
+    r#"
+from typing import Annotated
+from pydantic import BaseModel, Field
+
+class House(BaseModel):
+    street: str
+    city: str
+    zipcode: str
+    notes: Annotated[str, Field(default="")]
+    extra_fields: Annotated[dict, Field(default_factory=dict)]
+    something: dict = Field(default_factory=dict)
+
+house = House(
+    street="House Street",
+    city="House City",
+    zipcode="House Zipcode",
+)
+    "#,
+);

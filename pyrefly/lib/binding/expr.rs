@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::visit::VisitMut;
@@ -53,7 +54,6 @@ use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::types::callable::unexpected_keyword;
 use crate::types::types::Type;
 

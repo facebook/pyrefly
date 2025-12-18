@@ -1,12 +1,12 @@
 [build-system]
-requires = ["maturin>=1.0,!=1.10.0,!=1.10.1,<2.0"]
+requires = ["maturin>=1.10.2,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
 bindings = "bin"
 python-source = "python"
 module-name = "pyrefly"
-strip = true
+strip = false
 include = ["rust-toolchain"]
 
 [project.urls]

@@ -13,6 +13,7 @@ use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr::EllipsisLiteral;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -30,6 +31,7 @@ use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::pydantic::PydanticModelKind;
+use crate::alt::unwrap::HintRef;
 use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
 use crate::binding::pydantic::LE;
@@ -48,6 +50,7 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::class::Class;
+use crate::types::class::ClassType;
 use crate::types::display::ClassDisplayContext;
 use crate::types::keywords::ConverterMap;
 use crate::types::keywords::DataclassFieldKeywords;
@@ -177,7 +180,130 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if dataclass.kws.eq {
             fields.insert(dunder::HASH, ClassSynthesizedField::new(Type::None));
         }
+        fields.insert(
+            dunder::REPLACE,
+            self.get_dataclass_replace(cls, dataclass, errors),
+        );
         Some(ClassSynthesizedFields::new(fields))
+    }
+
+    pub fn call_dataclasses_replace(
+        &self,
+        replace_ty: &Type,
+        args: &[CallArg],
+        kws: &[CallKeyword],
+        callee_range: TextRange,
+        arg_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let Some(CallArg::Arg(obj_arg)) = args.first() else {
+            return self.freeform_call_infer(
+                replace_ty.clone(),
+                args,
+                kws,
+                callee_range,
+                arg_range,
+                hint,
+                errors,
+            );
+        };
+        let obj_ty = obj_arg.infer(self, errors);
+
+        let is_dataclass = |cls: &ClassType| {
+            let cls_metadata = self.get_metadata_for_class(cls.class_object());
+            cls_metadata.dataclass_metadata().is_some()
+        };
+
+        let mut dataclasses = Vec::new();
+        let mut non_dataclasses = Vec::new();
+        self.map_over_union(&obj_ty, |ty| match ty {
+            Type::ClassType(cls) if is_dataclass(cls) => dataclasses.push(ty.clone()),
+            _ => non_dataclasses.push(ty.clone()),
+        });
+
+        // For unions of dataclasses, typecheck each member individually. We treat the first argument
+        // as the member type to avoid rejecting `A | B` as not assignable to `A`.
+        let mut rets = dataclasses.map(|ty| {
+            let ret = self.call_magic_dunder_method(
+                ty,
+                &dunder::REPLACE,
+                arg_range,
+                &args.iter().skip(1).cloned().collect::<Vec<_>>(),
+                kws,
+                errors,
+                None,
+            );
+            ret.unwrap_or_else(|| ty.clone())
+        });
+        if !non_dataclasses.is_empty() {
+            let mut new_args = Vec::with_capacity(args.len());
+            let new_first_arg = self.unions(non_dataclasses);
+            new_args.push(CallArg::ty(&new_first_arg, obj_arg.range()));
+            new_args.extend(args.iter().skip(1).cloned());
+            rets.push(self.freeform_call_infer(
+                replace_ty.clone(),
+                &new_args,
+                kws,
+                callee_range,
+                arg_range,
+                hint,
+                errors,
+            ));
+        }
+        self.unions(rets)
+    }
+
+    fn get_dataclass_replace(
+        &self,
+        cls: &Class,
+        dataclass_metadata: &DataclassMetadata,
+        errors: &ErrorCollector,
+    ) -> ClassSynthesizedField {
+        let mut params = vec![self.class_self_param(cls, true)];
+
+        let strict_default = dataclass_metadata.kws.strict;
+        for (name, field, field_flags) in self.iter_fields(cls, dataclass_metadata, true) {
+            if !field_flags.init {
+                continue;
+            }
+
+            let strict = field_flags.strict.unwrap_or(strict_default);
+            let has_default = !field.is_init_var() || field_flags.default.is_some();
+            if field_flags.init_by_name {
+                params.push(self.as_param(
+                    &field,
+                    &name,
+                    has_default,
+                    true,
+                    strict,
+                    field_flags.converter_param.clone(),
+                    &|t| t,
+                    errors,
+                ));
+            }
+            if let Some(alias) = &field_flags.init_by_alias {
+                params.push(self.as_param(
+                    &field,
+                    alias,
+                    has_default,
+                    true,
+                    strict,
+                    field_flags.converter_param.clone(),
+                    &|t| t,
+                    errors,
+                ));
+            }
+        }
+        if dataclass_metadata.kws.extra {
+            params.push(Param::Kwargs(None, Type::Any(AnyStyle::Implicit)));
+        }
+
+        let ty = Type::Function(Box::new(Function {
+            signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::REPLACE),
+        }));
+        ClassSynthesizedField::new(ty)
     }
 
     pub fn validate_frozen_dataclass_inheritance(

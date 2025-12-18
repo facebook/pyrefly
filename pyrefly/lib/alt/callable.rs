@@ -428,7 +428,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             CallArg::Star(x, _) => {
                 let mut ty = x.infer(self, errors);
                 self.expand_vars_mut(&mut ty);
-                matches!(ty, Type::Args(q2) if &*q2 == q)
+                // This can either be `P.args` or `tuple[Any, ...]`
+                matches!(&ty, Type::Args(q2) if &**q2 == q)
+                    || self.is_subset_eq(&ty, &Type::unbounded_tuple(Type::never()))
             }
             _ => false,
         }
@@ -442,7 +444,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> bool {
         let mut ty = x.value.infer(self, errors);
         self.expand_vars_mut(&mut ty);
-        matches!(ty, Type::Kwargs(q2) if &*q2 == q)
+        // This can either be `P.kwargs` or `dict[str, Any]`
+        matches!(&ty, Type::Kwargs(q2) if &**q2 == q)
+            || self.is_subset_eq(
+                &ty,
+                &self
+                    .stdlib
+                    .dict(self.stdlib.str().clone().to_type(), Type::never())
+                    .to_type(),
+            )
     }
 
     // See comment on `callable_infer` about `arg_errors` and `call_errors`.

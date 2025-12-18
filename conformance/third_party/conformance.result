@@ -242,9 +242,7 @@
     "Line 117: Expected 1 errors",
     "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`\\n  Protocol `Template` requires attribute `temp`']"
   ],
-  "protocols_explicit.py": [
-    "Line 89: Expected 1 errors"
-  ],
+  "protocols_explicit.py": [],
   "protocols_generic.py": [],
   "protocols_merging.py": [],
   "protocols_modules.py": [
@@ -274,8 +272,7 @@
   "qualifiers_final_annotation.py": [
     "Line 34: Expected 1 errors",
     "Line 38: Expected 1 errors",
-    "Line 62: Expected 1 errors",
-    "Line 63: Expected 1 errors",
+    "Line 54: Expected 1 errors",
     "Line 107: Expected 1 errors",
     "Line 149: Expected 1 errors",
     "Line 152: Expected 1 errors",

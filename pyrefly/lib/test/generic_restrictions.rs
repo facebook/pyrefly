@@ -632,3 +632,47 @@ def f(t: T | None) -> None:...
 f(None)
     "#,
 );
+
+testcase!(
+    test_circular_bound,
+    r#"
+from typing import Any, assert_type
+
+class Node[P]: ...
+
+class A[P: A](Node[P]):
+    def __init__(self, x: P | None = None):
+        self.x = x
+    def f(self) -> P: ...
+
+a1 = A()
+assert_type(a1, A[Any])
+assert_type(a1.f(), Any)
+
+a2 = A(a1)
+assert_type(a2, A[A[Any]])
+assert_type(a2.f(), A[Any])
+    "#,
+);
+
+testcase!(
+    test_circular_bound_with_imported_base,
+    TestEnv::one("node", "class Node[P]: ..."),
+    r#"
+from node import Node
+from typing import Any, assert_type
+
+class A[P: A](Node[P]):
+    def __init__(self, x: P | None = None):
+        self.x = x
+    def f(self) -> P: ...
+
+a1 = A()
+assert_type(a1, A[Any])
+assert_type(a1.f(), Any)
+
+a2 = A(a1)
+assert_type(a2, A[A[Any]])
+assert_type(a2.f(), A[Any])
+    "#,
+);

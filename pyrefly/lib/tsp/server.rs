@@ -8,12 +8,12 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Instant;
 
 use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
 use lsp_types::ServerCapabilities;
+use pyrefly_util::telemetry::LspEventTelemetry;
 use tracing::info;
 use tsp_types::TSPRequests;
 
@@ -27,14 +27,14 @@ use crate::lsp::non_wasm::server::dispatch_lsp_events;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 
 /// TSP server that delegates to LSP server infrastructure while handling only TSP requests
-pub struct TspServer {
-    pub inner: Box<dyn TspInterface>,
+pub struct TspServer<T: TspInterface> {
+    pub inner: T,
     /// Current snapshot version, updated on RecheckFinished events
     pub(crate) current_snapshot: Arc<Mutex<i32>>,
 }
 
-impl TspServer {
-    pub fn new(lsp_server: Box<dyn TspInterface>) -> Self {
+impl<T: TspInterface> TspServer<T> {
+    pub fn new(lsp_server: T) -> Self {
         Self {
             inner: lsp_server,
             current_snapshot: Arc::new(Mutex::new(0)), // Start at 0, increments on RecheckFinished
@@ -45,6 +45,7 @@ impl TspServer {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
+        telemetry: &mut LspEventTelemetry,
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {
@@ -78,6 +79,7 @@ impl TspServer {
         let result = self.inner.process_event(
             ide_transaction_manager,
             canceled_requests,
+            telemetry,
             subsequent_mutation,
             event,
         )?;
@@ -133,7 +135,7 @@ impl TspServer {
 }
 
 pub fn tsp_loop(
-    lsp_server: Box<dyn TspInterface>,
+    lsp_server: impl TspInterface,
     _initialization_params: InitializeParams,
 ) -> anyhow::Result<()> {
     eprintln!("Reading TSP messages");
@@ -155,21 +157,29 @@ pub fn tsp_loop(
         let mut ide_transaction_manager = TransactionManager::default();
         let mut canceled_requests = HashSet::new();
 
-        while let Ok((subsequent_mutation, event, queue_time)) = server.inner.lsp_queue().recv() {
-            let queue_duration = queue_time.elapsed().as_secs_f32();
-            let process_start = Instant::now();
+        while let Ok((subsequent_mutation, event, enqueued_at)) = server.inner.lsp_queue().recv() {
+            let mut event_telemetry = LspEventTelemetry::new_dequeued(
+                event.describe(),
+                enqueued_at,
+                server.inner.sourcedb_available(),
+            );
             let event_description = event.describe();
-            match server.process_event(
+
+            let result = server.process_event(
                 &mut ide_transaction_manager,
                 &mut canceled_requests,
+                &mut event_telemetry,
                 subsequent_mutation,
                 event,
-            )? {
+            );
+            let (queue_duration, process_duration, result) = event_telemetry.finish(result);
+            match result? {
                 ProcessEvent::Continue => {
-                    let process_duration = process_start.elapsed().as_secs_f32();
                     info!(
                         "Type server processed event `{}` in {:.2}s ({:.2}s waiting)",
-                        event_description, process_duration, queue_duration
+                        event_description,
+                        process_duration.as_secs_f32(),
+                        queue_duration.as_secs_f32()
                     );
                 }
                 ProcessEvent::Exit => break,

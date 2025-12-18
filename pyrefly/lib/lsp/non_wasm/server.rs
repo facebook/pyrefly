@@ -184,6 +184,8 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::telemetry::LspEventTelemetry;
+use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -238,6 +240,7 @@ use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::ImportBehavior;
+use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
@@ -289,11 +292,14 @@ pub trait TspInterface: Send + Sync {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
+        telemetry: &mut LspEventTelemetry,
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent>;
 
     fn run_task(&self, task: HeavyTask);
+
+    fn sourcedb_available(&self) -> bool;
 }
 
 struct ServerConnection(Connection);
@@ -319,14 +325,16 @@ impl ServerConnection {
         &self,
         diags: SmallMap<PathBuf, Vec<Diagnostic>>,
         notebook_cell_urls: SmallMap<PathBuf, Url>,
+        version_info: HashMap<PathBuf, i32>,
     ) {
         for (path, diags) in diags {
             if let Some(url) = notebook_cell_urls.get(&path) {
                 self.publish_diagnostics_for_uri(url.clone(), diags, None)
             } else {
                 let path = path.absolutize();
+                let version = version_info.get(&path).copied();
                 match Url::from_file_path(&path) {
-                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
+                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, version),
                     Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
                 }
             }
@@ -593,6 +601,7 @@ pub fn lsp_loop(
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     build_system_blocking: bool,
+    telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
     let lsp_queue = LspQueue::new();
@@ -626,21 +635,26 @@ pub fn lsp_loop(
         let mut ide_transaction_manager = TransactionManager::default();
         let mut canceled_requests = HashSet::new();
         while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
-            let process_start = Instant::now();
+            let sourcedb_available = server.sourcedb_available();
+            let mut event_telemetry =
+                LspEventTelemetry::new_dequeued(event.describe(), enqueue_time, sourcedb_available);
             let event_description = event.describe();
-            match server.process_event(
+            let result = server.process_event(
                 &mut ide_transaction_manager,
                 &mut canceled_requests,
+                &mut event_telemetry,
                 subsequent_mutation,
                 event,
-            ) {
+            );
+            let (queue_duration, process_duration, result) =
+                event_telemetry.finish_and_record(telemetry, result);
+            match result {
                 Ok(ProcessEvent::Continue) => {
-                    let process_end = Instant::now();
-                    let process_duration = (process_end - process_start).as_secs_f32();
-                    let queue_duration = (process_start - enqueue_time).as_secs_f32();
                     info!(
                         "Language server processed event `{}` in {:.2}s ({:.2}s waiting)",
-                        event_description, process_duration, queue_duration
+                        event_description,
+                        process_duration.as_secs_f32(),
+                        queue_duration.as_secs_f32()
                     );
                 }
                 Ok(ProcessEvent::Exit) => break,
@@ -700,6 +714,7 @@ impl Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
+        telemetry: &mut LspEventTelemetry,
         // After this event there is another mutation
         subsequent_mutation: bool,
         event: LspEvent,
@@ -710,7 +725,9 @@ impl Server {
             }
             LspEvent::RecheckFinished => {
                 // We did a commit and want to get back to a stable state.
+                let validate_start = Instant::now();
                 self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
+                telemetry.set_validate_duration(validate_start.elapsed());
             }
             LspEvent::CancelRequest(id) => {
                 info!("We should cancel request {id:?}");
@@ -742,6 +759,7 @@ impl Server {
                 let contents = Arc::new(LspFile::from_source(text));
                 self.did_open(
                     ide_transaction_manager,
+                    telemetry,
                     subsequent_mutation,
                     uri,
                     version,
@@ -785,6 +803,7 @@ impl Server {
                 }
                 self.did_open(
                     ide_transaction_manager,
+                    telemetry,
                     subsequent_mutation,
                     url,
                     version,
@@ -865,7 +884,9 @@ impl Server {
                 //
                 // Validating in-memory files is relatively cheap, since we only actually recheck open files which have
                 // changed file contents, so it's simpler to just always do it.
+                let validate_start = Instant::now();
                 self.validate_in_memory_for_transaction(&mut transaction);
+                telemetry.set_validate_duration(validate_start.elapsed());
 
                 info!("Handling non-canceled request {} ({})", x.method, &x.id);
                 if let Some(params) = as_request::<GotoDefinition>(&x) {
@@ -1515,8 +1536,11 @@ impl Server {
                 let handle = make_open_handle(&self.state, path);
                 Self::append_ide_specific_diagnostics(transaction, &handle, diagnostics);
             }
-            self.connection
-                .publish_diagnostics(diags, notebook_cell_urls);
+            self.connection.publish_diagnostics(
+                diags,
+                notebook_cell_urls,
+                self.version_info.lock().clone(),
+            );
             if self
                 .initialize_params
                 .capabilities
@@ -1758,6 +1782,7 @@ impl Server {
     fn did_open<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry: &mut LspEventTelemetry,
         subsequent_mutation: bool,
         url: Url,
         version: i32,
@@ -1802,7 +1827,9 @@ impl Server {
                 "File {} opened, prepare to validate open files.",
                 path.display()
             );
+            let validate_start = Instant::now();
             self.validate_in_memory_without_committing(ide_transaction_manager);
+            telemetry.set_validate_duration(validate_start.elapsed());
         }
         self.populate_project_files_if_necessary(config_to_populate_files);
         self.populate_workspace_files_if_necessary();
@@ -1832,6 +1859,8 @@ impl Server {
             ));
         }
         version_info.insert(file_path.clone(), version);
+        // drop this to avoid deadlock
+        drop(version_info);
         let mut lock = self.open_files.write();
         let Some(original) = lock.get_mut(&file_path) else {
             return Err(anyhow::anyhow!(
@@ -1901,6 +1930,7 @@ impl Server {
             notebook_document.metadata = Some(metadata.clone());
         }
         version_info.insert(file_path.clone(), version);
+        drop(version_info);
         notebook_document.version = version;
         // Changes to cells
         if let Some(change) = &params.change.cells {
@@ -2033,17 +2063,21 @@ impl Server {
         let Some(path) = self.path_for_uri(&url) else {
             return;
         };
-        self.version_info.lock().remove(&path);
+        let version = self
+            .version_info
+            .lock()
+            .remove(&path)
+            .map(|version| version + 1);
         if let Some(LspFile::Notebook(notebook)) = self.open_files.write().remove(&path).as_deref()
         {
             for cell in notebook.cell_urls() {
                 self.connection
-                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
+                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), version);
                 self.open_notebook_cells.write().remove(cell);
             }
         } else {
             self.connection
-                .publish_diagnostics_for_uri(url.clone(), Vec::new(), None);
+                .publish_diagnostics_for_uri(url.clone(), Vec::new(), version);
         }
         self.unsaved_file_tracker.forget_uri_path(&url);
         self.queue_source_db_rebuild_and_recheck(false);
@@ -2363,10 +2397,6 @@ impl Server {
         params: CodeActionParams,
     ) -> Option<CodeActionResponse> {
         let uri = &params.text_document.uri;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            // TODO(yangdanny) handle notebooks
-            return None;
-        }
         let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
             uri,
             Some(CodeActionRequest::METHOD),
@@ -2376,39 +2406,44 @@ impl Server {
         let range = self.from_lsp_range(uri, &module_info, params.range);
         let mut actions = Vec::new();
         if let Some(quickfixes) =
-            transaction.local_quickfix_code_actions(&handle, range, import_format)
+            transaction.local_quickfix_code_actions_sorted(&handle, range, import_format)
         {
-            actions.extend(
-                quickfixes
-                    .into_iter()
-                    .map(|(title, info, range, insert_text)| {
-                        CodeActionOrCommand::CodeAction(CodeAction {
-                            title,
-                            kind: Some(CodeActionKind::QUICKFIX),
-                            edit: Some(WorkspaceEdit {
-                                changes: Some(HashMap::from([(
-                                    uri.clone(),
-                                    vec![TextEdit {
-                                        range: info.to_lsp_range(range),
-                                        new_text: insert_text,
-                                    }],
-                                )])),
-                                ..Default::default()
-                            }),
+            actions.extend(quickfixes.into_iter().filter_map(
+                |(title, info, range, insert_text)| {
+                    let lsp_location = self.to_lsp_location(&TextRangeWithModule {
+                        module: info,
+                        range,
+                    })?;
+                    Some(CodeActionOrCommand::CodeAction(CodeAction {
+                        title,
+                        kind: Some(CodeActionKind::QUICKFIX),
+                        edit: Some(WorkspaceEdit {
+                            changes: Some(HashMap::from([(
+                                lsp_location.uri,
+                                vec![TextEdit {
+                                    range: lsp_location.range,
+                                    new_text: insert_text,
+                                }],
+                            )])),
                             ..Default::default()
-                        })
-                    }),
-            );
+                        }),
+                        ..Default::default()
+                    }))
+                },
+            ));
         }
-        if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
+        let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
             for action in refactors {
                 let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
                 for (module, edit_range, new_text) in action.edits {
-                    let Some(edit_uri) = module_info_to_uri(&module) else {
+                    let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
+                        module,
+                        range: edit_range,
+                    }) else {
                         continue;
                     };
-                    changes.entry(edit_uri).or_default().push(TextEdit {
-                        range: module.to_lsp_range(edit_range),
+                    changes.entry(lsp_location.uri).or_default().push(TextEdit {
+                        range: lsp_location.range,
                         new_text,
                     });
                 }
@@ -2425,6 +2460,12 @@ impl Server {
                     ..Default::default()
                 }));
             }
+        };
+        if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
         }
         if actions.is_empty() {
             None
@@ -3526,12 +3567,14 @@ impl TspInterface for Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
+        telemetry: &mut LspEventTelemetry,
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {
         self.process_event(
             ide_transaction_manager,
             canceled_requests,
+            telemetry,
             subsequent_mutation,
             event,
         )
@@ -3539,5 +3582,9 @@ impl TspInterface for Server {
 
     fn run_task(&self, task: HeavyTask) {
         task.run(self)
+    }
+
+    fn sourcedb_available(&self) -> bool {
+        self.workspaces.sourcedb_available()
     }
 }

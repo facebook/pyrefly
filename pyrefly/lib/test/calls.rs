@@ -257,3 +257,58 @@ from typing import Any
 Any()  # E: `Any` can not be instantiated
     "#,
 );
+
+testcase!(
+    test_object_new_explicit_call,
+    r#"
+from typing import assert_type
+
+class A: pass
+class B(A): pass
+
+# Direct object.__new__ calls should return the argument class type
+x1 = object.__new__(A)
+assert_type(x1, A)
+
+x2 = object.__new__(B)
+assert_type(x2, B)
+
+# Works with builtin classes too
+x3 = object.__new__(int)
+assert_type(x3, int)
+    "#,
+);
+
+testcase!(
+    test_object_new_with_generics,
+    r#"
+from typing import assert_type
+
+class Container[T]: pass
+
+# object.__new__ with generic class should preserve type params
+x = object.__new__(Container[int])
+assert_type(x, Container[int])
+    "#,
+);
+
+testcase!(
+    test_custom_new_unaffected,
+    r#"
+from typing import Self, assert_type
+
+class A[T]:
+    def __new__(cls: type[Self], x: T) -> Self: ...
+
+# Custom __new__ should continue to work correctly
+o = A[int].__new__(A[int], 42)
+assert_type(o, A[int])
+
+# Receiver type binding is preserved
+class B:
+    def __new__(cls) -> Self: ...
+
+b = B.__new__(B)
+assert_type(b, B)
+    "#,
+);

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_graph::index::Idx;
 use pyrefly_util::display::DisplayWithCtx;
 
 use crate::alt::answers::LookupAnswer;
@@ -18,7 +19,6 @@ use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
-use crate::graph::index::Idx;
 
 /// Debugging helpers for the AnswersSolver.
 ///

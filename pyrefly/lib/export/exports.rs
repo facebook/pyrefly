@@ -11,6 +11,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_graph::calculation::Calculation;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
@@ -27,7 +28,6 @@ use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::DunderAllEntry;
 use crate::export::special::SpecialExport;
-use crate::graph::calculation::Calculation;
 use crate::module::module_info::ModuleInfo;
 use crate::state::loader::FindingOrError;
 

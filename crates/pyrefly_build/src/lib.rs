@@ -32,6 +32,7 @@ use std::sync::LazyLock;
 
 use dupe::Dupe as _;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::arc_id::WeakArcId;
 use pyrefly_util::lock::Mutex;
 use serde::Deserialize;
 use serde::Serialize;
@@ -55,7 +56,10 @@ use crate::source_db::query_source_db::QuerySourceDatabase;
 /// and config.
 static BUILD_SYSTEM_CACHE: LazyLock<
     Mutex<
-        SmallMap<(PathBuf, BuildSystemArgs), ArcId<Box<dyn source_db::SourceDatabase + 'static>>>,
+        SmallMap<
+            (PathBuf, BuildSystemArgs),
+            WeakArcId<Box<dyn source_db::SourceDatabase + 'static>>,
+        >,
     >,
 > = LazyLock::new(|| Mutex::new(SmallMap::new()));
 
@@ -137,7 +141,9 @@ impl BuildSystem {
         };
         let mut cache = BUILD_SYSTEM_CACHE.lock();
         let key = (repo_root.clone(), self.args.clone());
-        if let Some(result) = cache.get(&key) {
+        if let Some(maybe_result) = cache.get(&key)
+            && let Some(result) = maybe_result.upgrade()
+        {
             return Some(Ok(result.dupe()));
         }
 
@@ -153,7 +159,7 @@ impl BuildSystem {
             repo_root.to_path_buf(),
             querier,
         )) as Box<dyn SourceDatabase>);
-        cache.insert(key, source_db.dupe());
+        cache.insert(key, source_db.downgrade());
         Some(Ok(source_db))
     }
 }

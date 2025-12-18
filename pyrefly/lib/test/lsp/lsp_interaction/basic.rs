@@ -104,27 +104,19 @@ fn test_shutdown_with_messages_in_between() {
     // nvim sometimes sends messages in between shutdown and exit. The server should
     // handle this gracefully and not hang.
     // Per LSP spec, requests after shutdown should be rejected with InvalidRequest.
-    let root = get_test_files_root();
+    let test_files_root = get_test_files_root();
+    let root = test_files_root.path().join("basic");
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.clone());
     interaction
         .initialize(InitializeSettings::default())
         .unwrap();
 
-    let test_file = root.path().join("basic.py");
+    let test_file = root.join("foo.py");
     let uri = Url::from_file_path(&test_file).unwrap();
 
     // Open a file
-    interaction
-        .client
-        .send_notification::<DidOpenTextDocument>(json!({
-            "textDocument": {
-                "uri": uri.to_string(),
-                "languageId": "python",
-                "version": 1,
-                "text": "def foo():\n    pass\n",
-            }
-        }));
+    interaction.client.did_open("foo.py");
 
     // Expect initial diagnostics
     interaction.client.expect_any_message().unwrap();

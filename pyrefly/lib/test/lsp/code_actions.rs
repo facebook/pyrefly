@@ -33,7 +33,7 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     let mut report = "Code Actions Results:\n".to_owned();
     let transaction = state.transaction();
     for (title, info, range, patch) in transaction
-        .local_quickfix_code_actions(
+        .local_quickfix_code_actions_sorted(
             handle,
             TextRange::new(position, position),
             ImportFormat::Absolute,
@@ -124,6 +124,43 @@ fn apply_first_extract_action(code: &str) -> Option<String> {
     Some(apply_refactor_edits_for_module(&module_info, edits))
 }
 
+fn compute_extract_variable_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = find_marked_range(module_info.contents());
+    let actions = transaction
+        .extract_variable_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_first_extract_variable_action(code: &str) -> Option<String> {
+    let (module_info, actions, _) = compute_extract_variable_actions(code);
+    let edits = actions.first()?;
+    Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn assert_no_extract_variable_action(code: &str) {
+    let (_, actions, _) = compute_extract_variable_actions(code);
+    assert!(
+        actions.is_empty(),
+        "expected no extract-variable actions, found {}",
+        actions.len()
+    );
+}
+
 fn assert_no_extract_action(code: &str) {
     let (_, actions, _) = compute_extract_actions(code);
     assert!(
@@ -180,6 +217,40 @@ my_export
 "#
         .trim(),
         report.trim()
+    );
+}
+
+#[test]
+fn prefer_public_stdlib_module_for_reexports() {
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", "BytesIO\n# ^")], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+1 | BytesIO
+      ^
+Code Actions Results:
+# Title: Insert import: `from io import BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+from io import BytesIO
+BytesIO
+# ^
+# Title: Insert import: `from _io import BytesIO`
+
+## Before:
+BytesIO
+# ^
+## After:
+from _io import BytesIO
+BytesIO
+# ^
+"#
+        .trim(),
+        report.trim(),
     );
 }
 
@@ -321,6 +392,90 @@ my_export
 }
 
 #[test]
+fn test_import_from_stdlib() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("a", "TypeVar('T')\n# ^")],
+        get_test_report,
+    );
+    // TODO: Ideally `typing` would be preferred over `ast`.
+    assert_eq!(
+        r#"
+# a.py
+1 | TypeVar('T')
+      ^
+Code Actions Results:
+# Title: Insert import: `from ast import TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+from ast import TypeVar
+TypeVar('T')
+# ^
+# Title: Insert import: `from typing import TypeVar`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+from typing import TypeVar
+TypeVar('T')
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn test_take_deprecation_into_account_in_sorting_of_actions() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            (
+                "a",
+                "from warnings import deprecated\n@deprecated('')\ndef my_func(): pass",
+            ),
+            ("b", "def my_func(): pass"),
+            ("c", "my_func()\n# ^"),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# a.py
+
+# b.py
+
+# c.py
+1 | my_func()
+      ^
+Code Actions Results:
+# Title: Insert import: `from b import my_func`
+
+## Before:
+my_func()
+# ^
+## After:
+from b import my_func
+my_func()
+# ^
+# Title: Insert import: `from a import my_func` (deprecated)
+
+## Before:
+my_func()
+# ^
+## After:
+from a import my_func
+my_func()
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
 fn extract_function_basic_refactor() {
     let code = r#"
 def process_data(data_list):
@@ -399,6 +554,348 @@ class Processor:
             extracted_function(item, self)
             # EXTRACT-END
         return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_produces_method_action() {
+    let code = r#"
+class Processor:
+    def consume(self, item):
+        print(item)
+
+    def process(self, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            squared_value = item * item
+            if squared_value > 10:
+                self.consume(squared_value)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    let (module_info, actions, titles) = compute_extract_actions(code);
+    assert_eq!(
+        2,
+        actions.len(),
+        "expected both helper and method extract actions"
+    );
+    assert!(
+        titles
+            .get(1)
+            .is_some_and(|title| title.contains("method `extracted_method` on `Processor`")),
+        "expected second action to target method scope"
+    );
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected = r#"
+class Processor:
+    def consume(self, item):
+        print(item)
+
+    def extracted_method(self, item):
+        squared_value = item * item
+        if squared_value > 10:
+            self.consume(squared_value)
+
+    def process(self, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            self.extracted_method(item)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_method_without_self_usage_still_adds_receiver() {
+    let code = r#"
+class Processor:
+    def process(self, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            squared_value = item * item
+            print(item)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    let (module_info, actions, _) = compute_extract_actions(code);
+    assert_eq!(2, actions.len(), "expected helper and method actions");
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected = r#"
+class Processor:
+    def extracted_method(self, item):
+        squared_value = item * item
+        print(item)
+
+    def process(self, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            self.extracted_method(item)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_method_preserves_custom_receiver_name() {
+    let code = r#"
+class Processor:
+    def consume(this, item):
+        print(item)
+
+    def process(this, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            squared_value = item * item
+            this.consume(squared_value)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    let (module_info, actions, _) = compute_extract_actions(code);
+    assert_eq!(2, actions.len(), "expected helper and method actions");
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected = r#"
+class Processor:
+    def consume(this, item):
+        print(item)
+
+    def extracted_method(this, item):
+        squared_value = item * item
+        this.consume(squared_value)
+
+    def process(this, data_list):
+        for item in data_list:
+            # EXTRACT-START
+            this.extracted_method(item)
+            # EXTRACT-END
+        return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_nested_class_method_action() {
+    let code = r#"
+class Outer:
+    class Inner:
+        def consume(self, item):
+            print(item)
+
+        def process(self, data_list):
+            for item in data_list:
+                # EXTRACT-START
+                squared_value = item * item
+                self.consume(squared_value)
+                # EXTRACT-END
+            return len(data_list)
+"#;
+    let (module_info, actions, titles) = compute_extract_actions(code);
+    assert_eq!(2, actions.len(), "expected helper and method actions");
+    assert!(
+        titles
+            .get(1)
+            .is_some_and(|title| title.contains("method `extracted_method` on `Inner`")),
+        "expected method action scoped to Inner"
+    );
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected = r#"
+class Outer:
+    class Inner:
+        def consume(self, item):
+            print(item)
+
+        def extracted_method(self, item):
+            squared_value = item * item
+            self.consume(squared_value)
+
+        def process(self, data_list):
+            for item in data_list:
+                # EXTRACT-START
+                self.extracted_method(item)
+                # EXTRACT-END
+            return len(data_list)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_variable_basic_refactor() {
+    let code = r#"
+def process(data):
+    total = 0
+    for item in data:
+        total += (
+            # EXTRACT-START
+            item * item + 1
+            # EXTRACT-END
+        )
+    return total
+"#;
+    let updated =
+        apply_first_extract_variable_action(code).expect("expected extract variable action");
+    let expected = r#"
+def process(data):
+    total = 0
+    for item in data:
+        extracted_value = item * item + 1
+        total += (
+            # EXTRACT-START
+            extracted_value
+            # EXTRACT-END
+        )
+    return total
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_variable_name_increments_when_taken() {
+    let code = r#"
+def compute():
+    extracted_value = 10
+    result = (
+        # EXTRACT-START
+        4 * 5
+        # EXTRACT-END
+    )
+    return result
+"#;
+    let updated =
+        apply_first_extract_variable_action(code).expect("expected extract variable action");
+    let expected = r#"
+def compute():
+    extracted_value = 10
+    extracted_value_2 = 4 * 5
+    result = (
+        # EXTRACT-START
+        extracted_value_2
+        # EXTRACT-END
+    )
+    return result
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_variable_rejects_empty_selection() {
+    let code = r#"
+def sink(values):
+    # EXTRACT-START
+    # EXTRACT-END
+    return values
+"#;
+    assert_no_extract_variable_action(code);
+}
+
+#[test]
+fn extract_variable_rejects_whitespace_selection() {
+    let code = r#"
+def sink(values):
+    return (
+        # EXTRACT-START
+
+        # EXTRACT-END
+    )
+"#;
+    assert_no_extract_variable_action(code);
+}
+
+#[test]
+fn extract_variable_requires_exact_expression() {
+    let code = r#"
+def sink(values):
+    # EXTRACT-START
+    value = values[0]
+    # EXTRACT-END
+    return value
+"#;
+    assert_no_extract_variable_action(code);
+}
+
+#[test]
+fn extract_function_staticmethod_falls_back_to_helper() {
+    let code = r#"
+class Processor:
+    @staticmethod
+    def process(item):
+        # EXTRACT-START
+        squared_value = item * item
+        print(squared_value)
+        # EXTRACT-END
+        return squared_value
+"#;
+    let (module_info, actions, titles) = compute_extract_actions(code);
+    assert_eq!(
+        1,
+        actions.len(),
+        "expected only module-scope helper extract action"
+    );
+    assert!(
+        titles
+            .first()
+            .is_some_and(|title| title.contains("Extract into helper `")),
+        "expected helper extraction title, got {:?}",
+        titles
+    );
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def extracted_function(item):
+    squared_value = item * item
+    print(squared_value)
+    return squared_value
+
+class Processor:
+    @staticmethod
+    def process(item):
+        # EXTRACT-START
+        squared_value = extracted_function(item)
+        # EXTRACT-END
+        return squared_value
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_function_classmethod_falls_back_to_helper() {
+    let code = r#"
+class Processor:
+    @classmethod
+    def process(cls, item):
+        # EXTRACT-START
+        squared_value = item * item
+        print(squared_value)
+        # EXTRACT-END
+        return squared_value
+"#;
+    let (module_info, actions, titles) = compute_extract_actions(code);
+    assert_eq!(
+        1,
+        actions.len(),
+        "expected only module-scope helper extract action"
+    );
+    assert!(
+        titles
+            .first()
+            .is_some_and(|title| title.contains("Extract into helper `")),
+        "expected helper extraction title, got {:?}",
+        titles
+    );
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def extracted_function(item):
+    squared_value = item * item
+    print(squared_value)
+    return squared_value
+
+class Processor:
+    @classmethod
+    def process(cls, item):
+        # EXTRACT-START
+        squared_value = extracted_function(item)
+        # EXTRACT-END
+        return squared_value
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }

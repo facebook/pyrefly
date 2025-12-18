@@ -43,6 +43,7 @@ use lsp_types::notification::Exit;
 use lsp_types::notification::Initialized;
 use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
+use lsp_types::request::CodeActionRequest;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
 use lsp_types::request::GotoDefinition;
@@ -63,8 +64,8 @@ use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
 use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
-use pyrefly_util::lock::Condvar;
-use pyrefly_util::lock::Mutex;
+use pyrefly_util::lock::FinishHandle;
+use pyrefly_util::telemetry::NoTelemetry;
 use serde_json::Value;
 use serde_json::json;
 
@@ -111,31 +112,6 @@ pub struct InitializeSettings {
     pub capabilities: Option<serde_json::Value>,
     // initialization_options to send in the initialize request
     pub initialization_options: Option<serde_json::Value>,
-}
-
-pub struct FinishHandle {
-    finished: Mutex<bool>,
-    cvar: Condvar,
-}
-
-impl FinishHandle {
-    pub fn new() -> Self {
-        Self {
-            finished: Mutex::new(false),
-            cvar: Condvar::new(),
-        }
-    }
-
-    pub fn notify_finished(&self) {
-        let mut finished = self.finished.lock();
-        *finished = true;
-        self.cvar.notify_one();
-    }
-
-    pub fn wait_for_finish(&self, timeout: Duration) -> bool {
-        let finished = self.finished.lock();
-        *self.cvar.wait_timeout(finished, timeout).0
-    }
 }
 
 pub struct ClientRequestHandle<'a, R: lsp_types::request::Request> {
@@ -642,12 +618,15 @@ impl TestClient {
                 "textDocument": {
                     "publishDiagnostics": {
                         "relatedInformation": true,
-                        "versionSupport": false,
+                        "versionSupport": true,
                         "tagSupport": {
                             "valueSet": [1, 2],
                         },
                         "codeDescriptionSupport": true,
                         "dataSupport": true,
+                    },
+                    "documentSymbol": {
+                        "hierarchicalDocumentSymbolSupport": true
                     },
                 },
             },
@@ -1035,6 +1014,34 @@ impl TestClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
+    pub fn untyped_import_diagnostic_response(
+        package_name: &str,
+        line: u32,
+        start_character: u32,
+        end_character: u32,
+        severity: u32,
+    ) -> Value {
+        json!({
+            "items": [
+                {
+                    "code": "untyped-import",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
+                    },
+                    "message": format!("Missing type stubs for `{}`\n  Hint: install the `{}-stubs` package", package_name, package_name),
+                    "range": {
+                        "start": {"line": line, "character": start_character},
+                        "end": {"line": line, "character": end_character}
+                    },
+                    "severity": severity,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        })
+    }
+
     /// Helper function to merge JSON values, with the source taking precedence
     fn merge_json(target: &mut Value, source: &Value) {
         if let (Some(target_obj), Some(source_obj)) = (target.as_object_mut(), source.as_object()) {
@@ -1080,7 +1087,7 @@ impl LspInteraction {
                 workspace_indexing_limit: 50,
                 build_system_blocking: false,
             };
-            let _ = run_lsp(conn_server, args, "pyrefly-lsp-test-version");
+            let _ = run_lsp(conn_server, args, "pyrefly-lsp-test-version", &NoTelemetry);
             finish_server.notify_finished();
         });
 
@@ -1380,6 +1387,37 @@ impl LspInteraction {
                     "line": end_line,
                     "character": end_char
                 }
+            }
+        }))
+    }
+
+    /// Sends a code action request for a notebook cell at the specified range
+    pub fn code_action_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) -> ClientRequestHandle<'_, CodeActionRequest> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "range": {
+                "start": {
+                    "line": start_line,
+                    "character": start_char
+                },
+                "end": {
+                    "line": end_line,
+                    "character": end_char
+                }
+            },
+            "context": {
+                "diagnostics": []
             }
         }))
     }

@@ -8,6 +8,7 @@
 use std::mem;
 
 use dupe::Dupe as _;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
@@ -64,7 +65,6 @@ use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::types::types::Type;
 
 struct Decorators {

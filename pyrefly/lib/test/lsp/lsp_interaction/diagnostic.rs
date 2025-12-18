@@ -5,6 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_server::Message;
+use lsp_server::Notification;
+use lsp_types::DocumentDiagnosticReportResult;
+use lsp_types::Url;
 use pyrefly_config::environment::environment::PythonEnvironment;
 use serde_json::json;
 
@@ -783,6 +787,259 @@ fn test_shows_stdlib_errors_when_explicitly_included_in_project_includes() {
                     },
                     "severity": 1,
                     "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_publish_diagnostics_version_numbers_only_go_up() {
+    let test_files_root = get_test_files_root();
+    let root = test_files_root.path();
+    let file = root.join("text_document.py");
+    let uri = Url::from_file_path(file).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.to_path_buf());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    let create_version_validator = |expected_version: i64| {
+        let actual_uri = uri.as_str();
+        move |msg: Message| match msg {
+            Message::Notification(Notification { method, params })
+                if let Some((expected_uri, actual_version)) = params
+                    .get("uri")
+                    .and_then(|uri| uri.as_str())
+                    .zip(params.get("version").and_then(|version| version.as_i64()))
+                    && expected_uri == actual_uri
+                    && method == "textDocument/publishDiagnostics" =>
+            {
+                assert!(
+                    actual_version == expected_version,
+                    "expected version: {}, actual version: {}",
+                    expected_version,
+                    actual_version
+                );
+                (actual_version == expected_version).then_some(())
+            }
+            _ => None,
+        }
+    };
+
+    interaction.client.did_open("text_document.py");
+
+    let version = 1;
+    interaction
+        .client
+        .expect_message(
+            &format!(
+                "publishDiagnostics notification with version {} for file: {}",
+                version,
+                uri.as_str()
+            ),
+            create_version_validator(version),
+        )
+        .unwrap();
+
+    interaction.client.did_change("text_document.py", "a = b");
+
+    let version = 2;
+    interaction
+        .client
+        .expect_message(
+            &format!(
+                "publishDiagnostics notification with version {} for file: {}",
+                version,
+                uri.as_str()
+            ),
+            create_version_validator(version),
+        )
+        .unwrap();
+
+    interaction
+        .client
+        .send_message(Message::Notification(Notification {
+            method: "textDocument/didClose".to_owned(),
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": uri.as_str(),
+                    "languageId": "python",
+                    "version": 3
+                },
+            }),
+        }));
+
+    let version = 3;
+    interaction
+        .client
+        .expect_message(
+            &format!(
+                "publishDiagnostics notification with version {} for file: {}",
+                version,
+                uri.as_str()
+            ),
+            create_version_validator(version),
+        )
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_missing_source_for_stubs_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
+
+    interaction
+        .client
+        .did_open("missing_source_for_stubs/test.py");
+
+    interaction
+        .client
+        .diagnostic("missing_source_for_stubs/test.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "missing-source-for-stubs",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#missing-source-for-stubs"
+                    },
+                    "message": "Stubs for `whatthepatch` are bundled with Pyrefly but the source files for the package are not found.",
+                    "range": {
+                        "start": {"line": 5, "character": 7},
+                        "end": {"line": 5, "character": 19}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_missing_source_with_config_diagnostic_has_errors() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([
+                {"pyrefly": {"displayTypeErrors": "force-on"}}
+            ]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("missing_source_with_config/test.py");
+
+    interaction
+        .client
+        .diagnostic("missing_source_with_config/test.py")
+        .expect_response_with(|response| {
+            if let DocumentDiagnosticReportResult::Report(report) = response
+                && let lsp_types::DocumentDiagnosticReport::Full(full) = report
+            {
+                let items = &full.full_document_diagnostic_report.items;
+                if items.len() != 1 {
+                    return false;
+                }
+                let item = &items[0];
+                return item.code
+                    == Some(lsp_types::NumberOrString::String(
+                        "missing-import".to_owned(),
+                    ))
+                    && item
+                        .message
+                        .starts_with("Could not find import of `whatthepatch`")
+                    && item.range.start.line == 5
+                    && item.range.start.character == 7
+                    && item.range.end.line == 5
+                    && item.range.end.character == 19
+                    && item.severity == Some(lsp_types::DiagnosticSeverity::ERROR);
+            }
+            false
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_untyped_import_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
+
+    interaction
+        .client
+        .did_open("untyped_import_with_source/test.py");
+
+    interaction
+        .client
+        .diagnostic("untyped_import_with_source/test.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "untyped-import",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
+                    },
+                    "message": "Missing type stubs for `boto3`\n  Hint: install the `boto3-stubs` package",
+                    "range": {
+                        "start": {"line": 5, "character": 7},
+                        "end": {"line": 5, "character": 12}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                },
+                {
+                    "code": "unused-import",
+                    "message": "Import `boto3` is unused",
+                    "range": {
+                        "start": {"line": 5, "character": 7},
+                        "end": {"line": 5, "character": 12}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
                 }
             ],
             "kind": "full"

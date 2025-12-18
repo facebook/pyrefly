@@ -207,6 +207,102 @@ fn test_crash_on_search() {
     t.search_exports_exact("x");
 }
 
+#[test]
+fn test_compute_stdlib_uses_bundled_typeshed_even_with_custom_path() {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let typeshed_path = temp_dir.path().join("custom_typeshed");
+    let stdlib_path = typeshed_path.join("stdlib");
+    fs::create_dir_all(&stdlib_path).unwrap();
+
+    // Create a minimal builtins.pyi that defines int as a class, but very minimally.
+    // The key insight: Stdlib object loads built-in types (int, str, etc.) and their
+    // class definitions for type-checking. Since our custom typeshed's int is used
+    // for imports but bundled typeshed's int is used for Stdlib, we get a type mismatch.
+    let builtins_content = r#"
+class object: ...
+class type: ...
+class int:
+    # This is a minimal int that doesn't have many methods
+    # The bundled typeshed has a full implementation
+    pass
+class str: ...
+class bool(int): ...
+class float: ...
+class list: ...
+class dict: ...
+class tuple: ...
+class None: ...
+"#;
+    fs::write(stdlib_path.join("builtins.pyi"), builtins_content).unwrap();
+
+    fs::write(stdlib_path.join("VERSIONS"), "builtins: 3.0-\n").unwrap();
+
+    let mut config = ConfigFile::default();
+    config.python_environment.set_empty_to_default();
+    config.typeshed_path = Some(typeshed_path.clone());
+    let sys_info = config.get_sys_info();
+
+    // Create a test module. The bug manifests as follows:
+    // - The `int` annotation is resolved from the custom typeshed
+    // - The Stdlib's int (used for Literal[1]) comes from bundled typeshed
+    // - These are different types, causing "Literal[1] is not assignable to int"
+    let test_code = r#"
+# This simple assignment demonstrates the bug:
+# - The `int` type annotation is resolved from custom typeshed (builtins.int@4:7-10)
+# - The Literal[1] type comes from bundled Stdlib (builtins.int@420:7-10)
+# - Since these are different types, we get a type error
+x: int = 1
+"#;
+    let module_name = ModuleName::from_str("test_module");
+    let module_path = ModulePath::memory(PathBuf::from("test_module.py"));
+
+    let mut sourcedb = MapDatabase::new(sys_info.dupe());
+    sourcedb.insert(module_name, module_path.dupe());
+    config.source_db = Some(ArcId::new(Box::new(sourcedb)));
+    config.configure();
+    let config = ArcId::new(config);
+
+    let state = State::new(ConfigFinder::new_constant(config.clone()));
+    let handle = Handle::new(module_name, module_path, sys_info);
+
+    let mut transaction = state.new_transaction(Require::Everything, None);
+    transaction.set_memory(vec![(
+        PathBuf::from("test_module.py"),
+        Some(Arc::new(FileContents::from_source(test_code.to_owned()))),
+    )]);
+    transaction.run(&[handle.dupe()], Require::Everything);
+
+    let errors = transaction.get_errors([&handle]).collect_errors();
+
+    assert!(
+        config.typeshed_path.is_some(),
+        "Test setup error: typeshed_path should be set in config"
+    );
+    assert_eq!(
+        config.typeshed_path.as_ref().unwrap(),
+        &typeshed_path,
+        "Test setup error: typeshed_path should match the custom path"
+    );
+
+    // Verify the specific error is the expected type mismatch. This is specific
+    // error is an indication that we are not using the typeshed bundled with Pyrefly
+    // and not the typeshed provided through the config.
+    let error_messages: Vec<String> = errors.shown.iter().map(|e| e.msg().to_string()).collect();
+    let has_literal_int_error = error_messages
+        .iter()
+        .any(|msg| msg.contains("Literal[1]") && msg.contains("int"));
+    assert!(
+        has_literal_int_error,
+        "Expected error about Literal[1] not being assignable to int, but got: {:?}. \
+         This error demonstrates the mismatch between bundled Stdlib int and custom typeshed int.",
+        error_messages
+    );
+}
+
 const SEQUENTIAL_COMMITTABLE_TRANSACTIONS_SLEEP_TIME_MS: u64 = 100;
 
 #[test]

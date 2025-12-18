@@ -6,3 +6,4 @@
  */
 
 pub(crate) mod extract_function;
+pub(crate) mod extract_variable;

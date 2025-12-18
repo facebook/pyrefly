@@ -371,7 +371,7 @@ impl<'a> Transaction<'a> {
     fn collect_references(
         &self,
         handle: &Handle,
-        idx: crate::graph::index::Idx<Key>,
+        idx: pyrefly_graph::index::Idx<Key>,
         bindings: crate::binding::bindings::Bindings,
         transaction: &mut CancellableTransaction,
     ) -> Vec<(pyrefly_python::module::Module, Vec<TextRange>)> {

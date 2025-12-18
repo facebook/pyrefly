@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_graph::index::Idx;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -25,6 +26,7 @@ use crate::binding::binding::FirstUse;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
+use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
@@ -34,7 +36,6 @@ use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 
 impl<'a> BindingsBuilder<'a> {
     /// Bind one level of an unpacked LHS target, for example in `x, (y, [*z]), q = foo`
@@ -159,6 +160,13 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             self.declare_current_idx(Key::Anon(attr.range))
         };
+        let allow_assign_to_final =
+            self.scopes
+                .method_that_sets_attr(&attr)
+                .is_some_and(|method| {
+                    method.recognized_attribute_defining_method
+                        && matches!(method.instance_or_class, MethodSelfKind::Instance)
+                });
         self.ensure_expr(&mut attr.value, user.usage());
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
@@ -166,7 +174,11 @@ impl<'a> BindingsBuilder<'a> {
         let value = make_assigned_value(assigned.as_deref(), None);
         let idx = self.insert_binding_current(
             user,
-            Binding::AssignToAttribute(attr, Box::new(value.clone())),
+            Binding::AssignToAttribute {
+                attr,
+                value: Box::new(value.clone()),
+                allow_assign_to_final,
+            },
         );
         if let Some(identifier) = narrowing_identifier {
             self.narrow_if_name_is_defined(identifier, idx);

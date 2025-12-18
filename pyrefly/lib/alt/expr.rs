@@ -1150,7 +1150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If this is not the last entry, we have to make a type-dependent decision and also narrow the
             // result; both operations require us to force `Var` first or they become unpredictable.
             if i < last_index {
-                t = self.force_for_narrowing(&t);
+                t = self.force_for_narrowing(&t, value.range(), errors);
             }
             if i < last_index && should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);

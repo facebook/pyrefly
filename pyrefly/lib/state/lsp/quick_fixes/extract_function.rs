@@ -5,20 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-/*
- * Copyright (c) Meta Platforms, Inc. and affiliates.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
- */
-
-/*
- * Copyright (c) Meta Platforms, Inc. and affiliates.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
- */
-
 use std::collections::HashSet;
 
 use dupe::Dupe;
@@ -30,7 +16,10 @@ use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
+use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -59,6 +48,7 @@ pub(crate) fn extract_function_code_actions(
         return None;
     }
     let module_info = transaction.get_module_info(handle)?;
+    let module_source = module_info.contents();
     let ast = transaction.get_ast(handle)?;
     let selection_text = module_info.code_at(selection);
     if selection_text.trim().is_empty() {
@@ -84,7 +74,7 @@ pub(crate) fn extract_function_code_actions(
         }
     }
 
-    let helper_name = generate_helper_name(module_info.contents());
+    let function_helper_name = generate_helper_name(module_source, "extracted_function");
     let mut params = Vec::new();
     let mut seen_params = HashSet::new();
     for ident in load_refs {
@@ -123,50 +113,57 @@ pub(crate) fn extract_function_code_actions(
         returns.push(ident.name.clone());
     }
 
-    let indented_body = prefix_lines_with(&dedented_body, HELPER_INDENT);
-
-    let mut helper_text = if params.is_empty() {
-        format!("def {helper_name}():\n{indented_body}")
-    } else {
-        let helper_params = params.join(", ");
-        format!("def {helper_name}({helper_params}):\n{indented_body}")
-    };
-
-    if !returns.is_empty() && !returns.iter().all(|name| name.is_empty()) {
-        let return_expr = if returns.len() == 1 {
-            returns[0].clone()
-        } else {
-            returns.join(", ")
-        };
-        helper_text.push_str(&format!("{HELPER_INDENT}return {return_expr}\n"));
-    }
-    helper_text.push('\n');
-
-    let call_args = params.join(", ");
-    let call_expr = format!("{helper_name}({call_args})");
-    let replacement_line = if returns.is_empty() {
-        format!("{block_indent}{call_expr}\n")
-    } else {
-        let lhs = if returns.len() == 1 {
-            returns[0].clone()
-        } else {
-            returns.join(", ")
-        };
-        format!("{block_indent}{lhs} = {call_expr}\n")
-    };
-
+    let helper_text =
+        build_helper_text(&function_helper_name, &params, &returns, &dedented_body, "");
+    let call_expr = build_call_expr(&function_helper_name, None, &params);
+    let replacement_line = build_call_replacement(&block_indent, &call_expr, &returns);
     let helper_edit = (
         module_info.dupe(),
         TextRange::at(module_stmt_range.start(), TextSize::new(0)),
         helper_text,
     );
     let call_edit = (module_info.dupe(), selection, replacement_line);
-    let action = LocalRefactorCodeAction {
-        title: format!("Extract into helper `{helper_name}`"),
+    let mut actions = vec![LocalRefactorCodeAction {
+        title: format!("Extract into helper `{function_helper_name}`"),
         edits: vec![helper_edit, call_edit],
         kind: CodeActionKind::REFACTOR_EXTRACT,
-    };
-    Some(vec![action])
+    }];
+    if let Some(method_ctx) = find_enclosing_method(ast.as_ref(), selection, module_source) {
+        let method_helper_name = generate_helper_name(module_source, "extracted_method");
+        let mut signature_params = Vec::new();
+        signature_params.push(method_ctx.receiver_name.clone());
+        let method_params = filter_params_excluding(&params, &method_ctx.receiver_name);
+        signature_params.extend(method_params.iter().cloned());
+        let method_helper_text = build_helper_text(
+            &method_helper_name,
+            &signature_params,
+            &returns,
+            &dedented_body,
+            &method_ctx.method_indent,
+        );
+        let method_call_expr = build_call_expr(
+            &method_helper_name,
+            Some(&method_ctx.receiver_name),
+            &method_params,
+        );
+        let method_replacement = build_call_replacement(&block_indent, &method_call_expr, &returns);
+        let method_helper_edit = (
+            module_info.dupe(),
+            TextRange::at(method_ctx.insert_position, TextSize::new(0)),
+            method_helper_text,
+        );
+        let method_call_edit = (module_info.dupe(), selection, method_replacement);
+        actions.push(LocalRefactorCodeAction {
+            title: format!(
+                "Extract into method `{}` on `{}`",
+                method_helper_name, method_ctx.class_name
+            ),
+            edits: vec![method_helper_edit, method_call_edit],
+            kind: CodeActionKind::REFACTOR_EXTRACT,
+        });
+    }
+
+    Some(actions)
 }
 
 #[derive(Clone, Debug)]
@@ -232,6 +229,22 @@ fn collect_identifier_refs(
     (collector.loads, collector.stores)
 }
 
+#[derive(Clone, Debug)]
+/// Context information for extracting a method from a class.
+///
+/// Contains details about where and how to insert the extracted method,
+/// as well as relevant naming and formatting information.
+struct MethodContext {
+    /// Name of the class from which the method is being extracted.
+    class_name: String,
+    /// Name of the receiver variable (typically `self`).
+    receiver_name: String,
+    /// Byte offset in the source code where the extracted method should be inserted.
+    insert_position: TextSize,
+    /// Indentation string to use for the method definition line.
+    method_indent: String,
+}
+
 fn selection_contains_disallowed_statements(ast: &ModModule, selection: TextRange) -> bool {
     fn visit_stmt(stmt: &Stmt, selection: TextRange, found: &mut bool) {
         if *found || stmt.range().intersect(selection).is_none() {
@@ -295,6 +308,89 @@ fn collect_post_selection_loads(
     loads
 }
 
+fn find_enclosing_method(
+    ast: &ModModule,
+    selection: TextRange,
+    source: &str,
+) -> Option<MethodContext> {
+    for stmt in &ast.body {
+        if let Stmt::ClassDef(class_def) = stmt
+            && let Some(ctx) = method_context_in_class(class_def, selection, source)
+        {
+            return Some(ctx);
+        }
+    }
+    None
+}
+
+fn method_context_in_class(
+    class_def: &StmtClassDef,
+    selection: TextRange,
+    source: &str,
+) -> Option<MethodContext> {
+    for stmt in &class_def.body {
+        match stmt {
+            Stmt::FunctionDef(function_def) if function_def.range().contains_range(selection) => {
+                if let Some(ctx) = method_context_from_function(class_def, function_def, source) {
+                    return Some(ctx);
+                }
+            }
+            Stmt::ClassDef(inner_class) => {
+                if let Some(ctx) = method_context_in_class(inner_class, selection, source) {
+                    return Some(ctx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn method_context_from_function(
+    class_def: &StmtClassDef,
+    function_def: &StmtFunctionDef,
+    source: &str,
+) -> Option<MethodContext> {
+    if is_static_or_class_method(function_def) {
+        return None;
+    }
+    let receiver_name = first_parameter_name(&function_def.parameters)?;
+    let (method_indent, insert_position) =
+        indent_and_line_start(source, function_def.range().start())?;
+    Some(MethodContext {
+        class_name: class_def.name.id.to_string(),
+        receiver_name,
+        insert_position,
+        method_indent,
+    })
+}
+
+fn first_parameter_name(parameters: &Parameters) -> Option<String> {
+    if let Some(param) = parameters.posonlyargs.first() {
+        return Some(param.name().id.to_string());
+    }
+    parameters
+        .args
+        .first()
+        .map(|param| param.name().id.to_string())
+}
+
+fn is_static_or_class_method(function_def: &StmtFunctionDef) -> bool {
+    function_def.decorator_list.iter().any(|decorator| {
+        decorator_matches_name(&decorator.expression, "staticmethod")
+            || decorator_matches_name(&decorator.expression, "classmethod")
+    })
+}
+
+fn decorator_matches_name(decorator: &Expr, name: &str) -> bool {
+    match decorator {
+        Expr::Name(identifier) => identifier.id.as_str() == name,
+        Expr::Attribute(attribute) => attribute.attr.as_str() == name,
+        Expr::Call(call) => decorator_matches_name(call.func.as_ref(), name),
+        _ => false,
+    }
+}
+
 fn detect_block_indent(selection_text: &str) -> String {
     for line in selection_text.lines() {
         if line.trim().is_empty() {
@@ -308,6 +404,81 @@ fn detect_block_indent(selection_text: &str) -> String {
     String::new()
 }
 
+fn indent_and_line_start(source: &str, position: TextSize) -> Option<(String, TextSize)> {
+    let mut idx = position.to_usize();
+    if idx > source.len() {
+        idx = source.len();
+    }
+    let line_start = source[..idx]
+        .rfind('\n')
+        .map(|start| start + 1)
+        .unwrap_or(0);
+    let indent = source[line_start..idx]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+    let insert_position = TextSize::try_from(line_start).ok()?;
+    Some((indent, insert_position))
+}
+
+fn build_helper_text(
+    helper_name: &str,
+    params: &[String],
+    returns: &[String],
+    dedented_body: &str,
+    definition_indent: &str,
+) -> String {
+    let mut helper_text = if params.is_empty() {
+        format!("{definition_indent}def {helper_name}():\n")
+    } else {
+        let helper_params = params.join(", ");
+        format!("{definition_indent}def {helper_name}({helper_params}):\n")
+    };
+    let body_indent = format!("{definition_indent}{HELPER_INDENT}");
+    helper_text.push_str(&prefix_lines_with(dedented_body, &body_indent));
+    if !returns.is_empty() && !returns.iter().all(|name| name.is_empty()) {
+        let return_expr = if returns.len() == 1 {
+            returns[0].clone()
+        } else {
+            returns.join(", ")
+        };
+        helper_text.push_str(&format!("{body_indent}return {return_expr}\n"));
+    }
+    helper_text.push('\n');
+    helper_text
+}
+
+fn build_call_expr(helper_name: &str, receiver: Option<&str>, params: &[String]) -> String {
+    let callee = if let Some(receiver) = receiver {
+        format!("{receiver}.{helper_name}")
+    } else {
+        helper_name.to_owned()
+    };
+    let call_args = params.join(", ");
+    format!("{callee}({call_args})")
+}
+
+fn build_call_replacement(block_indent: &str, call_expr: &str, returns: &[String]) -> String {
+    if returns.is_empty() {
+        format!("{block_indent}{call_expr}\n")
+    } else {
+        let lhs = if returns.len() == 1 {
+            returns[0].clone()
+        } else {
+            returns.join(", ")
+        };
+        format!("{block_indent}{lhs} = {call_expr}\n")
+    }
+}
+
+fn filter_params_excluding(params: &[String], excluded: &str) -> Vec<String> {
+    params
+        .iter()
+        .filter(|name| name.as_str() != excluded)
+        .cloned()
+        .collect()
+}
+
 fn prefix_lines_with(block: &str, indent: &str) -> String {
     let mut result = String::new();
     for line in block.lines() {
@@ -318,13 +489,13 @@ fn prefix_lines_with(block: &str, indent: &str) -> String {
     result
 }
 
-fn generate_helper_name(source: &str) -> String {
+fn generate_helper_name(source: &str, prefix: &str) -> String {
     let mut counter = 1;
     loop {
         let candidate = if counter == 1 {
-            "extracted_function".to_owned()
+            prefix.to_owned()
         } else {
-            format!("extracted_function_{counter}")
+            format!("{prefix}_{counter}")
         };
         let needle = format!("def {candidate}(");
         if !source.contains(&needle) {

@@ -873,6 +873,27 @@ impl ClassField {
         }
     }
 
+    pub fn is_uninit_class_var(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Property { .. } => false,
+            ClassFieldInner::Descriptor { .. } => false,
+            ClassFieldInner::Method { .. } => false,
+            ClassFieldInner::NestedClass { .. } => false,
+            ClassFieldInner::ClassAttribute {
+                is_classvar,
+                initialization,
+                ..
+            } => {
+                *is_classvar
+                    && matches!(
+                        initialization,
+                        ClassFieldInitialization::Uninitialized | ClassFieldInitialization::Magic
+                    )
+            }
+            ClassFieldInner::InstanceAttribute { .. } => false,
+        }
+    }
+
     pub fn is_init_var(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { .. } => false,
@@ -1339,6 +1360,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
                 {
                     ClassFieldInitialization::Magic
+                } else if let Some(flags) =
+                    self.extract_pydantic_field_from_annotation(*annot, &metadata)
+                {
+                    ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
                 } else {
                     ClassFieldInitialization::Uninitialized
                 };
@@ -1832,22 +1857,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         field_definition: &ClassFieldDefinition,
     ) -> Option<ReadOnlyReason> {
         if let Some(ann) = annotation {
-            // TODO: enable this for Final attrs that aren't initialized on the class;
-            // this is a hack to avoid throwing errors when the attribute is set in
-            // `__init__` because so far we lack the hooks to special-case that.
-            let is_class_body_init = !matches!(
-                field_definition,
-                ClassFieldDefinition::DeclaredByAnnotation { .. }
-                    | ClassFieldDefinition::DeclaredWithoutAnnotation
-                    | ClassFieldDefinition::DefinedInMethod {
-                        method: MethodThatSetsAttr {
-                            instance_or_class: MethodSelfKind::Instance,
-                            ..
-                        },
-                        ..
-                    }
-            );
-            if ann.is_final() && is_class_body_init {
+            if ann.is_final() {
                 return Some(ReadOnlyReason::Final);
             }
             if ann.has_qualifier(&Qualifier::ReadOnly) {
@@ -2071,7 +2081,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Extract dataclass field keywords from a call expression if it's a dataclass field specifier.
-    fn compute_dataclass_field_initialization(
+    pub fn compute_dataclass_field_initialization(
         &self,
         call: &ExprCall,
         dm: &crate::alt::types::class_metadata::DataclassMetadata,
@@ -2595,7 +2605,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if matches!(class_field.1, IsInherited::No) && !is_override {
             return;
         }
-
         let metadata = self.get_metadata_for_class(cls);
         if !self.should_check_field_for_override_consistency(field_name, &metadata) {
             return;
@@ -2778,6 +2787,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         field_name,
                     ),
                 );
+        }
+        // Check for missing @override decorator when overriding a parent attribute.
+        // This error is emitted when a method overrides a parent but doesn't have @override.
+        // Since this error has Severity::Ignore by default, it won't be shown unless enabled.
+        if !is_override && parent_attr_found && !parent_has_any {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::MissingOverrideDecorator),
+                format!(
+                    "Class member `{}.{}` overrides a member in a parent class but is missing an `@override` decorator",
+                    cls.name(),
+                    field_name,
+                ),
+            );
         }
     }
 
@@ -3018,11 +3042,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         name: &Name,
     ) -> Option<Arc<ClassField>> {
+        self.get_non_synthesized_class_member_and_defining_class(cls, name)
+            .map(|x| x.value)
+    }
+
+    pub fn get_non_synthesized_class_member_and_defining_class(
+        &self,
+        cls: &Class,
+        name: &Name,
+    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
         self.get_field_from_mro(cls, name, &|cls, name| {
             self.get_non_synthesized_field_from_current_class_only(cls, name)
                 .filter(|field| !field.is_init_var())
         })
-        .map(|x| x.value)
     }
 
     fn get_synthesized_field_from_current_class_only(
@@ -3449,6 +3481,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_base: Option<&ClassBase>,
         attr_name: &Name,
         got: TypeOrExpr,
+        allow_assign_to_final: bool,
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
@@ -3465,7 +3498,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 *should_narrow = false;
             }
-            ClassAttribute::ReadOnly(_, reason) => {
+            ClassAttribute::ReadOnly(attr_ty, reason) => {
                 // In pydantic, if a non-frozen model inherits from a frozen model,
                 // attributes of the frozen model are no longer readonly.
                 let should_raise_error = if let Some(instance_class) = instance_class {
@@ -3479,7 +3512,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     true
                 };
 
-                if should_raise_error {
+                if allow_assign_to_final && matches!(reason, ReadOnlyReason::Final) {
+                    self.check_set_read_write_and_infer_narrow(
+                        attr_ty,
+                        attr_name,
+                        got,
+                        range,
+                        errors,
+                        context,
+                        *should_narrow,
+                        narrowed_types,
+                    );
+                } else if should_raise_error {
                     let msg = vec1![
                         format!("Cannot set field `{attr_name}`"),
                         reason.error_message()

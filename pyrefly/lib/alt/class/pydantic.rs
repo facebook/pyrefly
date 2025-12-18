@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::annotation::Annotation;
@@ -22,11 +23,13 @@ use pyrefly_types::keywords::DataclassFieldKeywords;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
+use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::DataclassMetadata;
@@ -34,6 +37,8 @@ use crate::alt::types::pydantic::PydanticConfig;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::alt::types::pydantic::PydanticModelKind::RootModel;
 use crate::alt::types::pydantic::PydanticValidationFlags;
+use crate::binding::binding::BindingAnnotation;
+use crate::binding::binding::KeyAnnotation;
 use crate::binding::pydantic::EXTRA;
 use crate::binding::pydantic::FROZEN;
 use crate::binding::pydantic::FROZEN_DEFAULT;
@@ -463,5 +468,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(le) = &keywords.le {
             emit_violation("le", le);
         }
+    }
+
+    /// Extract Pydantic Field metadata from an annotation binding.
+    /// This handles the Pydantic-specific pattern where fields can be declared as:
+    /// `field: Annotated[some_type, Field(some_keyword=<value>)]`
+    pub fn extract_pydantic_field_from_annotation(
+        &self,
+        annot: Idx<KeyAnnotation>,
+        metadata: &ClassMetadata,
+    ) -> Option<DataclassFieldKeywords> {
+        let dm = metadata.dataclass_metadata()?;
+        if !metadata.is_pydantic_base_model() {
+            return None;
+        }
+        if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _) = self.bindings().get(annot) {
+            let metadata_items = self.get_annotated_metadata(
+                annotation_expr,
+                TypeFormContext::ClassVarAnnotation,
+                &self.error_swallower(),
+            );
+            // Look through metadata items and find a Field(...) call, then extract its keywords
+            for metadata_item in &metadata_items {
+                if let Expr::Call(call) = metadata_item
+                    && let Some(keywords) = self.compute_dataclass_field_initialization(call, dm)
+                {
+                    return Some(keywords);
+                }
+            }
+        }
+        None
     }
 }

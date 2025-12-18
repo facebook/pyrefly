@@ -8781,6 +8781,17 @@
     {
       "code": -2,
       "column": 15,
+      "concise_description": "Cannot instantiate `Concrete1` because the following members are abstract: `cm1`",
+      "description": "Cannot instantiate `Concrete1` because the following members are abstract: `cm1`",
+      "line": 89,
+      "name": "bad-instantiation",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 89
+    },
+    {
+      "code": -2,
+      "column": 15,
       "concise_description": "Cannot instantiate `Concrete5` because the following members are abstract: `method1`",
       "description": "Cannot instantiate `Concrete5` because the following members are abstract: `method1`",
       "line": 134,
@@ -9392,13 +9403,24 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Cannot set field `ID5`",
-      "description": "Cannot set field `ID5`\n  This field is marked as Final",
-      "line": 54,
+      "concise_description": "Cannot set field `id3`",
+      "description": "Cannot set field `id3`\n  This field is marked as Final",
+      "line": 62,
       "name": "read-only",
       "severity": "error",
       "stop_column": 17,
-      "stop_line": 54
+      "stop_line": 62
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Cannot set field `id4`",
+      "description": "Cannot set field `id4`\n  This field is marked as Final",
+      "line": 63,
+      "name": "read-only",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 63
     },
     {
       "code": -2,

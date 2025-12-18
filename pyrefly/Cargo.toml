@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "0.45.2"
+version = "0.46.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -37,6 +37,7 @@ pyrefly_build = { path = "../crates/pyrefly_build" }
 pyrefly_bundled = { path = "../crates/pyrefly_bundled" }
 pyrefly_config = { path = "../crates/pyrefly_config" }
 pyrefly_derive = { path = "../crates/pyrefly_derive" }
+pyrefly_graph = { path = "../crates/pyrefly_graph" }
 pyrefly_python = { path = "../crates/pyrefly_python" }
 pyrefly_types = { path = "../crates/pyrefly_types" }
 pyrefly_util = { path = "../crates/pyrefly_util" }

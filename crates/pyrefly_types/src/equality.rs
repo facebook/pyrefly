@@ -48,11 +48,18 @@ pub struct TypeEqCtx {
 
 impl TypeEq for Unique {
     fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
-        match ctx.unique.entry(*self) {
-            Entry::Occupied(e) => e.get() == other,
-            Entry::Vacant(e) => {
-                e.insert(*other);
-                true
+        if self == other {
+            // NOTE(grievejia): Let's avoid having trivial identities pollute the mapping context
+            // There were some evidences that not doing so caused quantified types to be compared
+            // unequal unexpectedly.
+            true
+        } else {
+            match ctx.unique.entry(*self) {
+                Entry::Occupied(e) => e.get() == other,
+                Entry::Vacant(e) => {
+                    e.insert(*other);
+                    true
+                }
             }
         }
     }

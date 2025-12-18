@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::nesting_context::NestingContext;
 use ruff_python_ast::AtomicNodeIndex;
@@ -40,7 +41,6 @@ use crate::binding::scope::FlowStyle;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::types::facet::FacetKind;
 
 fn collect_match_pattern_metadata(

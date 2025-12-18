@@ -5,7 +5,7 @@ displaydoc = { git = "https://github.com/yaahc/displaydoc", rev = "7dc6e324b1788
 quickcheck = { git = "https://github.com/jakoschiko/quickcheck", rev = "6ecdf5bb4b0132ce66670b4d46453aa022ea892c" }
 
 [profile.release]
-debug = true
+debug = 1
 lto = true
 codegen-units = 1
 strip = false
@@ -16,6 +16,7 @@ members = [
   "crates/pyrefly_bundled",
   "crates/pyrefly_config",
   "crates/pyrefly_derive",
+  "crates/pyrefly_graph",
   "crates/pyrefly_python",
   "crates/pyrefly_types",
   "crates/pyrefly_util",

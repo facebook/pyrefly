@@ -2121,3 +2121,15 @@ def g(x: C):
         f(x)
     "#,
 );
+
+testcase!(
+    test_len_gt_empty_string,
+    r#"
+def test(unknown):
+    s = ""
+    if unknown:
+        s = unknown.foo
+    if len(s) > 0:
+      s[0]
+    "#,
+);

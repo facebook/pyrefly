@@ -1,9 +1,9 @@
 {
   "total": 138,
-  "pass": 103,
-  "fail": 35,
+  "pass": 104,
+  "fail": 34,
   "pass_rate": 0.75,
-  "differences": 146,
+  "differences": 144,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -81,6 +81,7 @@
     "overloads_consistency.py",
     "overloads_definitions.py",
     "overloads_evaluation.py",
+    "protocols_explicit.py",
     "protocols_generic.py",
     "protocols_merging.py",
     "protocols_recursive.py",
@@ -138,11 +139,10 @@
     "literals_interactions.py": 2,
     "protocols_class_objects.py": 4,
     "protocols_definition.py": 3,
-    "protocols_explicit.py": 1,
     "protocols_modules.py": 1,
     "protocols_variance.py": 7,
     "qualifiers_annotated.py": 6,
-    "qualifiers_final_annotation.py": 12,
+    "qualifiers_final_annotation.py": 11,
     "specialtypes_never.py": 1,
     "specialtypes_type.py": 8
   },

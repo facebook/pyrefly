@@ -10,6 +10,7 @@ use clap::ValueEnum;
 use lsp_server::Connection;
 use lsp_server::ProtocolError;
 use lsp_types::InitializeParams;
+use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::util::CommandExitStatus;
 use crate::lsp::non_wasm::server::capabilities;
@@ -51,7 +52,12 @@ pub struct LspArgs {
     pub(crate) build_system_blocking: bool,
 }
 
-pub fn run_lsp(connection: Connection, args: LspArgs, version_string: &str) -> anyhow::Result<()> {
+pub fn run_lsp(
+    connection: Connection,
+    args: LspArgs,
+    version_string: &str,
+    telemetry: &impl Telemetry,
+) -> anyhow::Result<()> {
     let initialization_params = match initialize_connection(&connection, &args, version_string) {
         Ok(it) => it,
         Err(e) => {
@@ -68,6 +74,7 @@ pub fn run_lsp(connection: Connection, args: LspArgs, version_string: &str) -> a
         args.indexing_mode,
         args.workspace_indexing_limit,
         args.build_system_blocking,
+        telemetry,
     )?;
     Ok(())
 }
@@ -95,7 +102,11 @@ fn initialize_connection(
 }
 
 impl LspArgs {
-    pub fn run(self, version_string: &str) -> anyhow::Result<CommandExitStatus> {
+    pub fn run(
+        self,
+        version_string: &str,
+        telemetry: &impl Telemetry,
+    ) -> anyhow::Result<CommandExitStatus> {
         // Note that  we must have our logging only write out to stderr.
         eprintln!("starting generic LSP server");
 
@@ -103,7 +114,7 @@ impl LspArgs {
         // also be implemented to use sockets or HTTP.
         let (connection, io_threads) = Connection::stdio();
 
-        run_lsp(connection, self, version_string)?;
+        run_lsp(connection, self, version_string, telemetry)?;
         io_threads.join()?;
         // We have shut down gracefully.
         eprintln!("shutting down server");

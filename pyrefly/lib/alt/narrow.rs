@@ -278,6 +278,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn narrow_length_greater(&self, ty: &Type, len: usize) -> Type {
         self.distribute_over_union(ty, |ty| match ty {
             Type::Tuple(Tuple::Concrete(elts)) if elts.len() <= len => Type::never(),
+            Type::Literal(Lit::Str(x)) if x.len() <= len => Type::never(),
             Type::ClassType(class)
                 if let Some(Tuple::Concrete(elts)) = self.as_tuple(class)
                     && elts.len() <= len =>
@@ -792,7 +793,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match first_facet {
             FacetKind::Attribute(first_attr_name) => match remaining_facets.split_first() {
                 None => match base.type_at_facet(first_facet) {
-                    Some(ty) => self.force_for_narrowing(ty),
+                    Some(ty) => self.force_for_narrowing(ty, range, errors),
                     None => self.narrowable_for_attr(base.ty(), first_attr_name, range, errors),
                 },
                 Some((next_name, remaining_facets)) => {
@@ -816,7 +817,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
                 match remaining_facets.split_first() {
                     None => match base.type_at_facet(first_facet) {
-                        Some(ty) => self.force_for_narrowing(ty),
+                        Some(ty) => self.force_for_narrowing(ty, range, errors),
                         None => self.subscript_infer_for_type(
                             base.ty(),
                             &synthesized_slice,
@@ -842,7 +843,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let synthesized_slice = Ast::str_expr(key, TextRange::empty(TextSize::from(0)));
                 match remaining_facets.split_first() {
                     None => match base.type_at_facet(first_facet) {
-                        Some(ty) => self.force_for_narrowing(ty),
+                        Some(ty) => self.force_for_narrowing(ty, range, errors),
                         None => self.subscript_infer_for_type(
                             base.ty(),
                             &synthesized_slice,
@@ -878,7 +879,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(facet_subject) => {
                         self.get_facet_chain_type(type_info, &facet_subject.chain, range)
                     }
-                    None => self.force_for_narrowing(type_info.ty()),
+                    None => self.force_for_narrowing(type_info.ty(), range, errors),
                 };
                 // We only narrow the attribute to `Any` if the attribute does not exist
                 if !self.has_attr(&base_ty, attr) {
@@ -910,7 +911,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(facet_subject) => {
                         self.get_facet_chain_type(type_info, &facet_subject.chain, range)
                     }
-                    None => self.force_for_narrowing(type_info.ty()),
+                    None => self.force_for_narrowing(type_info.ty(), range, errors),
                 };
                 let attr_ty =
                     self.attr_infer_for_type(&base_ty, attr, range, &suppress_errors, None);
@@ -940,7 +941,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             NarrowOp::Atomic(None, op) => {
                 let ty = self.atomic_narrow(
-                    &self.force_for_narrowing(type_info.ty()),
+                    &self.force_for_narrowing(type_info.ty(), range, errors),
                     op,
                     range,
                     errors,

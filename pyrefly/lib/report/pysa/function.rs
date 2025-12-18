@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -41,7 +42,6 @@ use crate::binding::binding::BindingClassField;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecoratedFunction;
-use crate::graph::index::Idx;
 use crate::report::pysa::ModuleContext;
 use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::resolve_decorator_callees;

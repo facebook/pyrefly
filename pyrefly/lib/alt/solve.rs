@@ -10,6 +10,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -104,7 +105,6 @@ use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
@@ -528,6 +528,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(Qualifier::InitVar)
         } else {
             None
+        }
+    }
+
+    /// Extract metadata items from an `Annotated` subscript expression.
+    /// Returns the metadata items (skipping the first element which is the type).
+    /// Returns an empty Vec if the expression is not `Annotated[...]`.
+    pub fn get_annotated_metadata(
+        &self,
+        expr: &Expr,
+        type_form_context: TypeFormContext,
+        errors: &ErrorCollector,
+    ) -> Vec<Expr> {
+        match expr {
+            Expr::Subscript(ExprSubscript { value, slice, .. })
+                if matches!(
+                    self.expr_qualifier(value, type_form_context, errors),
+                    Some(Qualifier::Annotated)
+                ) =>
+            {
+                Ast::unpack_slice(slice).iter().skip(1).cloned().collect()
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -1200,21 +1222,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         // Extract Annotated metadata; skip the first element since that's the type and collect the rest of the vector
-        let annotated_metadata = match expr {
-            Expr::Subscript(s)
-                if matches!(
-                    self.expr_qualifier(&s.value, TypeFormContext::TypeAlias, errors),
-                    Some(Qualifier::Annotated)
-                ) =>
-            {
-                Ast::unpack_slice(&s.slice)
-                    .iter()
-                    .skip(1)
-                    .map(|e| self.expr_infer(e, &self.error_swallower()))
-                    .collect()
-            }
-            _ => Vec::new(),
-        };
+        let annotated_metadata = self
+            .get_annotated_metadata(expr, TypeFormContext::TypeAlias, errors)
+            .iter()
+            .map(|e| self.expr_infer(e, &self.error_swallower()))
+            .collect();
 
         let ta = TypeAlias::new(name.clone(), Type::type_form(ty), style, annotated_metadata);
 
@@ -1383,23 +1395,79 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    pub fn scoped_type_params(&self, x: Option<&TypeParams>) -> Vec<TParam> {
+    fn quantified_from_type_parameter(
+        &self,
+        tp: &TypeParameter,
+        errors: &ErrorCollector,
+    ) -> Quantified {
+        let restriction = if let Some(bound) = &tp.bound {
+            let bound_ty = self.expr_untype(bound, TypeFormContext::TypeVarConstraint, errors);
+            Restriction::Bound(bound_ty)
+        } else if let Some((constraints, range)) = &tp.constraints {
+            if constraints.len() < 2 {
+                self.error(
+                    errors,
+                    *range,
+                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                    format!(
+                        "Expected at least 2 constraints in TypeVar `{}`, got {}",
+                        tp.name,
+                        constraints.len(),
+                    ),
+                );
+                Restriction::Unrestricted
+            } else {
+                let constraint_tys = constraints.map(|constraint| {
+                    self.expr_untype(constraint, TypeFormContext::TypeVarConstraint, errors)
+                });
+                Restriction::Constraints(constraint_tys)
+            }
+        } else {
+            Restriction::Unrestricted
+        };
+        let mut default_ty = None;
+        if let Some(default_expr) = &tp.default {
+            let default = self.expr_untype(
+                default_expr,
+                TypeFormContext::quantified_kind_default(tp.kind),
+                errors,
+            );
+            default_ty = Some(self.validate_type_var_default(
+                &tp.name,
+                tp.kind,
+                &default,
+                default_expr.range(),
+                &restriction,
+                errors,
+            ));
+        }
+        Quantified::new(tp.unique, tp.name.clone(), tp.kind, default_ty, restriction)
+    }
+
+    pub fn scoped_type_params(
+        &self,
+        x: Option<&TypeParams>,
+        errors: &ErrorCollector,
+    ) -> Vec<TParam> {
         match x {
             Some(x) => {
-                let get_quantified = |t: &Type| match t {
-                    Type::QuantifiedValue(q) => (**q).clone(),
-                    _ => unreachable!(
-                        "{}:{:?}: Expected a QuantifiedValue, got {}",
-                        self.module().path().as_path().display(),
-                        x.range(),
-                        t
-                    ),
-                };
                 let mut params = Vec::new();
                 for raw_param in x.type_params.iter() {
                     let name = raw_param.name();
-                    let quantified =
-                        get_quantified(self.get(&Key::Definition(ShortIdentifier::new(name))).ty());
+                    let key = Key::Definition(ShortIdentifier::new(name));
+                    let idx = self.bindings().key_to_idx(&key);
+                    let binding = self.bindings().get(idx);
+                    let quantified = match binding {
+                        Binding::TypeParameter(tp) => {
+                            self.quantified_from_type_parameter(tp, errors)
+                        }
+                        _ => unreachable!(
+                            "{}:{:?}: Expected a TypeParameter binding, got {:?}",
+                            self.module().path().as_path().display(),
+                            x.range(),
+                            binding
+                        ),
+                    };
                     params.push(TParam {
                         quantified,
                         variance: PreInferenceVariance::PUndefined,
@@ -1531,9 +1599,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Force the outermost type, without deep-forcing. Without this, narrowing behavior
     /// is unpredictable and has undesirable behavior particularly in loop recursion.
-    pub fn force_for_narrowing(&self, ty: &Type) -> Type {
+    pub fn force_for_narrowing(
+        &self,
+        ty: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
         match ty {
-            Type::Var(v) => self.force_for_narrowing(&self.solver().force_var(*v)),
+            Type::Var(v) => {
+                if let Some(_guard) = self.recurse(*v) {
+                    let forced = self.solver().force_var(*v);
+                    self.force_for_narrowing(&forced, range, errors)
+                } else {
+                    // Cycle detected - report as internal error
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InternalError),
+                        "Type narrowing encountered a cycle in Type::Var".to_owned(),
+                    )
+                }
+            }
             _ => ty.clone(),
         }
     }
@@ -2205,7 +2291,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.populate_dict_literal_facets(&mut type_info, &mut prefix, expr.as_ref());
                 type_info
             }
-            Binding::AssignToAttribute(attr, got) => {
+            Binding::AssignToAttribute {
+                attr,
+                value: got,
+                allow_assign_to_final,
+            } => {
                 // NOTE: Deterministic pinning of placeholder types based on first use relies on an
                 // invariant: if `got` is used in the binding for a class field, we must always solve
                 // that `ClassField` binding *before* analyzing `got`.
@@ -2217,6 +2307,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &base,
                     &attr.attr.id,
                     got,
+                    *allow_assign_to_final,
                     attr.range,
                     errors,
                 );
@@ -2612,7 +2703,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Binding::Phi(..)
             | Binding::LoopPhi(..)
             | Binding::Narrow(..)
-            | Binding::AssignToAttribute(..)
+            | Binding::AssignToAttribute { .. }
             | Binding::AssignToSubscript(..)
             | Binding::PossibleLegacyTParam(..) => {
                 // These forms require propagating attribute narrowing information, so they
@@ -3417,57 +3508,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             Binding::Type(x) => x.clone(),
             Binding::Global(global) => global.as_type(self.stdlib),
-            Binding::TypeParameter(box TypeParameter {
-                name,
-                unique,
-                kind,
-                bound,
-                default,
-                constraints,
-            }) => {
-                let restriction = if let Some(bound) = bound {
-                    let bound_ty =
-                        self.expr_untype(bound, TypeFormContext::TypeVarConstraint, errors);
-                    Restriction::Bound(bound_ty)
-                } else if let Some((constraints, range)) = constraints {
-                    if constraints.len() < 2 {
-                        self.error(
-                            errors,
-                            *range,
-                            ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
-                            format!(
-                                "Expected at least 2 constraints in TypeVar `{}`, got {}",
-                                name,
-                                constraints.len(),
-                            ),
-                        );
-                        Restriction::Unrestricted
-                    } else {
-                        let constraint_tys = constraints.map(|constraint| {
-                            self.expr_untype(constraint, TypeFormContext::TypeVarConstraint, errors)
-                        });
-                        Restriction::Constraints(constraint_tys)
-                    }
-                } else {
-                    Restriction::Unrestricted
-                };
-                let mut default_ty = None;
-                if let Some(default_expr) = default {
-                    let default = self.expr_untype(
-                        default_expr,
-                        TypeFormContext::quantified_kind_default(*kind),
-                        errors,
-                    );
-                    default_ty = Some(self.validate_type_var_default(
-                        name,
-                        *kind,
-                        &default,
-                        default_expr.range(),
-                        &restriction,
-                        errors,
-                    ));
-                }
-                Quantified::new(*unique, name.clone(), *kind, default_ty, restriction).to_value()
+            Binding::TypeParameter(tp) => {
+                self.quantified_from_type_parameter(tp, errors).to_value()
             }
             Binding::Module(m, path, prev) => {
                 let prev = prev
@@ -3503,7 +3545,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let params_range = params.as_ref().map_or(expr.range(), |x| x.range);
                         Forallable::TypeAlias(*ta).forall(self.validated_tparams(
                             params_range,
-                            self.scoped_type_params(params.as_ref()),
+                            self.scoped_type_params(params.as_ref(), errors),
                             TParamsSource::TypeAlias,
                             errors,
                         ))

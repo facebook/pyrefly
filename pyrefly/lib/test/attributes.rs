@@ -412,7 +412,6 @@ def f(a: A):
 );
 
 testcase!(
-    bug = "TODO(stroxler): We are always promoting literals. It is sound to preserve literals for read-only attributes",
     test_final_attribute_assigned_in_init,
     r#"
 from typing import assert_type, Final, Literal
@@ -420,7 +419,7 @@ class A:
     def __init__(self):
         self.x: Final = 0
 def f(a: A):
-    assert_type(a.x, Literal[0])  # E: assert_type(int, Literal[0])
+    assert_type(a.x, Literal[0])
     "#,
 );
 

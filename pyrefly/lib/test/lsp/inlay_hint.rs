@@ -266,3 +266,70 @@ foo("hello", 1, 2, 3, 5, a=1, b=2, t=4)
         .trim()
     );
 }
+
+/// todo(jvansch): Update test once parameter hints have locations.
+#[test]
+fn test_parameter_hints_do_not_have_locations() {
+    let code = r#"
+class MyType:
+    pass
+
+def my_function(x: MyType, y: str) -> None:
+    pass
+
+result = my_function(MyType(), "hello")
+"#;
+
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::indexing());
+    let handle = handles.get("main").unwrap();
+
+    let hints = state
+        .transaction()
+        .inlay_hints(
+            handle,
+            InlayHintConfig {
+                call_argument_names: AllOffPartial::All,
+                variable_types: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let x_hint = hints
+        .iter()
+        .find(|(_, parts)| parts.iter().any(|(text, _)| text == "x= "));
+
+    assert!(x_hint.is_some(), "Should have hint for parameter x");
+
+    if let Some((_, parts)) = x_hint {
+        let x_part = parts.iter().find(|(text, _)| text == "x= ");
+        assert!(x_part.is_some());
+
+        if let Some((text, location)) = x_part {
+            assert_eq!(text, "x= ");
+            assert!(
+                location.is_none(),
+                "Parameter hints should not have locations yet"
+            );
+        }
+    }
+
+    let y_hint = hints
+        .iter()
+        .find(|(_, parts)| parts.iter().any(|(text, _)| text == "y= "));
+
+    assert!(y_hint.is_some(), "Should have hint for parameter y");
+
+    if let Some((_, parts)) = y_hint {
+        let y_part = parts.iter().find(|(text, _)| text == "y= ");
+        assert!(y_part.is_some());
+
+        if let Some((_, location)) = y_part {
+            assert!(
+                location.is_none(),
+                "Parameter hints should not have locations yet"
+            );
+        }
+    }
+}

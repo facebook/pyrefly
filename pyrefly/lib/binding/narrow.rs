@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
@@ -42,7 +43,6 @@ use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::types::facet::FacetChain;
 use crate::types::facet::FacetKind;
