@@ -333,6 +333,25 @@ Completion Results:
 }
 
 #[test]
+fn dict_key_completion_from_typed_dict_literal() {
+    let code = r#"
+from typing import TypedDict
+
+class Config(TypedDict):
+    name: str
+    age: int
+
+cfg: Config = {"": 1}
+#             ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(report.contains("- (Field) age: int"));
+    assert!(report.contains("- (Field) name: str"));
+}
+
+#[test]
 fn dot_complete_with_deprecated_method() {
     let code = r#"
 from warnings import deprecated

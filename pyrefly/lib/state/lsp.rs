@@ -47,6 +47,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprContext;
+use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
@@ -91,6 +92,40 @@ use crate::types::types::Type;
 mod quick_fixes;
 
 pub(crate) use self::quick_fixes::extract_function::LocalRefactorCodeAction;
+
+#[derive(Clone)]
+enum DictKeyLiteralContext {
+    KeyAccess {
+        base_expr: Expr,
+        literal: ExprStringLiteral,
+    },
+    DictLiteral {
+        dict: ExprDict,
+        literal: ExprStringLiteral,
+    },
+}
+
+impl DictKeyLiteralContext {
+    fn literal_range(&self) -> TextRange {
+        match self {
+            Self::KeyAccess { literal, .. } | Self::DictLiteral { literal, .. } => literal.range(),
+        }
+    }
+
+    fn base_range(&self) -> TextRange {
+        match self {
+            Self::KeyAccess { base_expr, .. } => base_expr.range(),
+            Self::DictLiteral { dict, .. } => dict.range(),
+        }
+    }
+
+    fn base_expr(&self) -> Option<&Expr> {
+        match self {
+            Self::KeyAccess { base_expr, .. } => Some(base_expr),
+            Self::DictLiteral { .. } => None,
+        }
+    }
+}
 
 fn default_true() -> bool {
     true
@@ -2789,6 +2824,60 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn dict_key_literal_context(
+        &self,
+        handle: &Handle,
+        module: &ModModule,
+        position: TextSize,
+    ) -> Option<DictKeyLiteralContext> {
+        if let Some((base_expr, literal)) =
+            self.dict_key_string_literal_at(handle, module, position)
+        {
+            Some(DictKeyLiteralContext::KeyAccess { base_expr, literal })
+        } else {
+            Self::dict_literal_string_literal_at(module, position)
+                .map(|(dict, literal)| DictKeyLiteralContext::DictLiteral { dict, literal })
+        }
+    }
+
+    fn dict_literal_string_literal_at(
+        module: &ModModule,
+        position: TextSize,
+    ) -> Option<(ExprDict, ExprStringLiteral)> {
+        let nodes = Ast::locate_node(module, position);
+        let mut best: Option<(u8, TextSize, ExprDict, ExprStringLiteral)> = None;
+        for node in nodes {
+            if let AnyNodeRef::ExprDict(dict) = node {
+                for item in &dict.items {
+                    let Some(key_expr) = item.key.as_ref() else {
+                        continue;
+                    };
+                    if let Expr::StringLiteral(literal) = key_expr {
+                        let (priority, dist) =
+                            Self::string_literal_priority(position, literal.range());
+                        let should_update = match &best {
+                            Some((best_prio, best_dist, _, _)) => {
+                                priority < *best_prio
+                                    || (priority == *best_prio && dist < *best_dist)
+                            }
+                            None => true,
+                        };
+                        if should_update {
+                            best = Some((priority, dist, dict.clone(), literal.clone()));
+                            if priority == 0 && dist == TextSize::from(0) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if matches!(best, Some((0, dist, _, _)) if dist == TextSize::from(0)) {
+                    break;
+                }
+            }
+        }
+        best.map(|(_, _, dict, literal)| (dict, literal))
+    }
+
     fn expression_facets(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
         let mut facets = Vec::new();
         let mut current = expr;
@@ -2855,12 +2944,10 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        let Some((base_expr, string_lit)) =
-            self.dict_key_string_literal_at(handle, module, position)
-        else {
+        let Some(context) = self.dict_key_literal_context(handle, module, position) else {
             return;
         };
-        let literal_range = string_lit.range();
+        let literal_range = context.literal_range();
         // Allow the cursor to sit a few characters before the literal (e.g. between nested
         // subscripts) so completion requests fired just before the quotes still succeed.
         let allowance = TextSize::from(4);
@@ -2873,9 +2960,10 @@ impl<'a> Transaction<'a> {
         }
         let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
 
-        if let Some(bindings) = self.get_bindings(handle) {
-            let base_info = if let Some((identifier, facets)) = Self::expression_facets(&base_expr)
-            {
+        if let Some(base_expr) = context.base_expr()
+            && let Some(bindings) = self.get_bindings(handle)
+        {
+            let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
                 Some((identifier, facets))
             } else if let Expr::Name(name) = &base_expr {
                 Some((Ast::expr_name_identifier(name.clone()), Vec::new()))
@@ -2913,7 +3001,7 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        if let Some(base_type) = self.get_type_trace(handle, base_expr.range())
+        if let Some(base_type) = self.get_type_trace(handle, context.base_range())
             && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
         {
             for (key, ty) in typed_keys {
