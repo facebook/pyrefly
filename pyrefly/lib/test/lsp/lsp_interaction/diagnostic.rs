@@ -923,10 +923,10 @@ fn test_missing_source_for_stubs_diagnostic() {
                     "codeDescription": {
                         "href": "https://pyrefly.org/en/docs/error-kinds/#missing-source-for-stubs"
                     },
-                    "message": "Stubs for `requests` are bundled with Pyrefly but the source files for the package are not found.",
+                    "message": "Stubs for `whatthepatch` are bundled with Pyrefly but the source files for the package are not found.",
                     "range": {
                         "start": {"line": 5, "character": 7},
-                        "end": {"line": 5, "character": 15}
+                        "end": {"line": 5, "character": 19}
                     },
                     "severity": 1,
                     "source": "Pyrefly"
@@ -975,11 +975,11 @@ fn test_missing_source_with_config_diagnostic_has_errors() {
                     ))
                     && item
                         .message
-                        .starts_with("Could not find import of `requests`")
+                        .starts_with("Could not find import of `whatthepatch`")
                     && item.range.start.line == 5
                     && item.range.start.character == 7
                     && item.range.end.line == 5
-                    && item.range.end.character == 15
+                    && item.range.end.character == 19
                     && item.severity == Some(lsp_types::DiagnosticSeverity::ERROR);
             }
             false

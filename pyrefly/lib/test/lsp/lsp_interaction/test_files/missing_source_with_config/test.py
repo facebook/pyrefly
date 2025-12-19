@@ -3,8 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-import requests
+import whatthepatch
 
 
-def make_request():
-    return requests.get("https://example.com")
+def parse(text: str):
+    return whatthepatch.parse_patch(text)
