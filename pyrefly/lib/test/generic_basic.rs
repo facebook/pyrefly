@@ -69,6 +69,14 @@ class C[T](Generic[T]):  # E: Redundant
 );
 
 testcase!(
+    test_class_type_params_can_reference_class,
+    r#"
+class C[T: C](set[object]):
+    pass
+    "#,
+);
+
+testcase!(
     test_type_argument_error_default,
     r#"
 from typing import Any, assert_type
