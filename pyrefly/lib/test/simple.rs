@@ -1547,6 +1547,14 @@ if"":=  # E: Assignment expression target must be an identifier # E: Expected an
 );
 
 testcase!(
+    test_crash_on_invalid_attribute_walrus,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/1903
+(:=).:  # E: Type cannot be declared in assignment to non-self attribute `:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Parse error: Expected an expression
+"#,
+);
+
+testcase!(
     test_check_invalid_rhs,
     r#"
 def f(x): pass

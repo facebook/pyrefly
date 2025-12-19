@@ -216,7 +216,9 @@ impl Ast {
     pub fn expr_lvalue<'a>(x: &'a Expr, f: &mut impl FnMut(&'a ExprName)) {
         match x {
             Expr::Name(x) => {
-                f(x);
+                if !x.range.is_empty() {
+                    f(x);
+                }
             }
             Expr::Tuple(x) => {
                 for x in &x.elts {
