@@ -25,10 +25,14 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::callable::CallArg;
+use crate::alt::callable::CallKeyword;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
@@ -52,6 +56,45 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::types::Type;
+
+fn int_literal_from_type(ty: &Type) -> Option<&LitInt> {
+    match ty {
+        Type::Literal(Lit::Int(lit)) => Some(lit),
+        _ => None,
+    }
+}
+
+#[derive(Clone)]
+struct PydanticRangeConstraints {
+    gt: Option<Type>,
+    ge: Option<Type>,
+    lt: Option<Type>,
+    le: Option<Type>,
+}
+
+impl PydanticRangeConstraints {
+    fn from_keywords(keywords: &DataclassFieldKeywords) -> Option<Self> {
+        if keywords.gt.is_none()
+            && keywords.ge.is_none()
+            && keywords.lt.is_none()
+            && keywords.le.is_none()
+        {
+            return None;
+        }
+        Some(Self {
+            gt: keywords.gt.clone(),
+            ge: keywords.ge.clone(),
+            lt: keywords.lt.clone(),
+            le: keywords.le.clone(),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct PydanticParamConstraint {
+    field_name: Name,
+    constraints: PydanticRangeConstraints,
+}
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_pydantic_root_model_type_via_mro(
@@ -498,5 +541,162 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         None
+    }
+
+    pub fn check_pydantic_argument_range_constraints(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        errors: &ErrorCollector,
+    ) {
+        let Some((positional_slots, constraints)) =
+            self.collect_pydantic_constraint_params(cls, dataclass)
+        else {
+            return;
+        };
+        if constraints.is_empty() {
+            return;
+        }
+
+        let infer_errors = self.error_swallower();
+        let mut positional_index = 0;
+        for arg in args {
+            if positional_index >= positional_slots.len() {
+                break;
+            }
+            let slot = positional_slots.get(positional_index);
+            positional_index += 1;
+            let Some(slot) = slot else {
+                break;
+            };
+            let Some(param_name) = slot.clone() else {
+                continue;
+            };
+            match arg {
+                CallArg::Arg(value) => {
+                    let value_ty = value.infer(self, &infer_errors);
+                    if let Some(info) = constraints.get(&param_name) {
+                        self.emit_pydantic_argument_constraint(
+                            &value_ty,
+                            info,
+                            arg.range(),
+                            errors,
+                        );
+                    }
+                }
+                CallArg::Star(..) => {
+                    // Can't reliably map starred arguments to parameters.
+                    break;
+                }
+            }
+        }
+
+        for kw in keywords {
+            let Some(identifier) = kw.arg.as_ref() else {
+                continue;
+            };
+            if let Some(info) = constraints.get(&identifier.id) {
+                let value_ty = kw.value.infer(self, &infer_errors);
+                self.emit_pydantic_argument_constraint(&value_ty, info, kw.range, errors);
+            }
+        }
+    }
+
+    fn collect_pydantic_constraint_params(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+    ) -> Option<(Vec<Option<Name>>, SmallMap<Name, PydanticParamConstraint>)> {
+        let mut positional_slots: Vec<Option<Name>> = Vec::new();
+        let mut constraints = SmallMap::new();
+
+        for (field_name, _field, keywords) in self.iter_fields(cls, dataclass, true) {
+            if !keywords.init {
+                continue;
+            }
+
+            let constraint = PydanticRangeConstraints::from_keywords(&keywords);
+            let constraint_template = constraint.as_ref().map(|c| PydanticParamConstraint {
+                field_name: field_name.clone(),
+                constraints: c.clone(),
+            });
+
+            if keywords.init_by_name && !keywords.is_kw_only() {
+                positional_slots.push(constraint_template.as_ref().map(|_| field_name.clone()));
+            } else if keywords.init_by_name {
+                // kw-only parameter with no positional slot
+            }
+
+            if let Some(alias) = &keywords.init_by_alias
+                && !keywords.is_kw_only()
+            {
+                positional_slots.push(constraint_template.as_ref().map(|_| alias.clone()));
+            }
+
+            if let Some(info) = constraint_template {
+                if keywords.init_by_name {
+                    constraints.insert(field_name.clone(), info.clone());
+                }
+                if let Some(alias) = &keywords.init_by_alias {
+                    constraints.insert(alias.clone(), info.clone());
+                }
+            }
+        }
+
+        if constraints.is_empty() {
+            None
+        } else {
+            Some((positional_slots, constraints))
+        }
+    }
+
+    fn emit_pydantic_argument_constraint(
+        &self,
+        value_ty: &Type,
+        info: &PydanticParamConstraint,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let Some(value_lit) = int_literal_from_type(value_ty) else {
+            return;
+        };
+        let checks = [
+            ("gt", info.constraints.gt.as_ref()),
+            ("ge", info.constraints.ge.as_ref()),
+            ("lt", info.constraints.lt.as_ref()),
+            ("le", info.constraints.le.as_ref()),
+        ];
+        for (label, constraint_ty) in checks {
+            let Some(constraint_ty) = constraint_ty else {
+                continue;
+            };
+            let Some(constraint_lit) = int_literal_from_type(constraint_ty) else {
+                continue;
+            };
+            let comparison = value_lit.cmp(constraint_lit);
+            let violates = match label {
+                "gt" => !matches!(comparison, std::cmp::Ordering::Greater),
+                "ge" => matches!(comparison, std::cmp::Ordering::Less),
+                "lt" => !matches!(comparison, std::cmp::Ordering::Less),
+                "le" => matches!(comparison, std::cmp::Ordering::Greater),
+                _ => false,
+            };
+            if violates {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    format!(
+                        "Argument value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
+                        self.for_display(value_ty.clone()),
+                        label,
+                        self.for_display(constraint_ty.clone()),
+                        info.field_name
+                    ),
+                );
+            }
+        }
     }
 }

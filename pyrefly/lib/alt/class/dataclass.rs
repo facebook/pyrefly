@@ -604,7 +604,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    fn iter_fields(
+    pub(crate) fn iter_fields(
         &self,
         cls: &Class,
         dataclass: &DataclassMetadata,

@@ -21,8 +21,8 @@ class Model(BaseModel):
    x: int = Field(gt=0, lt=10)
 
 Model(x=5) 
-Model(x=0)  
-Model(x=15)
+Model(x=0)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
+Model(x=15)  # E: Argument value `Literal[15]` violates Pydantic `lt` constraint `Literal[10]` for field `x`
 "#,
 );
 
