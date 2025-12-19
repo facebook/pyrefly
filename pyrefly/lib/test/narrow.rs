@@ -964,7 +964,7 @@ def f(x: type[B] | type[int]):
 testcase!(
     test_issubclass_typevar,
     r#"
-from typing import TypeVar, assert_type
+from typing import TypeVar
 
 class Foo:
     @classmethod
@@ -973,10 +973,16 @@ class Foo:
 
 T = TypeVar("T", bound=type[object])
 
-def check(t: T) -> None:
+def needs_foo(cls: type[Foo]) -> None:
+    cls.check()
+
+def check(t: T) -> T:
     if issubclass(t, Foo):
-        assert_type(t, type[Foo])
+        needs_foo(t)
         t.check()
+        return t
+    return t
+
     "#,
 );
 

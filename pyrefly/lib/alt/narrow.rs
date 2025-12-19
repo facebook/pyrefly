@@ -158,13 +158,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn intersect_subclass_type(&self, left: &Type, right: &Type) -> Type {
         if let Some(allowed) = self.allowed_type_for_typevar(left) {
             let right_type_form = Type::type_form(right.clone());
-            if self.is_subset_eq(&right_type_form, &allowed) {
-                return right.clone();
-            } else {
+            if !self.is_subset_eq(&right_type_form, &allowed) {
                 return Type::never();
             }
-        } else if left.is_type_variable() {
-            return right.clone();
         }
         self.intersect(left, right)
     }
@@ -265,24 +261,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for right in self.as_class_info(right.clone()) {
             if matches!(left, Type::ClassDef(_)) && matches!(right, Type::ClassDef(_)) {
                 res.push(self.intersect(left, &right))
-            } else {
-                if let Some(left_ty) = self.untype_opt(left.clone(), range, errors) {
-                    if let Some(right_ty) = self.unwrap_class_object_silently(&right) {
-                        res.push(Type::type_form(
-                            self.intersect_subclass_type(&left_ty, &right_ty),
+            } else if let Some(right_ty) = self.unwrap_class_object_silently(&right) {
+                if left.is_type_variable() {
+                    let right_type_form = Type::type_form(right_ty.clone());
+                    if self.allowed_type_for_typevar(left).map_or(true, |allowed| {
+                        self.is_subset_eq(&right_type_form, &allowed)
+                    }) {
+                        res.push(intersect(
+                            vec![left.clone(), right_type_form],
+                            Type::never(),
                         ));
-                        continue;
+                    } else {
+                        res.push(Type::never());
                     }
-                } else if left.is_type_variable()
-                    && let Some(right_ty) = self.unwrap_class_object_silently(&right)
-                    && let Some(allowed) = self.allowed_type_for_typevar(left)
-                {
-                    let rhs_type_form = Type::type_form(right_ty.clone());
-                    if self.is_subset_eq(&rhs_type_form, &allowed) {
-                        res.push(Type::type_form(right_ty));
-                        continue;
-                    }
+                    continue;
                 }
+                if let Some(left_ty) = self.untype_opt(left.clone(), range, errors) {
+                    res.push(Type::type_form(
+                        self.intersect_subclass_type(&left_ty, &right_ty),
+                    ));
+                    continue;
+                }
+                res.push(left.clone());
+            } else {
                 res.push(left.clone());
             }
         }
