@@ -6072,3 +6072,41 @@ def foo():
         )]
     }
 );
+
+call_graph_testcase!(
+    test_slice,
+    TEST_MODULE_NAME,
+    r#"
+def foo():
+  x = [1, 2, 3]
+  return x[1:2]
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "4:10-4:16|artificial-call|subscript-get-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.list.__getitem__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.list", context),
+                    ]),
+                ),
+                (
+                    "4:12-4:15|artificial-call|slice",
+                    constructor_call_callees(
+                        vec![
+                            create_call_target("builtins.object.__init__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                        ],
+                        vec![
+                            create_call_target("builtins.slice.__new__", TargetType::Function)
+                                .with_is_static_method(true),
+                        ],
+                    ),
+                ),
+            ],
+        )]
+    }
+);

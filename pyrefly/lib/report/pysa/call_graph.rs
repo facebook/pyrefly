@@ -39,6 +39,7 @@ use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprFString;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::InterpolatedElement;
@@ -105,6 +106,7 @@ pub enum OriginKind {
     ForNext,
     ReprCall,
     StrCallToDunderMethod,
+    Slice,
 }
 
 impl std::fmt::Display for OriginKind {
@@ -123,6 +125,7 @@ impl std::fmt::Display for OriginKind {
             Self::ForNext => write!(f, "for-next"),
             Self::ReprCall => write!(f, "repr-call"),
             Self::StrCallToDunderMethod => write!(f, "str-call-to-dunder-method"),
+            Self::Slice => write!(f, "slice"),
         }
     }
 }
@@ -3050,6 +3053,37 @@ impl<'a> CallGraphVisitor<'a> {
         self.add_callees(identifier, ExpressionCallees::Call(callees));
     }
 
+    fn resolve_and_register_slice(&mut self, slice: &ExprSlice) {
+        let slice_class = self.module_context.stdlib.slice_class_object();
+        let slice_class_type =
+            pyrefly_types::class::ClassType::new(slice_class.dupe(), Default::default());
+        let (init_method, new_method) = self
+            .module_context
+            .transaction
+            .ad_hoc_solve(&self.module_context.handle, |solver| {
+                let new_method = solver.get_dunder_new(&slice_class_type);
+                let overrides_new = new_method.is_some();
+                let init_method = solver
+                    .get_dunder_init(&slice_class_type, /* get_object_init */ !overrides_new);
+                (init_method, new_method)
+            })
+            .unwrap();
+        let callees = self.resolve_constructor_callees(
+            init_method,
+            new_method,
+            /* callee_expr */ None,
+            Some(&Type::ClassDef(slice_class)),
+            ScalarTypeProperties::none(),
+            /* callee_expr_suffix */ None,
+            /* exclude_object_methods */ false,
+        );
+        let identifier = ExpressionIdentifier::ArtificialCall(Origin {
+            kind: OriginKind::Slice,
+            location: self.pysa_location(slice.range()),
+        });
+        self.add_callees(identifier, ExpressionCallees::Call(callees));
+    }
+
     fn resolve_and_register_expression(
         &mut self,
         expr: &Expr,
@@ -3194,6 +3228,14 @@ impl<'a> CallGraphVisitor<'a> {
                     expr.display_with(self.module_context)
                 );
                 self.resolve_and_register_binop(bin_op);
+            }
+            Expr::Slice(slice) => {
+                debug_println!(
+                    self.debug,
+                    "Resolving callees for slice `{}`",
+                    expr.display_with(self.module_context)
+                );
+                self.resolve_and_register_slice(slice);
             }
             _ => {
                 debug_println!(
