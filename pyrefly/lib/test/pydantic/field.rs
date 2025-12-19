@@ -202,7 +202,6 @@ class B(BaseModel):
 );
 
 pydantic_testcase!(
-    bug = "support Annotated (https://github.com/facebook/pyrefly/issues/1890)",
     test_annotated_field_with_defaults,
     r#"
 from typing import Annotated
@@ -216,7 +215,7 @@ class House(BaseModel):
     extra_fields: Annotated[dict, Field(default_factory=dict)]
     something: dict = Field(default_factory=dict)
 
-house = House( # E: Missing argument `notes` in function `House.__init__` # E: Missing argument `extra_fields` in function `House.__init__` 
+house = House(
     street="House Street",
     city="House City",
     zipcode="House Zipcode",

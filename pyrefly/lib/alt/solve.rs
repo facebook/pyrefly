@@ -510,6 +510,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Extract metadata items from an `Annotated` subscript expression.
+    /// Returns the metadata items (skipping the first element which is the type).
+    /// Returns an empty Vec if the expression is not `Annotated[...]`.
+    pub fn get_annotated_metadata(
+        &self,
+        expr: &Expr,
+        type_form_context: TypeFormContext,
+        errors: &ErrorCollector,
+    ) -> Vec<Expr> {
+        match expr {
+            Expr::Subscript(ExprSubscript { value, slice, .. })
+                if matches!(
+                    self.expr_qualifier(value, type_form_context, errors),
+                    Some(Qualifier::Annotated)
+                ) =>
+            {
+                Ast::unpack_slice(slice).iter().skip(1).cloned().collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     fn has_valid_annotation_syntax(&self, x: &Expr, errors: &ErrorCollector) -> bool {
         // Note that this function only checks for correct syntax.
         // Semantic validation (e.g. that `typing.Self` is used in a class
@@ -1179,21 +1201,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         // Extract Annotated metadata; skip the first element since that's the type and collect the rest of the vector
-        let annotated_metadata = match expr {
-            Expr::Subscript(s)
-                if matches!(
-                    self.expr_qualifier(&s.value, TypeFormContext::TypeAlias, errors),
-                    Some(Qualifier::Annotated)
-                ) =>
-            {
-                Ast::unpack_slice(&s.slice)
-                    .iter()
-                    .skip(1)
-                    .map(|e| self.expr_infer(e, &self.error_swallower()))
-                    .collect()
-            }
-            _ => Vec::new(),
-        };
+        let annotated_metadata = self
+            .get_annotated_metadata(expr, TypeFormContext::TypeAlias, errors)
+            .iter()
+            .map(|e| self.expr_infer(e, &self.error_swallower()))
+            .collect();
 
         let ta = TypeAlias::new(name.clone(), Type::type_form(ty), style, annotated_metadata);
 

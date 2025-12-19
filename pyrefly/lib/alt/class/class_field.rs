@@ -1360,6 +1360,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
                 {
                     ClassFieldInitialization::Magic
+                } else if let Some(flags) =
+                    self.extract_pydantic_field_from_annotation(*annot, &metadata)
+                {
+                    ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
                 } else {
                     ClassFieldInitialization::Uninitialized
                 };
@@ -2077,7 +2081,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Extract dataclass field keywords from a call expression if it's a dataclass field specifier.
-    fn compute_dataclass_field_initialization(
+    pub fn compute_dataclass_field_initialization(
         &self,
         call: &ExprCall,
         dm: &crate::alt::types::class_metadata::DataclassMetadata,
