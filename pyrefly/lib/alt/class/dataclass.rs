@@ -45,7 +45,6 @@ use crate::error::context::TypeCheckKind;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -181,6 +180,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if dataclass.kws.eq {
             fields.insert(dunder::HASH, ClassSynthesizedField::new(Type::None));
         }
+        fields.insert(
+            dunder::REPLACE,
+            self.get_dataclass_replace(cls, dataclass, errors),
+        );
         Some(ClassSynthesizedFields::new(fields))
     }
 
@@ -207,51 +210,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let obj_ty = obj_arg.infer(self, errors);
 
-        let dataclass_metadata = |cls: &ClassType| {
+        let is_dataclass = |cls: &ClassType| {
             let cls_metadata = self.get_metadata_for_class(cls.class_object());
-            cls_metadata.dataclass_metadata().cloned()
+            cls_metadata.dataclass_metadata().is_some()
         };
 
         let mut dataclasses = Vec::new();
         let mut non_dataclasses = Vec::new();
         self.map_over_union(&obj_ty, |ty| match ty {
-            Type::ClassType(cls) if let Some(m) = dataclass_metadata(cls) => {
-                dataclasses.push((ty.clone(), cls.clone(), m))
-            }
+            Type::ClassType(cls) if is_dataclass(cls) => dataclasses.push(ty.clone()),
             _ => non_dataclasses.push(ty.clone()),
         });
 
-        let args_with_first = |new_first_arg| {
-            let mut new_args = Vec::with_capacity(args.len());
-            new_args.push(CallArg::ty(new_first_arg, obj_arg.range()));
-            new_args.extend(args.iter().skip(1).cloned());
-            new_args
-        };
-
         // For unions of dataclasses, typecheck each member individually. We treat the first argument
         // as the member type to avoid rejecting `A | B` as not assignable to `A`.
-        let mut rets = dataclasses.map(|(ty, cls, m)| {
-            let callable = self.build_replace_callable(cls, m, errors);
-            let member_args = args_with_first(ty);
-            self.callable_infer(
-                callable,
-                Some(&FunctionKind::DataclassReplace),
-                None,
-                None,
-                &member_args,
-                kws,
+        let mut rets = dataclasses.map(|ty| {
+            let ret = self.call_magic_dunder_method(
+                ty,
+                &dunder::REPLACE,
                 arg_range,
+                &args.iter().skip(1).cloned().collect::<Vec<_>>(),
+                kws,
                 errors,
-                errors,
                 None,
-                None,
-                None,
-            )
+            );
+            ret.unwrap_or_else(|| ty.clone())
         });
         if !non_dataclasses.is_empty() {
+            let mut new_args = Vec::with_capacity(args.len());
+            let new_first_arg = self.unions(non_dataclasses);
+            new_args.push(CallArg::ty(&new_first_arg, obj_arg.range()));
+            new_args.extend(args.iter().skip(1).cloned());
             rets.push(self.freeform_call_infer(
                 replace_ty.clone(),
-                &args_with_first(&self.unions(non_dataclasses)),
+                &new_args,
                 kws,
                 callee_range,
                 arg_range,
@@ -262,30 +254,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.unions(rets)
     }
 
-    fn build_replace_callable(
+    fn get_dataclass_replace(
         &self,
-        dataclass_type: &ClassType,
+        cls: &Class,
         dataclass_metadata: &DataclassMetadata,
         errors: &ErrorCollector,
-    ) -> Callable {
-        let self_type = dataclass_type.clone().to_type();
-        let mut params = vec![Param::PosOnly(
-            Some(Name::new_static("obj")),
-            self_type.clone(),
-            Required::Required,
-        )];
-
-        let subst = dataclass_type.targs().substitution_map();
-        let type_transform = |mut ty: Type| {
-            ty.subst_self_type_mut(&self_type);
-            ty.subst_mut(&subst);
-            ty
-        };
+    ) -> ClassSynthesizedField {
+        let mut params = vec![self.class_self_param(cls, true)];
 
         let strict_default = dataclass_metadata.kws.strict;
-        for (name, field, field_flags) in
-            self.iter_fields(dataclass_type.class_object(), dataclass_metadata, true)
-        {
+        for (name, field, field_flags) in self.iter_fields(cls, dataclass_metadata, true) {
             if !field_flags.init {
                 continue;
             }
@@ -300,7 +278,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     true,
                     strict,
                     field_flags.converter_param.clone(),
-                    &type_transform,
+                    &|t| t,
                     errors,
                 ));
             }
@@ -312,7 +290,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     true,
                     strict,
                     field_flags.converter_param.clone(),
-                    &type_transform,
+                    &|t| t,
                     errors,
                 ));
             }
@@ -321,7 +299,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             params.push(Param::Kwargs(None, Type::Any(AnyStyle::Implicit)));
         }
 
-        Callable::list(ParamList::new(params), dataclass_type.clone().to_type())
+        let ty = Type::Function(Box::new(Function {
+            signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::REPLACE),
+        }));
+        ClassSynthesizedField::new(ty)
     }
 
     pub fn validate_frozen_dataclass_inheritance(

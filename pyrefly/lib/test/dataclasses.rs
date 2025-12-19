@@ -79,8 +79,8 @@ class Foo:
 
 f = Foo(1, "a")
 
-replace(f, x="wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `x` with type `int` in function `dataclasses.replace`
-replace(f, z=3)  # E: Unexpected keyword argument `z` in function `dataclasses.replace`
+replace(f, x="wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `x` with type `int` in function `Foo.__replace__`
+replace(f, z=3)  # E: Unexpected keyword argument `z`
     "#,
 );
 
@@ -112,7 +112,7 @@ class Foo:
 
 f = Foo(1, 2)
 
-replace(f)  # E: Missing argument `y` in function `dataclasses.replace`
+replace(f)  # E: Missing argument `y`
     "#,
 );
 
@@ -128,7 +128,7 @@ class Foo:
 
 f = Foo(1, "a")
 
-replace(f, "extra")  # E: Expected 1 positional argument, got 2
+replace(f, "extra")  # E: Expected 0 positional arguments, got 1
     "#,
 );
 
@@ -144,7 +144,7 @@ class WithInitFalse:
 
 g = WithInitFalse(1)
 
-replace(g, y=10)  # E: Unexpected keyword argument `y` in function `dataclasses.replace`
+replace(g, y=10)  # E: Unexpected keyword argument `y`
     "#,
 );
 
@@ -161,7 +161,7 @@ class Config:
 
 c = Config(10)
 replace(c, limit=20)
-replace(c, MAX_ID=200) # E: Unexpected keyword argument `MAX_ID` in function `dataclasses.replace`
+replace(c, MAX_ID=200) # E: Unexpected keyword argument `MAX_ID`
     "#,
 );
 
@@ -199,7 +199,7 @@ class B:
     y: int
 
 def f(obj: Union[A, B]):
-    replace(obj, z=1)  # E: Unexpected keyword argument `z` in function `dataclasses.replace`
+    replace(obj, z=1)  # E: Unexpected keyword argument `z` in function `A.__replace__`  # E: Unexpected keyword argument `z` in function `B.__replace__`
     "#,
 );
 
@@ -218,7 +218,7 @@ class B:
     y: int
 
 def f(obj: Union[A, B]):
-    replace(obj, x=1)  # E: Unexpected keyword argument `x` in function `dataclasses.replace`
+    replace(obj, x=1)  # E: Unexpected keyword argument `x`
     "#,
 );
 
@@ -255,8 +255,8 @@ class Foo:
 foo = Foo(1, 2)
 
 replace(foo, *())
-replace(foo, **{"x": "bad"})  # E: Argument `str` is not assignable to parameter `x` with type `int` in function `dataclasses.replace`
-replace(foo, **{"z": 0})  # E: Unexpected keyword argument `z` in function `dataclasses.replace`
+replace(foo, **{"x": "bad"})  # E: Argument `str` is not assignable to parameter `x` with type `int`
+replace(foo, **{"z": 0})  # E: Unexpected keyword argument `z`
     "#,
 );
 
@@ -271,7 +271,7 @@ class Foo:
 
 foo = Foo(1)
 
-replace(foo, obj=foo)  # E: Unexpected keyword argument `obj` in function `dataclasses.replace`
+replace(foo, obj=foo)  # E: Unexpected keyword argument `obj`
     "#,
 );
 
@@ -279,7 +279,7 @@ testcase!(
     test_replace_generic_consistency,
     r#"
 from dataclasses import dataclass, replace
-from typing import TypeVar, Generic
+from typing import TypeVar, Generic, assert_type
 
 T = TypeVar("T")
 
@@ -288,7 +288,7 @@ class Box(Generic[T]):
     item: T
 
 b = Box(item=1)
-replace(b, item=2)
+assert_type(replace(b, item=2), Box[int])
 replace(b, item="wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `item` with type `int`
     "#,
 );
