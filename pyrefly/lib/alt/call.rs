@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
@@ -878,20 +879,72 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     signature: callable,
                     metadata,
                 },
-            )) => self.callable_infer(
-                callable,
-                Some(&metadata.kind),
-                tparams.as_deref(),
-                None,
-                args,
-                keywords,
-                range,
-                errors,
-                errors,
-                context,
-                hint,
-                ctor_targs,
-            ),
+            )) => {
+                // HACK: Special handling for builtins.object.__new__
+                // - When object.__new__(C) is called directly, we want to return C instead of object
+                // - This is a quick fix to unblock the `tqdm` library, see issues
+                //
+                // TODO(stroxler) I think this hack is needed because we aren't handling `Self` in a spec-compliant
+                // way; it is supposed to be treated as a TypeVar with an upper bound, which means the behavior
+                // ought to come from the solver and not require a hack. We should investigate further - our
+                // implementation of `Self` allows more uses than the typevar logic would, but maybe we could
+                // detect situations (primarily unbound method calls) where the type var logic should be applied
+                // and rewrite the signature before calling.
+                if let FunctionKind::Def(func_id) = &metadata.kind
+                    && func_id.name == dunder::NEW
+                    && func_id.module.name() == ModuleName::builtins()
+                    && func_id
+                        .cls
+                        .as_ref()
+                        .is_some_and(|c| c.has_toplevel_qname("builtins", "object"))
+                    && let Some(first_arg_ty) = self.first_arg_type(args, errors)
+                {
+                    // Extract class type from first argument
+                    let result_ty = match &first_arg_ty {
+                        Type::ClassDef(cls) => Some(self.instantiate_fresh_class(cls)),
+                        Type::ClassType(cls) => Some(cls.clone().to_type()),
+                        Type::Type(box Type::ClassType(cls)) => Some(cls.clone().to_type()),
+                        _ => None,
+                    };
+
+                    if let Some(ty) = result_ty {
+                        // Validate all arguments
+                        let _ = self.callable_infer(
+                            callable.clone(),
+                            Some(&metadata.kind),
+                            tparams.as_deref(),
+                            None,
+                            args,
+                            keywords,
+                            range,
+                            errors,
+                            errors,
+                            context,
+                            hint,
+                            ctor_targs,
+                        );
+
+                        // Return the class instance type
+                        return ty;
+                    }
+                }
+
+                // Standard path for all other functions
+                self.callable_infer(
+                    callable,
+                    Some(&metadata.kind),
+                    tparams.as_deref(),
+                    None,
+                    args,
+                    keywords,
+                    range,
+                    errors,
+                    errors,
+                    context,
+                    hint,
+                    ctor_targs,
+                )
+            }
             CallTarget::FunctionOverload(overloads, metadata) => {
                 self.call_overloads(
                     overloads, metadata, None, args, keywords, range, errors, context, hint,
