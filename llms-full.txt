@@ -3114,7 +3114,7 @@ Type information for some third-party libraries is shipped in a stubs package se
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
 
-The default severity of this diagnostic is `ignore`.
+The default severity of this diagnostic is `warn`.
 
 ## unused-coroutine
 
@@ -3378,6 +3378,34 @@ imports by first searching for a relevant `-stubs` package, then by looking at
 the non-stubs package's `.pyi` files, then falls back to a `.py` file. See
 [Absolute Imports](#absolute-imports) for details on when non-stubs packages
 are allowed to be used for types, and how you can override that behavior.
+
+## Bundled Third Party Stubs
+
+Pyrefly bundles stubs for several popular third party libraries along with its binary which are
+used for type checking and IDE features. These bundled stubs have special import resolution rules which differ
+from how installed stubs might be treated. The decision tree below describes the scenarios in which third party stubs
+are used.
+
+
+```
+- Pyrefly config file present?
+   - Yes
+      - Is the package installed?
+         - Yes
+            - Are stubs installed by user?
+               - Yes
+                  Installed stubs are used.
+               - No
+                  UntypedImport error.
+         - No
+            MissingImport error.
+   - No
+      - Is the package installed?
+         - Yes
+            Bundled stubs used.
+         - No
+            MissingSourceForStubs error.
+```
 
 ## Editable Installs
 
