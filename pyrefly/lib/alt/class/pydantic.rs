@@ -556,9 +556,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         else {
             return;
         };
-        if constraints.is_empty() {
-            return;
-        }
 
         let infer_errors = self.error_swallower();
         let mut positional_index = 0;
