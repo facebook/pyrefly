@@ -517,6 +517,31 @@ impl Bindings {
             | SemanticSyntaxErrorKind::NonlocalWithoutBinding(_) => false,
         }
     }
+
+    #[cfg(test)]
+    pub fn for_test(name: &str) -> Self {
+        use pyrefly_python::module_name::ModuleName;
+        use pyrefly_python::module_path::ModulePath;
+        use crate::compat::ModuleInfo;
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        // Create a minimal ModuleInfo for testing
+        let module_name = ModuleName::from_str(name);
+        let module_path = ModulePath::filesystem(PathBuf::from(format!("/test/{}.py", name)));
+        let contents = Arc::new(String::new());
+
+        let module_info = ModuleInfo::new(module_name, module_path, contents);
+
+        Self(Arc::new(BindingsInner {
+            module_info,
+            table: Default::default(),
+            scope_trace: None,
+            unused_parameters: Vec::new(),
+            unused_imports: Vec::new(),
+            unused_variables: Vec::new(),
+        }))
+    }
 }
 
 impl BindingTable {
