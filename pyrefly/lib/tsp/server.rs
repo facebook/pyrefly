@@ -27,14 +27,14 @@ use crate::lsp::non_wasm::server::dispatch_lsp_events;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 
 /// TSP server that delegates to LSP server infrastructure while handling only TSP requests
-pub struct TspServer {
-    pub inner: Box<dyn TspInterface>,
+pub struct TspServer<T: TspInterface> {
+    pub inner: T,
     /// Current snapshot version, updated on RecheckFinished events
     pub(crate) current_snapshot: Arc<Mutex<i32>>,
 }
 
-impl TspServer {
-    pub fn new(lsp_server: Box<dyn TspInterface>) -> Self {
+impl<T: TspInterface> TspServer<T> {
+    pub fn new(lsp_server: T) -> Self {
         Self {
             inner: lsp_server,
             current_snapshot: Arc::new(Mutex::new(0)), // Start at 0, increments on RecheckFinished
@@ -135,7 +135,7 @@ impl TspServer {
 }
 
 pub fn tsp_loop(
-    lsp_server: Box<dyn TspInterface>,
+    lsp_server: impl TspInterface,
     _initialization_params: InitializeParams,
 ) -> anyhow::Result<()> {
     eprintln!("Reading TSP messages");

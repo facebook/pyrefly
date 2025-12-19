@@ -39,14 +39,14 @@ pub fn run_tsp(connection: Connection, args: TspArgs) -> anyhow::Result<()> {
 
     // Create an LSP server instance for the TSP server to use.
     let lsp_queue = LspQueue::new();
-    let lsp_server = Box::new(crate::lsp::non_wasm::server::Server::new(
+    let lsp_server = crate::lsp::non_wasm::server::Server::new(
         connection,
         lsp_queue,
         initialization_params.clone(),
         args.indexing_mode,
         args.workspace_indexing_limit,
         false,
-    ));
+    );
 
     // Reuse the existing lsp_loop but with TSP initialization
     tsp_loop(lsp_server, initialization_params)?;
