@@ -24,6 +24,9 @@ use anyhow::Context as _;
 use clap::Parser;
 use clap::ValueEnum;
 use dupe::Dupe as _;
+use percent_encoding::AsciiSet;
+use percent_encoding::CONTROLS;
+use percent_encoding::utf8_percent_encode;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::config::ConfigFile;
@@ -55,6 +58,7 @@ use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::error::print_error_counts;
 use crate::error::legacy::LegacyErrors;
+use crate::error::legacy::severity_to_str;
 use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
 use crate::module::typeshed::stdlib_search_path;
@@ -430,20 +434,26 @@ impl OutputFormat {
     }
 }
 
-fn should_emit_github_annotations() -> bool {
+fn should_emit_github_errors() -> bool {
     matches!(
         std::env::var("GITHUB_ACTIONS"),
         Ok(value) if value.eq_ignore_ascii_case("true")
     )
 }
 
+fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
+    let normalized = severity_to_str(severity);
+    match normalized.as_str() {
+        "ignore" => None,
+        "warn" => Some("warning"),
+        "info" => Some("notice"),
+        "error" => Some("error"),
+        _ => None,
+    }
+}
+
 fn github_actions_command(error: &Error, relative_to: &Path) -> Option<String> {
-    let command = match error.severity() {
-        Severity::Error => "error",
-        Severity::Warn => "warning",
-        Severity::Info => "notice",
-        Severity::Ignore => return None,
-    };
+    let command = severity_to_github_command(error.severity())?;
     let range = error.display_range();
     let file = github_actions_path(error.path().as_path(), relative_to);
     let params = format!(
@@ -458,6 +468,9 @@ fn github_actions_command(error: &Error, relative_to: &Path) -> Option<String> {
     let message = escape_workflow_data(&error.msg());
     Some(format!("::{command} {params}::{message}"))
 }
+
+const WORKFLOW_DATA_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'%');
+const WORKFLOW_PROPERTY_ENCODE_SET: &AsciiSet = &WORKFLOW_DATA_ENCODE_SET.add(b':').add(b',');
 
 fn github_actions_path(path: &Path, relative_to: &Path) -> String {
     let relative = if relative_to.as_os_str().is_empty() {
@@ -478,16 +491,11 @@ fn github_actions_path(path: &Path, relative_to: &Path) -> String {
 }
 
 fn escape_workflow_data(value: &str) -> String {
-    value
-        .replace('%', "%25")
-        .replace('\r', "%0D")
-        .replace('\n', "%0A")
+    utf8_percent_encode(value, WORKFLOW_DATA_ENCODE_SET).to_string()
 }
 
 fn escape_workflow_property(value: &str) -> String {
-    escape_workflow_data(value)
-        .replace(':', "%3A")
-        .replace(',', "%2C")
+    utf8_percent_encode(value, WORKFLOW_PROPERTY_ENCODE_SET).to_string()
 }
 
 #[cfg(test)]
@@ -956,7 +964,7 @@ impl CheckArgs {
                 .output_format
                 .write_errors_to_console(relative_to.as_path(), &shown_errors)?;
         }
-        if should_emit_github_annotations() && self.output.output_format != OutputFormat::Github {
+        if should_emit_github_errors() && self.output.output_format != OutputFormat::Github {
             OutputFormat::Github.write_errors_to_console(relative_to.as_path(), &shown_errors)?;
         }
         memory_trace.stop();
