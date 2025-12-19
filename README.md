@@ -1,7 +1,9 @@
 # Pyrefly: A fast type checker and language server for Python with powerful IDE features
 
 [![pyrefly](https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json)](https://github.com/facebook/pyrefly)
-[![PyPI](https://img.shields.io/pypi/v/pyrefly.svg?color=blue)](https://pypi.python.org/pypi/pyrefly)
+[![PyPI](https://img.shields.io/pypi/dm/pyrefly?color=blue&label=pypi)](https://pypi.python.org/pypi/pyrefly)
+[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/d/meta.pyrefly?color=blue&label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly)
+[![Open VSX](https://img.shields.io/open-vsx/dt/meta/pyrefly?color=blue&label=Open%20VSX)](https://open-vsx.org/extension/meta/pyrefly)
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?logo=discord&logoColor=white)](https://discord.gg/Cf7mFQtW7W)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
