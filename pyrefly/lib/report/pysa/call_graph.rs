@@ -2914,6 +2914,24 @@ impl<'a> CallGraphVisitor<'a> {
         expression_range: TextRange,
         object_type: &Type,
     ) -> CallCallees<FunctionRef> {
+        match callee_class {
+            Type::Union(box types) => {
+                // Handle union type separately, since each type of the union
+                // might resolve to a different method.
+                let mut callees = CallCallees::empty();
+                for type_ in types.members {
+                    callees.join_in_place(self.resolve_stringify_call(
+                        type_,
+                        callee_name.clone(),
+                        expression_range,
+                        object_type,
+                    ));
+                }
+                return callees;
+            }
+            _ => (),
+        }
+
         let mut callee_class = callee_class;
         let mut callee_name = callee_name;
         loop {

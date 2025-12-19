@@ -1617,6 +1617,49 @@ def foo(c: C):
 );
 
 call_graph_testcase!(
+    test_str_call_with_optional_class,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Optional
+class C:
+  def __repr__(self) -> str: ...
+def foo(c: Optional[C]):
+  str(c)
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "6:3-6:9",
+                    constructor_call_callees(
+                        vec![
+                            create_call_target("builtins.object.__init__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                        ],
+                        vec![
+                            create_call_target("builtins.str.__new__", TargetType::Function)
+                                .with_is_static_method(true),
+                        ],
+                    ),
+                ),
+                (
+                    "6:3-6:9|artificial-call|str-call-to-dunder-method",
+                    regular_call_callees(vec![
+                        create_call_target("test.C.__repr__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("test.C", context),
+                        create_call_target("builtins.object.__repr__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.object", context),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
     test_default_parameter_call,
     TEST_MODULE_NAME,
     r#"
