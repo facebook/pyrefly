@@ -13,6 +13,7 @@ use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
@@ -640,6 +641,7 @@ pub fn find_import_filtered(
             config.structured_import_lookup_path(origin),
             module,
             &config.source,
+            suggest_stdlib_import(module),
         ))
     }
 }
@@ -692,6 +694,23 @@ fn recommended_stubs_package(module: ModuleName) -> Option<ModuleName> {
         "django" => Some(ModuleName::from_str("django-stubs")),
         _ => None,
     }
+}
+
+/// Suggest a similar stdlib module name for a mistyped import.
+/// Uses Levenshtein distance to find the closest match from typeshed's stdlib modules.
+fn suggest_stdlib_import(missing: ModuleName) -> Option<ModuleName> {
+    let ts = typeshed().ok()?;
+    let missing_str = missing.as_str();
+
+    // For single-component module names, use best_suggestion with first component
+    // For multi-component, we compare full module name strings
+    let missing_name = Name::new(missing_str);
+
+    // Collect all stdlib module names and find the best suggestion
+    let candidates: Vec<Name> = ts.modules().map(|m| Name::new(m.as_str())).collect();
+
+    best_suggestion(&missing_name, candidates.iter().map(|c| (c, 0)))
+        .map(|suggestion| ModuleName::from_str(suggestion.as_str()))
 }
 
 #[cfg(test)]
@@ -1035,6 +1054,7 @@ mod tests {
                 config.structured_import_lookup_path(None),
                 ModuleName::from_str("spp_priority.d"),
                 &config.source,
+                None,
             )),
         );
     }
@@ -2242,5 +2262,39 @@ mod tests {
         } else {
             panic!("Expected Finding result for 'conans', got: {:?}", result);
         }
+    }
+
+    #[test]
+    fn test_suggest_stdlib_import() {
+        // Test that we suggest 'math' for 'mathh' (one character typo)
+        let suggestion = suggest_stdlib_import(ModuleName::from_str("mathh"));
+        assert_eq!(
+            suggestion,
+            Some(ModuleName::from_str("math")),
+            "Should suggest 'math' for 'mathh'"
+        );
+
+        // Test that we suggest 'os' for 'oss' (one character typo)
+        let suggestion = suggest_stdlib_import(ModuleName::from_str("oss"));
+        assert_eq!(
+            suggestion,
+            Some(ModuleName::from_str("os")),
+            "Should suggest 'os' for 'oss'"
+        );
+
+        // Test that we suggest 'json' for 'jsn' (missing character)
+        let suggestion = suggest_stdlib_import(ModuleName::from_str("jsn"));
+        assert_eq!(
+            suggestion,
+            Some(ModuleName::from_str("json")),
+            "Should suggest 'json' for 'jsn'"
+        );
+
+        // Test that we don't suggest for completely unrelated names
+        let suggestion = suggest_stdlib_import(ModuleName::from_str("xyzabc123"));
+        assert_eq!(
+            suggestion, None,
+            "Should not suggest for completely unrelated names"
+        );
     }
 }
