@@ -13,6 +13,7 @@ use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr::EllipsisLiteral;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -30,6 +31,7 @@ use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::pydantic::PydanticModelKind;
+use crate::alt::unwrap::HintRef;
 use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
 use crate::binding::pydantic::LE;
@@ -43,11 +45,13 @@ use crate::error::context::TypeCheckKind;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
+use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::class::Class;
+use crate::types::class::ClassType;
 use crate::types::display::ClassDisplayContext;
 use crate::types::keywords::ConverterMap;
 use crate::types::keywords::DataclassFieldKeywords;
@@ -178,6 +182,146 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fields.insert(dunder::HASH, ClassSynthesizedField::new(Type::None));
         }
         Some(ClassSynthesizedFields::new(fields))
+    }
+
+    pub fn call_dataclasses_replace(
+        &self,
+        replace_ty: &Type,
+        args: &[CallArg],
+        kws: &[CallKeyword],
+        callee_range: TextRange,
+        arg_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let Some(CallArg::Arg(obj_arg)) = args.first() else {
+            return self.freeform_call_infer(
+                replace_ty.clone(),
+                args,
+                kws,
+                callee_range,
+                arg_range,
+                hint,
+                errors,
+            );
+        };
+        let obj_ty = obj_arg.infer(self, errors);
+
+        let dataclass_metadata = |cls: &ClassType| {
+            let cls_metadata = self.get_metadata_for_class(cls.class_object());
+            cls_metadata.dataclass_metadata().cloned()
+        };
+
+        let mut dataclasses = Vec::new();
+        let mut non_dataclasses = Vec::new();
+        self.map_over_union(&obj_ty, |ty| match ty {
+            Type::ClassType(cls) if let Some(m) = dataclass_metadata(cls) => {
+                dataclasses.push((ty.clone(), cls.clone(), m))
+            }
+            _ => non_dataclasses.push(ty.clone()),
+        });
+
+        let args_with_first = |new_first_arg| {
+            let mut new_args = Vec::with_capacity(args.len());
+            new_args.push(CallArg::ty(new_first_arg, obj_arg.range()));
+            new_args.extend(args.iter().skip(1).cloned());
+            new_args
+        };
+
+        // For unions of dataclasses, typecheck each member individually. We treat the first argument
+        // as the member type to avoid rejecting `A | B` as not assignable to `A`.
+        let mut rets = dataclasses.map(|(ty, cls, m)| {
+            let callable = self.build_replace_callable(cls, m, errors);
+            let member_args = args_with_first(ty);
+            self.callable_infer(
+                callable,
+                Some(&FunctionKind::DataclassReplace),
+                None,
+                None,
+                &member_args,
+                kws,
+                arg_range,
+                errors,
+                errors,
+                None,
+                None,
+                None,
+            )
+        });
+        if !non_dataclasses.is_empty() {
+            rets.push(self.freeform_call_infer(
+                replace_ty.clone(),
+                &args_with_first(&self.unions(non_dataclasses)),
+                kws,
+                callee_range,
+                arg_range,
+                hint,
+                errors,
+            ));
+        }
+        self.unions(rets)
+    }
+
+    fn build_replace_callable(
+        &self,
+        dataclass_type: &ClassType,
+        dataclass_metadata: &DataclassMetadata,
+        errors: &ErrorCollector,
+    ) -> Callable {
+        let self_type = dataclass_type.clone().to_type();
+        let mut params = vec![Param::PosOnly(
+            Some(Name::new_static("obj")),
+            self_type.clone(),
+            Required::Required,
+        )];
+
+        let subst = dataclass_type.targs().substitution_map();
+        let type_transform = |mut ty: Type| {
+            ty.subst_self_type_mut(&self_type);
+            ty.subst_mut(&subst);
+            ty
+        };
+
+        let strict_default = dataclass_metadata.kws.strict;
+        for (name, field, field_flags) in
+            self.iter_fields(dataclass_type.class_object(), dataclass_metadata, true)
+        {
+            if !field_flags.init {
+                continue;
+            }
+
+            let strict = field_flags.strict.unwrap_or(strict_default);
+            let has_default = !field.is_init_var() || field_flags.default.is_some();
+            if field_flags.init_by_name {
+                params.push(self.as_param(
+                    &field,
+                    &name,
+                    has_default,
+                    true,
+                    strict,
+                    field_flags.converter_param.clone(),
+                    &type_transform,
+                    errors,
+                ));
+            }
+            if let Some(alias) = &field_flags.init_by_alias {
+                params.push(self.as_param(
+                    &field,
+                    alias,
+                    has_default,
+                    true,
+                    strict,
+                    field_flags.converter_param.clone(),
+                    &type_transform,
+                    errors,
+                ));
+            }
+        }
+        if dataclass_metadata.kws.extra {
+            params.push(Param::Kwargs(None, Type::Any(AnyStyle::Implicit)));
+        }
+
+        Callable::list(ParamList::new(params), dataclass_type.clone().to_type())
     }
 
     pub fn validate_frozen_dataclass_inheritance(
