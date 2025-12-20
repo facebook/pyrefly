@@ -420,6 +420,14 @@ impl<'a> BindingsBuilder<'a> {
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
+        if name.id.as_str().is_empty() || name.range.is_empty() {
+            // Parser error recovery can synthesize walrus targets with empty identifiers.
+            // Pretend the name binding succeeded so we still analyze the RHS, but skip
+            // putting an entry into the flow-sensitive scope to avoid panics later.
+            let binding = make_binding(assigned.as_deref(), None);
+            self.insert_binding_current(user, binding);
+            return;
+        }
         let ann = self.bind_current(&name.id, &user, FlowStyle::Other);
         let binding = make_binding(assigned.as_deref(), ann);
         self.insert_binding_current(user, binding);
