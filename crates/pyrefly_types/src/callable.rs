@@ -884,6 +884,8 @@ pub enum FunctionKind {
     ),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
     UsesShapeDsl,
+    /// `sqlalchemy.orm.mapped_column()`
+    SqlAlchemyMappedColumn,
 }
 
 impl Callable {
@@ -1260,6 +1262,10 @@ impl FunctionKind {
             ("numba.core.decorators", None, "jit") => Self::NumbaJit,
             ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
             ("shape_extensions", None, "uses_shape_dsl") => Self::UsesShapeDsl,
+            ("sqlalchemy.orm", None, "mapped_column")
+            | ("sqlalchemy.orm._orm_constructors", None, "mapped_column") => {
+                Self::SqlAlchemyMappedColumn
+            }
             _ => Self::Def(Arc::new(FuncId {
                 module,
                 cls,
@@ -1292,6 +1298,7 @@ impl FunctionKind {
             Self::DisjointBase => ModuleName::typing(),
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
+            Self::SqlAlchemyMappedColumn => ModuleName::from_str("sqlalchemy.orm"),
             Self::Def(func_id) => func_id.module.name().dupe(),
             Self::ShapeDsl(id, _, _) => id.module.name().dupe(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
@@ -1320,6 +1327,7 @@ impl FunctionKind {
             Self::DisjointBase => Cow::Owned(Name::new_static("disjoint_base")),
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
+            Self::SqlAlchemyMappedColumn => Cow::Owned(Name::new_static("mapped_column")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
             Self::ShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
@@ -1344,6 +1352,7 @@ impl FunctionKind {
             Self::RuntimeCheckable => None,
             Self::NumbaJit => None,
             Self::NumbaNjit => None,
+            Self::SqlAlchemyMappedColumn => None,
             Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
             Self::AbstractMethod => None,
             Self::TotalOrdering => None,

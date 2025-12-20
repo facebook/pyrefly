@@ -249,7 +249,9 @@ impl ClassKind {
             ("enum", "property") => Self::Property(name.clone()),
             ("enum", "member") => Self::EnumMember,
             ("enum", "nonmember") => Self::EnumNonmember,
-            ("dataclasses", "Field") => Self::DataclassField,
+            ("dataclasses", "Field")
+            | ("sqlalchemy.orm", "MappedColumn")
+            | ("sqlalchemy.orm.properties", "MappedColumn") => Self::DataclassField,
             _ => Self::Class,
         }
     }
