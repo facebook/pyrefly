@@ -68,6 +68,7 @@ pub enum SpecialExport {
     BuiltinsFrozenset,
     BuiltinsFloat,
     Deprecated,
+    SqlAlchemyMappedColumn,
     Final,
     TypingMapping,
     TypeForm,
@@ -139,6 +140,7 @@ impl SpecialExport {
             "frozenset" => Some(Self::BuiltinsFrozenset),
             "float" => Some(Self::BuiltinsFloat),
             "deprecated" => Some(Self::Deprecated),
+            "mapped_column" => Some(Self::SqlAlchemyMappedColumn),
             "Final" => Some(Self::Final),
             "Mapping" => Some(Self::TypingMapping),
             "TypeForm" => Some(Self::TypeForm),
@@ -228,6 +230,12 @@ impl SpecialExport {
             Self::ProxyMethod => matches!(m.as_str(), "shape_extensions"),
             Self::Sentinel => matches!(m.as_str(), "typing_extensions"),
             Self::BuiltinsSentinel => matches!(m.as_str(), "builtins"),
+            Self::SqlAlchemyMappedColumn => {
+                matches!(
+                    m.as_str(),
+                    "sqlalchemy.orm" | "sqlalchemy.orm._orm_constructors"
+                )
+            }
             Self::AttrsLegacyAttrib | Self::AttrsNextGenField | Self::AttrsNothing => {
                 matches!(m.as_str(), "attr" | "attrs")
             }

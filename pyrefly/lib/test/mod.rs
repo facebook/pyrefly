@@ -72,6 +72,7 @@ mod semantic_syntax_errors;
 mod sentinel;
 mod shape_dsl;
 mod simple;
+mod sqlalchemy;
 mod slots;
 mod state;
 mod subscript_narrow;
