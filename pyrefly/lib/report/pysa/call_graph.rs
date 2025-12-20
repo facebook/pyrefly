@@ -45,6 +45,7 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::InterpolatedElement;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtAugAssign;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFor;
 use ruff_python_ast::StmtFunctionDef;
@@ -102,6 +103,7 @@ pub enum OriginKind {
     SubscriptGetItem,
     SubscriptSetItem,
     BinaryOperator,
+    AugmentedAssignDunderCall,
     ForIter,
     ForNext,
     ReprCall,
@@ -121,6 +123,7 @@ impl std::fmt::Display for OriginKind {
             Self::SubscriptGetItem => write!(f, "subscript-get-item"),
             Self::SubscriptSetItem => write!(f, "subscript-set-item"),
             Self::BinaryOperator => write!(f, "binary"),
+            Self::AugmentedAssignDunderCall => write!(f, "augmented-assign-dunder-call"),
             Self::ForIter => write!(f, "for-iter"),
             Self::ForNext => write!(f, "for-next"),
             Self::ReprCall => write!(f, "repr-call"),
@@ -648,6 +651,14 @@ impl<Function: FunctionTrait> CallCallees<Function> {
             && self.init_targets.is_empty()
             && self.new_targets.is_empty()
             && self.higher_order_parameters.is_empty()
+    }
+
+    fn is_resolved(&self) -> bool {
+        self.unresolved == Unresolved::False
+    }
+
+    fn is_partially_resolved(&self) -> bool {
+        !self.is_empty() || self.is_resolved()
     }
 
     pub fn all_targets(&self) -> impl Iterator<Item = &CallTarget<Function>> {
@@ -3053,6 +3064,53 @@ impl<'a> CallGraphVisitor<'a> {
         self.add_callees(identifier, ExpressionCallees::Call(callees));
     }
 
+    fn resolve_and_register_augmented_assign(&mut self, aug_assign: &StmtAugAssign) {
+        let lhs_range = aug_assign.target.range();
+        let lhs_type = self.module_context.answers.get_type_trace(lhs_range);
+        let rhs_range = aug_assign.value.range();
+        let rhs_type = self.module_context.answers.get_type_trace(rhs_range);
+
+        // Try in-place dunder first (e.g., __iadd__), then regular dunder (e.g., __add__),
+        // then reflected dunder (e.g., __radd__) on the rhs. This mirrors the runtime behavior.
+        let calls_to_try = [
+            (
+                aug_assign.op.in_place_dunder(),
+                lhs_type.as_ref(),
+                lhs_range,
+            ),
+            (aug_assign.op.dunder(), lhs_type.as_ref(), lhs_range),
+            (
+                aug_assign.op.reflected_dunder(),
+                rhs_type.as_ref(),
+                rhs_range,
+            ),
+        ];
+
+        let mut callees = CallCallees::empty();
+        for (callee_name, base_type, range) in calls_to_try {
+            callees = self
+                .call_targets_from_magic_dunder_attr(
+                    /* base */ base_type,
+                    /* attribute */ Some(&Name::new_static(callee_name)),
+                    range,
+                    /* callee_expr */ None,
+                    /* unknown_callee_as_direct_call */ true,
+                    "resolve_and_register_augmented_assign",
+                    /* exclude_object_methods */ false,
+                )
+                .callees;
+            if callees.is_partially_resolved() {
+                break;
+            }
+        }
+
+        let identifier = ExpressionIdentifier::ArtificialCall(Origin {
+            kind: OriginKind::AugmentedAssignDunderCall,
+            location: self.pysa_location(aug_assign.range()),
+        });
+        self.add_callees(identifier, ExpressionCallees::Call(callees));
+    }
+
     fn resolve_and_register_slice(&mut self, slice: &ExprSlice) {
         let slice_class = self.module_context.stdlib.slice_class_object();
         let slice_class_type =
@@ -3522,6 +3580,7 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
             Stmt::FunctionDef(function_def) => self.resolve_and_register_function_def(function_def),
             Stmt::With(stmt_with) => self.resolve_and_register_with_statement(stmt_with),
             Stmt::For(stmt_for) => self.resolve_and_register_for_statement(stmt_for),
+            Stmt::AugAssign(aug_assign) => self.resolve_and_register_augmented_assign(aug_assign),
             _ => {}
         }
     }

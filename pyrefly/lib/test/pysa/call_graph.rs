@@ -6110,3 +6110,120 @@ def foo():
         )]
     }
 );
+
+call_graph_testcase!(
+    test_augmented_assign_iadd,
+    TEST_MODULE_NAME,
+    r#"
+def foo():
+  x = 1
+  x += 1
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "4:3-4:9|artificial-call|augmented-assign-dunder-call",
+                regular_call_callees(vec![
+                    create_call_target("builtins.int.__add__", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.int", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_augmented_assign_isub,
+    TEST_MODULE_NAME,
+    r#"
+def foo():
+  x = 1
+  x -= 1
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "4:3-4:9|artificial-call|augmented-assign-dunder-call",
+                regular_call_callees(vec![
+                    create_call_target("builtins.int.__sub__", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.int", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_augmented_assign_list_iadd,
+    TEST_MODULE_NAME,
+    r#"
+def foo():
+  x = [1, 2]
+  x += [3]
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "4:3-4:11|artificial-call|augmented-assign-dunder-call",
+                regular_call_callees(vec![
+                    create_call_target("builtins.list.__iadd__", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.list", context),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_augmented_assign_custom_class,
+    TEST_MODULE_NAME,
+    r#"
+class Counter:
+    def __init__(self, value: int) -> None:
+        self.value = value
+    def __iadd__(self, other: int) -> "Counter":
+        self.value += other
+        return self
+
+def foo():
+    c = Counter(0)
+    c += 1
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "10:9-10:19",
+                    constructor_call_callees(
+                        vec![
+                            create_call_target("test.Counter.__init__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                                .with_receiver_class_for_test("test.Counter", context),
+                        ],
+                        vec![
+                            create_call_target("builtins.object.__new__", TargetType::Function)
+                                .with_is_static_method(true),
+                        ],
+                    ),
+                ),
+                (
+                    "11:5-11:11|artificial-call|augmented-assign-dunder-call",
+                    regular_call_callees(vec![
+                        create_call_target("test.Counter.__iadd__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("test.Counter", context),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
