@@ -109,6 +109,13 @@ pub enum OriginKind {
     ReprCall,
     StrCallToDunderMethod,
     Slice,
+    ChainedAssign {
+        index: usize,
+    },
+    Nested {
+        head: Box<OriginKind>,
+        tail: Box<OriginKind>,
+    },
 }
 
 impl std::fmt::Display for OriginKind {
@@ -129,6 +136,11 @@ impl std::fmt::Display for OriginKind {
             Self::ReprCall => write!(f, "repr-call"),
             Self::StrCallToDunderMethod => write!(f, "str-call-to-dunder-method"),
             Self::Slice => write!(f, "slice"),
+            Self::ChainedAssign { index } => write!(f, "chained-assign:{}", index),
+            Self::Nested {
+                head: box head,
+                tail: box tail,
+            } => write!(f, "{}>{}", tail, head),
         }
     }
 }
@@ -2878,27 +2890,69 @@ impl<'a> CallGraphVisitor<'a> {
     fn resolve_and_register_subscript(
         &mut self,
         subscript: &ExprSubscript,
-        assignment_targets: Option<&[Expr]>,
-        current_statement_location: Option<TextRange>,
+        current_statement: Option<&Stmt>,
     ) {
         let subscript_range = subscript.range();
-        let is_assignment_target = assignment_targets.is_some_and(|assignment_targets| {
-            assignment_targets
+        let (callee_name, origin) = match current_statement {
+            Some(Stmt::Assign(assign)) if assign.targets.len() > 1 => assign
+                .targets
                 .iter()
-                .any(|assignment_target| assignment_target.range() == subscript_range)
-        });
-        let (callee_name, origin_kind, callee_location) = if is_assignment_target {
-            (
+                .enumerate()
+                .find_map(|(index, target)| {
+                    if target.range() == subscript.range {
+                        Some((
+                            dunder::SETITEM,
+                            Origin {
+                                kind: OriginKind::Nested {
+                                    head: Box::new(OriginKind::SubscriptSetItem),
+                                    tail: Box::new(OriginKind::ChainedAssign { index }),
+                                },
+                                location: self.pysa_location(assign.range()),
+                            },
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or((
+                    dunder::GETITEM,
+                    Origin {
+                        kind: OriginKind::SubscriptGetItem,
+                        location: self.pysa_location(subscript_range),
+                    },
+                )),
+            Some(Stmt::Assign(assign))
+                if assign.targets.len() == 1 && assign.targets[0].range() == subscript_range =>
+            {
+                (
+                    dunder::SETITEM,
+                    Origin {
+                        kind: OriginKind::SubscriptSetItem,
+                        location: self.pysa_location(assign.range()),
+                    },
+                )
+            }
+            Some(Stmt::AugAssign(assign)) if assign.target.range() == subscript_range => (
                 dunder::SETITEM,
-                OriginKind::SubscriptSetItem,
-                current_statement_location.unwrap(),
-            )
-        } else {
-            (
+                Origin {
+                    kind: OriginKind::SubscriptSetItem,
+                    location: self.pysa_location(assign.range()),
+                },
+            ),
+            Some(Stmt::AnnAssign(assign)) if assign.target.range() == subscript_range => (
+                dunder::SETITEM,
+                Origin {
+                    kind: OriginKind::SubscriptSetItem,
+                    location: self.pysa_location(assign.range()),
+                },
+            ),
+            _ => (
                 dunder::GETITEM,
-                OriginKind::SubscriptGetItem,
-                subscript_range,
-            )
+                Origin {
+                    kind: OriginKind::SubscriptGetItem,
+                    location: self.pysa_location(subscript_range),
+                },
+            ),
         };
         let value_range = subscript.value.range();
         let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
@@ -2914,10 +2968,7 @@ impl<'a> CallGraphVisitor<'a> {
             "resolve_expression_for_subscript",
             /* exclude_object_methods */ false,
         );
-        let identifier = ExpressionIdentifier::ArtificialCall(Origin {
-            kind: origin_kind,
-            location: self.pysa_location(callee_location),
-        });
+        let identifier = ExpressionIdentifier::ArtificialCall(origin);
         self.add_callees(identifier, ExpressionCallees::Call(callees))
     }
 
@@ -3268,11 +3319,7 @@ impl<'a> CallGraphVisitor<'a> {
                     "Resolving callees for subscript `{}`",
                     expr.display_with(self.module_context)
                 );
-                self.resolve_and_register_subscript(
-                    subscript,
-                    assignment_targets(current_statement),
-                    current_statement.map(|stmt| stmt.range()),
-                );
+                self.resolve_and_register_subscript(subscript, current_statement);
             }
             Expr::FString(fstring) => {
                 debug_println!(

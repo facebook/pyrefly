@@ -3471,6 +3471,40 @@ def fun(d: typing.Dict[str, int], e: typing.Dict[str, typing.Dict[str, int]]):
 );
 
 call_graph_testcase!(
+    test_dict_subscript_setitem_in_multi_assign,
+    TEST_MODULE_NAME,
+    r#"
+class LogRecord:
+    arg: dict[str, object]
+def foo(log: LogRecord):
+  x = log.arg["foo"] = {**log.arg["foo"]}
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "5:27-5:41|artificial-call|subscript-get-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.dict.__getitem__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.dict", context),
+                    ]),
+                ),
+                (
+                    "5:3-5:42|artificial-call|chained-assign:1>subscript-set-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.dict.__setitem__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.dict", context),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
     test_method_call_in_f_string,
     TEST_MODULE_NAME,
     r#"
