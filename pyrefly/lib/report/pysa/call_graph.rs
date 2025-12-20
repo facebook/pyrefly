@@ -1241,22 +1241,22 @@ fn assignment_targets(statement: Option<&Stmt>) -> Option<&[Expr]> {
 }
 
 // Invariant: `method` must not exist in the MRO of `class` that excludes `object`
-fn string_conversion_redirection(
-    class: Type,
+fn string_conversion_redirection<'a>(
+    class: &'a Type,
     method: Name,
-    object_type: &Type,
-) -> Option<(Type, Name)> {
-    if class == *object_type && (method == dunder::FORMAT || method == dunder::STR) {
+    object_type: &'a Type,
+) -> Option<(&'a Type, Name)> {
+    if class == object_type && (method == dunder::FORMAT || method == dunder::STR) {
         // `object.__format__` is implemented as calling `object.__str__`, which calls `object.__repr__`
         Some((class, dunder::REPR))
-    } else if class == *object_type {
+    } else if class == object_type {
         // Ensure the redirection call chain terminates
         None
     } else if method == dunder::STR {
         // Technically this redirects to `object.__str__`, which calls `obj.__repr__`
         Some((class, dunder::REPR))
     } else if method == dunder::REPR || method == dunder::ASCII {
-        Some((object_type.clone(), dunder::REPR))
+        Some((object_type, dunder::REPR))
     } else if method == dunder::FORMAT {
         // Technically this redirects to `object.__format__`, whose implementation
         // however is always `str(obj)`
@@ -2921,6 +2921,40 @@ impl<'a> CallGraphVisitor<'a> {
         self.add_callees(identifier, ExpressionCallees::Call(callees))
     }
 
+    fn distribute_over_union(
+        &self,
+        ty: &Type,
+        f: impl Fn(&Type) -> CallCallees<FunctionRef>,
+    ) -> CallCallees<FunctionRef> {
+        match ty {
+            Type::Union(box Union { members, .. }) => {
+                let mut callees = CallCallees::empty();
+                for type_ in members {
+                    callees.join_in_place(f(type_));
+                }
+                callees
+            }
+            _ => f(ty),
+        }
+    }
+
+    fn distribute_over_optional_union(
+        &self,
+        ty: Option<&Type>,
+        f: impl Fn(Option<&Type>) -> CallCallees<FunctionRef>,
+    ) -> CallCallees<FunctionRef> {
+        match ty {
+            Some(Type::Union(box Union { members, .. })) => {
+                let mut callees = CallCallees::empty();
+                for type_ in members {
+                    callees.join_in_place(f(Some(type_)));
+                }
+                callees
+            }
+            _ => f(ty),
+        }
+    }
+
     fn resolve_stringify_call(
         &self,
         callee_class: Type,
@@ -2928,50 +2962,34 @@ impl<'a> CallGraphVisitor<'a> {
         expression_range: TextRange,
         object_type: &Type,
     ) -> CallCallees<FunctionRef> {
-        match callee_class {
-            Type::Union(box types) => {
-                // Handle union type separately, since each type of the union
-                // might resolve to a different method.
-                let mut callees = CallCallees::empty();
-                for type_ in types.members {
-                    callees.join_in_place(self.resolve_stringify_call(
-                        type_,
-                        callee_name.clone(),
-                        expression_range,
-                        object_type,
-                    ));
+        self.distribute_over_union(&callee_class, |callee_class| {
+            let mut callee_class = callee_class;
+            let mut callee_name = callee_name.clone();
+            loop {
+                let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
+                    /* base */ Some(callee_class),
+                    /* attribute */ Some(&callee_name),
+                    expression_range,
+                    /* callee_expr */ None,
+                    /* unknown_callee_as_direct_call */ true,
+                    "resolve_stringify_call",
+                    /* exclude_object_methods */ true,
+                );
+                let should_redirect = callees.unresolved
+                    == Unresolved::True(UnresolvedReason::UnresolvedMagicDunderAttr)
+                    || callees.unresolved
+                        == Unresolved::True(UnresolvedReason::ClassFieldOnlyExistInObject);
+                if should_redirect
+                    && let Some((new_callee_class, new_callee_name)) =
+                        string_conversion_redirection(callee_class, callee_name, object_type)
+                {
+                    callee_class = new_callee_class;
+                    callee_name = new_callee_name;
+                } else {
+                    return callees;
                 }
-                return callees;
             }
-            _ => (),
-        }
-
-        let mut callee_class = callee_class;
-        let mut callee_name = callee_name;
-        loop {
-            let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
-                /* base */ Some(&callee_class),
-                /* attribute */ Some(&callee_name),
-                expression_range,
-                /* callee_expr */ None,
-                /* unknown_callee_as_direct_call */ true,
-                "resolve_stringify_call",
-                /* exclude_object_methods */ true,
-            );
-            let should_redirect = callees.unresolved
-                == Unresolved::True(UnresolvedReason::UnresolvedMagicDunderAttr)
-                || callees.unresolved
-                    == Unresolved::True(UnresolvedReason::ClassFieldOnlyExistInObject);
-            if should_redirect
-                && let Some((new_callee_class, new_callee_name)) =
-                    string_conversion_redirection(callee_class, callee_name, object_type)
-            {
-                callee_class = new_callee_class;
-                callee_name = new_callee_name;
-            } else {
-                return callees;
-            }
-        }
+        })
     }
 
     fn resolve_interpolation(
@@ -3007,25 +3025,12 @@ impl<'a> CallGraphVisitor<'a> {
             let expression_range = interpolation.expression.range();
             let callee_class = self.module_context.answers.get_type_trace(expression_range);
             let callees = if let Some(callee_class) = callee_class {
-                let callee_classes = match callee_class {
-                    Type::Union(types) => types.members,
-                    _ => vec![callee_class],
-                };
-                callee_classes
-                    .into_iter()
-                    .map(|callee_class| {
-                        self.resolve_interpolation(
-                            interpolation,
-                            callee_class,
-                            expression_range,
-                            &object_type,
-                        )
-                    })
-                    .reduce(|mut so_far, call_target| {
-                        so_far.join_in_place(call_target);
-                        so_far
-                    })
-                    .unwrap()
+                self.resolve_interpolation(
+                    interpolation,
+                    callee_class,
+                    expression_range,
+                    &object_type,
+                )
             } else {
                 CallCallees::new_unresolved(UnresolvedReason::UnresolvedMagicDunderAttrDueToNoBase)
             };
@@ -3070,39 +3075,37 @@ impl<'a> CallGraphVisitor<'a> {
         let rhs_range = aug_assign.value.range();
         let rhs_type = self.module_context.answers.get_type_trace(rhs_range);
 
-        // Try in-place dunder first (e.g., __iadd__), then regular dunder (e.g., __add__),
-        // then reflected dunder (e.g., __radd__) on the rhs. This mirrors the runtime behavior.
-        let calls_to_try = [
-            (
-                aug_assign.op.in_place_dunder(),
-                lhs_type.as_ref(),
-                lhs_range,
-            ),
-            (aug_assign.op.dunder(), lhs_type.as_ref(), lhs_range),
-            (
-                aug_assign.op.reflected_dunder(),
-                rhs_type.as_ref(),
-                rhs_range,
-            ),
-        ];
+        let callees = self.distribute_over_optional_union(lhs_type.as_ref(), |lhs_type| {
+            self.distribute_over_optional_union(rhs_type.as_ref(), |rhs_type| {
+                // Try in-place dunder first (e.g., __iadd__), then regular dunder (e.g., __add__),
+                // then reflected dunder (e.g., __radd__) on the rhs. This mirrors the runtime behavior.
+                let calls_to_try = [
+                    (aug_assign.op.in_place_dunder(), lhs_type, lhs_range),
+                    (aug_assign.op.dunder(), lhs_type, lhs_range),
+                    (aug_assign.op.reflected_dunder(), rhs_type, rhs_range),
+                ];
 
-        let mut callees = CallCallees::empty();
-        for (callee_name, base_type, range) in calls_to_try {
-            callees = self
-                .call_targets_from_magic_dunder_attr(
-                    /* base */ base_type,
-                    /* attribute */ Some(&Name::new_static(callee_name)),
-                    range,
-                    /* callee_expr */ None,
-                    /* unknown_callee_as_direct_call */ true,
-                    "resolve_and_register_augmented_assign",
-                    /* exclude_object_methods */ false,
-                )
-                .callees;
-            if callees.is_partially_resolved() {
-                break;
-            }
-        }
+                let mut callees = CallCallees::empty();
+                for (callee_name, base_type, range) in calls_to_try {
+                    callees = self
+                        .call_targets_from_magic_dunder_attr(
+                            /* base */ base_type,
+                            /* attribute */ Some(&Name::new_static(callee_name)),
+                            range,
+                            /* callee_expr */ None,
+                            /* unknown_callee_as_direct_call */ true,
+                            "resolve_and_register_augmented_assign",
+                            /* exclude_object_methods */ false,
+                        )
+                        .callees;
+                    if callees.is_partially_resolved() {
+                        break;
+                    }
+                }
+
+                callees
+            })
+        });
 
         let identifier = ExpressionIdentifier::ArtificialCall(Origin {
             kind: OriginKind::AugmentedAssignDunderCall,
