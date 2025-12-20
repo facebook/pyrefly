@@ -299,9 +299,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             hint,
             errors,
         );
-        let Some(python_type) = self.sqlalchemy_mapped_column_python_type(call) else {
+        let Some(mut python_type) = self.sqlalchemy_mapped_column_python_type(call) else {
             return ret;
         };
+        if self.sqlalchemy_mapped_column_is_nullable(call) {
+            python_type = Type::optional(python_type);
+        }
         self.apply_sqlalchemy_mapped_python_type(ret, python_type)
     }
 
@@ -321,6 +324,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         None
+    }
+
+    fn sqlalchemy_mapped_column_is_nullable(&self, call: &ExprCall) -> bool {
+        let mut nullable = true;
+        let mut primary_key = false;
+        for keyword in &call.arguments.keywords {
+            let Some(arg) = &keyword.arg else {
+                continue;
+            };
+            match arg.as_str() {
+                "nullable" => {
+                    if let Some(value) = Self::expr_bool_literal(&keyword.value) {
+                        nullable = value;
+                    }
+                }
+                "primary_key" => {
+                    if let Some(value) = Self::expr_bool_literal(&keyword.value) {
+                        primary_key = value;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if primary_key { false } else { nullable }
+    }
+
+    fn expr_bool_literal(expr: &Expr) -> Option<bool> {
+        match expr {
+            Expr::BooleanLiteral(value) => Some(value.value),
+            _ => None,
+        }
     }
 
     fn python_type_from_type_engine_expr(&self, expr: &Expr) -> Option<Type> {

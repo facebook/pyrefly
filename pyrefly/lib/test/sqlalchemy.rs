@@ -87,7 +87,11 @@ from .properties import MappedColumn
 
 __all__ = ["MappedColumn", "mapped_column"]
 
-def mapped_column(type_: TypeEngine[Any] | type[TypeEngine[Any]] | None = None) -> MappedColumn[Any]:
+def mapped_column(
+    type_: TypeEngine[Any] | type[TypeEngine[Any]] | None = None,
+    *args: Any,
+    **kw: Any,
+) -> MappedColumn[Any]:
     return MappedColumn()
 "#,
     );
@@ -105,8 +109,12 @@ from sqlalchemy.sql.sqltypes import Integer, String
 class Model:
     name = mapped_column(String())
     quantity = mapped_column(Integer)
+    sku = mapped_column(String(), nullable=False)
+    pk = mapped_column(Integer, primary_key=True)
 
-reveal_type(Model.name)  # E: revealed type: MappedColumn[str]
-reveal_type(Model.quantity)  # E: revealed type: MappedColumn[int]
+reveal_type(Model.name)  # E: revealed type: MappedColumn[str | None]
+reveal_type(Model.quantity)  # E: revealed type: MappedColumn[int | None]
+reveal_type(Model.sku)  # E: revealed type: MappedColumn[str]
+reveal_type(Model.pk)  # E: revealed type: MappedColumn[int]
 "#,
 );
