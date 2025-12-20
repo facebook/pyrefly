@@ -309,7 +309,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn sqlalchemy_mapped_column_python_type(&self, call: &ExprCall) -> Option<Type> {
-        // mapped_column's first two positional arguments correspond to the name/type.
+        // Check up to the first two positional arguments for a SQLAlchemy TypeEngine-derived column type.
         for expr in call.arguments.args.iter().take(2) {
             if let Some(ty) = self.python_type_from_type_engine_expr(expr) {
                 return Some(ty);
