@@ -1184,10 +1184,13 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         narrow_ops: &NarrowOps,
         use_location: NarrowUseLocation,
-        usage: &mut Usage,
+        usage: &Usage,
     ) {
         for (name, (op, op_range)) in narrow_ops.0.iter_hashed() {
-            if let Some(initial_idx) = self.lookup_name(name, usage).found() {
+            if let Some(initial_idx) = self
+                .lookup_name(name, &mut Usage::narrowing_from(usage))
+                .found()
+            {
                 let narrowed_idx = self.insert_binding(
                     Key::Narrow(name.into_key().clone(), *op_range, use_location),
                     Binding::Narrow(initial_idx, Box::new(op.clone()), use_location),

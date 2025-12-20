@@ -123,7 +123,7 @@ impl<'a> BindingsBuilder<'a> {
             self.bind_narrow_ops(
                 &negated_narrow_ops,
                 NarrowUseLocation::Span(msg_expr.range()),
-                &mut Usage::Narrowing(None),
+                &Usage::Narrowing(None),
             );
             let mut msg = self.declare_current_idx(Key::UsageLink(msg_expr.range()));
             self.ensure_expr(&mut msg_expr, msg.usage());
@@ -137,7 +137,7 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_narrow_ops(
             &narrow_ops,
             NarrowUseLocation::Span(assert_range),
-            &mut Usage::Narrowing(None),
+            &Usage::Narrowing(None),
         );
         if let Some(false) = static_test {
             self.scopes.mark_flow_termination();
@@ -748,7 +748,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.bind_narrow_ops(
                     &narrow_ops,
                     NarrowUseLocation::Span(x.range),
-                    &mut Usage::Narrowing(None),
+                    &Usage::Narrowing(None),
                 );
                 self.insert_binding(KeyExpect(x.test.range()), BindingExpect::Bool(*x.test));
                 self.stmts(x.body, parent);
@@ -778,7 +778,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_narrow_ops(
                         &negated_prev_ops,
                         NarrowUseLocation::Start(range),
-                        &mut Usage::Narrowing(None),
+                        &Usage::Narrowing(None),
                     );
                     // If there is no test, it's an `else` clause and `this_branch_chosen` will be true.
                     let this_branch_chosen = match &test {
@@ -804,7 +804,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_narrow_ops(
                         &new_narrow_ops,
                         NarrowUseLocation::Span(range),
-                        &mut Usage::Narrowing(None),
+                        &Usage::Narrowing(None),
                     );
                     negated_prev_ops.and_all(new_narrow_ops.negate());
                     self.stmts(body, parent);

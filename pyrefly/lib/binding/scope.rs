@@ -2805,7 +2805,7 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_narrow_ops(
             &narrow_ops.negate(),
             NarrowUseLocation::Span(other_range),
-            &mut Usage::Narrowing(None),
+            &Usage::Narrowing(None),
         );
         self.stmts(orelse, parent);
         // Exiting from a break skips past any `else`, so we merge them after, and the
@@ -2907,7 +2907,7 @@ impl<'a> BindingsBuilder<'a> {
                 negated_prev_ops,
                 // Generate a range that is distinct from other use_ranges of the same narrow.
                 NarrowUseLocation::End(fork.range),
-                &mut Usage::Narrowing(None),
+                &Usage::Narrowing(None),
             );
             self.merge_flow(fork.base, branches, fork.range, MergeStyle::Inclusive);
         } else {
