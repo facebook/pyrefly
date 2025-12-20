@@ -513,6 +513,8 @@ pub enum FunctionKind {
     NumbaJit,
     /// `numba.njit()`
     NumbaNjit,
+    /// `sqlalchemy.orm.mapped_column()`
+    SqlAlchemyMappedColumn,
 }
 
 impl Callable {
@@ -860,6 +862,10 @@ impl FunctionKind {
             ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
             ("numba.core.decorators", None, "jit") => Self::NumbaJit,
             ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
+            ("sqlalchemy.orm", None, "mapped_column")
+            | ("sqlalchemy.orm._orm_constructors", None, "mapped_column") => {
+                Self::SqlAlchemyMappedColumn
+            }
             _ => Self::Def(Box::new(FuncId {
                 module,
                 cls,
@@ -890,6 +896,7 @@ impl FunctionKind {
             Self::DisjointBase => ModuleName::typing(),
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
+            Self::SqlAlchemyMappedColumn => ModuleName::from_str("sqlalchemy.orm"),
             Self::Def(func_id) => func_id.module.name().dupe(),
         }
     }
@@ -916,6 +923,7 @@ impl FunctionKind {
             Self::DisjointBase => Cow::Owned(Name::new_static("disjoint_base")),
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
+            Self::SqlAlchemyMappedColumn => Cow::Owned(Name::new_static("mapped_column")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
         }
     }
@@ -938,6 +946,7 @@ impl FunctionKind {
             Self::RuntimeCheckable => None,
             Self::NumbaJit => None,
             Self::NumbaNjit => None,
+            Self::SqlAlchemyMappedColumn => None,
             Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
             Self::AbstractMethod => None,
             Self::TotalOrdering => None,

@@ -16,6 +16,7 @@ use pyrefly_types::types::Union;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprCall;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -37,6 +38,7 @@ use crate::error::context::TypeCheckKind;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::unexpected_keyword;
 use crate::types::class::Class;
+use crate::types::class::ClassType;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
 use crate::types::types::AnyStyle;
@@ -275,6 +277,118 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         ret
+    }
+
+    pub fn call_sqlalchemy_mapped_column(
+        &self,
+        callee_ty: Type,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        callee_range: TextRange,
+        arg_range: TextRange,
+        call: &ExprCall,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let ret = self.freeform_call_infer(
+            callee_ty,
+            args,
+            keywords,
+            callee_range,
+            arg_range,
+            hint,
+            errors,
+        );
+        let Some(python_type) = self.sqlalchemy_mapped_column_python_type(call) else {
+            return ret;
+        };
+        self.apply_sqlalchemy_mapped_python_type(ret, python_type)
+    }
+
+    fn sqlalchemy_mapped_column_python_type(&self, call: &ExprCall) -> Option<Type> {
+        // mapped_column's first two positional arguments correspond to the name/type.
+        for expr in call.arguments.args.iter().take(2) {
+            if let Some(ty) = self.python_type_from_type_engine_expr(expr) {
+                return Some(ty);
+            }
+        }
+        for keyword in &call.arguments.keywords {
+            if let Some(arg) = &keyword.arg
+                && matches!(arg.as_str(), "__type_pos" | "type_")
+                && let Some(ty) = self.python_type_from_type_engine_expr(&keyword.value)
+            {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
+    fn python_type_from_type_engine_expr(&self, expr: &Expr) -> Option<Type> {
+        let ty = self.expr_infer(expr, &self.error_swallower());
+        self.python_type_from_type_engine_type(&ty)
+    }
+
+    fn python_type_from_type_engine_type(&self, ty: &Type) -> Option<Type> {
+        match ty {
+            Type::ClassType(cls) => self.python_type_from_type_engine_class(cls),
+            Type::ClassDef(cls) => {
+                let inst = self.instantiate(cls);
+                self.python_type_from_type_engine_type(&inst)
+            }
+            Type::Type(inner) => self.python_type_from_type_engine_type(inner),
+            Type::TypeAlias(alias) => self.python_type_from_type_engine_type(&alias.as_type()),
+            Type::Union(u) => {
+                let mut inferred = None;
+                for member in &u.members {
+                    if let Some(member_ty) = self.python_type_from_type_engine_type(member) {
+                        match &inferred {
+                            Some(existing) if existing != &member_ty => return None,
+                            None => inferred = Some(member_ty),
+                            _ => {}
+                        }
+                    }
+                }
+                inferred
+            }
+            _ => None,
+        }
+    }
+
+    fn python_type_from_type_engine_class(&self, cls: &ClassType) -> Option<Type> {
+        if Self::is_sqlalchemy_type_engine_class(cls.class_object()) {
+            return cls.targs().as_slice().first().cloned();
+        }
+        let bases = self.get_base_types_for_class(cls.class_object());
+        for base in bases.iter() {
+            if let Some(ty) = self.python_type_from_type_engine_class(base) {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
+    fn is_sqlalchemy_type_engine_class(class: &Class) -> bool {
+        class.has_toplevel_qname("sqlalchemy.sql.type_api", "TypeEngine")
+    }
+
+    fn apply_sqlalchemy_mapped_python_type(&self, mut ty: Type, python_type: Type) -> Type {
+        ty.visit_mut(&mut |inner| {
+            if let Type::ClassType(class_type) = inner
+                && Self::is_sqlalchemy_mapped_class(class_type.class_object())
+            {
+                if let Some(slot) = class_type.targs_mut().as_mut().get_mut(0) {
+                    *slot = python_type.clone();
+                }
+            }
+        });
+        ty
+    }
+
+    fn is_sqlalchemy_mapped_class(class: &Class) -> bool {
+        class.has_toplevel_qname("sqlalchemy.orm.base", "Mapped")
+            || class.has_toplevel_qname("sqlalchemy.orm.base", "_MappedAnnotationBase")
+            || class.has_toplevel_qname("sqlalchemy.orm.base", "_DeclarativeMapped")
+            || class.has_toplevel_qname("sqlalchemy.orm.properties", "MappedColumn")
     }
 
     pub fn call_isinstance(
