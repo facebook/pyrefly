@@ -158,8 +158,11 @@ pub fn tsp_loop(
         let mut canceled_requests = HashSet::new();
 
         while let Ok((subsequent_mutation, event, enqueued_at)) = server.inner.lsp_queue().recv() {
-            let mut event_telemetry =
-                LspEventTelemetry::new_dequeued(event.describe(), enqueued_at);
+            let mut event_telemetry = LspEventTelemetry::new_dequeued(
+                event.describe(),
+                enqueued_at,
+                server.inner.sourcedb_available(),
+            );
             let event_description = event.describe();
 
             let result = server.process_event(

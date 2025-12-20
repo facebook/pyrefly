@@ -35,16 +35,18 @@ pub struct LspEventTelemetry {
     pub dequeued_at: Instant,
     pub error: Option<Error>,
     pub validate: Option<Duration>,
+    pub server_has_sourcedb: bool,
 }
 
 impl LspEventTelemetry {
-    pub fn new_dequeued(name: String, enqueued_at: Instant) -> Self {
+    pub fn new_dequeued(name: String, enqueued_at: Instant, server_has_sourcedb: bool) -> Self {
         Self {
             name,
             enqueued_at,
             dequeued_at: Instant::now(),
             error: None,
             validate: None,
+            server_has_sourcedb,
         }
     }
 

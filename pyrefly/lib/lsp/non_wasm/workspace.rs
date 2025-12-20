@@ -541,6 +541,10 @@ impl Workspaces {
 
         result
     }
+
+    pub fn sourcedb_available(&self) -> bool {
+        !self.source_db_config_map.lock().is_empty()
+    }
 }
 
 #[cfg(test)]

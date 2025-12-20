@@ -298,6 +298,8 @@ pub trait TspInterface: Send + Sync {
     ) -> anyhow::Result<ProcessEvent>;
 
     fn run_task(&self, task: HeavyTask);
+
+    fn sourcedb_available(&self) -> bool;
 }
 
 struct ServerConnection(Connection);
@@ -633,8 +635,9 @@ pub fn lsp_loop(
         let mut ide_transaction_manager = TransactionManager::default();
         let mut canceled_requests = HashSet::new();
         while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
+            let sourcedb_available = server.sourcedb_available();
             let mut event_telemetry =
-                LspEventTelemetry::new_dequeued(event.describe(), enqueue_time);
+                LspEventTelemetry::new_dequeued(event.describe(), enqueue_time, sourcedb_available);
             let event_description = event.describe();
             let result = server.process_event(
                 &mut ide_transaction_manager,
@@ -3579,5 +3582,9 @@ impl TspInterface for Server {
 
     fn run_task(&self, task: HeavyTask) {
         task.run(self)
+    }
+
+    fn sourcedb_available(&self) -> bool {
+        self.workspaces.sourcedb_available()
     }
 }
