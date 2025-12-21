@@ -35,6 +35,7 @@ pub struct TelemetryEvent {
     pub queue: Duration,
     pub start: Instant,
     pub error: Option<Error>,
+    pub invalidate: Option<Duration>,
     pub validate: Option<Duration>,
     pub server_state: TelemetryServerState,
 }
@@ -56,9 +57,14 @@ impl TelemetryEvent {
             queue,
             start,
             error: None,
+            invalidate: None,
             validate: None,
             server_state,
         }
+    }
+
+    pub fn set_invalidate_duration(&mut self, duration: Duration) {
+        self.invalidate = Some(duration);
     }
 
     pub fn set_validate_duration(&mut self, duration: Duration) {

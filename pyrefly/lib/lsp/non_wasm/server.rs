@@ -1653,13 +1653,18 @@ impl Server {
     fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + Sync + 'static) {
         self.recheck_queue.queue_task(
             TelemetryEventKind::Invalidate,
-            Box::new(move |server, _telemetry| {
+            Box::new(move |server, telemetry| {
                 let mut transaction = server
                     .state
                     .new_committable_transaction(Require::indexing(), None);
-                f(transaction.as_mut());
 
+                let invalidate_start = Instant::now();
+                f(transaction.as_mut());
+                telemetry.set_invalidate_duration(invalidate_start.elapsed());
+
+                let validate_start = Instant::now();
                 server.validate_in_memory_for_transaction(transaction.as_mut());
+                telemetry.set_validate_duration(validate_start.elapsed());
 
                 // Commit will be blocked until there are no ongoing reads.
                 // If we have some long running read jobs that can be cancelled, we should cancel them
@@ -2112,7 +2117,7 @@ impl Server {
         self.queue_source_db_rebuild_and_recheck(telemetry, false);
         self.recheck_queue.queue_task(
             TelemetryEventKind::InvalidateOnClose,
-            Box::new(move |server, _telemetry| {
+            Box::new(move |server, telemetry| {
                 // Clear out the memory associated with this file.
                 // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
                 // Having the extra file hanging around doesn't harm anything, but does use extra memory.
@@ -2120,7 +2125,9 @@ impl Server {
                     .state
                     .new_committable_transaction(Require::indexing(), None);
                 transaction.as_mut().set_memory(vec![(path, None)]);
+                let validate_start = Instant::now();
                 let _ = server.validate_in_memory_for_transaction(transaction.as_mut());
+                telemetry.set_validate_duration(validate_start.elapsed());
                 server.state.commit_transaction(transaction);
             }),
         );
@@ -3264,13 +3271,18 @@ impl Server {
     fn invalidate_config_and_validate_in_memory(&self) {
         self.recheck_queue.queue_task(
             TelemetryEventKind::InvalidateConfig,
-            Box::new(move |server, _telemetry| {
+            Box::new(move |server, telemetry| {
                 let mut transaction = server
                     .state
                     .new_committable_transaction(Require::indexing(), None);
-                transaction.as_mut().invalidate_config();
 
+                let invalidate_start = Instant::now();
+                transaction.as_mut().invalidate_config();
+                telemetry.set_invalidate_duration(invalidate_start.elapsed());
+
+                let validate_start = Instant::now();
                 server.validate_in_memory_for_transaction(transaction.as_mut());
+                telemetry.set_validate_duration(validate_start.elapsed());
 
                 // Commit will be blocked until there are no ongoing reads.
                 // If we have some long running read jobs that can be cancelled, we should cancel them
