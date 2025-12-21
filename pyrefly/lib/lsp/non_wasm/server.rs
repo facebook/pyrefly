@@ -651,7 +651,8 @@ pub fn lsp_loop(
                 subsequent_mutation,
                 event,
             );
-            let (process_duration, result) = event_telemetry.finish_and_record(telemetry, result);
+            let process_duration =
+                event_telemetry.finish_and_record(telemetry, result.as_ref().err());
             match result {
                 Ok(ProcessEvent::Continue) => {
                     info!(

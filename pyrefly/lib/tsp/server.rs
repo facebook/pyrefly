@@ -174,7 +174,7 @@ pub fn tsp_loop(
                 subsequent_mutation,
                 event,
             );
-            let (process_duration, result) = event_telemetry.finish(result);
+            let process_duration = event_telemetry.finish();
             match result? {
                 ProcessEvent::Continue => {
                     info!(

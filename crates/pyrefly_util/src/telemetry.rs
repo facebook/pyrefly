@@ -11,21 +11,13 @@ use std::time::Instant;
 use anyhow::Error;
 
 pub trait Telemetry {
-    fn record_event<T>(
-        &self,
-        event: TelemetryEvent,
-        result: Result<T, Error>,
-    ) -> (Duration, Result<T, Error>);
+    fn record_event(&self, event: TelemetryEvent, error: Option<&Error>) -> Duration;
 }
 pub struct NoTelemetry;
 
 impl Telemetry for NoTelemetry {
-    fn record_event<T>(
-        &self,
-        event: TelemetryEvent,
-        result: Result<T, Error>,
-    ) -> (Duration, Result<T, Error>) {
-        event.finish(result)
+    fn record_event(&self, event: TelemetryEvent, _error: Option<&Error>) -> Duration {
+        event.finish()
     }
 }
 
@@ -64,17 +56,12 @@ impl TelemetryEvent {
         self.validate = Some(duration);
     }
 
-    pub fn finish<T>(&self, result: Result<T, Error>) -> (Duration, Result<T, Error>) {
+    pub fn finish(&self) -> Duration {
         let finish = Instant::now();
-        let process = finish - self.start;
-        (process, result)
+        finish - self.start
     }
 
-    pub fn finish_and_record<T>(
-        self,
-        telemetry: &impl Telemetry,
-        result: Result<T, Error>,
-    ) -> (Duration, Result<T, Error>) {
-        telemetry.record_event(self, result)
+    pub fn finish_and_record(self, telemetry: &impl Telemetry, error: Option<&Error>) -> Duration {
+        telemetry.record_event(self, error)
     }
 }
