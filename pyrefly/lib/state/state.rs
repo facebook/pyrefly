@@ -991,33 +991,30 @@ impl<'a> Transaction<'a> {
 
     /// Return the module, plus true if the module was newly created.
     fn get_module_ex(&self, handle: &Handle, require: Require) -> (ArcId<ModuleDataMut>, bool) {
-        let mut created = None;
-        let res = self
-            .data
-            .updated_modules
-            .ensure(handle, || {
-                if let Some(m) = self.readable.modules.get(handle) {
-                    ArcId::new(m.clone_for_mutation())
-                } else {
-                    let config = self.data.state.get_config(handle.module(), handle.path());
-                    let res = ArcId::new(ModuleDataMut::new(
-                        handle.dupe(),
-                        require,
-                        config,
-                        self.data.now,
-                    ));
-                    created = Some(res.dupe());
-                    res
-                }
-            })
-            .dupe();
+        let mut created = false;
+        let (res, inserted) = self.data.updated_modules.ensure(handle, || {
+            if let Some(m) = self.readable.modules.get(handle) {
+                ArcId::new(m.clone_for_mutation())
+            } else {
+                created = true;
+                let config = self.data.state.get_config(handle.module(), handle.path());
+                ArcId::new(ModuleDataMut::new(
+                    handle.dupe(),
+                    require,
+                    config,
+                    self.data.now,
+                ))
+            }
+        });
         // Due to race conditions, we might create two ModuleDataMut, but only the first is returned.
         // Figure out if we won the race, and thus are the person who actually did the creation.
-        let created = Some(&res) == created.as_ref();
-        if created && let Some(subscriber) = &self.data.subscriber {
+        if inserted
+            && created
+            && let Some(subscriber) = &self.data.subscriber
+        {
             subscriber.start_work(handle);
         }
-        (res, created)
+        (res.dupe(), created)
     }
 
     fn add_error(
@@ -1152,6 +1149,7 @@ impl<'a> Transaction<'a> {
                 Some(v) => v.dupe(),
                 None => Arc::new(LoaderFindCache::new(loader.dupe())),
             })
+            .0
             .dupe()
     }
 

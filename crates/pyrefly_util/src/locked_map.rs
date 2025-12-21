@@ -81,13 +81,13 @@ impl<K: Eq + Hash + 'static, V: Dupe + 'static> LockedMap<K, V> {
     /// If the value is not present, create it using the provided function.
     /// Note that the provided function may be called even if we don't create a new entry,
     /// if someone else is simultaneously inserting a value for the same key.
-    pub fn ensure(&self, key: &K, value: impl FnOnce() -> V) -> &V
+    pub fn ensure(&self, key: &K, value: impl FnOnce() -> V) -> (&V, bool)
     where
         K: Dupe,
     {
         let hash = WithHash::new(key).hash();
         if let Some(v) = self.map.lookup(hash, |x| x.0.key() == key) {
-            return &v.1;
+            return (&v.1, false);
         }
         let res = self.map.insert(
             hash,
@@ -95,7 +95,7 @@ impl<K: Eq + Hash + 'static, V: Dupe + 'static> LockedMap<K, V> {
             Self::equals,
             Self::hash,
         );
-        &res.0.1
+        (&res.0.1, res.1.is_none())
     }
 
     pub fn iter_unordered(&self) -> impl Iterator<Item = (&K, &V)> {
