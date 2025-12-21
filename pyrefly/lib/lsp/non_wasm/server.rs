@@ -187,6 +187,7 @@ use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
+use pyrefly_util::telemetry::TelemetryServerState;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -299,7 +300,7 @@ pub trait TspInterface: Send + Sync {
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent>;
 
-    fn sourcedb_available(&self) -> bool;
+    fn telemetry_state(&self) -> TelemetryServerState;
 }
 
 struct ServerConnection(Connection);
@@ -629,11 +630,10 @@ pub fn lsp_loop(
         let mut ide_transaction_manager = TransactionManager::default();
         let mut canceled_requests = HashSet::new();
         while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
-            let sourcedb_available = server.sourcedb_available();
             let mut event_telemetry = TelemetryEvent::new_dequeued(
                 TelemetryEventKind::LspEvent(event.describe()),
                 enqueue_time,
-                sourcedb_available,
+                server.telemetry_state(),
             );
             let queue_duration = event_telemetry.queue;
             let event_description = event.describe();
@@ -1303,6 +1303,12 @@ impl Server {
         s.setup_file_watcher_if_necessary();
         s.request_settings_for_all_workspaces();
         s
+    }
+
+    fn telemetry_state(&self) -> TelemetryServerState {
+        TelemetryServerState {
+            has_sourcedb: self.workspaces.sourcedb_available(),
+        }
     }
 
     fn send_response(&self, x: Response) {
@@ -3582,7 +3588,7 @@ impl TspInterface for Server {
         )
     }
 
-    fn sourcedb_available(&self) -> bool {
-        self.workspaces.sourcedb_available()
+    fn telemetry_state(&self) -> TelemetryServerState {
+        self.telemetry_state()
     }
 }

@@ -29,14 +29,18 @@ pub struct TelemetryEvent {
     pub start: Instant,
     pub error: Option<Error>,
     pub validate: Option<Duration>,
-    pub server_has_sourcedb: bool,
+    pub server_state: TelemetryServerState,
+}
+
+pub struct TelemetryServerState {
+    pub has_sourcedb: bool,
 }
 
 impl TelemetryEvent {
     pub fn new_dequeued(
         kind: TelemetryEventKind,
         enqueued_at: Instant,
-        server_has_sourcedb: bool,
+        server_state: TelemetryServerState,
     ) -> Self {
         let start = Instant::now();
         let queue = start - enqueued_at;
@@ -46,7 +50,7 @@ impl TelemetryEvent {
             start,
             error: None,
             validate: None,
-            server_has_sourcedb,
+            server_state,
         }
     }
 

@@ -159,7 +159,7 @@ pub fn tsp_loop(
             let mut event_telemetry = TelemetryEvent::new_dequeued(
                 TelemetryEventKind::LspEvent(event.describe()),
                 enqueued_at,
-                server.inner.sourcedb_available(),
+                server.inner.telemetry_state(),
             );
             let queue_duration = event_telemetry.queue;
             let event_description = event.describe();
