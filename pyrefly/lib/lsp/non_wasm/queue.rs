@@ -24,6 +24,9 @@ use lsp_types::DidChangeWorkspaceFoldersParams;
 use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
 use lsp_types::DidSaveTextDocumentParams;
+use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::telemetry::TelemetryEventKind;
 use tracing::debug;
 use tracing::info;
 
@@ -201,8 +204,8 @@ impl HeavyTask {
 
 /// A queue for heavy tasks that should be run in the background thread.
 pub struct HeavyTaskQueue {
-    task_sender: Sender<(HeavyTask, Instant)>,
-    task_receiver: Receiver<(HeavyTask, Instant)>,
+    task_sender: Sender<(HeavyTask, TelemetryEventKind, Instant)>,
+    task_receiver: Receiver<(HeavyTask, TelemetryEventKind, Instant)>,
     stop_sender: Sender<()>,
     stop_receiver: Receiver<()>,
     queue_name: String,
@@ -222,14 +225,18 @@ impl HeavyTaskQueue {
         }
     }
 
-    pub fn queue_task(&self, f: Box<dyn FnOnce(&Server) + Send + Sync + 'static>) {
+    pub fn queue_task(
+        &self,
+        kind: TelemetryEventKind,
+        f: Box<dyn FnOnce(&Server) + Send + Sync + 'static>,
+    ) {
         self.task_sender
-            .send((HeavyTask(f), Instant::now()))
+            .send((HeavyTask(f), kind, Instant::now()))
             .expect("Failed to queue heavy task");
         debug!("Enqueued task on {} heavy task queue", self.queue_name);
     }
 
-    pub fn run_until_stopped(&self, server: &Server) {
+    pub fn run_until_stopped(&self, server: &Server, telemetry: &impl Telemetry) {
         let mut receiver_selector = Select::new_biased();
         // Biased selector will pick the receiver with lower index over higher ones,
         // so we register priority_events_receiver first.
@@ -245,18 +252,20 @@ impl HeavyTaskQueue {
                     return;
                 }
                 i if i == task_receiver_index => {
-                    let (task, enqueued) = selected
+                    let (task, kind, enqueued) = selected
                         .recv(&self.task_receiver)
                         .expect("Failed to receive heavy task");
                     debug!("Dequeued task on {} heavy task queue", self.queue_name);
-                    let task_start = Instant::now();
+                    let telemetry_event =
+                        TelemetryEvent::new_dequeued(kind, enqueued, server.telemetry_state());
+                    let queue_duration = telemetry_event.queue;
                     task.run(server);
-                    let task_end = Instant::now();
+                    let process_duration = telemetry_event.finish_and_record(telemetry, None);
                     info!(
                         "Ran task on {} heavy task queue. Queue time: {:.2}, task time: {:.2}",
                         self.queue_name,
-                        (task_start - enqueued).as_secs_f32(),
-                        (task_end - task_start).as_secs_f32()
+                        queue_duration.as_secs_f32(),
+                        process_duration.as_secs_f32()
                     );
                 }
                 _ => unreachable!(),

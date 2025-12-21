@@ -286,7 +286,7 @@ pub trait TspInterface: Send + Sync {
     fn lsp_queue(&self) -> &LspQueue;
 
     /// Get access to the recheck queue for async task processing
-    fn run_recheck_queue(&self);
+    fn run_recheck_queue(&self, telemetry: &impl Telemetry);
 
     fn stop_recheck_queue(&self);
 
@@ -619,13 +619,15 @@ pub fn lsp_loop(
             dispatch_lsp_events(&server.connection.0, &server.lsp_queue);
         });
         scope.spawn(|| {
-            server.recheck_queue.run_until_stopped(&server);
+            server.recheck_queue.run_until_stopped(&server, telemetry);
         });
         scope.spawn(|| {
-            server.find_reference_queue.run_until_stopped(&server);
+            server
+                .find_reference_queue
+                .run_until_stopped(&server, telemetry);
         });
         scope.spawn(|| {
-            server.sourcedb_queue.run_until_stopped(&server);
+            server.sourcedb_queue.run_until_stopped(&server, telemetry);
         });
         let mut ide_transaction_manager = TransactionManager::default();
         let mut canceled_requests = HashSet::new();
@@ -1305,7 +1307,7 @@ impl Server {
         s
     }
 
-    fn telemetry_state(&self) -> TelemetryServerState {
+    pub fn telemetry_state(&self) -> TelemetryServerState {
         TelemetryServerState {
             has_sourcedb: self.workspaces.sourcedb_available(),
         }
@@ -1596,9 +1598,12 @@ impl Server {
                 IndexingMode::None => {}
                 IndexingMode::LazyNonBlockingBackground => {
                     if self.indexed_configs.lock().insert(config.dupe()) {
-                        self.recheck_queue.queue_task(Box::new(move |server| {
-                            server.populate_all_project_files_in_config(config);
-                        }));
+                        self.recheck_queue.queue_task(
+                            TelemetryEventKind::PopulateProjectFiles,
+                            Box::new(move |server| {
+                                server.populate_all_project_files_in_config(config);
+                            }),
+                        );
                     }
                 }
                 IndexingMode::LazyBlocking => {
@@ -1627,9 +1632,12 @@ impl Server {
             IndexingMode::LazyNonBlockingBackground => {
                 indexed_workspaces.extend(roots_to_populate_files.iter().cloned());
                 drop(indexed_workspaces);
-                self.recheck_queue.queue_task(Box::new(move |server| {
-                    server.populate_all_workspaces_files(roots_to_populate_files);
-                }));
+                self.recheck_queue.queue_task(
+                    TelemetryEventKind::PopulateWorkspaceFiles,
+                    Box::new(move |server| {
+                        server.populate_all_workspaces_files(roots_to_populate_files);
+                    }),
+                );
             }
             IndexingMode::LazyBlocking => {
                 indexed_workspaces.extend(roots_to_populate_files.iter().cloned());
@@ -1642,30 +1650,33 @@ impl Server {
     /// Perform an invalidation of elements on `State` and commit them.
     /// Runs asynchronously. Returns immediately and may wait a while for a committable transaction.
     fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + Sync + 'static) {
-        self.recheck_queue.queue_task(Box::new(move |server| {
-            let mut transaction = server
-                .state
-                .new_committable_transaction(Require::indexing(), None);
-            f(transaction.as_mut());
+        self.recheck_queue.queue_task(
+            TelemetryEventKind::Invalidate,
+            Box::new(move |server| {
+                let mut transaction = server
+                    .state
+                    .new_committable_transaction(Require::indexing(), None);
+                f(transaction.as_mut());
 
-            server.validate_in_memory_for_transaction(transaction.as_mut());
+                server.validate_in_memory_for_transaction(transaction.as_mut());
 
-            // Commit will be blocked until there are no ongoing reads.
-            // If we have some long running read jobs that can be cancelled, we should cancel them
-            // to unblock committing transactions.
-            for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
-                cancellation_handle.cancel();
-            }
-            // we have to run, not just commit to process updates
-            server
-                .state
-                .run_with_committing_transaction(transaction, &[], Require::Everything);
-            // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
-            // the main event loop of the server. As a result, the server can do a revalidation of
-            // all the in-memory files based on the fresh main State as soon as possible.
-            info!("Invalidated state, prepare to recheck open files.");
-            let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
-        }));
+                // Commit will be blocked until there are no ongoing reads.
+                // If we have some long running read jobs that can be cancelled, we should cancel them
+                // to unblock committing transactions.
+                for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
+                    cancellation_handle.cancel();
+                }
+                // we have to run, not just commit to process updates
+                server
+                    .state
+                    .run_with_committing_transaction(transaction, &[], Require::Everything);
+                // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
+                // the main event loop of the server. As a result, the server can do a revalidation of
+                // all the in-memory files based on the fresh main State as soon as possible.
+                info!("Invalidated state, prepare to recheck open files.");
+                let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
+            }),
+        );
     }
 
     /// Certain IDE features (e.g. find-references) require us to know the dependency graph of the
@@ -1773,7 +1784,8 @@ impl Server {
         if self.build_system_blocking {
             run(self);
         } else {
-            self.sourcedb_queue.queue_task(Box::new(run));
+            self.sourcedb_queue
+                .queue_task(TelemetryEventKind::SourceDbRebuild, Box::new(run));
         }
     }
 
@@ -2085,17 +2097,20 @@ impl Server {
         }
         self.unsaved_file_tracker.forget_uri_path(&url);
         self.queue_source_db_rebuild_and_recheck(false);
-        self.recheck_queue.queue_task(Box::new(move |server| {
-            // Clear out the memory associated with this file.
-            // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
-            // Having the extra file hanging around doesn't harm anything, but does use extra memory.
-            let mut transaction = server
-                .state
-                .new_committable_transaction(Require::indexing(), None);
-            transaction.as_mut().set_memory(vec![(path, None)]);
-            let _ = server.validate_in_memory_for_transaction(transaction.as_mut());
-            server.state.commit_transaction(transaction);
-        }));
+        self.recheck_queue.queue_task(
+            TelemetryEventKind::InvalidateOnClose,
+            Box::new(move |server| {
+                // Clear out the memory associated with this file.
+                // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
+                // Having the extra file hanging around doesn't harm anything, but does use extra memory.
+                let mut transaction = server
+                    .state
+                    .new_committable_transaction(Require::indexing(), None);
+                transaction.as_mut().set_memory(vec![(path, None)]);
+                let _ = server.validate_in_memory_for_transaction(transaction.as_mut());
+                server.state.commit_transaction(transaction);
+            }),
+        );
     }
 
     fn workspace_folders_changed(&self, params: DidChangeWorkspaceFoldersParams) {
@@ -2541,8 +2556,9 @@ impl Server {
         else {
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
-        self.find_reference_queue
-            .queue_task(Box::new(move |server| {
+        self.find_reference_queue.queue_task(
+            TelemetryEventKind::FindFromDefinition,
+            Box::new(move |server| {
                 let mut transaction = server.state.cancellable_transaction();
                 server
                     .cancellation_handles
@@ -2567,7 +2583,8 @@ impl Server {
                         )));
                     }
                 }
-            }));
+            }),
+        );
     }
 
     /// Compute references of a symbol at a given position using the standard find_global_references_from_definition
@@ -3232,35 +3249,38 @@ impl Server {
     /// Asynchronously invalidate configuration and then validate in-memory files
     /// This ensures validate_in_memory() only runs after config invalidation completes
     fn invalidate_config_and_validate_in_memory(&self) {
-        self.recheck_queue.queue_task(Box::new(move |server| {
-            let mut transaction = server
-                .state
-                .new_committable_transaction(Require::indexing(), None);
-            transaction.as_mut().invalidate_config();
+        self.recheck_queue.queue_task(
+            TelemetryEventKind::InvalidateConfig,
+            Box::new(move |server| {
+                let mut transaction = server
+                    .state
+                    .new_committable_transaction(Require::indexing(), None);
+                transaction.as_mut().invalidate_config();
 
-            server.validate_in_memory_for_transaction(transaction.as_mut());
+                server.validate_in_memory_for_transaction(transaction.as_mut());
 
-            // Commit will be blocked until there are no ongoing reads.
-            // If we have some long running read jobs that can be cancelled, we should cancel them
-            // to unblock committing transactions.
-            for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
-                cancellation_handle.cancel();
-            }
-            // we have to run, not just commit to process updates
-            server
-                .state
-                .run_with_committing_transaction(transaction, &[], Require::Everything);
-            // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
-            // the main event loop of the server. As a result, the server can do a revalidation of
-            // all the in-memory files based on the fresh main State as soon as possible.
-            // Only send RecheckFinished if there are actually open files to revalidate.
-            if !server.open_files.read().is_empty() {
-                info!("Invalidated config, prepare to recheck open files.");
-                let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
-            } else {
-                info!("Invalidated config, but no open files to recheck.");
-            }
-        }));
+                // Commit will be blocked until there are no ongoing reads.
+                // If we have some long running read jobs that can be cancelled, we should cancel them
+                // to unblock committing transactions.
+                for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
+                    cancellation_handle.cancel();
+                }
+                // we have to run, not just commit to process updates
+                server
+                    .state
+                    .run_with_committing_transaction(transaction, &[], Require::Everything);
+                // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
+                // the main event loop of the server. As a result, the server can do a revalidation of
+                // all the in-memory files based on the fresh main State as soon as possible.
+                // Only send RecheckFinished if there are actually open files to revalidate.
+                if !server.open_files.read().is_empty() {
+                    info!("Invalidated config, prepare to recheck open files.");
+                    let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
+                } else {
+                    info!("Invalidated config, but no open files to recheck.");
+                }
+            }),
+        );
     }
 
     fn will_rename_files(
@@ -3563,8 +3583,8 @@ impl TspInterface for Server {
         &self.lsp_queue
     }
 
-    fn run_recheck_queue(&self) {
-        self.recheck_queue.run_until_stopped(self);
+    fn run_recheck_queue(&self, telemetry: &impl Telemetry) {
+        self.recheck_queue.run_until_stopped(self, telemetry);
     }
 
     fn stop_recheck_queue(&self) {

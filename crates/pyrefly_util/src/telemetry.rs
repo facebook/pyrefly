@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use anyhow::Error;
 
-pub trait Telemetry {
+pub trait Telemetry: Send + Sync {
     fn record_event(&self, event: TelemetryEvent, process: Duration, error: Option<&Error>);
 }
 pub struct NoTelemetry;
@@ -21,6 +21,13 @@ impl Telemetry for NoTelemetry {
 
 pub enum TelemetryEventKind {
     LspEvent(String),
+    Invalidate,
+    InvalidateConfig,
+    InvalidateOnClose,
+    PopulateProjectFiles,
+    PopulateWorkspaceFiles,
+    SourceDbRebuild,
+    FindFromDefinition,
 }
 
 pub struct TelemetryEvent {

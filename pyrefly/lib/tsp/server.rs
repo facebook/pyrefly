@@ -146,7 +146,7 @@ pub fn tsp_loop(
 
     std::thread::scope(|scope| {
         // Start the recheck queue thread to process async tasks
-        scope.spawn(|| server.inner.run_recheck_queue());
+        scope.spawn(|| server.inner.run_recheck_queue(telemetry));
 
         scope.spawn(|| {
             dispatch_lsp_events(server.inner.connection(), server.inner.lsp_queue());
