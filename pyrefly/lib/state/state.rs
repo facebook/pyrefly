@@ -21,7 +21,6 @@ use std::sync::RwLockReadGuard;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 
 use dupe::Dupe;
 use dupe::OptionDupedExt;
@@ -60,6 +59,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::trace;
 use vec1::vec1;
+use web_time::Instant;
 
 use crate::alt::answers::AnswerEntry;
 use crate::alt::answers::AnswerTable;
@@ -1186,6 +1186,8 @@ impl<'a> Transaction<'a> {
     }
 
     fn run_step(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
+        let run_start = Instant::now();
+
         self.data.now.next();
         let sys_infos = handles
             .iter()
@@ -1215,6 +1217,11 @@ impl<'a> Transaction<'a> {
         self.data.state.threads.spawn_many(|| {
             cancelled.fetch_or(self.work().is_err(), Ordering::Relaxed);
         });
+
+        let mut stats = self.stats.lock();
+        stats.run_steps += 1;
+        stats.run_time += run_start.elapsed();
+
         if cancelled.into_inner() {
             Err(Cancelled)
         } else {

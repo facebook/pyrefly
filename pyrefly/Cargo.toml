@@ -60,6 +60,7 @@ toml = { version = "0.9.8", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tsp_types = { path = "../crates/tsp_types" }
 vec1 = { version = "1", features = ["serde"] }
+web-time = "1.1.0"
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 
 [dev-dependencies]

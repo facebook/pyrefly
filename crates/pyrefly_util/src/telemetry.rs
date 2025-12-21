@@ -50,6 +50,8 @@ pub struct TelemetryTransactionStats {
     pub modules: usize,
     pub dirty_rdeps: usize,
     pub cycle_rdeps: usize,
+    pub run_steps: usize,
+    pub run_time: Duration,
 }
 
 impl TelemetryEvent {
