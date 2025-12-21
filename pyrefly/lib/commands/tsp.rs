@@ -9,6 +9,7 @@ use clap::Parser;
 use lsp_server::Connection;
 use lsp_server::ProtocolError;
 use lsp_types::InitializeParams;
+use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::lsp::IndexingMode;
 use crate::commands::util::CommandExitStatus;
@@ -29,7 +30,11 @@ pub struct TspArgs {
     pub(crate) workspace_indexing_limit: usize,
 }
 
-pub fn run_tsp(connection: Connection, args: TspArgs) -> anyhow::Result<()> {
+pub fn run_tsp(
+    connection: Connection,
+    args: TspArgs,
+    telemetry: &impl Telemetry,
+) -> anyhow::Result<()> {
     let initialization_params = match initialize_tsp_connection(&connection, &args) {
         Ok(it) => it,
         Err(e) => {
@@ -49,7 +54,7 @@ pub fn run_tsp(connection: Connection, args: TspArgs) -> anyhow::Result<()> {
     );
 
     // Reuse the existing lsp_loop but with TSP initialization
-    tsp_loop(lsp_server, initialization_params)?;
+    tsp_loop(lsp_server, initialization_params, telemetry)?;
     Ok(())
 }
 
@@ -74,7 +79,7 @@ fn initialize_tsp_connection(
 }
 
 impl TspArgs {
-    pub fn run(self) -> anyhow::Result<CommandExitStatus> {
+    pub fn run(self, telemetry: &impl Telemetry) -> anyhow::Result<CommandExitStatus> {
         // Note that  we must have our logging only write out to stderr.
         eprintln!("starting TSP server");
 
@@ -82,7 +87,7 @@ impl TspArgs {
         // also be implemented to use sockets or HTTP.
         let (connection, io_threads) = Connection::stdio();
 
-        run_tsp(connection, self)?;
+        run_tsp(connection, self, telemetry)?;
         io_threads.join()?;
         // We have shut down gracefully.
         eprintln!("shutting down TSP server");

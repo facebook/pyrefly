@@ -13,6 +13,7 @@ use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
 use lsp_types::ServerCapabilities;
+use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use tracing::info;
@@ -138,6 +139,7 @@ impl<T: TspInterface> TspServer<T> {
 pub fn tsp_loop(
     lsp_server: impl TspInterface,
     _initialization_params: InitializeParams,
+    telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     eprintln!("Reading TSP messages");
     let server = TspServer::new(lsp_server);
@@ -174,7 +176,8 @@ pub fn tsp_loop(
                 subsequent_mutation,
                 event,
             );
-            let process_duration = event_telemetry.finish();
+            let process_duration =
+                event_telemetry.finish_and_record(telemetry, result.as_ref().err());
             match result? {
                 ProcessEvent::Continue => {
                     info!(
