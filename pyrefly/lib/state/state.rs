@@ -876,6 +876,7 @@ impl<'a> Transaction<'a> {
                             // continue around the loop - failed to get the lock, but we really want it
                         }
                     }
+                    self.stats.lock().dirty_rdeps += dirtied.len();
                     self.data.dirty.lock().extend(dirtied);
                 }
                 if let Some(load) = load_result
@@ -1008,11 +1009,11 @@ impl<'a> Transaction<'a> {
         });
         // Due to race conditions, we might create two ModuleDataMut, but only the first is returned.
         // Figure out if we won the race, and thus are the person who actually did the creation.
-        if inserted
-            && created
-            && let Some(subscriber) = &self.data.subscriber
-        {
-            subscriber.start_work(handle);
+        if inserted {
+            self.stats.lock().modules += 1;
+            if created && let Some(subscriber) = &self.data.subscriber {
+                subscriber.start_work(handle);
+            }
         }
         (res.dupe(), created)
     }
@@ -1240,6 +1241,7 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
+        self.stats.lock().cycle_rdeps += dirty.len();
 
         let mut dirty_set: std::sync::MutexGuard<'_, SmallSet<ArcId<ModuleDataMut>>> =
             self.data.dirty.lock();

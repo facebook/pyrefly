@@ -46,7 +46,11 @@ pub struct TelemetryServerState {
 }
 
 #[derive(Default)]
-pub struct TelemetryTransactionStats {}
+pub struct TelemetryTransactionStats {
+    pub modules: usize,
+    pub dirty_rdeps: usize,
+    pub cycle_rdeps: usize,
+}
 
 impl TelemetryEvent {
     pub fn new_dequeued(
