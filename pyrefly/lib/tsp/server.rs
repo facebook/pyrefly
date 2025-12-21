@@ -96,7 +96,7 @@ impl<T: TspInterface> TspServer<T> {
 
     fn handle_tsp_request<'a>(
         &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
+        _ide_transaction_manager: &mut TransactionManager<'a>,
         request: &Request,
     ) -> anyhow::Result<bool> {
         // Convert the request into a TSPRequests enum
@@ -113,13 +113,10 @@ impl<T: TspInterface> TspServer<T> {
 
         match msg {
             TSPRequests::GetSupportedProtocolVersionRequest { .. } => {
-                let transaction =
-                    ide_transaction_manager.non_committable_transaction(self.inner.state());
                 self.inner.send_response(new_response(
                     request.id.clone(),
-                    Ok(self.get_supported_protocol_version(&transaction)),
+                    Ok(self.get_supported_protocol_version()),
                 ));
-                ide_transaction_manager.save(transaction);
                 Ok(true)
             }
             TSPRequests::GetSnapshotRequest { .. } => {

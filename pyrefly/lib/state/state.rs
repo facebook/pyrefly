@@ -44,6 +44,8 @@ use pyrefly_util::small_set1::SmallSet1;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::task_heap::TaskHeap;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::telemetry::TelemetryTransactionStats;
 use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::upgrade_lock::UpgradeLock;
@@ -279,6 +281,7 @@ impl<'a> TransactionData<'a> {
         if self.base == readable.now {
             Some(Transaction {
                 data: self,
+                stats: Default::default(),
                 readable,
             })
         } else {
@@ -294,14 +297,20 @@ impl<'a> TransactionData<'a> {
 /// in a transaction.
 pub struct Transaction<'a> {
     data: TransactionData<'a>,
+    stats: Mutex<TelemetryTransactionStats>,
     readable: RwLockReadGuard<'a, StateData>,
 }
 
 impl<'a> Transaction<'a> {
     /// Drops the lock and retains just the underlying data.
-    pub(crate) fn save(self) -> TransactionData<'a> {
-        let Transaction { data, readable } = self;
+    pub(crate) fn save(self, telemetry: &mut TelemetryEvent) -> TransactionData<'a> {
+        let Transaction {
+            data,
+            stats,
+            readable,
+        } = self;
         drop(readable);
+        telemetry.set_transaction_stats(stats.into_inner());
         data
     }
 
@@ -1785,6 +1794,7 @@ impl State {
         let stdlib = readable.stdlib.clone();
         Transaction {
             readable,
+            stats: Default::default(),
             data: TransactionData {
                 state: self,
                 stdlib,
@@ -1842,12 +1852,17 @@ impl State {
         }
     }
 
-    pub fn commit_transaction(&self, transaction: CommittingTransaction) {
+    pub fn commit_transaction(
+        &self,
+        transaction: CommittingTransaction,
+        telemetry: Option<&mut TelemetryEvent>,
+    ) {
         debug!("Committing transaction");
         let CommittingTransaction {
             transaction:
                 Transaction {
                     readable,
+                    stats,
                     data:
                         TransactionData {
                             stdlib,
@@ -1868,6 +1883,10 @@ impl State {
         } = transaction;
         // Drop the read lock the transaction holds.
         drop(readable);
+
+        if let Some(telemetry) = telemetry {
+            telemetry.set_transaction_stats(stats.into_inner());
+        }
 
         // If you make a transaction dirty, e.g. by calling an invalidate method,
         // you must subsequently call `run` to drain the dirty queue.
@@ -1903,10 +1922,11 @@ impl State {
         require: Require,
         default_require: Require,
         subscriber: Option<Box<dyn Subscriber>>,
+        telemetry: Option<&mut TelemetryEvent>,
     ) {
         let mut transaction = self.new_committable_transaction(default_require, subscriber);
         transaction.transaction.run(handles, require);
-        self.commit_transaction(transaction);
+        self.commit_transaction(transaction, telemetry);
     }
 
     pub fn run_with_committing_transaction(
@@ -1914,8 +1934,9 @@ impl State {
         mut transaction: CommittingTransaction<'_>,
         handles: &[Handle],
         require: Require,
+        telemetry: Option<&mut TelemetryEvent>,
     ) {
         transaction.transaction.run(handles, require);
-        self.commit_transaction(transaction);
+        self.commit_transaction(transaction, telemetry);
     }
 }

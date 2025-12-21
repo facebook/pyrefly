@@ -333,7 +333,7 @@ impl TestEnv {
         );
         transaction.as_mut().set_memory(self.get_memory());
         transaction.as_mut().run(&handles, Require::Everything);
-        state.commit_transaction(transaction);
+        state.commit_transaction(transaction, None);
         subscriber.finish();
         let project_root = PathBuf::new();
         print_errors(

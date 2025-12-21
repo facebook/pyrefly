@@ -943,7 +943,7 @@ impl Query {
         let new_transaction_mut = transaction.as_mut();
         new_transaction_mut.invalidate_events(events);
         new_transaction_mut.run(&[], Require::Exports);
-        self.state.commit_transaction(transaction);
+        self.state.commit_transaction(transaction, None);
         let all_files = self.files.lock().iter().cloned().collect::<Vec<_>>();
         self.add_files(all_files);
     }
@@ -957,7 +957,7 @@ impl Query {
         let handles = files.into_map(|(name, file)| self.make_handle(name, file));
         transaction.as_mut().run(&handles, Require::Everything);
         let errors = transaction.as_mut().get_errors(&handles);
-        self.state.commit_transaction(transaction);
+        self.state.commit_transaction(transaction, None);
         let project_root = PathBuf::new();
         errors.collect_errors().shown.map(|e| {
             // We deliberately don't have a Display for `Error`, to encourage doing the right thing.

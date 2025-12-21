@@ -136,7 +136,7 @@ fn test_change_require() {
     let mut t = state.new_committable_transaction(Require::Exports, None);
     t.as_mut().set_memory(env.get_memory());
     t.as_mut().run(&[handle.dupe()], Require::Exports);
-    state.commit_transaction(t);
+    state.commit_transaction(t, None);
 
     assert_eq!(
         state
@@ -148,7 +148,13 @@ fn test_change_require() {
         0
     );
     assert!(state.transaction().get_bindings(&handle).is_none());
-    state.run(&[handle.dupe()], Require::Errors, Require::Exports, None);
+    state.run(
+        &[handle.dupe()],
+        Require::Errors,
+        Require::Exports,
+        None,
+        None,
+    );
     assert_eq!(
         state
             .transaction()
@@ -163,6 +169,7 @@ fn test_change_require() {
         &[handle.dupe()],
         Require::Everything,
         Require::Exports,
+        None,
         None,
     );
     assert_eq!(
@@ -192,12 +199,12 @@ fn test_crash_on_search() {
         Some(Arc::new(FileContents::from_source("x = 3".to_owned()))),
     )]);
     t.as_mut().run(&[], Require::Everything); // This run breaks reproduction (but is now required)
-    state.commit_transaction(t);
+    state.commit_transaction(t, None);
 
     // Now we need to increment the step counter.
     let mut t = state.new_committable_transaction(REQUIRE, None);
     t.as_mut().run(&[], Require::Everything);
-    state.commit_transaction(t);
+    state.commit_transaction(t, None);
 
     // Now we run two searches, this used to crash
     let t = state.new_transaction(REQUIRE, None);
@@ -347,7 +354,7 @@ fn test_sequential_committable_transactions() {
             assert_eq!(initial_value + 1, v);
             v
         };
-        state.commit_transaction(t);
+        state.commit_transaction(t, None);
     }
 
     // We rapidly spin up 5 threads, each of which will increment the counter twice.

@@ -278,9 +278,6 @@ pub trait TspInterface: Send + Sync {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
 
-    /// Get access to the state for creating transactions
-    fn state(&self) -> &State;
-
     fn connection(&self) -> &Connection;
 
     fn lsp_queue(&self) -> &LspQueue;
@@ -726,7 +723,7 @@ impl Server {
             LspEvent::RecheckFinished => {
                 // We did a commit and want to get back to a stable state.
                 let validate_start = Instant::now();
-                self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
+                self.validate_in_memory_and_commit_if_possible(ide_transaction_manager, telemetry);
                 telemetry.set_validate_duration(validate_start.elapsed());
             }
             LspEvent::CancelRequest(id) => {
@@ -771,6 +768,7 @@ impl Server {
                     ide_transaction_manager,
                     subsequent_mutation,
                     params,
+                    telemetry,
                 )?;
             }
             LspEvent::DidCloseTextDocument(params) => {
@@ -815,6 +813,7 @@ impl Server {
                     ide_transaction_manager,
                     subsequent_mutation,
                     params,
+                    telemetry,
                 )?;
             }
             LspEvent::DidCloseNotebookDocument(params) => {
@@ -1233,7 +1232,7 @@ impl Server {
                     ));
                     info!("Unhandled request: {x:?}");
                 }
-                ide_transaction_manager.save(transaction);
+                ide_transaction_manager.save(transaction, telemetry);
             }
         }
         Ok(ProcessEvent::Continue)
@@ -1457,24 +1456,28 @@ impl Server {
     fn validate_in_memory_and_commit_if_possible<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry: &mut TelemetryEvent,
     ) {
         let possibly_committable_transaction =
             ide_transaction_manager.get_possibly_committable_transaction(&self.state);
         self.validate_in_memory_for_possibly_committable_transaction(
             ide_transaction_manager,
             possibly_committable_transaction,
+            telemetry,
         );
     }
 
     fn validate_in_memory_without_committing<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry: &mut TelemetryEvent,
     ) {
         let noncommittable_transaction =
             ide_transaction_manager.non_committable_transaction(&self.state);
         self.validate_in_memory_for_possibly_committable_transaction(
             ide_transaction_manager,
             Err(noncommittable_transaction),
+            telemetry,
         );
     }
 
@@ -1509,6 +1512,7 @@ impl Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         mut possibly_committable_transaction: Result<CommittingTransaction<'a>, Transaction<'a>>,
+        telemetry: &mut TelemetryEvent,
     ) {
         let transaction = match &mut possibly_committable_transaction {
             Ok(transaction) => transaction.as_mut(),
@@ -1562,7 +1566,7 @@ impl Server {
 
         match possibly_committable_transaction {
             Ok(transaction) => {
-                self.state.commit_transaction(transaction);
+                self.state.commit_transaction(transaction, Some(telemetry));
                 // In the case where we can commit transactions, `State` already has latest updates.
                 // Therefore, we can compute errors from transactions freshly created from `State``.
                 let transaction = self.state.transaction();
@@ -1576,7 +1580,7 @@ impl Server {
                 // up-to-date in-memory content, but can have stale main `State` content.
                 // Note: if this changes, update this function's docstring.
                 publish(&transaction);
-                ide_transaction_manager.save(transaction);
+                ide_transaction_manager.save(transaction, telemetry);
                 info!("Validated open files and saved non-committable transaction.");
             }
         }
@@ -1673,9 +1677,12 @@ impl Server {
                     cancellation_handle.cancel();
                 }
                 // we have to run, not just commit to process updates
-                server
-                    .state
-                    .run_with_committing_transaction(transaction, &[], Require::Everything);
+                server.state.run_with_committing_transaction(
+                    transaction,
+                    &[],
+                    Require::Everything,
+                    Some(telemetry),
+                );
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
                 // all the in-memory files based on the fresh main State as soon as possible.
@@ -1692,7 +1699,7 @@ impl Server {
     fn populate_all_project_files_in_config(
         &self,
         config: ArcId<ConfigFile>,
-        _telemetry: &mut TelemetryEvent,
+        telemetry: &mut TelemetryEvent,
     ) {
         let unknown = ModuleName::unknown();
 
@@ -1718,7 +1725,7 @@ impl Server {
 
         info!("Prepare to check {} files.", handles.len());
         transaction.as_mut().run(&handles, Require::indexing());
-        self.state.commit_transaction(transaction);
+        self.state.commit_transaction(transaction, Some(telemetry));
         // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
         // the main event loop of the server. As a result, the server can do a revalidation of
         // all the in-memory files based on the fresh main State as soon as possible.
@@ -1729,7 +1736,7 @@ impl Server {
     fn populate_all_workspaces_files(
         &self,
         workspace_roots: Vec<PathBuf>,
-        _telemetry: &mut TelemetryEvent,
+        telemetry: &mut TelemetryEvent,
     ) {
         for workspace_root in workspace_roots {
             info!(
@@ -1756,7 +1763,7 @@ impl Server {
 
             info!("Prepare to check {} files.", handles.len());
             transaction.as_mut().run(&handles, Require::indexing());
-            self.state.commit_transaction(transaction);
+            self.state.commit_transaction(transaction, Some(telemetry));
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
@@ -1858,7 +1865,7 @@ impl Server {
                 path.display()
             );
             let validate_start = Instant::now();
-            self.validate_in_memory_without_committing(ide_transaction_manager);
+            self.validate_in_memory_without_committing(ide_transaction_manager, telemetry);
             telemetry.set_validate_duration(validate_start.elapsed());
         }
         self.populate_project_files_if_necessary(config_to_populate_files, telemetry);
@@ -1873,6 +1880,7 @@ impl Server {
         ide_transaction_manager: &mut TransactionManager<'a>,
         subsequent_mutation: bool,
         params: DidChangeTextDocumentParams,
+        telemetry: &mut TelemetryEvent,
     ) -> anyhow::Result<()> {
         let VersionedTextDocumentIdentifier { uri, version } = params.text_document;
         let Some(file_path) = self.path_for_uri(&uri) else {
@@ -1908,7 +1916,7 @@ impl Server {
                 "File {} changed, prepare to validate open files.",
                 file_path.display()
             );
-            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
+            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager, telemetry);
         }
         Ok(())
     }
@@ -1918,6 +1926,7 @@ impl Server {
         ide_transaction_manager: &mut TransactionManager<'a>,
         subsequent_mutation: bool,
         params: DidChangeNotebookDocumentParams,
+        telemetry: &mut TelemetryEvent,
     ) -> anyhow::Result<()> {
         let uri = params.notebook_document.uri.clone();
         let version = params.notebook_document.version;
@@ -2043,7 +2052,7 @@ impl Server {
                 "Notebook {} changed, prepare to validate open files.",
                 file_path.display()
             );
-            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
+            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager, telemetry);
         }
         Ok(())
     }
@@ -2128,7 +2137,9 @@ impl Server {
                 let validate_start = Instant::now();
                 let _ = server.validate_in_memory_for_transaction(transaction.as_mut());
                 telemetry.set_validate_duration(validate_start.elapsed());
-                server.state.commit_transaction(transaction);
+                server
+                    .state
+                    .commit_transaction(transaction, Some(telemetry));
             }),
         );
     }
@@ -3291,9 +3302,12 @@ impl Server {
                     cancellation_handle.cancel();
                 }
                 // we have to run, not just commit to process updates
-                server
-                    .state
-                    .run_with_committing_transaction(transaction, &[], Require::Everything);
+                server.state.run_with_committing_transaction(
+                    transaction,
+                    &[],
+                    Require::Everything,
+                    Some(telemetry),
+                );
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
                 // all the in-memory files based on the fresh main State as soon as possible.
@@ -3594,10 +3608,6 @@ impl Server {
 impl TspInterface for Server {
     fn send_response(&self, response: Response) {
         self.send_response(response)
-    }
-
-    fn state(&self) -> &State {
-        &self.state
     }
 
     fn connection(&self) -> &Connection {

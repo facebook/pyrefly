@@ -359,8 +359,12 @@ impl Playground {
 
         let handles: Vec<Handle> = self.handles.values().map(|handle| handle.dupe()).collect();
 
-        self.state
-            .run_with_committing_transaction(transaction, &handles, Require::Everything);
+        self.state.run_with_committing_transaction(
+            transaction,
+            &handles,
+            Require::Everything,
+            None,
+        );
         Some(format!(
             "{}.{}",
             desired_version.major, desired_version.minor
@@ -382,8 +386,12 @@ impl Playground {
 
             let handles: Vec<Handle> = self.handles.values().map(|handle| handle.dupe()).collect();
 
-            self.state
-                .run_with_committing_transaction(transaction, &handles, Require::Everything);
+            self.state.run_with_committing_transaction(
+                transaction,
+                &handles,
+                Require::Everything,
+                None,
+            );
 
             if self.handles.contains_key(&filename) {
                 self.active_filename = filename;

@@ -644,7 +644,7 @@ impl CheckArgs {
                 sourcedb_errors,
                 require_levels.specified,
             );
-            state.commit_transaction(transaction);
+            state.commit_transaction(transaction, None);
             if let Err(e) = res {
                 eprintln!("{e:#}");
             }

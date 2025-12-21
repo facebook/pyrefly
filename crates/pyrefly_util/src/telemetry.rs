@@ -37,12 +37,16 @@ pub struct TelemetryEvent {
     pub error: Option<Error>,
     pub invalidate: Option<Duration>,
     pub validate: Option<Duration>,
+    pub transaction_stats: Option<TelemetryTransactionStats>,
     pub server_state: TelemetryServerState,
 }
 
 pub struct TelemetryServerState {
     pub has_sourcedb: bool,
 }
+
+#[derive(Default)]
+pub struct TelemetryTransactionStats {}
 
 impl TelemetryEvent {
     pub fn new_dequeued(
@@ -59,6 +63,7 @@ impl TelemetryEvent {
             error: None,
             invalidate: None,
             validate: None,
+            transaction_stats: None,
             server_state,
         }
     }
@@ -69,6 +74,10 @@ impl TelemetryEvent {
 
     pub fn set_validate_duration(&mut self, duration: Duration) {
         self.validate = Some(duration);
+    }
+
+    pub fn set_transaction_stats(&mut self, stats: TelemetryTransactionStats) {
+        self.transaction_stats = Some(stats);
     }
 
     pub fn finish_and_record(self, telemetry: &impl Telemetry, error: Option<&Error>) -> Duration {
