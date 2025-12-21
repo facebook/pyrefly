@@ -11,26 +11,30 @@ use std::time::Instant;
 use anyhow::Error;
 
 pub trait Telemetry {
-    fn record_lsp_event<T>(
+    fn record_event<T>(
         &self,
-        event: LspEventTelemetry,
+        event: TelemetryEvent,
         result: Result<T, Error>,
     ) -> (Duration, Duration, Result<T, Error>);
 }
 pub struct NoTelemetry;
 
 impl Telemetry for NoTelemetry {
-    fn record_lsp_event<T>(
+    fn record_event<T>(
         &self,
-        event: LspEventTelemetry,
+        event: TelemetryEvent,
         result: Result<T, Error>,
     ) -> (Duration, Duration, Result<T, Error>) {
         event.finish(result)
     }
 }
 
-pub struct LspEventTelemetry {
-    pub name: String,
+pub enum TelemetryEventKind {
+    LspEvent(String),
+}
+
+pub struct TelemetryEvent {
+    pub kind: TelemetryEventKind,
     pub enqueued_at: Instant,
     pub dequeued_at: Instant,
     pub error: Option<Error>,
@@ -38,10 +42,14 @@ pub struct LspEventTelemetry {
     pub server_has_sourcedb: bool,
 }
 
-impl LspEventTelemetry {
-    pub fn new_dequeued(name: String, enqueued_at: Instant, server_has_sourcedb: bool) -> Self {
+impl TelemetryEvent {
+    pub fn new_dequeued(
+        kind: TelemetryEventKind,
+        enqueued_at: Instant,
+        server_has_sourcedb: bool,
+    ) -> Self {
         Self {
-            name,
+            kind,
             enqueued_at,
             dequeued_at: Instant::now(),
             error: None,
@@ -66,6 +74,6 @@ impl LspEventTelemetry {
         telemetry: &impl Telemetry,
         result: Result<T, Error>,
     ) -> (Duration, Duration, Result<T, Error>) {
-        telemetry.record_lsp_event(self, result)
+        telemetry.record_event(self, result)
     }
 }

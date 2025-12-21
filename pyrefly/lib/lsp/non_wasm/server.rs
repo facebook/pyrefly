@@ -184,8 +184,9 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
-use pyrefly_util::telemetry::LspEventTelemetry;
 use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::telemetry::TelemetryEventKind;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -292,7 +293,7 @@ pub trait TspInterface: Send + Sync {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &mut LspEventTelemetry,
+        telemetry: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent>;
@@ -636,8 +637,11 @@ pub fn lsp_loop(
         let mut canceled_requests = HashSet::new();
         while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
             let sourcedb_available = server.sourcedb_available();
-            let mut event_telemetry =
-                LspEventTelemetry::new_dequeued(event.describe(), enqueue_time, sourcedb_available);
+            let mut event_telemetry = TelemetryEvent::new_dequeued(
+                TelemetryEventKind::LspEvent(event.describe()),
+                enqueue_time,
+                sourcedb_available,
+            );
             let event_description = event.describe();
             let result = server.process_event(
                 &mut ide_transaction_manager,
@@ -714,7 +718,7 @@ impl Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &mut LspEventTelemetry,
+        telemetry: &mut TelemetryEvent,
         // After this event there is another mutation
         subsequent_mutation: bool,
         event: LspEvent,
@@ -1782,7 +1786,7 @@ impl Server {
     fn did_open<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
-        telemetry: &mut LspEventTelemetry,
+        telemetry: &mut TelemetryEvent,
         subsequent_mutation: bool,
         url: Url,
         version: i32,
@@ -3567,7 +3571,7 @@ impl TspInterface for Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &mut LspEventTelemetry,
+        telemetry: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {

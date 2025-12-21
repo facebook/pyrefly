@@ -13,7 +13,8 @@ use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
 use lsp_types::ServerCapabilities;
-use pyrefly_util::telemetry::LspEventTelemetry;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::telemetry::TelemetryEventKind;
 use tracing::info;
 use tsp_types::TSPRequests;
 
@@ -45,7 +46,7 @@ impl<T: TspInterface> TspServer<T> {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &mut LspEventTelemetry,
+        telemetry: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {
@@ -158,8 +159,8 @@ pub fn tsp_loop(
         let mut canceled_requests = HashSet::new();
 
         while let Ok((subsequent_mutation, event, enqueued_at)) = server.inner.lsp_queue().recv() {
-            let mut event_telemetry = LspEventTelemetry::new_dequeued(
-                event.describe(),
+            let mut event_telemetry = TelemetryEvent::new_dequeued(
+                TelemetryEventKind::LspEvent(event.describe()),
                 enqueued_at,
                 server.inner.sourcedb_available(),
             );
