@@ -416,7 +416,10 @@ fn test_notebook_non_ipynb_extension() {
 
     // Open a .py file as a notebook (simulating Marimo or similar)
     // The key test is that the notebook operations work even with .py extension
-    interaction.open_notebook("marimo_notebook.py", vec!["x: int = 1", "z: str = ''\nz = 1"]);
+    interaction.open_notebook(
+        "marimo_notebook.py",
+        vec!["x: int = 1", "z: str = ''\nz = 1"],
+    );
 
     // Cell 1 should have no errors
     interaction
@@ -494,20 +497,24 @@ fn test_notebook_text_open_conflict() {
     // Now try to open the same file as a text document (should be ignored)
     let notebook_path = root.path().join("conflict_test.py");
     let notebook_uri = Url::from_file_path(&notebook_path).unwrap();
-    interaction
-        .client
-        .did_open_uri(&notebook_uri, "python", "# This should be ignored\nx: str = 1");
+    interaction.client.did_open_uri(
+        &notebook_uri,
+        "python",
+        "# This should be ignored\nx: str = 1",
+    );
 
     // Try to send a textDocument/didChange for the notebook file (should be ignored)
-    interaction.client.send_notification::<DidChangeTextDocument>(json!({
-        "textDocument": {
-            "uri": notebook_uri.to_string(),
-            "version": 2
-        },
-        "contentChanges": [{
-            "text": "# Changed content that should be ignored"
-        }]
-    }));
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": notebook_uri.to_string(),
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": "# Changed content that should be ignored"
+            }]
+        }));
 
     // The notebook should still work - cell diagnostics should still be available
     // If the text operations had affected the notebook, this would fail
@@ -538,11 +545,13 @@ fn test_notebook_text_open_conflict() {
 
     // Try to send a textDocument/didClose for the notebook file (should be ignored)
     // The notebook should remain open and functional
-    interaction.client.send_notification::<DidCloseTextDocument>(json!({
-        "textDocument": {
-            "uri": notebook_uri.to_string()
-        }
-    }));
+    interaction
+        .client
+        .send_notification::<DidCloseTextDocument>(json!({
+            "textDocument": {
+                "uri": notebook_uri.to_string()
+            }
+        }));
 
     // Verify the notebook is still functional after the ignored didClose
     interaction
