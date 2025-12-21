@@ -540,26 +540,6 @@ def f() -> None:
   pass
 ```
 
-## invalid-enum-pattern
-
-Enum members are values, not classes. Using a class pattern such as `case Color.RED():`
-attempts to treat the member as a type and will never match at runtime. Match the member
-directly instead.
-
-```python
-from enum import Enum
-
-class Color(Enum):
-  RED = "red"
-
-def render(color: Color) -> str:
-  match color:
-    case Color.RED():  # invalid-enum-pattern
-      return "danger"
-    case Color.RED:
-      return "danger"
-```
-
 ## invalid-inheritance
 
 An error caused by incorrect inheritance in a class or type definition.

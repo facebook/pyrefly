@@ -86,7 +86,6 @@ use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
-use crate::binding::binding::MatchStmtInfo;
 use crate::binding::binding::NoneIfRecursive;
 use crate::binding::binding::RaisedException;
 use crate::binding::binding::ReturnTypeKind;
@@ -117,7 +116,6 @@ use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::display::TypeDisplayContext;
 use crate::types::literal::Lit;
-use crate::types::literal::LitEnum;
 use crate::types::module::ModuleType;
 use crate::types::param_spec::ParamSpec;
 use crate::types::quantified::Quantified;
@@ -177,25 +175,6 @@ pub enum TypeFormContext {
     /// Variable annotation outside of a class definition
     /// Is the variable assigned a value here?
     VarAnnotation(AnnAssignHasValue),
-}
-
-#[derive(Clone)]
-enum EnumMatchDomain {
-    Full {
-        class: ClassType,
-    },
-    Restricted {
-        class: ClassType,
-        allowed: SmallMap<Name, LitEnum>,
-    },
-}
-
-impl EnumMatchDomain {
-    fn class(&self) -> &ClassType {
-        match self {
-            EnumMatchDomain::Full { class } | EnumMatchDomain::Restricted { class, .. } => class,
-        }
-    }
 }
 
 impl TypeFormContext {
@@ -1629,6 +1608,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver().expand_vars_mut(ty);
     }
 
+    fn is_pure_enum_class(&self, cls: &ClassType) -> bool {
+        self.get_metadata_for_class(cls.class_object())
+            .enum_metadata()
+            .is_some_and(|meta| !meta.is_flag)
+    }
+
+    fn is_pure_enum_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => self.is_pure_enum_class(cls),
+            Type::Literal(Lit::Enum(lit_enum)) => {
+                let lit_enum = lit_enum.as_ref();
+                self.is_pure_enum_class(&lit_enum.class)
+            }
+            Type::Union(union) => {
+                let union = union.as_ref();
+                !union.members.is_empty()
+                    && union
+                        .members
+                        .iter()
+                        .all(|member| self.is_pure_enum_type(member))
+            }
+            _ => false,
+        }
+    }
+
+    fn format_enum_literal_cases(&self, ty: &Type) -> Option<String> {
+        fn collect_cases(ty: &Type, acc: &mut Vec<String>) -> bool {
+            match ty {
+                Type::Literal(Lit::Enum(lit_enum)) => {
+                    let lit_enum = lit_enum.as_ref();
+                    acc.push(format!("{}.{}", lit_enum.class.name(), lit_enum.member));
+                    true
+                }
+                Type::Union(union) => {
+                    let union = union.as_ref();
+                    union
+                        .members
+                        .iter()
+                        .all(|member| collect_cases(member, acc))
+                }
+                _ => false,
+            }
+        }
+
+        let mut cases = Vec::new();
+        if collect_cases(ty, &mut cases) {
+            Some(cases.join(", "))
+        } else {
+            None
+        }
+    }
+
     fn check_del_typed_dict_field(
         &self,
         typed_dict: &Name,
@@ -1782,6 +1813,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                     );
                 }
+            }
+            BindingExpect::MatchExhaustiveness {
+                subject,
+                remaining,
+                range,
+            } => {
+                let subject_info = self.get_idx(*subject);
+                let mut subject_ty = subject_info.ty().clone();
+                self.expand_vars_mut(&mut subject_ty);
+                if !self.is_pure_enum_type(&subject_ty) {
+                    return Arc::new(EmptyAnswer);
+                }
+                let mut remaining_ty = subject_ty.clone();
+                if let Some((op, narrow_range)) = remaining {
+                    let narrowed = self.narrow(&subject_info, op.as_ref(), *narrow_range, errors);
+                    let mut ty = narrowed.ty().clone();
+                    self.expand_vars_mut(&mut ty);
+                    remaining_ty = ty;
+                }
+                if remaining_ty.is_never() {
+                    return Arc::new(EmptyAnswer);
+                }
+                let subject_display = self.for_display(subject_ty);
+                let remaining_display = self.for_display(remaining_ty.clone());
+                let ctx = TypeDisplayContext::new(&[&subject_display, &remaining_display]);
+                let missing_cases = self
+                    .format_enum_literal_cases(&remaining_ty)
+                    .unwrap_or_else(|| ctx.display(&remaining_display).to_string());
+                self.error(
+                    errors,
+                    *range,
+                    ErrorInfo::Kind(ErrorKind::NonExhaustiveMatch),
+                    format!(
+                        "Match on `{}` is not exhaustive; missing cases: {}",
+                        ctx.display(&subject_display),
+                        missing_cases,
+                    ),
+                );
             }
         }
         Arc::new(EmptyAnswer)
@@ -2936,7 +3005,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.attr_infer(&binding, &attr.id, attr.range, errors, None)
                     .into_ty()
             }
-            Binding::MatchStmt(info) => self.check_match_stmt(info.as_ref(), errors),
             Binding::NameAssign {
                 name,
                 annotation: annot_key,
@@ -4181,214 +4249,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // This is a fallback in case a variable is defined *only* by a `del` - we'll use `Any` as
         // the type for reads (i.e. `BoundName` / `Forward` key/binding pairs) in that case.
         Type::any_implicit()
-    }
-
-    fn check_match_stmt(&self, info: &MatchStmtInfo, errors: &ErrorCollector) -> Type {
-        self.check_invalid_enum_class_patterns(info, errors);
-        self.check_non_exhaustive_enum_match(info, errors);
-        Type::None
-    }
-
-    fn check_invalid_enum_class_patterns(&self, info: &MatchStmtInfo, errors: &ErrorCollector) {
-        for case in info.cases.iter() {
-            for class_pattern in case.class_patterns.iter() {
-                let cls_ty = self.expr_infer(&class_pattern.cls_expr, errors);
-                if let Type::Literal(Lit::Enum(lit_enum)) = cls_ty {
-                    let lit_display = Lit::Enum(lit_enum.clone());
-                    self.error(
-                        errors,
-                        class_pattern.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidEnumPattern),
-                        format!(
-                            "Enum member `{}` cannot be used as a class pattern; match the member directly",
-                            lit_display
-                        ),
-                    );
-                }
-            }
-        }
-    }
-
-    fn check_non_exhaustive_enum_match(&self, info: &MatchStmtInfo, errors: &ErrorCollector) {
-        if info
-            .cases
-            .iter()
-            .any(|case| !case.has_guard && case.is_irrefutable)
-        {
-            return;
-        }
-        let binding = self.get_idx(info.subject);
-        let mut subject_ty = binding.ty().clone();
-        self.expand_vars_mut(&mut subject_ty);
-        let Some(domain) = self.enum_match_domain_from_type(&subject_ty) else {
-            return;
-        };
-        let enum_class = domain.class().clone();
-        let mut covered = SmallSet::new();
-        let mut has_literal_case = false;
-        for case in info.cases.iter() {
-            if case.has_guard {
-                continue;
-            }
-            if !case.value_patterns.is_empty() {
-                has_literal_case = true;
-            }
-            for expr in case.value_patterns.iter() {
-                if let Some(member) = self.enum_member_name_from_expr(expr, &enum_class, errors) {
-                    covered.insert(member);
-                }
-            }
-        }
-        if !has_literal_case {
-            return;
-        }
-        let missing_literals: Vec<LitEnum> = match &domain {
-            EnumMatchDomain::Full { class } => self
-                .get_enum_members(class.class_object())
-                .into_iter()
-                .filter_map(|lit| match lit {
-                    Lit::Enum(lit_enum) if !covered.contains(&lit_enum.member) => {
-                        Some((*lit_enum).clone())
-                    }
-                    _ => None,
-                })
-                .collect(),
-            EnumMatchDomain::Restricted { allowed, .. } => allowed
-                .iter()
-                .filter_map(|(name, lit)| {
-                    if covered.contains(name) {
-                        None
-                    } else {
-                        Some(lit.clone())
-                    }
-                })
-                .collect(),
-        };
-        if missing_literals.is_empty() {
-            return;
-        }
-        let ty_display = self.for_display(Type::ClassType(enum_class));
-        let missing_str = missing_literals
-            .iter()
-            .map(|lit| format!("{}", Lit::Enum(Box::new(lit.clone()))))
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.error(
-            errors,
-            info.range,
-            ErrorInfo::Kind(ErrorKind::NonExhaustiveMatch),
-            format!(
-                "Match on `{}` is not exhaustive; missing cases: {}",
-                ty_display, missing_str
-            ),
-        );
-    }
-
-    fn enum_member_name_from_expr(
-        &self,
-        expr: &Expr,
-        expected_class: &ClassType,
-        errors: &ErrorCollector,
-    ) -> Option<Name> {
-        let ty = self.expr_infer(expr, errors);
-        match ty {
-            Type::Literal(Lit::Enum(lit_enum))
-                if lit_enum.class.class_object() == expected_class.class_object() =>
-            {
-                Some(lit_enum.member.clone())
-            }
-            _ => None,
-        }
-    }
-
-    fn enum_match_domain_from_type(&self, ty: &Type) -> Option<EnumMatchDomain> {
-        match ty {
-            Type::Union(box Union { members, .. }) => {
-                let mut domain = None;
-                for member in members {
-                    let Some(member_domain) = self.enum_match_domain_from_type(member) else {
-                        return None;
-                    };
-                    let Some(merged) = self.merge_enum_match_domains(domain, member_domain) else {
-                        return None;
-                    };
-                    domain = Some(merged);
-                }
-                domain
-            }
-            _ => self.enum_match_domain_from_non_union(ty),
-        }
-    }
-
-    fn enum_match_domain_from_non_union(&self, ty: &Type) -> Option<EnumMatchDomain> {
-        match ty {
-            Type::ClassType(cls) => {
-                let metadata = self.get_enum_from_class(cls.class_object())?;
-                if metadata.is_flag {
-                    return None;
-                }
-                Some(EnumMatchDomain::Full { class: cls.clone() })
-            }
-            Type::Literal(Lit::Enum(lit_enum)) => {
-                let enum_member = lit_enum.as_ref().clone();
-                let metadata = self.get_enum_from_class(enum_member.class.class_object())?;
-                if metadata.is_flag {
-                    return None;
-                }
-                let class = enum_member.class.clone();
-                let member_name = enum_member.member.clone();
-                let mut allowed: SmallMap<Name, LitEnum> = SmallMap::new();
-                allowed.insert(member_name, enum_member);
-                Some(EnumMatchDomain::Restricted { class, allowed })
-            }
-            _ => None,
-        }
-    }
-
-    fn merge_enum_match_domains(
-        &self,
-        existing: Option<EnumMatchDomain>,
-        new_domain: EnumMatchDomain,
-    ) -> Option<EnumMatchDomain> {
-        match (existing, new_domain) {
-            (None, domain) => Some(domain),
-            (
-                Some(EnumMatchDomain::Full { class, .. }),
-                EnumMatchDomain::Full { class: new_class },
-            ) if class.class_object() == new_class.class_object() => {
-                Some(EnumMatchDomain::Full { class })
-            }
-            (
-                Some(EnumMatchDomain::Full { class, .. }),
-                EnumMatchDomain::Restricted {
-                    class: new_class, ..
-                },
-            ) if class.class_object() == new_class.class_object() => {
-                Some(EnumMatchDomain::Full { class })
-            }
-            (
-                Some(EnumMatchDomain::Restricted {
-                    class,
-                    allowed: _allowed,
-                }),
-                EnumMatchDomain::Full { class: new_class },
-            ) if class.class_object() == new_class.class_object() => {
-                Some(EnumMatchDomain::Full { class: new_class })
-            }
-            (
-                Some(EnumMatchDomain::Restricted { class, mut allowed }),
-                EnumMatchDomain::Restricted {
-                    class: new_class,
-                    allowed: new_allowed,
-                },
-            ) if class.class_object() == new_class.class_object() => {
-                for (name, lit) in new_allowed {
-                    allowed.insert(name, lit);
-                }
-                Some(EnumMatchDomain::Restricted { class, allowed })
-            }
-            _ => None,
-        }
     }
 
     pub fn expr_untype(

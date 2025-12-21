@@ -116,19 +116,3 @@ def describe(color: Color) -> str:
     return "cool"
 "#,
 );
-
-testcase!(
-    test_enum_member_class_pattern_error,
-    r#"
-from enum import Enum
-
-class Color(Enum):
-    RED = "red"
-
-def render(color: Color) -> str:
-    match color:
-        case Color.RED():  # E: Enum member `Color.RED` cannot be used as a class pattern; match the member directly
-            return "danger"
-    return "ok"
-"#,
-);
