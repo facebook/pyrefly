@@ -722,9 +722,7 @@ impl Server {
             }
             LspEvent::RecheckFinished => {
                 // We did a commit and want to get back to a stable state.
-                let validate_start = Instant::now();
                 self.validate_in_memory_and_commit_if_possible(ide_transaction_manager, telemetry);
-                telemetry.set_validate_duration(validate_start.elapsed());
             }
             LspEvent::CancelRequest(id) => {
                 info!("We should cancel request {id:?}");
@@ -883,9 +881,7 @@ impl Server {
                 //
                 // Validating in-memory files is relatively cheap, since we only actually recheck open files which have
                 // changed file contents, so it's simpler to just always do it.
-                let validate_start = Instant::now();
-                self.validate_in_memory_for_transaction(&mut transaction);
-                telemetry.set_validate_duration(validate_start.elapsed());
+                self.validate_in_memory_for_transaction(&mut transaction, telemetry);
 
                 info!("Handling non-canceled request {} ({})", x.method, &x.id);
                 if let Some(params) = as_request::<GotoDefinition>(&x) {
@@ -1331,7 +1327,12 @@ impl Server {
     }
 
     /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
-    fn validate_in_memory_for_transaction(&self, transaction: &mut Transaction<'_>) -> Vec<Handle> {
+    fn validate_in_memory_for_transaction(
+        &self,
+        transaction: &mut Transaction<'_>,
+        telemetry: &mut TelemetryEvent,
+    ) -> Vec<Handle> {
+        let validate_start = Instant::now();
         let handles = self
             .open_files
             .read()
@@ -1346,6 +1347,7 @@ impl Server {
                 .collect::<Vec<_>>(),
         );
         transaction.run(&handles, Require::Everything);
+        telemetry.set_validate_duration(validate_start.elapsed());
         handles
     }
 
@@ -1518,7 +1520,7 @@ impl Server {
             Ok(transaction) => transaction.as_mut(),
             Err(transaction) => transaction,
         };
-        let handles = self.validate_in_memory_for_transaction(transaction);
+        let handles = self.validate_in_memory_for_transaction(transaction, telemetry);
 
         let publish = |transaction: &Transaction| {
             let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
@@ -1666,9 +1668,7 @@ impl Server {
                 f(transaction.as_mut());
                 telemetry.set_invalidate_duration(invalidate_start.elapsed());
 
-                let validate_start = Instant::now();
-                server.validate_in_memory_for_transaction(transaction.as_mut());
-                telemetry.set_validate_duration(validate_start.elapsed());
+                server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry);
 
                 // Commit will be blocked until there are no ongoing reads.
                 // If we have some long running read jobs that can be cancelled, we should cancel them
@@ -1864,9 +1864,7 @@ impl Server {
                 "File {} opened, prepare to validate open files.",
                 path.display()
             );
-            let validate_start = Instant::now();
             self.validate_in_memory_without_committing(ide_transaction_manager, telemetry);
-            telemetry.set_validate_duration(validate_start.elapsed());
         }
         self.populate_project_files_if_necessary(config_to_populate_files, telemetry);
         self.populate_workspace_files_if_necessary(telemetry);
@@ -2134,9 +2132,7 @@ impl Server {
                     .state
                     .new_committable_transaction(Require::indexing(), None);
                 transaction.as_mut().set_memory(vec![(path, None)]);
-                let validate_start = Instant::now();
-                let _ = server.validate_in_memory_for_transaction(transaction.as_mut());
-                telemetry.set_validate_duration(validate_start.elapsed());
+                let _ = server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry);
                 server
                     .state
                     .commit_transaction(transaction, Some(telemetry));
@@ -2589,13 +2585,13 @@ impl Server {
         };
         self.find_reference_queue.queue_task(
             TelemetryEventKind::FindFromDefinition,
-            Box::new(move |server, _telemetry| {
+            Box::new(move |server, telemetry| {
                 let mut transaction = server.state.cancellable_transaction();
                 server
                     .cancellation_handles
                     .lock()
                     .insert(request_id.clone(), transaction.get_cancellation_handle());
-                server.validate_in_memory_for_transaction(transaction.as_mut());
+                server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry);
                 match find_fn(&mut transaction, &handle, definition) {
                     Ok(results) => {
                         server.cancellation_handles.lock().remove(&request_id);
@@ -3291,9 +3287,7 @@ impl Server {
                 transaction.as_mut().invalidate_config();
                 telemetry.set_invalidate_duration(invalidate_start.elapsed());
 
-                let validate_start = Instant::now();
-                server.validate_in_memory_for_transaction(transaction.as_mut());
-                telemetry.set_validate_duration(validate_start.elapsed());
+                server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry);
 
                 // Commit will be blocked until there are no ongoing reads.
                 // If we have some long running read jobs that can be cancelled, we should cancel them
