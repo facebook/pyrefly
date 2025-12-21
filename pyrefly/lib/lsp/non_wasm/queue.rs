@@ -194,11 +194,11 @@ impl LspQueue {
     }
 }
 
-pub struct HeavyTask(Box<dyn FnOnce(&Server) + Send + Sync + 'static>);
+pub struct HeavyTask(Box<dyn FnOnce(&Server, &mut TelemetryEvent) + Send + Sync + 'static>);
 
 impl HeavyTask {
-    fn run(self, server: &Server) {
-        self.0(server)
+    fn run(self, server: &Server, telemetry: &mut TelemetryEvent) {
+        self.0(server, telemetry);
     }
 }
 
@@ -228,7 +228,7 @@ impl HeavyTaskQueue {
     pub fn queue_task(
         &self,
         kind: TelemetryEventKind,
-        f: Box<dyn FnOnce(&Server) + Send + Sync + 'static>,
+        f: Box<dyn FnOnce(&Server, &mut TelemetryEvent) + Send + Sync + 'static>,
     ) {
         self.task_sender
             .send((HeavyTask(f), kind, Instant::now()))
@@ -256,10 +256,10 @@ impl HeavyTaskQueue {
                         .recv(&self.task_receiver)
                         .expect("Failed to receive heavy task");
                     debug!("Dequeued task on {} heavy task queue", self.queue_name);
-                    let telemetry_event =
+                    let mut telemetry_event =
                         TelemetryEvent::new_dequeued(kind, enqueued, server.telemetry_state());
                     let queue_duration = telemetry_event.queue;
-                    task.run(server);
+                    task.run(server, &mut telemetry_event);
                     let process_duration = telemetry_event.finish_and_record(telemetry, None);
                     info!(
                         "Ran task on {} heavy task queue. Queue time: {:.2}, task time: {:.2}",

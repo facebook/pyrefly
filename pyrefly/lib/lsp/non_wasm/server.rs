@@ -774,7 +774,7 @@ impl Server {
                 )?;
             }
             LspEvent::DidCloseTextDocument(params) => {
-                self.did_close(params.text_document.uri);
+                self.did_close(params.text_document.uri, telemetry);
             }
             LspEvent::DidSaveTextDocument(params) => {
                 self.did_save(params.text_document.uri);
@@ -818,13 +818,13 @@ impl Server {
                 )?;
             }
             LspEvent::DidCloseNotebookDocument(params) => {
-                self.did_close(params.notebook_document.uri);
+                self.did_close(params.notebook_document.uri, telemetry);
             }
             LspEvent::DidSaveNotebookDocument(params) => {
                 self.did_save(params.notebook_document.uri);
             }
             LspEvent::DidChangeWatchedFiles(params) => {
-                self.did_change_watched_files(params);
+                self.did_change_watched_files(params, telemetry);
             }
             LspEvent::DidChangeWorkspaceFolders(params) => {
                 self.workspace_folders_changed(params);
@@ -1589,6 +1589,7 @@ impl Server {
     fn populate_project_files_if_necessary(
         &self,
         config_to_populate_files: Option<ArcId<ConfigFile>>,
+        telemetry: &mut TelemetryEvent,
     ) {
         if let Some(config) = config_to_populate_files {
             if config.skip_lsp_config_indexing {
@@ -1600,22 +1601,22 @@ impl Server {
                     if self.indexed_configs.lock().insert(config.dupe()) {
                         self.recheck_queue.queue_task(
                             TelemetryEventKind::PopulateProjectFiles,
-                            Box::new(move |server| {
-                                server.populate_all_project_files_in_config(config);
+                            Box::new(move |server, telemetry| {
+                                server.populate_all_project_files_in_config(config, telemetry);
                             }),
                         );
                     }
                 }
                 IndexingMode::LazyBlocking => {
                     if self.indexed_configs.lock().insert(config.dupe()) {
-                        self.populate_all_project_files_in_config(config);
+                        self.populate_all_project_files_in_config(config, telemetry);
                     }
                 }
             }
         }
     }
 
-    fn populate_workspace_files_if_necessary(&self) {
+    fn populate_workspace_files_if_necessary(&self, telemetry: &mut TelemetryEvent) {
         let mut indexed_workspaces = self.indexed_workspaces.lock();
         let roots_to_populate_files = self
             .workspaces
@@ -1634,15 +1635,15 @@ impl Server {
                 drop(indexed_workspaces);
                 self.recheck_queue.queue_task(
                     TelemetryEventKind::PopulateWorkspaceFiles,
-                    Box::new(move |server| {
-                        server.populate_all_workspaces_files(roots_to_populate_files);
+                    Box::new(move |server, telemetry| {
+                        server.populate_all_workspaces_files(roots_to_populate_files, telemetry);
                     }),
                 );
             }
             IndexingMode::LazyBlocking => {
                 indexed_workspaces.extend(roots_to_populate_files.iter().cloned());
                 drop(indexed_workspaces);
-                self.populate_all_workspaces_files(roots_to_populate_files);
+                self.populate_all_workspaces_files(roots_to_populate_files, telemetry);
             }
         }
     }
@@ -1652,7 +1653,7 @@ impl Server {
     fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + Sync + 'static) {
         self.recheck_queue.queue_task(
             TelemetryEventKind::Invalidate,
-            Box::new(move |server| {
+            Box::new(move |server, _telemetry| {
                 let mut transaction = server
                     .state
                     .new_committable_transaction(Require::indexing(), None);
@@ -1683,7 +1684,11 @@ impl Server {
     /// entire project to work. This blocking function should be called when we know that a project
     /// file is opened and if we intend to provide features like find-references, and should be
     /// called when config changes (currently this is a TODO).
-    fn populate_all_project_files_in_config(&self, config: ArcId<ConfigFile>) {
+    fn populate_all_project_files_in_config(
+        &self,
+        config: ArcId<ConfigFile>,
+        _telemetry: &mut TelemetryEvent,
+    ) {
         let unknown = ModuleName::unknown();
 
         info!("Populating all files in the config ({:?}).", config.source);
@@ -1716,7 +1721,11 @@ impl Server {
         let _ = self.lsp_queue.send(LspEvent::RecheckFinished);
     }
 
-    fn populate_all_workspaces_files(&self, workspace_roots: Vec<PathBuf>) {
+    fn populate_all_workspaces_files(
+        &self,
+        workspace_roots: Vec<PathBuf>,
+        _telemetry: &mut TelemetryEvent,
+    ) {
         for workspace_root in workspace_roots {
             info!(
                 "Populating up to {} files in the workspace ({workspace_root:?}).",
@@ -1753,8 +1762,8 @@ impl Server {
 
     /// Attempts to requery any open sourced_dbs for open files, and if there are changes,
     /// invalidate find and perform a recheck.
-    fn queue_source_db_rebuild_and_recheck(&self, force: bool) {
-        let run = move |server: &Server| {
+    fn queue_source_db_rebuild_and_recheck(&self, telemetry: &mut TelemetryEvent, force: bool) {
+        let run = move |server: &Server, _telemetry: &mut TelemetryEvent| {
             let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> =
                 SmallMap::new();
             let config_finder = server.state.config_finder();
@@ -1782,7 +1791,7 @@ impl Server {
         };
 
         if self.build_system_blocking {
-            run(self);
+            run(self, telemetry);
         } else {
             self.sourcedb_queue
                 .queue_task(TelemetryEventKind::SourceDbRebuild, Box::new(run));
@@ -1827,7 +1836,7 @@ impl Server {
         };
         self.version_info.lock().insert(path.clone(), version);
         self.open_files.write().insert(path.clone(), contents);
-        self.queue_source_db_rebuild_and_recheck(false);
+        self.queue_source_db_rebuild_and_recheck(telemetry, false);
         if !subsequent_mutation {
             // In order to improve perceived startup perf, when a file is opened, we run a
             // non-committing transaction that indexes the file with default require level Exports.
@@ -1847,8 +1856,8 @@ impl Server {
             self.validate_in_memory_without_committing(ide_transaction_manager);
             telemetry.set_validate_duration(validate_start.elapsed());
         }
-        self.populate_project_files_if_necessary(config_to_populate_files);
-        self.populate_workspace_files_if_necessary();
+        self.populate_project_files_if_necessary(config_to_populate_files, telemetry);
+        self.populate_workspace_files_if_necessary(telemetry);
         // rewatch files in case we loaded or dropped any configs
         self.setup_file_watcher_if_necessary();
         Ok(())
@@ -2052,7 +2061,11 @@ impl Server {
         config_changed || files_added_or_removed
     }
 
-    fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+    fn did_change_watched_files(
+        &self,
+        params: DidChangeWatchedFilesParams,
+        telemetry: &mut TelemetryEvent,
+    ) {
         let events = CategorizedEvents::new_lsp(params.changes);
         if events.is_empty() {
             return;
@@ -2071,11 +2084,11 @@ impl Server {
         // If no build system file was changed, then we should just not do anything. If
         // a build system file was changed, then the change should take effect soon.
         if should_requery_build_system {
-            self.queue_source_db_rebuild_and_recheck(true);
+            self.queue_source_db_rebuild_and_recheck(telemetry, true);
         }
     }
 
-    fn did_close(&self, url: Url) {
+    fn did_close(&self, url: Url, telemetry: &mut TelemetryEvent) {
         let Some(path) = self.path_for_uri(&url) else {
             return;
         };
@@ -2096,10 +2109,10 @@ impl Server {
                 .publish_diagnostics_for_uri(url.clone(), Vec::new(), version);
         }
         self.unsaved_file_tracker.forget_uri_path(&url);
-        self.queue_source_db_rebuild_and_recheck(false);
+        self.queue_source_db_rebuild_and_recheck(telemetry, false);
         self.recheck_queue.queue_task(
             TelemetryEventKind::InvalidateOnClose,
-            Box::new(move |server| {
+            Box::new(move |server, _telemetry| {
                 // Clear out the memory associated with this file.
                 // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
                 // Having the extra file hanging around doesn't harm anything, but does use extra memory.
@@ -2558,7 +2571,7 @@ impl Server {
         };
         self.find_reference_queue.queue_task(
             TelemetryEventKind::FindFromDefinition,
-            Box::new(move |server| {
+            Box::new(move |server, _telemetry| {
                 let mut transaction = server.state.cancellable_transaction();
                 server
                     .cancellation_handles
@@ -3251,7 +3264,7 @@ impl Server {
     fn invalidate_config_and_validate_in_memory(&self) {
         self.recheck_queue.queue_task(
             TelemetryEventKind::InvalidateConfig,
-            Box::new(move |server| {
+            Box::new(move |server, _telemetry| {
                 let mut transaction = server
                     .state
                     .new_committable_transaction(Require::indexing(), None);
