@@ -214,7 +214,6 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
-use crate::lsp::non_wasm::queue::HeavyTask;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
@@ -286,7 +285,9 @@ pub trait TspInterface: Send + Sync {
     fn lsp_queue(&self) -> &LspQueue;
 
     /// Get access to the recheck queue for async task processing
-    fn recheck_queue(&self) -> &HeavyTaskQueue<HeavyTask>;
+    fn run_recheck_queue(&self);
+
+    fn stop_recheck_queue(&self);
 
     /// Process an LSP event and return the next step
     fn process_event<'a>(
@@ -297,8 +298,6 @@ pub trait TspInterface: Send + Sync {
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent>;
-
-    fn run_task(&self, task: HeavyTask);
 
     fn sourcedb_available(&self) -> bool;
 }
@@ -346,9 +345,9 @@ impl ServerConnection {
 pub struct Server {
     connection: ServerConnection,
     lsp_queue: LspQueue,
-    recheck_queue: HeavyTaskQueue<HeavyTask>,
-    find_reference_queue: HeavyTaskQueue<HeavyTask>,
-    sourcedb_queue: HeavyTaskQueue<HeavyTask>,
+    recheck_queue: HeavyTaskQueue,
+    find_reference_queue: HeavyTaskQueue,
+    sourcedb_queue: HeavyTaskQueue,
     /// Any configs whose find cache should be invalidated.
     invalidated_source_dbs: Mutex<SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>>,
     initialize_params: InitializeParams,
@@ -619,19 +618,13 @@ pub fn lsp_loop(
             dispatch_lsp_events(&server.connection.0, &server.lsp_queue);
         });
         scope.spawn(|| {
-            server
-                .recheck_queue
-                .run_until_stopped(|task| task.run(&server));
+            server.recheck_queue.run_until_stopped(&server);
         });
         scope.spawn(|| {
-            server
-                .find_reference_queue
-                .run_until_stopped(|task| task.run(&server));
+            server.find_reference_queue.run_until_stopped(&server);
         });
         scope.spawn(|| {
-            server
-                .sourcedb_queue
-                .run_until_stopped(|task| task.run(&server));
+            server.sourcedb_queue.run_until_stopped(&server);
         });
         let mut ide_transaction_manager = TransactionManager::default();
         let mut canceled_requests = HashSet::new();
@@ -1597,7 +1590,7 @@ impl Server {
                 IndexingMode::None => {}
                 IndexingMode::LazyNonBlockingBackground => {
                     if self.indexed_configs.lock().insert(config.dupe()) {
-                        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
+                        self.recheck_queue.queue_task(Box::new(move |server| {
                             server.populate_all_project_files_in_config(config);
                         }));
                     }
@@ -1628,7 +1621,7 @@ impl Server {
             IndexingMode::LazyNonBlockingBackground => {
                 indexed_workspaces.extend(roots_to_populate_files.iter().cloned());
                 drop(indexed_workspaces);
-                self.recheck_queue.queue_task(HeavyTask::new(move |server| {
+                self.recheck_queue.queue_task(Box::new(move |server| {
                     server.populate_all_workspaces_files(roots_to_populate_files);
                 }));
             }
@@ -1643,7 +1636,7 @@ impl Server {
     /// Perform an invalidation of elements on `State` and commit them.
     /// Runs asynchronously. Returns immediately and may wait a while for a committable transaction.
     fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + Sync + 'static) {
-        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
+        self.recheck_queue.queue_task(Box::new(move |server| {
             let mut transaction = server
                 .state
                 .new_committable_transaction(Require::indexing(), None);
@@ -1774,7 +1767,7 @@ impl Server {
         if self.build_system_blocking {
             run(self);
         } else {
-            self.sourcedb_queue.queue_task(HeavyTask::new(run));
+            self.sourcedb_queue.queue_task(Box::new(run));
         }
     }
 
@@ -2086,7 +2079,7 @@ impl Server {
         }
         self.unsaved_file_tracker.forget_uri_path(&url);
         self.queue_source_db_rebuild_and_recheck(false);
-        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
+        self.recheck_queue.queue_task(Box::new(move |server| {
             // Clear out the memory associated with this file.
             // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
             // Having the extra file hanging around doesn't harm anything, but does use extra memory.
@@ -2543,7 +2536,7 @@ impl Server {
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
         self.find_reference_queue
-            .queue_task(HeavyTask::new(move |server| {
+            .queue_task(Box::new(move |server| {
                 let mut transaction = server.state.cancellable_transaction();
                 server
                     .cancellation_handles
@@ -3233,7 +3226,7 @@ impl Server {
     /// Asynchronously invalidate configuration and then validate in-memory files
     /// This ensures validate_in_memory() only runs after config invalidation completes
     fn invalidate_config_and_validate_in_memory(&self) {
-        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
+        self.recheck_queue.queue_task(Box::new(move |server| {
             let mut transaction = server
                 .state
                 .new_committable_transaction(Require::indexing(), None);
@@ -3564,8 +3557,12 @@ impl TspInterface for Server {
         &self.lsp_queue
     }
 
-    fn recheck_queue(&self) -> &HeavyTaskQueue<HeavyTask> {
-        &self.recheck_queue
+    fn run_recheck_queue(&self) {
+        self.recheck_queue.run_until_stopped(self);
+    }
+
+    fn stop_recheck_queue(&self) {
+        self.recheck_queue.stop();
     }
 
     fn process_event<'a>(
@@ -3583,10 +3580,6 @@ impl TspInterface for Server {
             subsequent_mutation,
             event,
         )
-    }
-
-    fn run_task(&self, task: HeavyTask) {
-        task.run(self)
     }
 
     fn sourcedb_available(&self) -> bool {

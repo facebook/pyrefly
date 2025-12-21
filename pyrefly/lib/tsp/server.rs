@@ -146,12 +146,7 @@ pub fn tsp_loop(
 
     std::thread::scope(|scope| {
         // Start the recheck queue thread to process async tasks
-        scope.spawn(|| {
-            server
-                .inner
-                .recheck_queue()
-                .run_until_stopped(|task| server.inner.run_task(task));
-        });
+        scope.spawn(|| server.inner.run_recheck_queue());
 
         scope.spawn(|| {
             dispatch_lsp_events(server.inner.connection(), server.inner.lsp_queue());
@@ -191,7 +186,7 @@ pub fn tsp_loop(
             }
         }
 
-        server.inner.recheck_queue().stop();
+        server.inner.stop_recheck_queue();
         Ok(())
     })
 }

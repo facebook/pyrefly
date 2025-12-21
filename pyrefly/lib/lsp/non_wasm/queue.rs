@@ -194,25 +194,21 @@ impl LspQueue {
 pub struct HeavyTask(Box<dyn FnOnce(&Server) + Send + Sync + 'static>);
 
 impl HeavyTask {
-    pub fn new(f: impl FnOnce(&Server) + Send + Sync + 'static) -> Self {
-        Self(Box::new(f))
-    }
-
-    pub fn run(self, server: &Server) {
+    fn run(self, server: &Server) {
         self.0(server)
     }
 }
 
 /// A queue for heavy tasks that should be run in the background thread.
-pub struct HeavyTaskQueue<T> {
-    task_sender: Sender<(T, Instant)>,
-    task_receiver: Receiver<(T, Instant)>,
+pub struct HeavyTaskQueue {
+    task_sender: Sender<(HeavyTask, Instant)>,
+    task_receiver: Receiver<(HeavyTask, Instant)>,
     stop_sender: Sender<()>,
     stop_receiver: Receiver<()>,
     queue_name: String,
 }
 
-impl<T> HeavyTaskQueue<T> {
+impl HeavyTaskQueue {
     pub fn new(queue_name: &str) -> Self {
         let queue_name = queue_name.to_owned();
         let (task_sender, task_receiver) = crossbeam_channel::unbounded();
@@ -226,14 +222,14 @@ impl<T> HeavyTaskQueue<T> {
         }
     }
 
-    pub fn queue_task(&self, task: T) {
+    pub fn queue_task(&self, f: Box<dyn FnOnce(&Server) + Send + Sync + 'static>) {
         self.task_sender
-            .send((task, Instant::now()))
+            .send((HeavyTask(f), Instant::now()))
             .expect("Failed to queue heavy task");
         debug!("Enqueued task on {} heavy task queue", self.queue_name);
     }
 
-    pub fn run_until_stopped(&self, f: impl Fn(T)) {
+    pub fn run_until_stopped(&self, server: &Server) {
         let mut receiver_selector = Select::new_biased();
         // Biased selector will pick the receiver with lower index over higher ones,
         // so we register priority_events_receiver first.
@@ -254,7 +250,7 @@ impl<T> HeavyTaskQueue<T> {
                         .expect("Failed to receive heavy task");
                     debug!("Dequeued task on {} heavy task queue", self.queue_name);
                     let task_start = Instant::now();
-                    f(task);
+                    task.run(server);
                     let task_end = Instant::now();
                     info!(
                         "Ran task on {} heavy task queue. Queue time: {:.2}, task time: {:.2}",
