@@ -642,6 +642,7 @@ pub fn lsp_loop(
                 enqueue_time,
                 sourcedb_available,
             );
+            let queue_duration = event_telemetry.queue;
             let event_description = event.describe();
             let result = server.process_event(
                 &mut ide_transaction_manager,
@@ -650,8 +651,7 @@ pub fn lsp_loop(
                 subsequent_mutation,
                 event,
             );
-            let (queue_duration, process_duration, result) =
-                event_telemetry.finish_and_record(telemetry, result);
+            let (process_duration, result) = event_telemetry.finish_and_record(telemetry, result);
             match result {
                 Ok(ProcessEvent::Continue) => {
                     info!(

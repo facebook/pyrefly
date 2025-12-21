@@ -164,6 +164,7 @@ pub fn tsp_loop(
                 enqueued_at,
                 server.inner.sourcedb_available(),
             );
+            let queue_duration = event_telemetry.queue;
             let event_description = event.describe();
 
             let result = server.process_event(
@@ -173,7 +174,7 @@ pub fn tsp_loop(
                 subsequent_mutation,
                 event,
             );
-            let (queue_duration, process_duration, result) = event_telemetry.finish(result);
+            let (process_duration, result) = event_telemetry.finish(result);
             match result? {
                 ProcessEvent::Continue => {
                     info!(

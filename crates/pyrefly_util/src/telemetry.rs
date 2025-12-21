@@ -15,7 +15,7 @@ pub trait Telemetry {
         &self,
         event: TelemetryEvent,
         result: Result<T, Error>,
-    ) -> (Duration, Duration, Result<T, Error>);
+    ) -> (Duration, Result<T, Error>);
 }
 pub struct NoTelemetry;
 
@@ -24,7 +24,7 @@ impl Telemetry for NoTelemetry {
         &self,
         event: TelemetryEvent,
         result: Result<T, Error>,
-    ) -> (Duration, Duration, Result<T, Error>) {
+    ) -> (Duration, Result<T, Error>) {
         event.finish(result)
     }
 }
@@ -35,8 +35,8 @@ pub enum TelemetryEventKind {
 
 pub struct TelemetryEvent {
     pub kind: TelemetryEventKind,
-    pub enqueued_at: Instant,
-    pub dequeued_at: Instant,
+    pub queue: Duration,
+    pub start: Instant,
     pub error: Option<Error>,
     pub validate: Option<Duration>,
     pub server_has_sourcedb: bool,
@@ -48,10 +48,12 @@ impl TelemetryEvent {
         enqueued_at: Instant,
         server_has_sourcedb: bool,
     ) -> Self {
+        let start = Instant::now();
+        let queue = start - enqueued_at;
         Self {
             kind,
-            enqueued_at,
-            dequeued_at: Instant::now(),
+            queue,
+            start,
             error: None,
             validate: None,
             server_has_sourcedb,
@@ -62,18 +64,17 @@ impl TelemetryEvent {
         self.validate = Some(duration);
     }
 
-    pub fn finish<T>(&self, result: Result<T, Error>) -> (Duration, Duration, Result<T, Error>) {
-        let finished_at = Instant::now();
-        let queue_duration = self.dequeued_at - self.enqueued_at;
-        let process_duration = finished_at - self.dequeued_at;
-        (queue_duration, process_duration, result)
+    pub fn finish<T>(&self, result: Result<T, Error>) -> (Duration, Result<T, Error>) {
+        let finish = Instant::now();
+        let process = finish - self.start;
+        (process, result)
     }
 
     pub fn finish_and_record<T>(
         self,
         telemetry: &impl Telemetry,
         result: Result<T, Error>,
-    ) -> (Duration, Duration, Result<T, Error>) {
+    ) -> (Duration, Result<T, Error>) {
         telemetry.record_event(self, result)
     }
 }
