@@ -19,7 +19,9 @@ use pyrefly_types::display::TypeDisplayContext;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::state::require::Require;
 use crate::state::state::Transaction;
+use dupe::Dupe;
 
 #[derive(Debug)]
 pub enum ProvideType {}
@@ -43,10 +45,15 @@ pub struct ProvideTypeResponse {
 }
 
 pub fn provide_type(
-    transaction: &Transaction<'_>,
+    transaction: &mut Transaction<'_>,
     handle: &Handle,
     positions: Vec<Position>,
 ) -> Option<ProvideTypeResponse> {
+    let was_loaded = transaction.get_module_info(handle).is_some();
+    if !was_loaded {
+        transaction.run(&[handle.dupe()], Require::Everything);
+    }
+
     let info = transaction.get_module_info(handle)?;
     let mut contents = Vec::new();
 
