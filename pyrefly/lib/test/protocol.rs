@@ -785,3 +785,27 @@ def g(b: B, c: C):
     f(c)  # E: `C` is not assignable to upper bound `A`
     "#,
 );
+
+testcase!(
+    bug = "Uncomment the definition of `f` in `test` and we stack overflow.",
+    test_functor_protocol_and_impl,
+    r#"
+from typing import Generic, TypeVar, Protocol, Callable
+
+T = TypeVar('T')
+U = TypeVar('U')
+
+class Functor(Protocol[T]):
+    """A Functor protocol - common in functional programming."""
+    def map(self, f: Callable[[T], U]) -> Functor[U]: ...
+
+class Maybe(Generic[T]):
+    """A Maybe/Option type that should implement Functor."""
+    value: T | None
+    def map(self, f: Callable[[T], U]) -> Maybe[U]: ...
+
+def test():
+    m: Maybe[int] = ...  # type: ignore
+    # f: Functor[int] = m  # Stack overflow here!
+"#,
+);
