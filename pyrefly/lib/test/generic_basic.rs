@@ -533,3 +533,18 @@ def _to_list[T](
 def to_type[T](value: Any, kind: TypeForm[T]) -> T: ...
     "#,
 );
+
+testcase!(
+    bug = "Generic type is used for parametrization in a function signature",
+    test_generic_call_distributed_over_union,
+    r#"
+from typing import reveal_type
+
+def foo[T](a: set[T]) -> T: ...
+
+args: list[set[int] | set[bool]] = []
+
+# Expected: list[int | bool]
+reveal_type([foo(arg) for arg in args]) # E: revealed type: list[bool | int]
+"#,
+);

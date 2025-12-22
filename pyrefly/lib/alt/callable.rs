@@ -996,6 +996,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         mut ctor_targs: Option<&mut TArgs>,
     ) -> Type {
+        if tparams.is_some() {
+            for (i, arg) in args.iter().enumerate() {
+                let mut temp_ty: Option<Type> = None;
+                match arg {
+                    CallArg::Arg(TypeOrExpr::Type(ty, _)) => {
+                        if matches!(ty, Type::Union(_)) {
+                            temp_ty = Some((*ty).clone());
+                        }
+                    }
+                    CallArg::Arg(TypeOrExpr::Expr(e)) => {
+                        let ty = self.expr_infer(e, arg_errors); 
+                        if matches!(ty, Type::Union(_)) {
+                            temp_ty = Some(ty);
+                        }
+                    }
+                    CallArg::Star(..) => {
+                    }
+                }
+
+                if let Some(Type::Union(u)) = temp_ty {
+                    let mut results = Vec::new();
+                    for member in &u.members {
+                        let mut new_args = args.to_vec();
+                        new_args[i] = CallArg::ty(member, arg.range());
+                        
+                        let res = self.callable_infer(
+                            callable.clone(),
+                            callable_name,
+                            tparams,
+                            self_obj.clone(),
+                            &new_args,
+                            keywords,
+                            range,
+                            arg_errors,
+                            call_errors,
+                            context,
+                            hint,
+                            None, 
+                        );
+                        results.push(res);
+                    }
+                    return self.unions(results);
+                }
+            }
+        }
+
         let (qs, mut callable) = if let Some(tparams) = tparams {
             // If we have a hint, we want to try to instantiate against it first, so we can contextually type
             // arguments. If we don't match the hint, we need to throw away any instantiations we might have made.
