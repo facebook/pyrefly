@@ -191,7 +191,9 @@ struct DefinitionsBuilder<'a> {
 }
 
 fn is_private_name(name: &Name) -> bool {
-    name.starts_with('_')
+    // Names starting with underscore are private, except for a single underscore `_`
+    // which is commonly used as an alias for gettext.
+    name.starts_with('_') && name.as_str() != "_"
 }
 
 fn implicitly_imported_submodule(

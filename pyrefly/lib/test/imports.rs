@@ -1077,3 +1077,25 @@ testcase!(
 x: X = X()
 "#,
 );
+
+fn env_extra_builtins_single_underscore() -> TestEnv {
+    TestEnv::one_with_path(
+        "__builtins__",
+        "__builtins__.pyi",
+        r#"
+def gettext(message: str) -> str: ...
+def _(message: str) -> str: ...
+"#,
+    )
+}
+
+testcase!(
+    test_extra_builtins_single_underscore,
+    env_extra_builtins_single_underscore(),
+    r#"
+from typing import assert_type
+# Single underscore `_` is a common alias for gettext and should be exported from builtins
+assert_type(gettext("a"), str)
+assert_type(_("b"), str)
+"#,
+);
