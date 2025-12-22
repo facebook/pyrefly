@@ -407,13 +407,53 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
+        // First check exact (Type, Type) recursive assumptions
         let recursive_check = (got.clone(), Type::ClassType(protocol.clone()));
         if !self.recursive_assumptions.insert(recursive_check.clone()) {
             // Assume recursive checks are true
             return Ok(());
         }
+
+        // For class-level coinductive reasoning: if the `got` type's type arguments
+        // contain Vars, we're likely in a recursive pattern (e.g., checking method return
+        // types that reference the same classes). Use (Class, Class) matching to detect
+        // cycles that would otherwise be missed due to fresh Var creation.
+        let class_check = if let Type::ClassType(got_class) = &got {
+            // Check if any targ contains a Var (indicating we're in recursive pattern)
+            let mut contains_var = false;
+            for targ in got_class.targs().as_slice() {
+                targ.universe(&mut |t| contains_var |= matches!(t, Type::Var(_)));
+                if contains_var {
+                    break;
+                }
+            }
+
+            if contains_var {
+                let key = (
+                    got_class.class_object().clone(),
+                    protocol.class_object().clone(),
+                );
+                if !self.class_protocol_assumptions.insert(key.clone()) {
+                    // Coinductive: assume this recursive class-level check succeeds
+                    self.recursive_assumptions.shift_remove(&recursive_check);
+                    return Ok(());
+                }
+                Some(key)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let res = self.is_subset_protocol_inner(got, protocol);
+
+        // Clean up assumptions
         self.recursive_assumptions.shift_remove(&recursive_check);
+        if let Some(key) = class_check {
+            self.class_protocol_assumptions.shift_remove(&key);
+        }
+
         res
     }
 

@@ -786,8 +786,8 @@ def g(b: B, c: C):
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1905
 testcase!(
-    bug = "Uncomment the definition of `f` in `test` and we stack overflow.",
     test_functor_protocol_and_impl,
     r#"
 from typing import Generic, TypeVar, Protocol, Callable
@@ -806,6 +806,31 @@ class Maybe(Generic[T]):
 
 def test():
     m: Maybe[int] = ...  # type: ignore
-    # f: Functor[int] = m  # Stack overflow here!
+    f: Functor[int] = m  # Should work now!
+"#,
+);
+
+// Regression test for a case an early implementation of https://github.com/facebook/pyrefly/issues/1905 got wrong
+testcase!(
+    test_second_order_protocol_subset_failure,
+    r#"
+from typing import Generic, TypeVar, Protocol, Callable
+
+T = TypeVar('T')
+U = TypeVar('U')
+
+class TrickyProtocol(Protocol[T]):
+    def recurse(self, f: Callable[[T], U]) -> "TrickyProtocol[U]": ...
+    def check(self) -> T: ...
+
+class TrickyImpl(Generic[T]):
+    def recurse(self, f: Callable[[T], U]) -> "TrickyImpl[U]": ...
+    def check(self) -> int: ...
+
+def test():
+    t: TrickyImpl[int] = TrickyImpl()
+    # Invalid because p.recurse(lambda i: str(i)).check() returns int, but
+    # it should return `str` if we fully implemented the protocol
+    p: TrickyProtocol[int] = t  # E:
 "#,
 );
