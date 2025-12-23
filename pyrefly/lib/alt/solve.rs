@@ -2118,9 +2118,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return default.clone();
         }
         match restriction {
-            // Default must be a subtype of the upper bound
+            // Default must be a subtype of the upper bound.
+            // Per PEP 696: when default is a TypeVar, "T1's bound must be a subtype of T2's bound"
             Restriction::Bound(bound_ty) => {
-                if !self.is_subset_eq(default, bound_ty) {
+                let default_for_check = match default {
+                    Type::TypeVar(tv) => tv.restriction().as_type(&self.stdlib),
+                    Type::Quantified(q) if q.is_type_var() => q.restriction().as_type(&self.stdlib),
+                    _ => default.clone(),
+                };
+                if !self.is_subset_eq(&default_for_check, bound_ty) {
                     self.error(
                         errors,
                         range,
@@ -2133,8 +2139,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Restriction::Constraints(constraints) => {
-                // Default must exactly match one of the constraints
-                if !constraints.iter().any(|c| self.is_equal(c, default)) {
+                // Per PEP 696: when default is a TypeVar, "the constraints of T2 must be a
+                // superset of the constraints of T1". A bounded or unrestricted TypeVar cannot
+                // be a valid default for a constrained TypeVar since it can't guarantee an
+                // exact constraint match.
+                let valid = match default {
+                    Type::TypeVar(tv) => match tv.restriction() {
+                        Restriction::Constraints(default_constraints) => default_constraints
+                            .iter()
+                            .all(|dc| constraints.iter().any(|c| self.is_equal(c, dc))),
+                        Restriction::Bound(_) | Restriction::Unrestricted => false,
+                    },
+                    Type::Quantified(q) if q.is_type_var() => match q.restriction() {
+                        Restriction::Constraints(default_constraints) => default_constraints
+                            .iter()
+                            .all(|dc| constraints.iter().any(|c| self.is_equal(c, dc))),
+                        Restriction::Bound(_) | Restriction::Unrestricted => false,
+                    },
+                    _ => constraints.iter().any(|c| self.is_equal(c, default)),
+                };
+                if !valid {
                     let formatted_constraints = constraints
                         .iter()
                         .map(|x| format!("`{x}`"))
