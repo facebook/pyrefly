@@ -375,12 +375,21 @@ class C:
 testcase!(
     test_final_reassign,
     r#"
-from typing import Final
+from typing import Final, TextIO
 x: Final[int] = 0
 x = 1  # E: `x` is marked final
 x += 1  # E: Cannot assign to variable `x` because it is marked final
 y = x = 3 # E: Cannot assign to variable `x` because it is marked final
 y = (x := 3) # E: Cannot assign to variable `x` because it is marked final
+x, y = 4, 5 # E: Cannot assign to variable `x` because it is marked final
+[x, y] = [6, 7] # E: Cannot assign to variable `x` because it is marked final
+
+xs: Final[list[int]] = []
+[_, *xs] = [1, 2, 3]  # E: Cannot assign to variable `xs` because it is marked final
+
+f: Final[TextIO]
+with open("file.txt") as f: # E: Cannot assign to variable `f` because it is marked final
+    ...
 "#,
 );
 

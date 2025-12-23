@@ -3417,17 +3417,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::ContextValue(ann, e, range, kind) => {
                 let context_manager = self.get_idx(*e);
                 let context_value = self.context_value(context_manager.ty(), *kind, *range, errors);
-                let ty = ann.map(|k| self.get_idx(k));
-                match ty
-                    .as_ref()
-                    .and_then(|x| x.ty(self.stdlib).map(|t| (t, &x.target)))
-                {
-                    Some((ty, target)) => {
-                        self.check_and_return_type(context_value, &ty, *range, errors, &|| {
-                            TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
-                        })
+                let ann = ann.map(|k| self.get_idx(k));
+                if let Some(ann) = ann {
+                    if ann.annotation.is_final() {
+                        self.error(
+                            errors,
+                            *range,
+                            ErrorInfo::Kind(ErrorKind::BadAssignment),
+                            format!("Cannot assign to {} because it is marked final", ann.target),
+                        );
                     }
-                    None => context_value,
+                    if let Some(ty) = ann.ty(self.stdlib) {
+                        self.check_and_return_type(context_value, &ty, *range, errors, &|| {
+                            TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(
+                                &ann.target,
+                            ))
+                        })
+                    } else {
+                        context_value
+                    }
+                } else {
+                    context_value
                 }
             }
             Binding::UnpackedValue(ann, to_unpack, range, pos) => {
@@ -3487,13 +3497,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                 }
                 let got = self.unions(values);
-                if let Some(want) = ann
-                    .map(|idx| self.get_idx(idx))
-                    .and_then(|ann| ann.ty(self.stdlib))
-                {
-                    self.check_type(&got, &want, *range, errors, &|| {
-                        TypeCheckContext::of_kind(TypeCheckKind::UnpackedAssign)
-                    });
+                if let Some(ann) = ann.map(|idx| self.get_idx(idx)) {
+                    if ann.annotation.is_final() {
+                        self.error(
+                            errors,
+                            *range,
+                            ErrorInfo::Kind(ErrorKind::BadAssignment),
+                            format!("Cannot assign to {} because it is marked final", ann.target),
+                        );
+                    }
+                    if let Some(want) = ann.ty(self.stdlib) {
+                        self.check_type(&got, &want, *range, errors, &|| {
+                            TypeCheckContext::of_kind(TypeCheckKind::UnpackedAssign)
+                        });
+                    }
                 }
                 got
             }
