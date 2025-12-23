@@ -2133,3 +2133,21 @@ def test(unknown):
       s[0]
     "#,
 );
+
+testcase!(
+    test_typeis_narrow_to_intersection_not_never,
+    r#"
+from typing import TypeIs, reveal_type
+
+class A: ...
+
+def f(x: object) -> TypeIs[A]:
+    return True
+
+class B: ...
+
+def g(b: B):
+    if f(b):
+        reveal_type(b)  # E: A & B
+    "#,
+);

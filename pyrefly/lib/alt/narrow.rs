@@ -672,7 +672,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let ret =
                         self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
                     if let Type::TypeIs(t) = ret {
-                        return self.intersect(ty, &t);
+                        return self.distribute_over_union(&t, |right| {
+                            self.intersect_with_fallback(ty, right, &|| right.clone())
+                        });
                     }
                 }
                 ty.clone()
