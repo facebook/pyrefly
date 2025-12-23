@@ -21,6 +21,7 @@ use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
+use pyrefly_types::read_only::IsFinalVariableInitialized;
 use pyrefly_types::simplify::unions;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDictInner;
@@ -1858,7 +1859,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<ReadOnlyReason> {
         if let Some(ann) = annotation {
             if ann.is_final() {
-                return Some(ReadOnlyReason::Final);
+                let is_initialized = matches!(
+                    field_definition,
+                    ClassFieldDefinition::AssignedInBody { .. }
+                );
+                return Some(ReadOnlyReason::Final(if is_initialized {
+                    IsFinalVariableInitialized::Yes
+                } else {
+                    IsFinalVariableInitialized::No
+                }));
             }
             if ann.has_qualifier(&Qualifier::ReadOnly) {
                 return Some(ReadOnlyReason::ReadOnlyQualifier);
@@ -3467,7 +3476,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if field.is_final() {
                 let msg = vec1![
                     format!("Cannot set field `{attr_name}`"),
-                    ReadOnlyReason::Final.error_message()
+                    ReadOnlyReason::Final(IsFinalVariableInitialized::No).error_message()
                 ];
                 errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
             }
@@ -3512,7 +3521,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     true
                 };
 
-                if allow_assign_to_final && matches!(reason, ReadOnlyReason::Final) {
+                if allow_assign_to_final
+                    && matches!(
+                        reason,
+                        ReadOnlyReason::Final(IsFinalVariableInitialized::No)
+                    )
+                {
                     self.check_set_read_write_and_infer_narrow(
                         attr_ty,
                         attr_name,

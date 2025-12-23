@@ -43,6 +43,7 @@ use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;
 use crate::types::callable::Params;
+use crate::types::class::Class;
 use crate::types::module::ModuleType;
 use crate::types::simplify::simplify_tuples;
 use crate::types::simplify::unions;
@@ -1095,6 +1096,7 @@ impl Solver {
             type_order,
             gas: INITIAL_GAS,
             recursive_assumptions: SmallSet::new(),
+            class_protocol_assumptions: SmallSet::new(),
         }
     }
 }
@@ -1293,6 +1295,12 @@ pub struct Subset<'a, Ans: LookupAnswer> {
     /// Recursive assumptions of pairs of types that is_subset_eq returns true for.
     /// Used for structural typechecking of protocols.
     pub recursive_assumptions: SmallSet<(Type, Type)>,
+    /// Class-level recursive assumptions for protocol checks.
+    /// When checking `got <: protocol` where got's type arguments contain Vars
+    /// (indicating we're in a recursive pattern), we track (got_class, protocol_class)
+    /// pairs to detect cycles. This enables coinductive reasoning for recursive protocols
+    /// like Functor/Maybe without falsely assuming success for unrelated protocol checks.
+    pub class_protocol_assumptions: SmallSet<(Class, Class)>,
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {

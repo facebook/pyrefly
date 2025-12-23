@@ -39,6 +39,7 @@ starlark_map = "0.13.0"
 strsim = "0.10.0"
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tracing-subscriber = { version = "0.3.20", features = ["chrono", "env-filter", "json", "local-time", "parking_lot", "registry"] }
+uuid = { version = "1.17", features = ["js", "rng-getrandom", "v4"] }
 vec1 = { version = "1", features = ["serde"] }
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 

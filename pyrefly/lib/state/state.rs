@@ -1891,8 +1891,11 @@ impl State {
         // Drop the read lock the transaction holds.
         drop(readable);
 
+        let mut stats = stats.into_inner();
+        stats.committed = true;
+
         if let Some(telemetry) = telemetry {
-            telemetry.set_transaction_stats(stats.into_inner());
+            telemetry.set_transaction_stats(stats);
         }
 
         // If you make a transaction dirty, e.g. by calling an invalidate method,

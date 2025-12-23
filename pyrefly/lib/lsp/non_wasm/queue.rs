@@ -27,6 +27,7 @@ use lsp_types::DidSaveTextDocumentParams;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
+use pyrefly_util::telemetry::TelemetryTaskStats;
 use tracing::debug;
 use tracing::info;
 
@@ -208,12 +209,12 @@ pub struct HeavyTaskQueue {
     task_receiver: Receiver<(HeavyTask, TelemetryEventKind, Instant)>,
     stop_sender: Sender<()>,
     stop_receiver: Receiver<()>,
-    queue_name: String,
+    queue_name: &'static str,
+    next_task_id: AtomicUsize,
 }
 
 impl HeavyTaskQueue {
-    pub fn new(queue_name: &str) -> Self {
-        let queue_name = queue_name.to_owned();
+    pub fn new(queue_name: &'static str) -> Self {
         let (task_sender, task_receiver) = crossbeam_channel::unbounded();
         let (stop_sender, stop_receiver) = crossbeam_channel::unbounded();
         Self {
@@ -222,6 +223,7 @@ impl HeavyTaskQueue {
             stop_sender,
             stop_receiver,
             queue_name,
+            next_task_id: AtomicUsize::new(1),
         }
     }
 
@@ -259,6 +261,10 @@ impl HeavyTaskQueue {
                     let mut telemetry_event =
                         TelemetryEvent::new_dequeued(kind, enqueued, server.telemetry_state());
                     let queue_duration = telemetry_event.queue;
+                    telemetry_event.set_task_stats(TelemetryTaskStats::new(
+                        self.queue_name,
+                        self.next_task_id.fetch_add(1, Ordering::Relaxed),
+                    ));
                     task.run(server, &mut telemetry_event);
                     let process_duration = telemetry_event.finish_and_record(telemetry, None);
                     info!(

@@ -785,3 +785,52 @@ def g(b: B, c: C):
     f(c)  # E: `C` is not assignable to upper bound `A`
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1905
+testcase!(
+    test_functor_protocol_and_impl,
+    r#"
+from typing import Generic, TypeVar, Protocol, Callable
+
+T = TypeVar('T')
+U = TypeVar('U')
+
+class Functor(Protocol[T]):
+    """A Functor protocol - common in functional programming."""
+    def map(self, f: Callable[[T], U]) -> Functor[U]: ...
+
+class Maybe(Generic[T]):
+    """A Maybe/Option type that should implement Functor."""
+    value: T | None
+    def map(self, f: Callable[[T], U]) -> Maybe[U]: ...
+
+def test():
+    m: Maybe[int] = ...  # type: ignore
+    f: Functor[int] = m  # Should work now!
+"#,
+);
+
+// Regression test for a case an early implementation of https://github.com/facebook/pyrefly/issues/1905 got wrong
+testcase!(
+    test_second_order_protocol_subset_failure,
+    r#"
+from typing import Generic, TypeVar, Protocol, Callable
+
+T = TypeVar('T')
+U = TypeVar('U')
+
+class TrickyProtocol(Protocol[T]):
+    def recurse(self, f: Callable[[T], U]) -> "TrickyProtocol[U]": ...
+    def check(self) -> T: ...
+
+class TrickyImpl(Generic[T]):
+    def recurse(self, f: Callable[[T], U]) -> "TrickyImpl[U]": ...
+    def check(self) -> int: ...
+
+def test():
+    t: TrickyImpl[int] = TrickyImpl()
+    # Invalid because p.recurse(lambda i: str(i)).check() returns int, but
+    # it should return `str` if we fully implemented the protocol
+    p: TrickyProtocol[int] = t  # E:
+"#,
+);

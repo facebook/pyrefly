@@ -187,6 +187,7 @@ use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
+use pyrefly_util::telemetry::TelemetryFileStats;
 use pyrefly_util::telemetry::TelemetryServerState;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::Ranged;
@@ -199,6 +200,7 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
 use tracing::info;
+use uuid::Uuid;
 
 use crate::ModuleInfo;
 use crate::commands::lsp::IndexingMode;
@@ -376,6 +378,7 @@ pub struct Server {
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
     filewatcher_registered: AtomicBool,
     version_info: Mutex<HashMap<PathBuf, i32>>,
+    id: Uuid,
 }
 
 /// At the time when we are ready to handle a new LSP event, it will help if we know the list of
@@ -751,6 +754,7 @@ impl Server {
                 let lsp_types::TextDocumentItem {
                     uri, version, text, ..
                 } = text_document;
+                self.set_file_stats(uri.clone(), telemetry);
                 let contents = Arc::new(LspFile::from_source(text));
                 self.did_open(
                     ide_transaction_manager,
@@ -762,6 +766,7 @@ impl Server {
                 )?;
             }
             LspEvent::DidChangeTextDocument(params) => {
+                self.set_file_stats(params.text_document.uri.clone(), telemetry);
                 self.text_document_did_change(
                     ide_transaction_manager,
                     subsequent_mutation,
@@ -770,13 +775,16 @@ impl Server {
                 )?;
             }
             LspEvent::DidCloseTextDocument(params) => {
+                self.set_file_stats(params.text_document.uri.clone(), telemetry);
                 self.did_close(params.text_document.uri, telemetry);
             }
             LspEvent::DidSaveTextDocument(params) => {
+                self.set_file_stats(params.text_document.uri.clone(), telemetry);
                 self.did_save(params.text_document.uri);
             }
             LspEvent::DidOpenNotebookDocument(params) => {
                 let url = params.notebook_document.uri.clone();
+                self.set_file_stats(url.clone(), telemetry);
                 let version = params.notebook_document.version;
                 let notebook_document = params.notebook_document.clone();
                 let cell_contents: HashMap<Url, String> = params
@@ -807,6 +815,7 @@ impl Server {
                 )?;
             }
             LspEvent::DidChangeNotebookDocument(params) => {
+                self.set_file_stats(params.notebook_document.uri.clone(), telemetry);
                 self.notebook_document_did_change(
                     ide_transaction_manager,
                     subsequent_mutation,
@@ -815,9 +824,11 @@ impl Server {
                 )?;
             }
             LspEvent::DidCloseNotebookDocument(params) => {
+                self.set_file_stats(params.notebook_document.uri.clone(), telemetry);
                 self.did_close(params.notebook_document.uri, telemetry);
             }
             LspEvent::DidSaveNotebookDocument(params) => {
+                self.set_file_stats(params.notebook_document.uri.clone(), telemetry);
                 self.did_save(params.notebook_document.uri);
             }
             LspEvent::DidChangeWatchedFiles(params) => {
@@ -890,6 +901,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry,
+                        );
                         let default_response = GotoDefinitionResponse::Array(Vec::new());
                         self.send_response(new_response(
                             x.id,
@@ -904,6 +923,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry,
+                        );
                         let default_response = GotoDefinitionResponse::Array(Vec::new());
                         self.send_response(new_response(
                             x.id,
@@ -918,6 +945,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry,
+                        );
                         let default_response = GotoTypeDefinitionResponse::Array(Vec::new());
                         self.send_response(new_response(
                             x.id,
@@ -932,6 +967,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry,
+                        );
                         self.async_go_to_implementations(x.id, &transaction, params);
                     }
                 } else if let Some(params) = as_request::<CodeActionRequest>(&x) {
@@ -940,6 +983,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.code_action(&transaction, params).unwrap_or_default()),
@@ -949,6 +993,10 @@ impl Server {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<Completion>(params, &x.id)
                     {
+                        self.set_file_stats(
+                            params.text_document_position.text_document.uri.clone(),
+                            telemetry,
+                        );
                         self.send_response(new_response(
                             x.id,
                             self.completion(&transaction, params),
@@ -960,6 +1008,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry,
+                        );
                         self.send_response(new_response(
                             x.id,
                             Ok(self.document_highlight(&transaction, params)),
@@ -973,6 +1029,10 @@ impl Server {
                             .read()
                             .contains_key(&params.text_document_position.text_document.uri)
                     {
+                        self.set_file_stats(
+                            params.text_document_position.text_document.uri.clone(),
+                            telemetry,
+                        );
                         self.references(x.id, &transaction, params);
                     } else {
                         // TODO(yangdanny) handle notebooks
@@ -986,6 +1046,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.prepare_rename(&transaction, params)),
@@ -999,6 +1060,10 @@ impl Server {
                             .read()
                             .contains_key(&params.text_document_position.text_document.uri)
                     {
+                        self.set_file_stats(
+                            params.text_document_position.text_document.uri.clone(),
+                            telemetry,
+                        );
                         // TODO(yangdanny) handle notebooks
                         // First check if rename is allowed via prepare_rename. If a rename is not allowed we
                         // send back an error. Otherwise we continue with the rename operation.
@@ -1024,6 +1089,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry,
+                        );
                         self.send_response(new_response(
                             x.id,
                             Ok(self.signature_help(&transaction, params)),
@@ -1033,6 +1106,14 @@ impl Server {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<HoverRequest>(params, &x.id)
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry,
+                        );
                         let default_response = Hover {
                             contents: HoverContents::Array(Vec::new()),
                             range: None,
@@ -1048,6 +1129,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.inlay_hints(&transaction, params).unwrap_or_default()),
@@ -1059,6 +1141,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry);
                         let default_response = SemanticTokensResult::Tokens(SemanticTokens {
                             result_id: None,
                             data: Vec::new(),
@@ -1076,6 +1159,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry);
                         let default_response = SemanticTokensRangeResult::Tokens(SemanticTokens {
                             result_id: None,
                             data: Vec::new(),
@@ -1093,6 +1177,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry);
                         self.send_response(new_response(
                             x.id,
                             Ok(DocumentSymbolResponse::Nested(
@@ -1120,6 +1205,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.document_diagnostics(&transaction, params)),
@@ -1129,6 +1215,7 @@ impl Server {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<ProvideType>(params, &x.id)
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.provide_type(&transaction, params)),
@@ -1163,6 +1250,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry);
                         let result = self
                             .folding_ranges(&transaction, params)
                             .unwrap_or_default();
@@ -1174,6 +1262,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry,
+                        );
                         self.send_response(new_response(
                             x.id,
                             Ok(self.prepare_call_hierarchy(&transaction, params)),
@@ -1185,6 +1281,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.item.uri.clone(), telemetry);
                         self.async_call_hierarchy_incoming_calls(x.id, &transaction, params);
                     }
                 } else if let Some(params) = as_request::<CallHierarchyOutgoingCalls>(&x) {
@@ -1193,16 +1290,19 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.item.uri.clone(), telemetry);
                         self.async_call_hierarchy_outgoing_calls(x.id, &transaction, params);
                     }
                 } else if &x.method == "pyrefly/textDocument/docstringRanges" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
+                    self.set_file_stats(text_document.uri.clone(), telemetry);
                     let ranges = self
                         .docstring_ranges(&transaction, &text_document)
                         .unwrap_or_default();
                     self.send_response(new_response(x.id, Ok(ranges)));
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
+                    self.set_file_stats(text_document.uri.clone(), telemetry);
                     if !self
                         .open_notebook_cells
                         .read()
@@ -1280,6 +1380,7 @@ impl Server {
             outgoing_requests: Mutex::new(HashMap::new()),
             filewatcher_registered: AtomicBool::new(false),
             version_info: Mutex::new(HashMap::new()),
+            id: Uuid::new_v4(),
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -1305,7 +1406,25 @@ impl Server {
     pub fn telemetry_state(&self) -> TelemetryServerState {
         TelemetryServerState {
             has_sourcedb: self.workspaces.sourcedb_available(),
+            id: self.id,
         }
+    }
+
+    pub fn set_file_stats(&self, uri: Url, telemetry: &mut TelemetryEvent) {
+        let config_root = if let Ok(path) = uri.to_file_path() {
+            let config = self
+                .state
+                .config_finder()
+                .python_file(ModuleName::unknown(), &ModulePath::filesystem(path));
+            config
+                .source
+                .root()
+                .and_then(|p| Url::from_file_path(p).ok())
+        } else {
+            None
+        };
+
+        telemetry.set_file_stats(TelemetryFileStats { uri, config_root });
     }
 
     fn send_response(&self, x: Response) {
@@ -1775,7 +1894,7 @@ impl Server {
     /// Attempts to requery any open sourced_dbs for open files, and if there are changes,
     /// invalidate find and perform a recheck.
     fn queue_source_db_rebuild_and_recheck(&self, telemetry: &mut TelemetryEvent, force: bool) {
-        let run = move |server: &Server, _telemetry: &mut TelemetryEvent| {
+        let run = move |server: &Server, telemetry: &mut TelemetryEvent| {
             let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> =
                 SmallMap::new();
             let config_finder = server.state.config_finder();
@@ -1792,7 +1911,9 @@ impl Server {
                     .or_default()
                     .insert(handle.path().dupe());
             }
-            let new_invalidated_source_dbs = ConfigFile::query_source_db(&configs_to_paths, force);
+            let (new_invalidated_source_dbs, rebuild_stats) =
+                ConfigFile::query_source_db(&configs_to_paths, force);
+            telemetry.set_sourcedb_rebuild_stats(rebuild_stats);
             if !new_invalidated_source_dbs.is_empty() {
                 let mut lock = server.invalidated_source_dbs.lock();
                 for db in new_invalidated_source_dbs {

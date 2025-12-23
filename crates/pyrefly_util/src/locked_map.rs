@@ -81,6 +81,7 @@ impl<K: Eq + Hash + 'static, V: Dupe + 'static> LockedMap<K, V> {
     /// If the value is not present, create it using the provided function.
     /// Note that the provided function may be called even if we don't create a new entry,
     /// if someone else is simultaneously inserting a value for the same key.
+    /// The resulting bool represents whether the value was inserted by this call.
     pub fn ensure(&self, key: &K, value: impl FnOnce() -> V) -> (&V, bool)
     where
         K: Dupe,

@@ -421,7 +421,7 @@ impl Handles {
         }
 
         // TODO(connernilsen): wire in force logic
-        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false);
+        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false).0;
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))

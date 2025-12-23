@@ -16,7 +16,6 @@ use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display;
-use tracing::warn;
 
 use crate::base::UntypedDefBehavior;
 use crate::config::ConfigFile;
@@ -114,14 +113,6 @@ pub struct ConfigOverrideArgs {
     /// related import errors.
     #[arg(long)]
     ignore_missing_imports: Option<Vec<String>>,
-    /// [DEPRECATED] Use `--ignore=missing-source` or `--error=missing-source` instead. Ignore missing source packages when only type stubs are available, allowing imports to proceed without source validation.
-    #[arg(
-        long,
-        default_missing_value = "true",
-        require_equals = true,
-        num_args = 0..=1
-    )]
-    ignore_missing_source: Option<bool>,
     /// Whether to ignore type errors in generated code.
     #[arg(
         long,
@@ -237,15 +228,6 @@ impl ConfigOverrideArgs {
                 display::commas_iter(|| ignore_info_conflicts.iter().map(|&&s| s))
             ));
         }
-        match self.ignore_missing_source {
-            Some(true) => warn!(
-                "`--ignore-missing-source` is deprecated and will be removed in a future version. Please use `--ignore=missing-source` instead."
-            ),
-            Some(false) => warn!(
-                "`--ignore-missing-source` is deprecated and will be removed in a future version. Please use `--error=missing-source` instead."
-            ),
-            None => {}
-        }
         if self.permissive_ignores.is_some() && self.enabled_ignores.is_some() {
             return Err(anyhow::anyhow!(
                 "Cannot use both `--permissive-ignores` and `--enabled-ignores`"
@@ -302,9 +284,6 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.use_ignore_files {
             config.use_ignore_files = *x;
-        }
-        if let Some(x) = &self.ignore_missing_source {
-            config.ignore_missing_source = *x;
         }
         if let Some(x) = &self.untyped_def_behavior {
             config.root.untyped_def_behavior = Some(*x);
@@ -363,47 +342,21 @@ impl ConfigOverrideArgs {
             config.root.infer_with_first_use = Some(*x);
         }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
-            let mut missing_source_severity = None;
-            let mut apply_severity = |error_kind: &ErrorKind, severity| {
-                error_config.set_error_severity(*error_kind, severity);
-                if *error_kind == ErrorKind::MissingSource {
-                    missing_source_severity = Some(severity);
-                }
-            };
             for error_kind in &self.error {
-                apply_severity(error_kind, Severity::Error);
+                error_config.set_error_severity(*error_kind, Severity::Error);
             }
             for error_kind in &self.warn {
-                apply_severity(error_kind, Severity::Warn);
+                error_config.set_error_severity(*error_kind, Severity::Warn);
             }
             for error_kind in &self.ignore {
-                apply_severity(error_kind, Severity::Ignore);
+                error_config.set_error_severity(*error_kind, Severity::Ignore);
             }
             for error_kind in &self.info {
-                apply_severity(error_kind, Severity::Info);
+                error_config.set_error_severity(*error_kind, Severity::Info);
             }
-            missing_source_severity
         };
         let root_errors = config.root.errors.get_or_insert_default();
-        let missing_source_severity = apply_error_settings(root_errors);
-        // Make sure CLI takes precedence by overriding both the error config and ignore_missing_source
-        // if only one is explicitly overridden.
-        match (missing_source_severity, self.ignore_missing_source) {
-            (Some(severity), None) => {
-                config.ignore_missing_source = severity == Severity::Ignore;
-            }
-            (None, Some(ignore_missing_source)) => {
-                root_errors.set_error_severity(
-                    ErrorKind::MissingSource,
-                    if ignore_missing_source {
-                        Severity::Ignore
-                    } else {
-                        Severity::Error
-                    },
-                );
-            }
-            _ => {}
-        }
+        apply_error_settings(root_errors);
         for sub_config in config.sub_configs.iter_mut() {
             let sub_config_errors = sub_config.settings.errors.get_or_insert_default();
             apply_error_settings(sub_config_errors);
