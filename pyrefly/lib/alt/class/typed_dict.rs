@@ -228,11 +228,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         is_total: bool,
     ) -> Option<TypedDictField> {
-        self.get_class_member(class, name).and_then(|field| {
-            Arc::unwrap_or_clone(field)
+        // Get the field along with the class that defines it
+        let member_with_defining_class = self.get_class_member_with_defining_class(class, name)?;
+        let defining_class = &member_with_defining_class.defining_class;
+        let field = Arc::unwrap_or_clone(member_with_defining_class.value);
+
+        // If the field is defined in the current class, just apply the substitution directly
+        if defining_class == class {
+            return field
                 .as_typed_dict_field_info(is_total)
-                .map(|field| field.substitute_with(substitution))
-        })
+                .map(|field| field.substitute_with(substitution));
+        }
+
+        // If the field is inherited, we need to compose substitutions:
+        // 1. Find the defining class in the MRO to get its type arguments
+        // 2. Apply the child's substitution to get the defining class's concrete type arguments
+        // 3. Use those type arguments to substitute into the field type
+        let mro = self.get_mro_for_class(class);
+        let defining_class_type = mro
+            .ancestors(self.stdlib)
+            .find(|ancestor| ancestor.class_object() == defining_class)?;
+
+        // Apply child's substitution to the defining class's type arguments
+        let defining_class_substituted = defining_class_type.substitute_with(substitution);
+
+        // Now apply the defining class's substitution to the field
+        field
+            .as_typed_dict_field_info(is_total)
+            .map(|field| field.substitute_with(&defining_class_substituted.substitution()))
     }
 
     pub fn typed_dict_fields(&self, typed_dict: &TypedDict) -> SmallMap<Name, TypedDictField> {
