@@ -383,6 +383,8 @@ y = x = 3 # E: Cannot assign to variable `x` because it is marked final
 y = (x := 3) # E: Cannot assign to variable `x` because it is marked final
 x, y = 4, 5 # E: Cannot assign to variable `x` because it is marked final
 [x, y] = [6, 7] # E: Cannot assign to variable `x` because it is marked final
+for x in [1, 2, 3]:  # E: Cannot assign to variable `x` because it is marked final
+    ...
 
 xs: Final[list[int]] = []
 [_, *xs] = [1, 2, 3]  # E: Cannot assign to variable `xs` because it is marked final
