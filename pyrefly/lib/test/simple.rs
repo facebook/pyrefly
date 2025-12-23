@@ -373,6 +373,18 @@ class C:
 );
 
 testcase!(
+    test_final_reassign,
+    r#"
+from typing import Final
+x: Final[int] = 0
+x = 1  # E: `x` is marked final
+x += 1  # E: Cannot assign to variable `x` because it is marked final
+y = x = 3 # E: Cannot assign to variable `x` because it is marked final
+y = (x := 3) # E: Cannot assign to variable `x` because it is marked final
+"#,
+);
+
+testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type

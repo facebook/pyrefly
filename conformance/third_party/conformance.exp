@@ -9623,8 +9623,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot assign to var x because it is marked final",
-      "description": "Cannot assign to var x because it is marked final",
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
       "line": 145,
       "name": "bad-assignment",
       "severity": "error",
@@ -9634,8 +9634,8 @@
     {
       "code": -2,
       "column": 15,
-      "concise_description": "Assignment target is marked final",
-      "description": "Assignment target is marked final",
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
       "line": 147,
       "name": "bad-assignment",
       "severity": "error",

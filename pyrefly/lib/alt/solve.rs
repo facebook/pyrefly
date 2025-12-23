@@ -2775,7 +2775,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                             e.range(),
                             ErrorInfo::Kind(ErrorKind::BadAssignment),
-                            "Assignment target is marked final".to_owned(),
+                            format!(
+                                "Cannot assign to {} because it is marked final",
+                                annot.target
+                            ),
                         );
                     }
                     self.expr(e, annot.ty(self.stdlib).as_ref().map(|t| (t, tcc)), errors)
@@ -2812,7 +2815,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                             *range,
                             ErrorInfo::Kind(ErrorKind::BadAssignment),
-                            "Assignment target is marked final".to_owned(),
+                            format!(
+                                "Cannot assign to {} because it is marked final",
+                                annot.target
+                            ),
                         );
                     }
                     if let Some(annot_ty) = annot.ty(self.stdlib)
