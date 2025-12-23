@@ -3457,13 +3457,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                 }
                 let got = self.unions(values);
-                if let Some(want) = ann
-                    .map(|idx| self.get_idx(idx))
-                    .and_then(|ann| ann.ty(self.stdlib))
-                {
-                    self.check_type(&got, &want, *range, errors, &|| {
-                        TypeCheckContext::of_kind(TypeCheckKind::UnpackedAssign)
-                    });
+                if let Some(ann) = ann.map(|idx| self.get_idx(idx)) {
+                    if ann.annotation.is_final() {
+                        self.error(
+                            errors,
+                            *range,
+                            ErrorInfo::Kind(ErrorKind::BadAssignment),
+                            format!("Cannot assign to {} because it is marked final", ann.target),
+                        );
+                    }
+                    if let Some(want) = ann.ty(self.stdlib) {
+                        self.check_type(&got, &want, *range, errors, &|| {
+                            TypeCheckContext::of_kind(TypeCheckKind::UnpackedAssign)
+                        });
+                    }
                 }
                 got
             }
