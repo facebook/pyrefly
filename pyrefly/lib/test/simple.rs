@@ -360,6 +360,19 @@ y = "bar"  # E: `y` is marked final
 );
 
 testcase!(
+    test_final_field,
+    r#"
+from typing import Final
+class C:
+    x: Final[int] = 1
+    uninitialized: Final[str]
+    def __init__(self):
+        self.x = 42  # E: Cannot set field `x`
+        self.uninitialized = "ok"
+"#,
+);
+
+testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type
