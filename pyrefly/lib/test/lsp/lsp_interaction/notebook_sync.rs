@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::Url;
+use lsp_types::notification::DidChangeTextDocument;
+use lsp_types::notification::DidCloseTextDocument;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -392,5 +395,171 @@ fn test_notebook_did_change_delete_cell() {
         }))
         .unwrap();
 
+    interaction.shutdown().unwrap();
+}
+
+/// Test that opening a file as a notebook with a non-.ipynb extension works correctly.
+/// This tests support for formats like Marimo that use .py files as notebooks.
+#[test]
+fn test_notebook_non_ipynb_extension() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    // Open a .py file as a notebook (simulating Marimo or similar)
+    // The key test is that the notebook operations work even with .py extension
+    interaction.open_notebook(
+        "marimo_notebook.py",
+        vec!["x: int = 1", "z: str = ''\nz = 1"],
+    );
+
+    // Cell 1 should have no errors
+    interaction
+        .diagnostic_for_cell("marimo_notebook.py", "cell1")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    // Cell 2 should have the type error
+    interaction
+        .diagnostic_for_cell("marimo_notebook.py", "cell2")
+        .expect_response(json!({
+            "items": [{
+                "code": "bad-assignment",
+                "codeDescription": {
+                    "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                },
+                "message": "`Literal[1]` is not assignable to variable `z` with type `str`",
+                "range": {
+                    "start": {"line": 1, "character": 4},
+                    "end": {"line": 1, "character": 5}
+                },
+                "severity": 1,
+                "source": "Pyrefly"
+            }],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.close_notebook("marimo_notebook.py");
+    interaction.shutdown().unwrap();
+}
+
+/// Test that when a file is already open as a notebook, text document operations
+/// (didOpen, didChange, didClose) do not affect the notebook state.
+/// This is important for formats like Marimo where the same .py file could
+/// potentially receive both notebook and text document events.
+#[test]
+fn test_notebook_text_open_conflict() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    // First, open as a notebook
+    interaction.open_notebook("conflict_test.py", vec!["x: int = 1", "y: str = ''\ny = 1"]);
+
+    // Verify notebook diagnostics work
+    interaction
+        .diagnostic_for_cell("conflict_test.py", "cell2")
+        .expect_response(json!({
+            "items": [{
+                "code": "bad-assignment",
+                "codeDescription": {
+                    "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                },
+                "message": "`Literal[1]` is not assignable to variable `y` with type `str`",
+                "range": {
+                    "start": {"line": 1, "character": 4},
+                    "end": {"line": 1, "character": 5}
+                },
+                "severity": 1,
+                "source": "Pyrefly"
+            }],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    // Now try to open the same file as a text document (should be ignored)
+    let notebook_path = root.path().join("conflict_test.py");
+    let notebook_uri = Url::from_file_path(&notebook_path).unwrap();
+    interaction.client.did_open_uri(
+        &notebook_uri,
+        "python",
+        "# This should be ignored\nx: str = 1",
+    );
+
+    // Try to send a textDocument/didChange for the notebook file (should be ignored)
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": notebook_uri.to_string(),
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": "# Changed content that should be ignored"
+            }]
+        }));
+
+    // The notebook should still work - cell diagnostics should still be available
+    // If the text operations had affected the notebook, this would fail
+    interaction
+        .diagnostic_for_cell("conflict_test.py", "cell1")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    interaction
+        .diagnostic_for_cell("conflict_test.py", "cell2")
+        .expect_response(json!({
+            "items": [{
+                "code": "bad-assignment",
+                "codeDescription": {
+                    "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                },
+                "message": "`Literal[1]` is not assignable to variable `y` with type `str`",
+                "range": {
+                    "start": {"line": 1, "character": 4},
+                    "end": {"line": 1, "character": 5}
+                },
+                "severity": 1,
+                "source": "Pyrefly"
+            }],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    // Try to send a textDocument/didClose for the notebook file (should be ignored)
+    // The notebook should remain open and functional
+    interaction
+        .client
+        .send_notification::<DidCloseTextDocument>(json!({
+            "textDocument": {
+                "uri": notebook_uri.to_string()
+            }
+        }));
+
+    // Verify the notebook is still functional after the ignored didClose
+    interaction
+        .diagnostic_for_cell("conflict_test.py", "cell1")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    // Now properly close the notebook
+    interaction.close_notebook("conflict_test.py");
     interaction.shutdown().unwrap();
 }

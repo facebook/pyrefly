@@ -684,6 +684,16 @@ impl Server {
         None
     }
 
+    /// Check if a path is currently open as a notebook.
+    /// This is used to handle the case where a file could be opened as both
+    /// a notebook (e.g., via Marimo or Jupyter) and as a regular text file.
+    fn is_open_as_notebook(&self, path: &PathBuf) -> bool {
+        self.open_files
+            .read()
+            .get(path)
+            .is_some_and(|file| file.is_notebook())
+    }
+
     fn extract_request_params_or_send_err_response<T>(
         &self,
         params: Result<T::Params, serde_json::Error>,
@@ -751,26 +761,59 @@ impl Server {
                 let lsp_types::TextDocumentItem {
                     uri, version, text, ..
                 } = text_document;
-                let contents = Arc::new(LspFile::from_source(text));
-                self.did_open(
-                    ide_transaction_manager,
-                    telemetry,
-                    subsequent_mutation,
-                    uri,
-                    version,
-                    contents,
-                )?;
+                // Skip if file is already open as a notebook (e.g., Marimo .py notebooks).
+                if let Some(path) = self
+                    .path_for_uri(&uri)
+                    .filter(|p| self.is_open_as_notebook(p))
+                {
+                    info!(
+                        "Skipping textDocument/didOpen for {} because it is already open as a notebook",
+                        path.display()
+                    );
+                } else {
+                    let contents = Arc::new(LspFile::from_source(text));
+                    self.did_open(
+                        ide_transaction_manager,
+                        telemetry,
+                        subsequent_mutation,
+                        uri,
+                        version,
+                        contents,
+                    )?;
+                }
             }
             LspEvent::DidChangeTextDocument(params) => {
-                self.text_document_did_change(
-                    ide_transaction_manager,
-                    subsequent_mutation,
-                    params,
-                    telemetry,
-                )?;
+                // Skip if file is open as a notebook (e.g., Marimo .py notebooks).
+                if let Some(path) = self
+                    .path_for_uri(&params.text_document.uri)
+                    .filter(|p| self.is_open_as_notebook(p))
+                {
+                    info!(
+                        "Skipping textDocument/didChange for {} because it is open as a notebook",
+                        path.display()
+                    );
+                } else {
+                    self.text_document_did_change(
+                        ide_transaction_manager,
+                        subsequent_mutation,
+                        params,
+                        telemetry,
+                    )?;
+                }
             }
             LspEvent::DidCloseTextDocument(params) => {
-                self.did_close(params.text_document.uri, telemetry);
+                // Skip if file is open as a notebook (e.g., Marimo .py notebooks).
+                if let Some(path) = self
+                    .path_for_uri(&params.text_document.uri)
+                    .filter(|p| self.is_open_as_notebook(p))
+                {
+                    info!(
+                        "Skipping textDocument/didClose for {} because it is open as a notebook",
+                        path.display()
+                    );
+                } else {
+                    self.did_close(params.text_document.uri, telemetry);
+                }
             }
             LspEvent::DidSaveTextDocument(params) => {
                 self.did_save(params.text_document.uri);
@@ -792,6 +835,18 @@ impl Server {
                         url
                     )
                 })?;
+                // Log if upgrading from text file to notebook (e.g., Marimo .py notebooks).
+                if self
+                    .open_files
+                    .read()
+                    .get(&notebook_path)
+                    .is_some_and(|file| !file.is_notebook())
+                {
+                    info!(
+                        "Upgrading {} from text file to notebook",
+                        notebook_path.display()
+                    );
+                }
                 for cell_url in lsp_notebook.cell_urls() {
                     self.open_notebook_cells
                         .write()
