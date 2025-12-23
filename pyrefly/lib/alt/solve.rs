@@ -3363,10 +3363,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Binding::AugAssign(ann, x) => self.augassign_infer(*ann, x, errors),
             Binding::IterableValue(ann, e, is_async) => {
-                let ty = ann.map(|k| self.get_idx(k));
+                let ann = ann.map(|k| self.get_idx(k));
+                if let Some(ann) = &ann
+                    && ann.annotation.is_final()
+                {
+                    self.error(
+                        errors,
+                        e.range(),
+                        ErrorInfo::Kind(ErrorKind::BadAssignment),
+                        format!("Cannot assign to {} because it is marked final", ann.target),
+                    );
+                }
                 let tcc: &dyn Fn() -> TypeCheckContext = &|| {
                     let (name, annot_type) = {
-                        match &ty {
+                        match &ann {
                             None => (None, None),
                             Some(t) => (
                                 match &t.target {
@@ -3384,7 +3394,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                 };
                 let iterables = if is_async.is_async() {
-                    let infer_hint = ty.clone().and_then(|x| {
+                    let infer_hint = ann.clone().and_then(|x| {
                         x.ty(self.stdlib)
                             .map(|ty| self.stdlib.async_iterable(ty.clone()).to_type())
                     });
@@ -3395,7 +3405,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     self.async_iterate(&iterable, e.range(), errors)
                 } else {
-                    let infer_hint = ty.clone().and_then(|x| {
+                    let infer_hint = ann.clone().and_then(|x| {
                         x.ty(self.stdlib)
                             .map(|ty| self.stdlib.iterable(ty.clone()).to_type())
                     });
@@ -3407,7 +3417,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.iterate(&iterable, e.range(), errors, None)
                 };
                 let value = self.get_produced_type(iterables);
-                let check_hint = ty.clone().and_then(|x| x.ty(self.stdlib));
+                let check_hint = ann.clone().and_then(|x| x.ty(self.stdlib));
                 if let Some(check_hint) = check_hint {
                     self.check_and_return_type(value, &check_hint, e.range(), errors, tcc)
                 } else {
