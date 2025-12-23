@@ -482,6 +482,14 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn record_yield(&mut self, mut x: ExprYield) {
+        // Check if this yield is unreachable (comes after a terminating statement)
+        if self.scopes.has_flow_terminated() {
+            self.error(
+                x.range,
+                ErrorInfo::Kind(ErrorKind::UnreachableStatement),
+                "This `yield` expression is unreachable".to_owned(),
+            );
+        }
         let mut yield_link = self.declare_current_idx(Key::YieldLink(x.range));
         let idx = self.idx_for_promise(KeyYield(x.range));
         self.ensure_expr_opt(x.value.as_deref_mut(), yield_link.usage());
@@ -492,6 +500,14 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn record_yield_from(&mut self, mut x: ExprYieldFrom) {
+        // Check if this yield from is unreachable (comes after a terminating statement)
+        if self.scopes.has_flow_terminated() {
+            self.error(
+                x.range,
+                ErrorInfo::Kind(ErrorKind::UnreachableStatement),
+                "This `yield from` expression is unreachable".to_owned(),
+            );
+        }
         let mut yield_from_link = self.declare_current_idx(Key::YieldLink(x.range));
         let idx = self.idx_for_promise(KeyYieldFrom(x.range));
         self.ensure_expr(&mut x.value, yield_from_link.usage());
