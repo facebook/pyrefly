@@ -9623,8 +9623,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot assign to var x because it is marked final",
-      "description": "Cannot assign to var x because it is marked final",
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
       "line": 145,
       "name": "bad-assignment",
       "severity": "error",
@@ -9634,13 +9634,46 @@
     {
       "code": -2,
       "column": 15,
-      "concise_description": "Assignment target is marked final",
-      "description": "Assignment target is marked final",
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
       "line": 147,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 16,
       "stop_line": 147
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
+      "line": 149,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 149
+    },
+    {
+      "code": -2,
+      "column": 10,
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
+      "line": 152,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 152
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
+      "line": 155,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 155
     }
   ],
   "qualifiers_final_decorator.py": [

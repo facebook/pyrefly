@@ -1893,12 +1893,12 @@ pub enum AnnotationTarget {
 impl Display for AnnotationTarget {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Param(name) => write!(f, "param {name}"),
-            Self::ArgsParam(name) => write!(f, "args {name}"),
-            Self::KwargsParam(name) => write!(f, "kwargs {name}"),
-            Self::Return(name) => write!(f, "{name} return"),
-            Self::Assign(name, _initialized) => write!(f, "var {name}"),
-            Self::ClassMember(name) => write!(f, "attr {name}"),
+            Self::Param(name) => write!(f, "parameter `{name}`"),
+            Self::ArgsParam(name) => write!(f, "args `{name}`"),
+            Self::KwargsParam(name) => write!(f, "kwargs `{name}`"),
+            Self::Return(name) => write!(f, "`{name}` return"),
+            Self::Assign(name, _initialized) => write!(f, "variable `{name}`"),
+            Self::ClassMember(name) => write!(f, "attribute `{name}`"),
         }
     }
 }
