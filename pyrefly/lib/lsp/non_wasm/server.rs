@@ -847,6 +847,7 @@ impl Server {
                     Completion::METHOD,
                     SignatureHelpRequest::METHOD,
                     GotoDefinition::METHOD,
+                    ProvideType::METHOD,
                 ];
 
                 let in_cancelled_requests = canceled_requests.remove(&x.id);
