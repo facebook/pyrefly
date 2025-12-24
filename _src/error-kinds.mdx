@@ -170,6 +170,23 @@ class A:
 with A(): ...  # `A` is missing an `__exit__` method!
 ```
 
+## bad-dunder-all
+
+This error occurs when `__all__` is explicitly defined for a module but contains an entry that cannot be found in the module's definitions, wildcard imports, or submodules (for `__init__.py` files).
+
+```python
+__all__ = ["x", "y"]  # Name `y` is listed in `__all__` but is not defined in the module
+x = 5
+```
+
+To fix this error, either define the missing name or remove it from `__all__`:
+
+```python
+__all__ = ["x", "y"]
+x = 5
+y = 10  # Now `y` is defined
+```
+
 ## bad-function-definition
 
 Like `bad-class-definition`, this error kind is uncommon because other error kinds are used for more specific issues.
@@ -1134,7 +1151,30 @@ def test1(x: object) -> None:
         pass
 ```
 
-This check is relatively conservative and only warn on limited cases where the comparison is highly likely to be redundant.
+This check is relatively conservative and only warns on limited cases where the comparison is highly likely to be redundant.
+
+## unsafe-overlap
+
+Protocols decorated with `@runtime_checkable` may be used in `isinstance` and `issubclass` checks, but the runtime will only checks that all the required attributes are present, without looking at their types.
+
+This error occurs when the object you're checking against the protocol has all the required attributes, but their types are not compatible.
+
+In the example below, `C` should not match with `P`, but the `isinstance` check will succeed at runtime.
+
+```python
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class P(Protocol):
+    x: int
+
+class C:
+    x: str
+
+c = C()
+if isinstance(c, P):
+    pass
+```
 
 ## unsupported
 
