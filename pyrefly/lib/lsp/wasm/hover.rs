@@ -411,19 +411,19 @@ pub fn get_hover(
     }
 
     // Check if hovering over `in` keyword in for loop or comprehension
-    if let Some(iterable_range) = in_keyword_in_iteration_at(transaction, handle, position) {
-        if let Some(iterable_type) = transaction.get_type_at(handle, iterable_range.start()) {
-            return Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: format!(
-                        "```python\n(keyword) in\n```\n---\nIteration over `{}`\n\nThe `in` keyword here is part of for-loop iteration syntax, which iterates over elements of the iterable.",
-                        iterable_type
-                    ),
-                }),
-                range: None,
-            });
-        }
+    if let Some(iterable_range) = in_keyword_in_iteration_at(transaction, handle, position)
+        && let Some(iterable_type) = transaction.get_type_at(handle, iterable_range.start())
+    {
+        return Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: format!(
+                    "```python\n(keyword) in\n```\n---\nIteration over `{}`\n\nThe `in` keyword here is part of for-loop iteration syntax, which iterates over elements of the iterable.",
+                    iterable_type
+                ),
+            }),
+            range: None,
+        });
     }
 
     // Otherwise, fall through to the existing type hover logic
