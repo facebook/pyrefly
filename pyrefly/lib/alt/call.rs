@@ -474,6 +474,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             "Expr::call_method",
             true,
         )?;
+        // Record the method type for hover support
+        self.record_resolved_trace(range, callee_ty.clone());
         Some(self.make_call_target_and_call(
             callee_ty,
             method_name,

@@ -387,7 +387,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                                 Some(&context),
                             ) {
-                                // Comparison method called.
                                 ret
                             } else {
                                 let iteration_errors = self.error_collector();

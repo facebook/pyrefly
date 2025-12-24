@@ -27,8 +27,11 @@ use pyrefly_types::callable::Required;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_python::ast::Ast;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
@@ -330,6 +333,39 @@ fn identifier_text_at(
         .map(|id| id.identifier.id.to_string())
 }
 
+/// Check if the cursor position is on the `in` keyword within a for loop or comprehension.
+/// Returns Some(iterable_range) if found, None otherwise.
+fn in_keyword_in_iteration_at(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<TextRange> {
+    let ast = transaction.get_ast(handle)?;
+    let module = transaction.get_module_info(handle)?;
+
+    // Helper to check if position is on "in" between target and iter
+    let check_in_keyword = |target_end: TextSize, iter_start: TextSize| -> bool {
+        position >= target_end
+            && position < iter_start
+            && module
+                .code_at(TextRange::new(target_end, iter_start))
+                .contains("in")
+    };
+
+    for node in Ast::locate_node(&ast, position) {
+        match node {
+            AnyNodeRef::StmtFor(s) if check_in_keyword(s.target.range().end(), s.iter.range().start()) => {
+                return Some(s.iter.range());
+            }
+            AnyNodeRef::Comprehension(c) if check_in_keyword(c.target.range().end(), c.iter.range().start()) => {
+                return Some(c.iter.range());
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 pub fn get_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -368,6 +404,22 @@ pub fn get_hover(
 
     if position_is_in_docstring(transaction, handle, position) {
         return None;
+    }
+
+    // Check if hovering over `in` keyword in for loop or comprehension
+    if let Some(iterable_range) = in_keyword_in_iteration_at(transaction, handle, position) {
+        if let Some(iterable_type) = transaction.get_type_at(handle, iterable_range.start()) {
+            return Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: format!(
+                        "```python\n(keyword) in\n```\n---\nIteration over `{}`\n\nThe `in` keyword here is part of for-loop iteration syntax, which iterates over elements of the iterable.",
+                        iterable_type
+                    ),
+                }),
+                range: None,
+            });
+        }
     }
 
     // Otherwise, fall through to the existing type hover logic
