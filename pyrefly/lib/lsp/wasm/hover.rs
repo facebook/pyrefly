@@ -13,6 +13,7 @@ use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
@@ -27,7 +28,6 @@ use pyrefly_types::callable::Required;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
-use pyrefly_python::ast::Ast;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
@@ -354,10 +354,14 @@ fn in_keyword_in_iteration_at(
 
     for node in Ast::locate_node(&ast, position) {
         match node {
-            AnyNodeRef::StmtFor(s) if check_in_keyword(s.target.range().end(), s.iter.range().start()) => {
+            AnyNodeRef::StmtFor(s)
+                if check_in_keyword(s.target.range().end(), s.iter.range().start()) =>
+            {
                 return Some(s.iter.range());
             }
-            AnyNodeRef::Comprehension(c) if check_in_keyword(c.target.range().end(), c.iter.range().start()) => {
+            AnyNodeRef::Comprehension(c)
+                if check_in_keyword(c.target.range().end(), c.iter.range().start()) =>
+            {
                 return Some(c.iter.range());
             }
             _ => {}
