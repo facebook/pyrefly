@@ -790,3 +790,57 @@ token-type: variable, token-modifiers: [readonly]
 "#,
     );
 }
+
+#[test]
+fn shadowed_builtin_not_highlighted_as_builtin() {
+    let code = r#"
+from typing import Literal
+
+input = 1
+not_a_builtin = 1
+x: Literal[1] = input
+y: Literal[1] = not_a_builtin
+str(input)
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 5, length: 6, text: typing
+token-type: namespace
+
+line: 1, column: 19, length: 7, text: Literal
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 3, column: 0, length: 5, text: input
+token-type: variable
+
+line: 4, column: 0, length: 13, text: not_a_builtin
+token-type: variable
+
+line: 5, column: 0, length: 1, text: x
+token-type: variable
+
+line: 5, column: 3, length: 7, text: Literal
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 5, column: 16, length: 5, text: input
+token-type: variable
+
+line: 6, column: 0, length: 1, text: y
+token-type: variable
+
+line: 6, column: 3, length: 7, text: Literal
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 6, column: 16, length: 13, text: not_a_builtin
+token-type: variable
+
+line: 7, column: 0, length: 3, text: str
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 7, column: 4, length: 5, text: input
+token-type: variable
+"#,
+    );
+}
