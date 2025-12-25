@@ -226,6 +226,21 @@ def f(cond):
 );
 
 testcase!(
+    test_for_loop_divmod_reassignment,
+    r#"
+from typing import assert_type
+def process(value: int | float) -> None:
+    for _ in range(2):
+        v, value = divmod(value, 7)
+
+        assert_type(v, int | float)
+        assert_type(value, int | float)
+
+    assert_type(value, int | float)
+"#,
+);
+
+testcase!(
     test_for_simple,
     r#"
 from typing import assert_type

@@ -110,7 +110,11 @@ impl<'a> TypeOrExpr<'a> {
     ) -> Type {
         match self {
             TypeOrExpr::Type(ty, _) => ty.clone(),
-            TypeOrExpr::Expr(x) => solver.expr_infer(x, errors),
+            TypeOrExpr::Expr(x) => {
+                let ty = solver.expr_infer(x, errors);
+                // Keep loop-recursive types usable during call inference.
+                solver.solver().expand_loop_recursive(ty)
+            }
         }
     }
 
