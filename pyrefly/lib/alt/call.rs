@@ -283,6 +283,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                 }
             }
+            Type::Intersect(intersect) => {
+                let (_, fallback) = *intersect;
+                self.as_call_target_impl(fallback, quantified, dunder_call)
+            }
             Type::Any(style) => CallTargetLookup::Ok(Box::new(CallTarget::Any(style))),
             Type::TypeAlias(ta) => {
                 self.as_call_target_impl(ta.as_value(self.stdlib), quantified, dunder_call)
