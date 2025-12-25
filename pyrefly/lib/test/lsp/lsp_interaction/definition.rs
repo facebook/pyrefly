@@ -66,6 +66,22 @@ fn test_go_to_def(
 }
 
 #[test]
+fn definition_on_submodule_attribute_resolves_to_package() {
+    let root = get_test_files_root();
+    test_go_to_def(
+        root.path().to_path_buf(),
+        None,
+        "implicit_submodule/main.py",
+        vec![
+            // `foo.y` -> `x.y`
+            (2, 4, "implicit_submodule/x/y/__init__.py", 0, 0, 0, 0),
+            // `foo.y.z` -> `x.y.z`
+            (3, 6, "implicit_submodule/x/y/z/__init__.py", 0, 0, 0, 0),
+        ],
+    );
+}
+
+#[test]
 fn definition_on_attr_of_pyi_assignment_goes_to_py() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();

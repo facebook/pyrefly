@@ -1841,7 +1841,9 @@ torch.autograd.Function
 # main.py
 3 | torch.autograd.Function
           ^
-Definition Result: None
+Definition Result:
+1 | # torch/autograd/__init__.py
+    ^
 
 
 # torch.py
@@ -1882,7 +1884,9 @@ a.b.c.D
 # main.py
 3 | a.b.c.D
       ^
-Definition Result: None
+Definition Result:
+1 | # a/b/__init__.py
+    ^
 
 
 # a.py

@@ -488,6 +488,32 @@ fn test_stdlib_submodule_completion() {
 }
 
 #[test]
+fn test_implicit_submodule_completion() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("implicit_submodule/main.py");
+    interaction
+        .client
+        .did_change("implicit_submodule/main.py", "import x as foo\n\nfoo.");
+    interaction
+        .client
+        .completion("implicit_submodule/main.py", 2, 4)
+        .expect_completion_response_with(|list| {
+            list.items
+                .iter()
+                .any(|item| item.label == "y" && item.kind == Some(CompletionItemKind::MODULE))
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_stdlib_class_completion() {
     let root = get_test_files_root();
     let root_path = root.path().join("basic");
