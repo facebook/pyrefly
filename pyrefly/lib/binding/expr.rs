@@ -863,7 +863,17 @@ impl<'a> BindingsBuilder<'a> {
             // binding that we crash looking for if we don't do this.
             Expr::Call(_) => self.ensure_expr(x, static_type_usage),
             // Bind walrus so we don't crash when looking up the assigned name later.
-            Expr::Named(_) => self.ensure_expr(x, static_type_usage),
+            // Named expressions are not allowed inside type aliases (PEP 695).
+            Expr::Named(named) => {
+                if self.scopes.in_type_alias() {
+                    self.error(
+                        named.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "named expression cannot be used within a type alias".to_owned(),
+                    );
+                }
+                self.ensure_expr(x, static_type_usage);
+            }
             // Bind yield and yield from so we don't crash when checking return type later.
             Expr::Yield(_) => {
                 self.ensure_expr(x, static_type_usage);

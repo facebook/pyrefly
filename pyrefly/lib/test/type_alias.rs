@@ -874,3 +874,14 @@ x7: TA | C = C()
 c2: Callable[[int], int] = f2  # E: `(x: C | int | str) -> C | int | str` is not assignable to `(int) -> int`
     "#,
 );
+
+testcase!(
+    test_named_expression_in_type_alias,
+    r#"
+# Named expressions (walrus operator) are not allowed inside type aliases (PEP 695).
+# This matches Python's behavior which raises a SyntaxError.
+type T = (a := 1)  # E: named expression cannot be used within a type alias # E: Expected `T` to be a type alias
+type U = (a := 1)  # E: named expression cannot be used within a type alias # E: Expected `U` to be a type alias
+type V = int | (b := str)  # E: named expression cannot be used within a type alias
+    "#,
+);

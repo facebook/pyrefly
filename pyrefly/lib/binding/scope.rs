@@ -1540,6 +1540,11 @@ impl Scopes {
         matches!(self.current().kind, ScopeKind::Comprehension { .. })
     }
 
+    /// Check if we're currently in a type alias scope.
+    pub fn in_type_alias(&self) -> bool {
+        matches!(self.current().kind, ScopeKind::TypeAlias)
+    }
+
     /// Check if we're in a synchronous comprehension.
     /// A comprehension is synchronous unless we're in an async function.
     pub fn in_sync_comprehension(&self) -> bool {
