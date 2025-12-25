@@ -4191,6 +4191,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         type_form_context: TypeFormContext,
         errors: &ErrorCollector,
     ) -> Type {
+        if let Expr::StringLiteral(string_literal) = x
+            && let Some(string_literal) = string_literal.as_single_part_string()
+            && let Ok(string_type_expression) = Ast::parse_type_literal(string_literal)
+        {
+            return self.expr_untype(&string_type_expression, type_form_context, errors);
+        }
         let result = match x {
             Expr::List(x)
                 if matches!(
