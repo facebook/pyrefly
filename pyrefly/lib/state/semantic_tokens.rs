@@ -266,7 +266,9 @@ impl SemanticTokenBuilder {
                 // todo(samzhou19815): if the class's base is Enum, it should be ENUM_MEMBER
                 let kind = match get_type_of_attribute(attr.range()) {
                     Some(Type::BoundMethod(_)) => SemanticTokenType::METHOD,
-                    Some(Type::Function(_) | Type::Callable(_)) => SemanticTokenType::FUNCTION,
+                    Some(Type::Function(_) | Type::Callable(_) | Type::Overload(_)) => {
+                        SemanticTokenType::FUNCTION
+                    }
                     Some(Type::ClassDef(_)) => SemanticTokenType::CLASS,
                     _ => SemanticTokenType::PROPERTY,
                 };
