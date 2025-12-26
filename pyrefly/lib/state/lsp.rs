@@ -1362,6 +1362,58 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn find_attribute_definition_fallback(
+        &self,
+        handle: &Handle,
+        covering_nodes: &[AnyNodeRef],
+        identifier: &Identifier,
+        preference: FindPreference,
+    ) -> Vec<FindDefinitionItemWithDocstring> {
+        // Extract the base name from the ExprAttribute node.
+        // Index 1 is the ExprAttribute node itself (index 0 is the identifier).
+        if let Some(AnyNodeRef::ExprAttribute(attr)) = covering_nodes.get(1)
+            && let Expr::Name(base_name) = attr.value.as_ref()
+        {
+            let base_id = Ast::expr_name_identifier(base_name.clone());
+
+            // Try module resolution: if base is a module, look up the submodule directly
+            if let Some(def) = self.find_definition_for_name_use(handle, &base_id, preference)
+                && matches!(
+                    def.metadata,
+                    DefinitionMetadata::Variable(Some(SymbolKind::Module))
+                )
+            {
+                let submodule_name = def.module.name().append(identifier.id());
+                if let Some(submodule_def) =
+                    self.find_definition_for_imported_module(handle, submodule_name, preference)
+                {
+                    return vec![submodule_def];
+                }
+            }
+
+            // Try bindings resolution: get the base type from bindings and look up the attribute
+            if let Some(bindings) = self.get_bindings(handle)
+                && let Some(answers) = self.get_answers(handle)
+            {
+                let short_id = ShortIdentifier::new(&base_id);
+                let bound_key = Key::BoundName(short_id);
+                if bindings.is_valid_key(&bound_key) {
+                    let idx = bindings.key_to_idx(&bound_key);
+                    if let Some(base_type) = answers.get_type_at(idx) {
+                        return self.find_attribute_definition_for_base_type(
+                            handle,
+                            preference,
+                            base_type,
+                            identifier.id(),
+                        );
+                    };
+                }
+            }
+        };
+
+        vec![]
+    }
+
     fn find_definition_for_imported_module(
         &self,
         handle: &Handle,
@@ -1613,7 +1665,22 @@ impl<'a> Transaction<'a> {
                 identifier,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
-                self.find_definition_for_attribute(handle, base_range, identifier.id(), preference)
+                let result = self.find_definition_for_attribute(
+                    handle,
+                    base_range,
+                    identifier.id(),
+                    preference,
+                );
+                if !result.is_empty() {
+                    result
+                } else {
+                    self.find_attribute_definition_fallback(
+                        handle,
+                        &covering_nodes,
+                        &identifier,
+                        preference,
+                    )
+                }
             }
             None => {
                 // Check if this is a None literal, if so, resolve to NoneType class
