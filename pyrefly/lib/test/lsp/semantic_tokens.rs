@@ -790,3 +790,63 @@ token-type: variable, token-modifiers: [readonly]
 "#,
     );
 }
+
+#[test]
+fn import_with_same_name_alias_test() {
+    let lib = r#"
+def func():
+    pass
+"#;
+    let code = r#"
+from lib import func as func
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code), ("lib", lib)],
+        r#"
+# main.py
+line: 1, column: 5, length: 3, text: lib
+token-type: namespace
+
+line: 1, column: 16, length: 4, text: func
+token-type: namespace
+
+line: 1, column: 24, length: 4, text: func
+token-type: function
+
+
+# lib.py
+line: 1, column: 4, length: 4, text: func
+token-type: function
+"#,
+    );
+}
+
+#[test]
+fn import_with_renamed_alias_test() {
+    let foo = r#"
+def bar():
+    pass
+"#;
+    let code = r#"
+from foo import bar as baz
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code), ("foo", foo)],
+        r#"
+# main.py
+line: 1, column: 5, length: 3, text: foo
+token-type: namespace
+
+line: 1, column: 16, length: 3, text: bar
+token-type: namespace
+
+line: 1, column: 23, length: 3, text: baz
+token-type: function
+
+
+# foo.py
+line: 1, column: 4, length: 3, text: bar
+token-type: function
+"#,
+    );
+}
