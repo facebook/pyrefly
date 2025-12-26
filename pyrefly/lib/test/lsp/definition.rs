@@ -1814,3 +1814,67 @@ Definition Result:
         report.trim(),
     );
 }
+
+#[test]
+fn goto_def_on_first_component_of_multi_part_import() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# mymod/__init__.py"),
+        "Expected go-to-definition to point to mymod/__init__.py, got: {report}"
+    );
+    assert!(
+        !report.contains("# mymod/submod/__init__.py"),
+        "Go-to-definition should not point to mymod/submod/__init__.py when clicking on 'mymod', got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_middle_component_of_multi_part_import() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let mymod_submod_deep_init = r#"# mymod/submod/deep/__init__.py
+class Bar: ...
+"#;
+    let code = r#"
+from mymod.submod.deep import Bar
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+            ("mymod.submod.deep", mymod_submod_deep_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# mymod/submod/__init__.py"),
+        "Expected go-to-definition to point to mymod/submod/__init__.py, got: {report}"
+    );
+    assert!(
+        !report.contains("# mymod/submod/deep/__init__.py"),
+        "Go-to-definition should not point to mymod/submod/deep/__init__.py when clicking on 'submod', got: {report}"
+    );
+}
