@@ -1145,6 +1145,50 @@ def f():
     "#,
 );
 
+fn env_singleton_attribute_assignment() -> TestEnv {
+    TestEnv::one(
+        "singleton",
+        r#"
+class GlobalInventory:
+    _instance: GlobalInventory | None = None
+    _initialized: bool = False
+
+    initialization_status: bool
+    config_file_inventory: dict[str, int]
+
+    def __new__(cls) -> GlobalInventory:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        assert cls._instance is not None, "GlobalInventory instance creation failed"
+        return cls._instance
+
+    def __init__(self) -> None:
+        if not self._initialized:
+            self.initialization_status = False
+            self.config_file_inventory = {}
+            GlobalInventory._initialized = True
+
+globals_inv: GlobalInventory = GlobalInventory()
+        "#,
+    )
+}
+
+testcase!(
+    test_attribute_assignment_to_imported_singleton_in_method,
+    env_singleton_attribute_assignment(),
+    r#"
+from singleton import globals_inv
+
+class Foo:
+    def __init__(self) -> None:
+        globals_inv.config_file_inventory = {"foo": 1}
+        for _ in globals_inv.config_file_inventory.values():
+            if globals_inv.initialization_status:
+                break
+        globals_inv.initialization_status = True
+    "#,
+);
+
 testcase!(
     test_unbound_local_name_error_in_def,
     r#"

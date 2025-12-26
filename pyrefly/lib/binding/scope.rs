@@ -2512,6 +2512,7 @@ impl<'a> BindingsBuilder<'a> {
         let n_branch_flow_infos = flow_infos.len();
         // Track if base has a value for this name (for LoopDefinitelyRuns init check)
         let base_has_value = merge_item.base.as_ref().is_some_and(|b| b.value.is_some());
+        let base_has_name = merge_item.base.is_some();
         // If this is a loop, we want to use the current default in any phis we produce,
         // and the base flow is part of the merge for type inference purposes.
         let loop_prior = if merge_style.is_loop()
@@ -2552,11 +2553,9 @@ impl<'a> BindingsBuilder<'a> {
         let mut value_idxs = SmallSet::with_capacity(flow_infos.len());
         let mut branch_idxs = SmallSet::with_capacity(flow_infos.len());
         let mut styles = Vec::with_capacity(flow_infos.len());
-        let mut n_values = 0;
         for flow_info in flow_infos.into_iter() {
             let branch_idx = flow_info.idx();
             if let Some(v) = flow_info.value {
-                n_values += 1;
                 if v.idx == phi_idx {
                     continue;
                 }
@@ -2572,9 +2571,14 @@ impl<'a> BindingsBuilder<'a> {
         // - It was defined before the loop (base_has_value), OR
         // - It's defined in all loop body branches (since the loop definitely runs at least once)
         // For regular loops and other merges, a name is always defined if it's in all branches.
+        let is_name_exists_in_all_branch_flow = match merge_style {
+            MergeStyle::Loop => n_branch_flow_infos == n_branches.saturating_sub(1),
+            _ => n_branch_flow_infos == n_branches,
+        };
         let this_name_always_defined = match merge_style {
-            MergeStyle::LoopDefinitelyRuns => base_has_value || n_branch_flow_infos == n_branches,
-            _ => n_values == n_branches,
+            MergeStyle::Loop => base_has_name && is_name_exists_in_all_branch_flow,
+            MergeStyle::LoopDefinitelyRuns => base_has_value || is_name_exists_in_all_branch_flow,
+            _ => is_name_exists_in_all_branch_flow,
         };
         match value_idxs.len() {
             // If there are no values, then this name isn't assigned at all
