@@ -1512,14 +1512,34 @@ impl<'a> Transaction<'a> {
                 }
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context:
                     IdentifierContext::ImportedModule {
                         name: module_name, ..
                     },
-            }) => self
-                .find_definition_for_imported_module(handle, module_name, preference)
-                .map_or(vec![], |item| vec![item]),
+            }) => {
+                // Build the module name for lookup based on identifier position.
+                let components = module_name.components();
+
+                let target_module_name =
+                    if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
+                        // Identifier matches a module component.
+                        ModuleName::from_parts(&components[..=idx])
+                    } else if identifier.as_str() == module_name.as_str() {
+                        // Identifier matches full module name; decide which component based on position offset.
+                        let module_str = module_name.as_str();
+                        let offset = (position - identifier.range.start())
+                            .to_usize()
+                            .min(module_str.len());
+                        let idx = module_str[..offset].matches('.').count();
+                        ModuleName::from_parts(&components[..=idx])
+                    } else {
+                        // Fallback: use the whole module name.
+                        module_name
+                    };
+                self.find_definition_for_imported_module(handle, target_module_name, preference)
+                    .map_or(vec![], |item| vec![item])
+            }
             Some(IdentifierWithContext {
                 identifier: _,
                 context:
