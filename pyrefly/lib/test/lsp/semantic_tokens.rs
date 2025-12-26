@@ -955,7 +955,7 @@ token-type: namespace
 line: 2, column: 6, length: 6, text: submod
 token-type: namespace
 
-line: 2, column: 13, length: 6, text: Foo
+line: 2, column: 13, length: 3, text: Foo
 token-type: class
 
 
@@ -968,7 +968,7 @@ token-type: class, token-modifiers: [defaultLibrary]
 
 
 # mymod.submod.py
-line: 1, column: 6, length: 6, text: Foo
+line: 1, column: 6, length: 3, text: Foo
 token-type: class
 "#,
     );

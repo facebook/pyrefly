@@ -1520,7 +1520,6 @@ impl<'a> Transaction<'a> {
             }) => {
                 // Build the module name for lookup based on identifier position.
                 let components = module_name.components();
-
                 let target_module_name =
                     if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
                         // Identifier matches a module component.
