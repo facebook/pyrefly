@@ -2107,6 +2107,19 @@ def test_isinstance[T: Mapping[str, int] | Sequence[int]](arg: T) -> T:
 );
 
 testcase!(
+    test_isinstance_narrow_bounded_type_param,
+    r#"
+from typing import reveal_type
+
+def test[T: int | str](value: T) -> T:
+    if isinstance(value, int):
+        reveal_type(value) # E: int & T
+        return value
+    return value
+    "#,
+);
+
+testcase!(
     test_match_intersection_against_constrained_typevar,
     r#"
 class A: ...
