@@ -1,32 +1,41 @@
 [build-system]
-requires = ["maturin>=1.10.2,<2.0"]
 build-backend = "maturin"
+requires = [ "maturin>=1.10.2,<2" ]
+
+[project]
+name = "pyrefly"
+description = "A fast type checker and language server for Python with powerful IDE features"
+readme = "README.md"
+keywords = [ "typechecker", "typechecking" ]
+requires-python = ">=3.8"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development",
+]
+
+optional-dependencies.dev = [
+  "pre-commit",
+  "ty",
+]
+urls.documentation = "https://pyrefly.org/en/docs/"
+urls.homepage = "https://pyrefly.org"
 
 [tool.maturin]
 bindings = "bin"
 python-source = "python"
 module-name = "pyrefly"
 strip = false
-include = ["rust-toolchain"]
-
-[project.urls]
-homepage = "https://pyrefly.org"
-documentation = "https://pyrefly.org/en/docs/"
-
-[project]
-name = "pyrefly"
-description = "A fast type checker and language server for Python with powerful IDE features"
-readme = "README.md"
-requires-python = ">=3.8"
-keywords = ["typechecker", "typechecking"]
-classifiers = [
-  "Development Status :: 4 - Beta",
-  "Programming Language :: Python",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-  "Operating System :: MacOS",
-  "Operating System :: Microsoft :: Windows",
-  "Operating System :: POSIX :: Linux",
-  "Intended Audience :: Developers",
-  "Topic :: Software Development"
-]
+include = [ "rust-toolchain" ]

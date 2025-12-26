@@ -1,0 +1,20 @@
+---
+fail_fast: true
+
+ci:
+  skip:
+    - ty
+
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: ty
+        name: ty
+        stages: [pre-push]
+        entry: uv run --extra=dev ty check
+        language: python
+        types_or: [python, toml]
+        pass_filenames: false
+        additional_dependencies: [uv]
