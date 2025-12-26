@@ -2047,6 +2047,7 @@ dependencies = [
  "num-traits",
  "parse-display",
  "paste",
+ "percent-encoding",
  "pretty_assertions",
  "pyrefly_build",
  "pyrefly_bundled",

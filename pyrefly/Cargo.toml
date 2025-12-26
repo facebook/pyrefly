@@ -33,6 +33,7 @@ lsp-types = { git = "https://github.com/astral-sh/lsp-types", rev = "3512a9f33ea
 num-traits = { version = "0.2.19", default-features = false }
 parse-display = "0.8.2"
 paste = "1.0.14"
+percent-encoding = "2.3.2"
 pyrefly_build = { path = "../crates/pyrefly_build" }
 pyrefly_bundled = { path = "../crates/pyrefly_bundled" }
 pyrefly_config = { path = "../crates/pyrefly_config" }
