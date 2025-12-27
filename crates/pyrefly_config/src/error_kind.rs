@@ -211,6 +211,8 @@ pub enum ErrorKind {
     NoAccess,
     /// Attempting to call an overloaded function, but none of the signatures match.
     NoMatchingOverload,
+    /// Matching on an enum without covering all possible cases.
+    NonExhaustiveMatch,
     /// Attempting to use something that isn't a type where a type is expected.
     /// This is a very general error and should be used sparingly.
     NotAType,
@@ -318,6 +320,7 @@ impl ErrorKind {
             ErrorKind::MissingSource => Severity::Ignore,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::NonExhaustiveMatch => Severity::Warn,
             _ => Severity::Error,
         }
     }

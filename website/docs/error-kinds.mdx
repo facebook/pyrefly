@@ -860,6 +860,24 @@ def f(x: int | str) -> int | str:
 f(1.0)
 ```
 
+## non-exhaustive-match
+
+Pyrefly warns when a `match` statement over an `Enum` attempts to enumerate the members
+but forgets at least one case. Add the missing members or a default arm.
+
+```python
+from enum import Enum
+
+class Color(Enum):
+  RED = "red"
+  BLUE = "blue"
+
+def describe(color: Color) -> str:
+  match color:  # non-exhaustive-match
+    case Color.RED:
+      return "danger"
+```
+
 ## not-a-type
 
 This indicates an attempt to use something that isn't a type where a type is expected.

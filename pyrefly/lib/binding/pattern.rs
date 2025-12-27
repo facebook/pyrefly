@@ -13,6 +13,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Int;
+use ruff_python_ast::MatchCase;
 use ruff_python_ast::Number;
 use ruff_python_ast::Pattern;
 use ruff_python_ast::PatternKeyword;
@@ -364,23 +365,31 @@ impl<'a> BindingsBuilder<'a> {
         // is carried over to the fallback case.
         let mut negated_prev_ops = NarrowOps::new();
         for case in x.cases {
+            let MatchCase {
+                pattern,
+                guard,
+                body,
+                range: case_range,
+                ..
+            } = case;
             self.start_branch();
-            if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
+            let case_is_irrefutable = pattern.is_wildcard() || pattern.is_irrefutable();
+            if case_is_irrefutable {
                 exhaustive = true;
             }
             self.bind_narrow_ops(
                 &negated_prev_ops,
-                NarrowUseLocation::Start(case.range),
+                NarrowUseLocation::Start(case_range),
                 &Usage::Narrowing(None),
             );
             let mut new_narrow_ops =
-                self.bind_pattern(match_narrowing_subject.clone(), case.pattern, subject_idx);
+                self.bind_pattern(match_narrowing_subject.clone(), pattern, subject_idx);
             self.bind_narrow_ops(
                 &new_narrow_ops,
-                NarrowUseLocation::Span(case.range),
+                NarrowUseLocation::Span(case_range),
                 &Usage::Narrowing(None),
             );
-            if let Some(mut guard) = case.guard {
+            if let Some(mut guard) = guard {
                 self.ensure_expr(&mut guard, &mut Usage::Narrowing(None));
                 let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));
                 self.bind_narrow_ops(
@@ -392,13 +401,31 @@ impl<'a> BindingsBuilder<'a> {
                 new_narrow_ops.and_all(guard_narrow_ops)
             }
             negated_prev_ops.and_all(new_narrow_ops.negate());
-            self.stmts(case.body, parent);
+            self.stmts(body, parent);
             self.finish_branch();
         }
         if exhaustive {
             self.finish_exhaustive_fork();
         } else {
             self.finish_non_exhaustive_fork(&negated_prev_ops);
+            if let Some(subject_name) = match match_narrowing_subject.as_ref() {
+                Some(NarrowingSubject::Name(name)) => Some(name.clone()),
+                Some(NarrowingSubject::Facets(name, _)) => Some(name.clone()),
+                None => None,
+            } {
+                let remaining = negated_prev_ops
+                    .0
+                    .get(&subject_name)
+                    .map(|(op, range)| (Box::new(op.clone()), *range));
+                self.insert_binding(
+                    KeyExpect(x.range),
+                    BindingExpect::MatchExhaustiveness {
+                        subject: subject_idx,
+                        remaining,
+                        range: x.range,
+                    },
+                );
+            }
         }
     }
 }

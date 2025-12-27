@@ -151,3 +151,20 @@ def f0(x: C):
             assert_type(x, C)
 "#,
 );
+
+testcase!(
+    test_non_exhaustive_enum_match_warning,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+    BLUE = "blue"
+
+def describe(color: Color) -> str:
+    match color:  # E: Match on `Color` is not exhaustive; missing cases: Color.BLUE
+        case Color.RED:
+            return "danger"
+    return "cool"
+"#,
+);

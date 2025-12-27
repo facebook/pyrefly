@@ -1608,6 +1608,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver().expand_vars_mut(ty);
     }
 
+    fn is_pure_enum_class(&self, cls: &ClassType) -> bool {
+        self.get_metadata_for_class(cls.class_object())
+            .enum_metadata()
+            .is_some_and(|meta| !meta.is_flag)
+    }
+
+    fn is_pure_enum_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => self.is_pure_enum_class(cls),
+            Type::Literal(Lit::Enum(lit_enum)) => {
+                let lit_enum = lit_enum.as_ref();
+                self.is_pure_enum_class(&lit_enum.class)
+            }
+            Type::Union(union) => {
+                let union = union.as_ref();
+                !union.members.is_empty()
+                    && union
+                        .members
+                        .iter()
+                        .all(|member| self.is_pure_enum_type(member))
+            }
+            _ => false,
+        }
+    }
+
+    fn format_enum_literal_cases(&self, ty: &Type) -> Option<String> {
+        fn collect_cases(ty: &Type, acc: &mut Vec<String>) -> bool {
+            match ty {
+                Type::Literal(Lit::Enum(lit_enum)) => {
+                    let lit_enum = lit_enum.as_ref();
+                    acc.push(format!("{}.{}", lit_enum.class.name(), lit_enum.member));
+                    true
+                }
+                Type::Union(union) => {
+                    let union = union.as_ref();
+                    union
+                        .members
+                        .iter()
+                        .all(|member| collect_cases(member, acc))
+                }
+                _ => false,
+            }
+        }
+
+        let mut cases = Vec::new();
+        if collect_cases(ty, &mut cases) {
+            Some(cases.join(", "))
+        } else {
+            None
+        }
+    }
+
     fn check_del_typed_dict_field(
         &self,
         typed_dict: &Name,
@@ -1761,6 +1813,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                     );
                 }
+            }
+            BindingExpect::MatchExhaustiveness {
+                subject,
+                remaining,
+                range,
+            } => {
+                let subject_info = self.get_idx(*subject);
+                let mut subject_ty = subject_info.ty().clone();
+                self.expand_vars_mut(&mut subject_ty);
+                if !self.is_pure_enum_type(&subject_ty) {
+                    return Arc::new(EmptyAnswer);
+                }
+                let mut remaining_ty = subject_ty.clone();
+                if let Some((op, narrow_range)) = remaining {
+                    let narrowed = self.narrow(&subject_info, op.as_ref(), *narrow_range, errors);
+                    let mut ty = narrowed.ty().clone();
+                    self.expand_vars_mut(&mut ty);
+                    remaining_ty = ty;
+                }
+                if remaining_ty.is_never() {
+                    return Arc::new(EmptyAnswer);
+                }
+                let subject_display = self.for_display(subject_ty);
+                let remaining_display = self.for_display(remaining_ty.clone());
+                let ctx = TypeDisplayContext::new(&[&subject_display, &remaining_display]);
+                let missing_cases = self
+                    .format_enum_literal_cases(&remaining_ty)
+                    .unwrap_or_else(|| ctx.display(&remaining_display).to_string());
+                self.error(
+                    errors,
+                    *range,
+                    ErrorInfo::Kind(ErrorKind::NonExhaustiveMatch),
+                    format!(
+                        "Match on `{}` is not exhaustive; missing cases: {}",
+                        ctx.display(&subject_display),
+                        missing_cases,
+                    ),
+                );
             }
         }
         Arc::new(EmptyAnswer)

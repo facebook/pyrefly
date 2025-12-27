@@ -582,6 +582,12 @@ pub enum BindingExpect {
     },
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
     Bool(Expr),
+    /// A match statement that may be non-exhaustive at runtime.
+    MatchExhaustiveness {
+        subject: Idx<Key>,
+        remaining: Option<(Box<NarrowOp>, TextRange)>,
+        range: TextRange,
+    },
 }
 
 impl DisplayWith<Bindings> for BindingExpect {
@@ -632,6 +638,23 @@ impl DisplayWith<Bindings> for BindingExpect {
                 ctx.display(*existing),
                 name
             ),
+            Self::MatchExhaustiveness {
+                subject,
+                remaining,
+                range,
+            } => {
+                let remaining_desc = remaining
+                    .as_ref()
+                    .map(|(_, narrow_range)| format!("{}", ctx.module().display(narrow_range)))
+                    .unwrap_or_else(|| "None".to_owned());
+                write!(
+                    f,
+                    "MatchExhaustiveness({}, {}, {})",
+                    ctx.display(*subject),
+                    remaining_desc,
+                    ctx.module().display(range)
+                )
+            }
         }
     }
 }
