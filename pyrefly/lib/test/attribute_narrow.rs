@@ -117,6 +117,21 @@ def f(foo: Foo):
 );
 
 testcase!(
+    test_missing_attribute_call_does_not_narrow,
+    r#"
+from typing import reveal_type
+def f(x: str):
+    if (
+        len(x.magic)  # E: Object of class `str` has no attribute `magic`
+        or reveal_type(  # E: revealed type: Unknown
+            x.magic  # E: Object of class `str` has no attribute `magic`
+        )
+    ):
+        pass
+"#,
+);
+
+testcase!(
     test_attr_assignment_introduction,
     r#"
 from typing import Any, Literal, assert_type
