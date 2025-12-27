@@ -477,7 +477,7 @@ testcase!(
     r#"
 from typing import Final
 x: Final = [""]
-x += [""]  # E: Cannot assign to var x because it is marked final
+x += [""]  # E: Cannot assign to variable `x` because it is marked final
 x[0] += ""
 "#,
 );
