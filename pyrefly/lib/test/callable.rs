@@ -1000,6 +1000,18 @@ if g:
 );
 
 testcase!(
+    test_generic_callable_in_condition,
+    r#"
+from typing import Callable, Iterable
+
+def test[T](it: Iterable[T], f: Callable[[T], bool]) -> None:
+    for e in it:
+        if f(e):
+            pass
+    "#,
+);
+
+testcase!(
     test_pass_literals_through_identity,
     r#"
 from typing import Callable, Literal, reveal_type
