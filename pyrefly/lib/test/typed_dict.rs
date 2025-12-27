@@ -2091,3 +2091,27 @@ x = TD({"x": 1}, y="2")
 x = TD({"x": 1})
 "#,
 );
+
+testcase!(
+    test_generic_typed_dict_inheritance_with_unpack,
+    r#"
+from typing import TypedDict, Type, Generic
+from typing_extensions import TypeVar, Unpack
+
+_T = TypeVar("_T", default=str)
+
+class Base(TypedDict, Generic[_T], total=False):
+    default: _T | None
+
+T = TypeVar('T')
+
+class Child(Base[T], total=False):
+    other: Type[T]
+
+def test(**kwargs: Unpack[Child[int]]) -> None:
+    pass
+
+# Should accept default=5 because Child[int] should have default: int | None
+test(other=int, default=5)
+"#,
+);
