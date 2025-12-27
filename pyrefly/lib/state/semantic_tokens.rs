@@ -338,11 +338,19 @@ impl SemanticTokenBuilder {
                     }
                 }
             }
-            Stmt::ImportFrom(StmtImportFrom {
-                module: Some(module),
-                ..
-            }) => {
-                self.push_if_in_range(module.range, SemanticTokenType::NAMESPACE, vec![]);
+            Stmt::ImportFrom(StmtImportFrom { module, names, .. }) => {
+                if let Some(module) = module {
+                    self.push_if_in_range(module.range, SemanticTokenType::NAMESPACE, vec![]);
+                }
+                for alias in names {
+                    if alias.asname.is_some() {
+                        self.push_if_in_range(
+                            alias.name.range,
+                            SemanticTokenType::NAMESPACE,
+                            vec![],
+                        );
+                    }
+                }
             }
             Stmt::AnnAssign(ann_assign) => {
                 if let Expr::Name(name) = &*ann_assign.target {

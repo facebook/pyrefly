@@ -653,3 +653,115 @@ greeter.attr
     );
     assert!(!report.contains("__call__"));
 }
+
+#[test]
+fn hover_on_import_same_name_alias_first_token_test() {
+    let lib = r#"
+def func() -> None: ...
+"#;
+    let code = r#"
+from lib import func as func
+#                ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import func as func
+                     ^
+```python
+(function) func: def func() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_import_same_name_alias_second_token_test() {
+    let lib = r#"
+def func() -> None: ...
+"#;
+    let code = r#"
+from lib import func as func
+#                        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import func as func
+                             ^
+```python
+(function) func: def func() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_import_different_name_alias_first_token_test() {
+    let lib = r#"
+def bar() -> None: ...
+"#;
+    let code = r#"
+from lib import bar as baz
+#                ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import bar as baz
+                     ^
+```python
+(function) bar: def bar() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_import_different_name_alias_second_token_test() {
+    let lib = r#"
+def bar() -> None: ...
+"#;
+    let code = r#"
+from lib import bar as baz
+#                       ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import bar as baz
+                            ^
+```python
+(function) bar: def bar() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}

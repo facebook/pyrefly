@@ -780,10 +780,17 @@ impl<'a> Transaction<'a> {
             }
             Some(IdentifierWithContext {
                 identifier: _,
-                context: IdentifierContext::ImportedName { .. },
+                context:
+                    IdentifierContext::ImportedName {
+                        name_after_import, ..
+                    },
             }) => {
-                // TODO(grievejia): handle definitions of imported names
-                None
+                let key = Key::Definition(ShortIdentifier::new(&name_after_import));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
             }
             Some(IdentifierWithContext {
                 identifier: _,
