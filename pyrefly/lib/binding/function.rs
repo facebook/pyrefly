@@ -809,27 +809,27 @@ fn function_last_expressions<'a>(
                 }
             }
             Stmt::Try(x) => {
-                // If final body is not empty, _and_ contains a return statement,
-                // process it.
-                if !x.finalbody.is_empty()
-                    && x.finalbody
-                        .iter()
-                        .any(|stmt| matches!(stmt, Stmt::Return(_)))
-                {
-                    f(sys_info, &x.finalbody, res)?;
-                } else {
-                    if x.orelse.is_empty() {
-                        f(sys_info, &x.body, res)?;
-                    } else {
-                        f(sys_info, &x.orelse, res)?;
+                // A `finally` block always executes, but only if it always terminates should it
+                // override the return-path analysis of the try/except/else.
+                if !x.finalbody.is_empty() {
+                    let mut final_body_last_expressions = Vec::new();
+                    if f(sys_info, &x.finalbody, &mut final_body_last_expressions).is_some()
+                        && final_body_last_expressions.is_empty()
+                    {
+                        return Some(());
                     }
-                    for handler in &x.handlers {
-                        match handler {
-                            ExceptHandler::ExceptHandler(x) => f(sys_info, &x.body, res)?,
-                        }
-                    }
-                    // If we don't have a matching handler, we raise an exception, which is fine.
                 }
+                if x.orelse.is_empty() {
+                    f(sys_info, &x.body, res)?;
+                } else {
+                    f(sys_info, &x.orelse, res)?;
+                }
+                for handler in &x.handlers {
+                    match handler {
+                        ExceptHandler::ExceptHandler(x) => f(sys_info, &x.body, res)?,
+                    }
+                }
+                // If we don't have a matching handler, we raise an exception, which is fine.
             }
             Stmt::Match(x) => {
                 let mut exhaustive = false;
