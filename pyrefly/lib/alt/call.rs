@@ -571,15 +571,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.solver().generalize_class_targs(cls.targs_mut());
         }
         let hint = None; // discard hint
+        let class_metadata = self.get_metadata_for_class(cls.class_object());
         if let Some(ret) =
             self.call_metaclass(&cls, arguments_range, args, keywords, errors, context, hint)
             && !self.is_compatible_constructor_return(&ret, cls.class_object())
         {
             if let Some(metaclass_dunder_call) = self.get_metaclass_dunder_call(&cls) {
                 if let Some(callee_range) = callee_range
-                    && let Some(metaclass) = self
-                        .get_metadata_for_class(cls.class_object())
-                        .custom_metaclass()
+                    && let Some(metaclass) = class_metadata.custom_metaclass()
                 {
                     self.record_external_attribute_definition_index(
                         &metaclass.clone().to_type(),
@@ -675,6 +674,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
             self.record_resolved_trace(arguments_range, init_method);
+        }
+        if class_metadata.is_pydantic_base_model()
+            && let Some(dataclass) = class_metadata.dataclass_metadata()
+        {
+            self.check_pydantic_argument_range_constraints(
+                cls.class_object(),
+                dataclass,
+                args,
+                keywords,
+                errors,
+            );
         }
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
