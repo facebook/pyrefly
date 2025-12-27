@@ -74,6 +74,17 @@ def f(b: bool) -> int:
 );
 
 testcase!(
+    test_return_try_finally_explicit_return,
+    r#"
+def f() -> int:
+    try:
+        return 1
+    finally:
+        print("done")
+"#,
+);
+
+testcase!(
     test_return_never,
     r#"
 from typing import NoReturn
