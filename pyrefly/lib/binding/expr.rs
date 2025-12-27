@@ -50,6 +50,7 @@ use crate::binding::bindings::LegacyTParamId;
 use crate::binding::bindings::NameLookupResult;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
@@ -760,6 +761,22 @@ impl<'a> BindingsBuilder<'a> {
                 x.recurse_mut(&mut |x| self.ensure_expr(x, usage));
                 // Control flow doesn't proceed after sys.exit(), exit(), quit(), or os._exit().
                 self.scopes.mark_flow_termination();
+            }
+            Expr::Subscript(ExprSubscript { value: subscript_base, slice: subscript_slice, .. }) => {
+                self.ensure_expr(&mut *subscript_base, usage);
+                let subscript_base_is_class_definition = matches!(
+                    &**subscript_base,
+                    Expr::Name(subscript_base_name)
+                        if self
+                            .scopes
+                            .binding_idx_for_name(&subscript_base_name.id)
+                            .is_some_and(|(_, flow_style)| matches!(flow_style, FlowStyle::ClassDef))
+                );
+                if subscript_base_is_class_definition {
+                    self.ensure_type(&mut *subscript_slice, &mut None);
+                } else {
+                    self.ensure_expr(&mut *subscript_slice, usage);
+                }
             }
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
