@@ -434,6 +434,17 @@ impl Solver {
         }
     }
 
+    pub fn quantified_type_for_solver_variable(&self, solver_variable: Var) -> Option<Type> {
+        let variables_lock = self.variables.lock();
+        let solver_variable_entry = variables_lock.get(solver_variable);
+        match &*solver_variable_entry {
+            Variable::Quantified(quantified_type_parameter) | Variable::PartialQuantified(quantified_type_parameter) => {
+                Some(Type::Quantified(Box::new((**quantified_type_parameter).clone())))
+            }
+            _ => None,
+        }
+    }
+
     fn deep_force_mut_with_limit(&self, t: &mut Type, limit: usize, recurser: &VarRecurser) {
         if limit == 0 {
             // TODO: Should probably add an error here, and use any_error,

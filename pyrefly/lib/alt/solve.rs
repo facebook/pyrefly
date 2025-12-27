@@ -1586,7 +1586,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         match ty {
             Type::Var(v) => {
-                if let Some(_guard) = self.recurse(*v) {
+                if let Some(quantified) = self.solver().quantified_type_for_solver_variable(*v) {
+                    quantified
+                } else if let Some(_guard) = self.recurse(*v) {
                     let forced = self.solver().force_var(*v);
                     self.force_for_narrowing(&forced, range, errors)
                 } else {
