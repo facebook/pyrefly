@@ -28,6 +28,8 @@ use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypedDictSubsetError;
+use crate::types::equality::TypeEq;
+use crate::types::equality::TypeEqCtx;
 use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -954,6 +956,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (_, Type::Any(_)) => Ok(()),
             (Type::Never(_), _) => Ok(()),
+            (Type::Quantified(left), Type::Quantified(right))
+                if left.type_eq(right, &mut TypeEqCtx::default()) =>
+            {
+                Ok(())
+            }
             (_, Type::ClassType(want)) if want.is_builtin("object") => {
                 Ok(()) // everything is an instance of `object`
             }
