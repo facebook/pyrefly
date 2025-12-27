@@ -382,6 +382,13 @@ impl Solver {
         self.simplify_mut(t);
     }
 
+    /// Expand loop-recursive vars to their prior type without pinning them.
+    pub fn expand_loop_recursive(&self, mut t: Type) -> Type {
+        self.expand_loop_recursive_mut(&mut t, TYPE_LIMIT, &VarRecurser::new());
+        self.simplify_mut(&mut t);
+        t
+    }
+
     /// Expand, but if the resulting type will be greater than limit levels deep, return an `Any`.
     /// Avoids producing things that stack overflow later in the process.
     fn expand_with_limit(&self, t: &mut Type, limit: usize, recurser: &VarRecurser) {
@@ -407,6 +414,31 @@ impl Solver {
             }
         } else {
             t.recurse_mut(&mut |t| self.expand_with_limit(t, limit - 1, recurser));
+        }
+    }
+
+    fn expand_loop_recursive_mut(&self, t: &mut Type, limit: usize, recurser: &VarRecurser) {
+        if limit == 0 {
+            *t = Type::any_implicit();
+        } else if let Type::Var(v) = t {
+            let lock = self.variables.lock();
+            if let Some(_guard) = lock.recurse(*v, recurser) {
+                let variable = lock.get(*v);
+                let prior = match &*variable {
+                    Variable::LoopRecursive(prior_type, _) => Some(prior_type.clone()),
+                    _ => None,
+                };
+                drop(variable);
+                drop(lock);
+                if let Some(prior) = prior {
+                    *t = prior;
+                    self.expand_loop_recursive_mut(t, limit - 1, recurser);
+                }
+            } else {
+                *t = Type::any_implicit();
+            }
+        } else {
+            t.recurse_mut(&mut |t| self.expand_loop_recursive_mut(t, limit - 1, recurser));
         }
     }
 
