@@ -1429,8 +1429,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
-                // Check if there's an inherited property field from a parent class
-                // If so, we should just use the parent's property instead of creating a new field
+                // Check if there's an inherited property or descriptor field from a parent class.
+                // If so, use the parent's field instead of creating a new field.
                 if !Ast::is_mangled_attr(name) {
                     // Use get_field_from_ancestors to only look at parent classes, not the current class
                     if let Some(parent_field) = self.get_field_from_ancestors(
@@ -1440,9 +1440,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &|cls, name| self.get_field_from_current_class_only(cls, name),
                     ) {
                         match &*parent_field.value {
-                            ClassField(ClassFieldInner::Property { .. }, ..) => {
-                                // If we found a property in the parent, just return the parent's field
-                                // This ensures the property with its setter is properly inherited
+                            ClassField(
+                                ClassFieldInner::Property { .. }
+                                | ClassFieldInner::Descriptor { .. },
+                                ..,
+                            ) => {
+                                // If we found a property or descriptor in the parent, return the parent's field.
+                                // This ensures setters are properly inherited.
                                 return Arc::unwrap_or_clone(parent_field.value);
                             }
                             _ => {
@@ -1574,32 +1578,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Identify whether this is a descriptor
         let mut descriptor = None;
-        match &ty {
-            // TODO(stroxler): This works for simple descriptors. There three known gaps, there may be others:
-            // - If the field is instance-only, descriptor dispatching won't occur, an instance-only attribute
-            //   that happens to be a descriptor just behaves like a normal instance-only attribute.
-            // - Gracefully handle instance-only `__get__`/`__set__`. Descriptors only seem to be detected
-            //   when the descriptor attribute is initialized on the class body of the descriptor.
-            // - Do we care about distributing descriptor behavior over unions? If so, what about the case when
-            //   the raw class field is a union of a descriptor and a non-descriptor? Do we want to allow this?
-            Type::ClassType(cls) => {
-                let getter = self
-                    .get_class_member(cls.class_object(), &dunder::GET)
-                    .is_some();
-                let setter = self
-                    .get_class_member(cls.class_object(), &dunder::SET)
-                    .is_some();
-                if getter || setter {
-                    descriptor = Some(Descriptor {
-                        range,
-                        cls: cls.clone(),
-                        getter,
-                        setter,
-                    })
+        if matches!(initialization, ClassFieldInitialization::ClassBody(_)) {
+            match &ty {
+                // TODO(stroxler): This works for simple descriptors. There three known gaps, there may be others:
+                // - If the field is instance-only, descriptor dispatching won't occur, an instance-only attribute
+                //   that happens to be a descriptor just behaves like a normal instance-only attribute.
+                // - Gracefully handle instance-only `__get__`/`__set__`. Descriptors only seem to be detected
+                //   when the descriptor attribute is initialized on the class body of the descriptor.
+                // - Do we care about distributing descriptor behavior over unions? If so, what about the case when
+                //   the raw class field is a union of a descriptor and a non-descriptor? Do we want to allow this?
+                Type::ClassType(cls) => {
+                    let getter = self
+                        .get_class_member(cls.class_object(), &dunder::GET)
+                        .is_some();
+                    let setter = self
+                        .get_class_member(cls.class_object(), &dunder::SET)
+                        .is_some();
+                    if getter || setter {
+                        descriptor = Some(Descriptor {
+                            range,
+                            cls: cls.clone(),
+                            getter,
+                            setter,
+                        })
+                    }
                 }
-            }
-            _ => {}
-        };
+                _ => {}
+            };
+        }
         // Check if this is a Django ForeignKey field
         let is_foreign_key = metadata.is_django_model()
             && matches!(&ty, Type::ClassType(cls) if self.is_foreign_key_field(cls.class_object()));

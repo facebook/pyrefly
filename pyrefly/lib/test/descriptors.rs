@@ -202,6 +202,18 @@ C().d = 42  # E:  Attribute `d` of class `C` is a read-only descriptor with no `
 );
 
 testcase!(
+    test_annotation_only_descriptor_allows_assignment,
+    r#"
+class Device:
+    def __get__(self, obj, classobj) -> int: ...
+class C:
+    device: Device
+def f(c: C) -> None:
+    c.device = Device()
+    "#,
+);
+
+testcase!(
     test_simple_user_defined_set_descriptor,
     r#"
 from typing import assert_type
