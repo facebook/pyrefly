@@ -1099,6 +1099,16 @@ def f(
 );
 
 testcase!(
+    test_assert_callable_narrow_any,
+    r#"
+from typing import Any, assert_type
+def f(x: object):
+    assert callable(x)
+    assert_type(x(), Any)
+    "#,
+);
+
+testcase!(
     test_narrow_union,
     r#"
 from typing import Any, Callable, assert_type
