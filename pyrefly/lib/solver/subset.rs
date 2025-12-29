@@ -617,6 +617,18 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 l_after.reverse();
                 u_after.reverse();
 
+                if l_before.is_empty()
+                    && l_after.is_empty()
+                    && u_before.is_empty()
+                    && u_after.is_empty()
+                    && let (Type::Quantified(l_middle_q), Type::Quantified(u_middle_q)) =
+                        (l_middle, u_middle)
+                    && l_middle_q.is_type_var_tuple()
+                    && l_middle_q == u_middle_q
+                {
+                    return Ok(());
+                }
+
                 self.is_subset_eq(
                     &Type::unpacked_tuple(l_before, l_middle.clone(), l_after),
                     u_middle,

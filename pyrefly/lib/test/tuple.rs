@@ -469,6 +469,23 @@ def f(x: TupleChild[int, str]):
 );
 
 testcase!(
+    test_typevartuple_unpack_in_loop_after_callable,
+    r#"
+from typing import Callable
+
+def test[*Ts](
+    x: tuple[*Ts],
+    y: int,
+    predicate: Callable[[tuple[*Ts]], bool],
+) -> None:
+    a: list[tuple[*Ts, int]] = []
+    for _ in range(10):
+        if predicate(x):
+            a.append((*x, y))
+    "#,
+);
+
+testcase!(
     test_starred_empty_tuple_no_panic,
     r#"
 (),*()
