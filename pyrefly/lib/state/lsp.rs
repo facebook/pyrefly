@@ -2541,6 +2541,8 @@ impl<'a> Transaction<'a> {
             && let Some(ast) = self.get_ast(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
+            let mut autoimport_candidates = Vec::new();
+            let mut names_with_public = OrderedSet::new();
             for (handle_to_import_from, name, export) in
                 self.search_exports_fuzzy(identifier.as_str())
             {
@@ -2557,7 +2559,7 @@ impl<'a> Transaction<'a> {
                         &ast,
                         self.config_finder(),
                         handle.dupe(),
-                        handle_to_import_from,
+                        handle_to_import_from.clone(),
                         &name,
                         import_format,
                     );
@@ -2569,29 +2571,47 @@ impl<'a> Transaction<'a> {
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
-                completions.push(CompletionItem {
-                    label: name,
-                    detail: Some(insert_text),
-                    kind: export
-                        .symbol_kind
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
-                    additional_text_edits,
-                    label_details: supports_completion_item_details.then_some(
-                        CompletionItemLabelDetails {
-                            detail: Some(auto_import_label_detail),
-                            description: Some(module_description),
+                let is_private_import = handle_to_import_from
+                    .module()
+                    .components()
+                    .last()
+                    .is_some_and(|component| component.as_str().starts_with('_'));
+                if !is_private_import {
+                    names_with_public.insert(name.clone());
+                }
+                autoimport_candidates.push((
+                    CompletionItem {
+                        label: name,
+                        detail: Some(insert_text),
+                        kind: export
+                            .symbol_kind
+                            .map_or(Some(CompletionItemKind::VARIABLE), |k| {
+                                Some(k.to_lsp_completion_item_kind())
+                            }),
+                        additional_text_edits,
+                        label_details: supports_completion_item_details.then_some(
+                            CompletionItemLabelDetails {
+                                detail: Some(auto_import_label_detail),
+                                description: Some(module_description),
+                            },
+                        ),
+                        tags: if export.deprecation.is_some() {
+                            Some(vec![CompletionItemTag::DEPRECATED])
+                        } else {
+                            None
                         },
-                    ),
-                    tags: if export.deprecation.is_some() {
-                        Some(vec![CompletionItemTag::DEPRECATED])
-                    } else {
-                        None
+                        sort_text: Some(format!("4{}", depth)),
+                        ..Default::default()
                     },
-                    sort_text: Some(format!("4{}", depth)),
-                    ..Default::default()
-                });
+                    is_private_import,
+                ));
+            }
+
+            for (mut item, is_private_import) in autoimport_candidates {
+                if is_private_import && names_with_public.contains(&item.label) {
+                    item.sort_text = Some("b".to_owned());
+                }
+                completions.push(item);
             }
 
             for module_name in self.search_modules_fuzzy(identifier.as_str()) {
@@ -3066,20 +3086,23 @@ impl<'a> Transaction<'a> {
                 .as_ref()
                 .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
             {
-                "9"
+                "9".to_owned()
             } else if item.additional_text_edits.is_some() {
-                "4"
+                if let Some(sort_text) = &item.sort_text {
+                    format!("4{sort_text}")
+                } else {
+                    "4".to_owned()
+                }
             } else if item.label.starts_with("__") {
-                "3"
+                "3".to_owned()
             } else if item.label.as_str().starts_with("_") {
-                "2"
+                "2".to_owned()
             } else if let Some(sort_text) = &item.sort_text {
                 // 1 is reserved for re-exports
-                sort_text.as_str()
+                sort_text.clone()
             } else {
-                "0"
-            }
-            .to_owned();
+                "0".to_owned()
+            };
             item.sort_text = Some(sort_text);
         }
         (result, is_incomplete)
@@ -3106,17 +3129,19 @@ impl<'a> Transaction<'a> {
     /// - Handles stdlib patterns where a public module (`io`) re-exports from a
     ///   private implementation module (`_io`).
     fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
-        let canonical_components = canonical.module().components();
+        let canonical_module = canonical.module();
+        let original_module = original.module();
+        let canonical_components = canonical_module.components();
         let canonical_component = canonical_components
             .last()
             .map(|name| name.as_str())
             .unwrap_or("");
-        let original_components = original.module().components();
+        let original_components = original_module.components();
         let original_component = original_components
             .last()
             .map(|name| name.as_str())
             .unwrap_or("");
-
+    
         if canonical_component.starts_with('_')
             && canonical_component.trim_start_matches('_') == original_component
         {
@@ -3132,6 +3157,17 @@ impl<'a> Transaction<'a> {
         } else {
             false
         }
+        {
+            return true;
+        }
+        // Some stdlib shims encode dotted modules with underscores (e.g. _collections_abc).
+        if canonical_module.as_str().starts_with('_') && original_module.as_str().contains('.') {
+            let canonical_trim = canonical_module.as_str().trim_start_matches('_');
+            if canonical_trim == original_module.as_str().replace('.', "_") {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
