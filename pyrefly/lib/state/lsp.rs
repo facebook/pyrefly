@@ -2673,17 +2673,19 @@ impl<'a> Transaction<'a> {
     /// - Handles stdlib patterns where a public module (`io`) re-exports from a
     ///   private implementation module (`_io`).
     fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
-        let canonical_components = canonical.module().components();
+        let canonical_module = canonical.module();
+        let original_module = original.module();
+        let canonical_components = canonical_module.components();
         let canonical_component = canonical_components
             .last()
             .map(|name| name.as_str())
             .unwrap_or("");
-        let original_components = original.module().components();
+        let original_components = original_module.components();
         let original_component = original_components
             .last()
             .map(|name| name.as_str())
             .unwrap_or("");
-
+    
         if canonical_component.starts_with('_')
             && canonical_component.trim_start_matches('_') == original_component
         {
@@ -2699,6 +2701,17 @@ impl<'a> Transaction<'a> {
         } else {
             false
         }
+        {
+            return true;
+        }
+        // Some stdlib shims encode dotted modules with underscores (e.g. _collections_abc).
+        if canonical_module.as_str().starts_with('_') && original_module.as_str().contains('.') {
+            let canonical_trim = canonical_module.as_str().trim_start_matches('_');
+            if canonical_trim == original_module.as_str().replace('.', "_") {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {

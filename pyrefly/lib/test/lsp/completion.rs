@@ -1810,6 +1810,41 @@ Completion Results:
 }
 
 #[test]
+fn autoimport_prefers_public_reexport_for_dotted_private_module() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("_foo_bar", "Thing = 1\n"),
+            ("foo.bar", "from _foo_bar import Thing\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from foo.bar import Thing
+
+- (Variable) Thing: from _foo_bar import Thing
+
+
+
+# _foo_bar.py
+
+# foo.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn autoimport_completions_set_label_details() {
     let code = r#"
 T = foooooo
