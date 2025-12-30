@@ -28,9 +28,9 @@ pub struct CustomQueryArgs {
     /// <arg>
     /// ...
     /// ```
-    /// and `<arg-flag>` is either `--file` or `--target`, depending on the type
-    /// of `<arg>`
-    /// and `<arg>` is an absolute path to a file or a build system's target.
+    ///
+    /// `<arg-flag>` is either `--file` or `--target`, depending on the type
+    /// of `<arg>`, and `<arg>` is an absolute path to a file or a build system's target.
     pub command: Vec1<String>,
 
     /// The root of the repository. Repo roots here will be shared between configs.
