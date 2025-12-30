@@ -959,15 +959,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 type_info.clone().with_ty(ty)
             }
             NarrowOp::Atomic(Some(facet_subject), op) => {
-                if let AtomicNarrowOp::Call(func, args)
-                | AtomicNarrowOp::NotCall(func, args) = op
-                {
-                    if self
+                if let AtomicNarrowOp::Call(func, args) | AtomicNarrowOp::NotCall(func, args) = op
+                    && self
                         .resolve_narrowing_call(func.as_ref(), args, errors)
                         .is_none()
-                    {
-                        return type_info.clone();
-                    }
+                {
+                    return type_info.clone();
                 }
                 if facet_subject.origin == FacetOrigin::GetMethod
                     && !self.supports_dict_get_subject(type_info, facet_subject, range)
