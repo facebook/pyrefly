@@ -523,7 +523,7 @@ testcase!(
     test_add_with_constraints,
     r#"
 def add[T: (int, str)](x: T, y: T) -> T:
-    return x + y # E: `+` is not supported # E: `+` is not supported # E: `int | Unknown` is not assignable to declared return type `T`
+    return x + y # E: `+` is not supported # E: `+` is not supported
     "#,
 );
 
