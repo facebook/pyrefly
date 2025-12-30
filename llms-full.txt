@@ -3152,6 +3152,35 @@ def test1(x: object) -> None:
 
 This check is relatively conservative and only warns on limited cases where the comparison is highly likely to be redundant.
 
+## unreachable
+
+This error is raised when a `return` or `yield` can never be reached because it comes
+after a statement that always exits the current flow, such as `return`, `raise`, `break`, or `continue`.
+
+```python
+def example():
+    return 1
+    return 2  # This `return` statement is unreachable [unreachable]
+
+def generator():
+    return
+    yield 1  # This `yield` expression is unreachable [unreachable]
+
+def loop_example():
+    while True:
+        break
+        return 1  # This `return` statement is unreachable [unreachable]
+```
+
+Note that `yield` statements can follow other `yield` statements without error, since generators
+can produce multiple values:
+
+```python
+def valid_generator():
+    yield 1
+    yield 2  # This is valid
+```
+
 ## unsafe-overlap
 
 Protocols decorated with `@runtime_checkable` may be used in `isinstance` and `issubclass` checks, but the runtime will only checks that all the required attributes are present, without looking at their types.
@@ -3201,7 +3230,7 @@ Type information for some third-party libraries is shipped in a stubs package se
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
 
-The default severity of this diagnostic is `warn`.
+The default severity of this diagnostic is `ignore`.
 
 ## unused-coroutine
 
