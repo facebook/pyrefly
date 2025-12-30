@@ -170,6 +170,23 @@ class A:
 with A(): ...  # `A` is missing an `__exit__` method!
 ```
 
+## bad-dunder-all
+
+This error occurs when `__all__` is explicitly defined for a module but contains an entry that cannot be found in the module's definitions, wildcard imports, or submodules (for `__init__.py` files).
+
+```python
+__all__ = ["x", "y"]  # Name `y` is listed in `__all__` but is not defined in the module
+x = 5
+```
+
+To fix this error, either define the missing name or remove it from `__all__`:
+
+```python
+__all__ = ["x", "y"]
+x = 5
+y = 10  # Now `y` is defined
+```
+
 ## bad-function-definition
 
 Like `bad-class-definition`, this error kind is uncommon because other error kinds are used for more specific issues.
@@ -769,6 +786,32 @@ os.perkeo  # missing-attribute
 In this example, `os.bacarat` is treated as a module name, so failing to find it results in an `missing-import`.
 `from os import joker` does not tell us if `joker` is a module, class, function, etc., so it is treated as the more general `missing-module-attribute`.
 
+## missing-override-decorator
+
+A method overrides a parent class method but does not have the `@override` decorator.
+
+This error supports strict override enforcement as specified in the [typing spec](https://typing.python.org/en/latest/spec/class-compat.html#strict-enforcement-per-project). When enabled, it requires all overriding methods to be explicitly marked with `@typing.override`.
+
+```python
+from typing import override
+
+class Base:
+    def foo(self) -> None: ...
+
+class Derived(Base):
+    def foo(self) -> None: ...  # missing-override-decorator
+
+    @override
+    def foo(self) -> None: ...  # OK
+```
+
+The default severity of this diagnostic is `ignore`. To enable strict override enforcement, set the severity to `error` in your configuration:
+
+```toml
+[tool.pyrefly]
+errors = { missing-override-decorator = "error" }
+```
+
 ## missing-source
 
 Pyrefly was able to find a stubs package but no corresponding source package. For example, this can
@@ -873,6 +916,32 @@ This is most likely to be seen in a `for` loop:
 x = 1  # Or some other value
 for val in x:  # not-iterable
   ...
+```
+
+## not-required-key-access
+
+This warning indicates that a [`TypedDict`](https://typing.python.org/en/latest/spec/typeddict.html)
+key marked `NotRequired` (or inherited from a `total=False` TypedDict) is being accessed without
+first ensuring that the key is present. Even if the value type is non-optional, the key itself may
+not exist at runtime, so Pyrefly encourages guarding the access with an `in` check or a `.get()`
+call.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+from typing import NotRequired, TypedDict
+
+class Movie(TypedDict):
+    title: str
+    year: NotRequired[int]
+
+def describe(movie: Movie) -> int:
+    return movie["year"]  # not-required-key-access
+
+def safe_describe(movie: Movie) -> int:
+    if "year" in movie:
+        return movie["year"]  # OK: key presence established
+    raise ValueError("Missing year")
 ```
 
 ## open-unpacking
@@ -1108,7 +1177,59 @@ def test1(x: object) -> None:
         pass
 ```
 
-This check is relatively conservative and only warn on limited cases where the comparison is highly likely to be redundant.
+This check is relatively conservative and only warns on limited cases where the comparison is highly likely to be redundant.
+
+## unreachable
+
+This error is raised when a `return` or `yield` can never be reached because it comes
+after a statement that always exits the current flow, such as `return`, `raise`, `break`, or `continue`.
+
+```python
+def example():
+    return 1
+    return 2  # This `return` statement is unreachable [unreachable]
+
+def generator():
+    return
+    yield 1  # This `yield` expression is unreachable [unreachable]
+
+def loop_example():
+    while True:
+        break
+        return 1  # This `return` statement is unreachable [unreachable]
+```
+
+Note that `yield` statements can follow other `yield` statements without error, since generators
+can produce multiple values:
+
+```python
+def valid_generator():
+    yield 1
+    yield 2  # This is valid
+```
+
+## unsafe-overlap
+
+Protocols decorated with `@runtime_checkable` may be used in `isinstance` and `issubclass` checks, but the runtime will only checks that all the required attributes are present, without looking at their types.
+
+This error occurs when the object you're checking against the protocol has all the required attributes, but their types are not compatible.
+
+In the example below, `C` should not match with `P`, but the `isinstance` check will succeed at runtime.
+
+```python
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class P(Protocol):
+    x: int
+
+class C:
+    x: str
+
+c = C()
+if isinstance(c, P):
+    pass
+```
 
 ## unsupported
 

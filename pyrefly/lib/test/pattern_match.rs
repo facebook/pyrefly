@@ -86,7 +86,6 @@ def foo(x: Literal['A'] | Literal['B']):
 );
 
 testcase!(
-    bug = "We currently never negate class matches; ideally we would be smarter about when the match is exhaustive",
     test_negated_exhaustive_class_match,
     r#"
 from typing import assert_type
@@ -96,6 +95,59 @@ def f0(x: int | str):
         case int():
             pass
         case _:
-            assert_type(x, str)  # E: assert_type(int | str, str)
+            assert_type(x, str)
+"#,
+);
+
+testcase!(
+    test_class_match_with_args_not_exhaustive,
+    r#"
+from typing import assert_type
+
+class C:
+    val: int
+
+def f0(x: C):
+    match x:
+        case C(val=1):
+            pass
+        case _:
+            assert_type(x, C)
+"#,
+);
+
+testcase!(
+    test_class_match_with_guard_not_exhaustive,
+    r#"
+from typing import assert_type
+
+def condition() -> bool: ...
+
+def f0(x: int):
+    match x:
+        case int() if condition():
+            pass
+        case _:
+            assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_class_match_with_positional_args_not_exhaustive,
+    r#"
+from typing import assert_type
+
+class C:
+    val: int
+    __match_args__ = ("val",)
+    def __init__(self, val: int):
+        self.val = val
+
+def f0(x: C):
+    match x:
+        case C(1):
+            pass
+        case _:
+            assert_type(x, C)
 "#,
 );

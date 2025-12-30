@@ -95,7 +95,7 @@ fn all_modules(module_name: ModuleName) -> impl Iterator<Item = String> {
 
 fn all_modules_with_range(module_id: &Identifier) -> impl Iterator<Item = (String, TextRange)> {
     let offset = module_id.range().start();
-    all_modules(ModuleName::from_parts(module_id.id().split("."))).map(move |name| {
+    all_modules(ModuleName::from_name(module_id.id())).map(move |name| {
         let range = TextRange::at(offset, TextSize::try_from(name.len()).unwrap());
         (name, range)
     })

@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use pyrefly_build::handle::Handle;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::thread_pool::ThreadPool;
@@ -24,7 +25,6 @@ use starlark_map::small_set::SmallSet;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
-use crate::graph::index::Idx;
 use crate::report::pysa::ast_visitor::AstScopedVisitor;
 use crate::report::pysa::ast_visitor::ScopeExportedFunctionFlags;
 use crate::report::pysa::ast_visitor::Scopes;

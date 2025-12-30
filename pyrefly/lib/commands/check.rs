@@ -421,10 +421,19 @@ impl Handles {
         }
 
         // TODO(connernilsen): wire in force logic
-        let reloaded_configs = ConfigFile::query_source_db(&configs, false);
+        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false).0;
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
+            .collect();
+        let reloaded_configs = configs
+            .into_iter()
+            .map(|x| x.0)
+            .filter(|c| {
+                c.source_db
+                    .as_ref()
+                    .is_some_and(|db| reloaded_source_dbs.contains(db))
+            })
             .collect();
         (result, reloaded_configs, Vec::new())
     }
@@ -635,7 +644,7 @@ impl CheckArgs {
                 sourcedb_errors,
                 require_levels.specified,
             );
-            state.commit_transaction(transaction);
+            state.commit_transaction(transaction, None);
             if let Err(e) = res {
                 eprintln!("{e:#}");
             }
@@ -829,7 +838,7 @@ impl CheckArgs {
             }
         }
         if let Some(pysa_directory) = &self.output.report_pysa {
-            report::pysa::write_results(pysa_directory, transaction)?;
+            report::pysa::write_results(pysa_directory, transaction, &shown_errors)?;
         }
         if let Some(path) = &self.output.report_binding_memory {
             fs_anyhow::write(path, report::binding_memory::binding_memory(transaction))?;

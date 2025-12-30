@@ -47,18 +47,18 @@ jobs:
         if: ${{ !inputs.is_rollback }}
         run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       # For regular deployments, download today's artifacts
       - name: Download build artifacts (regular deployment)
         if: ${{ !inputs.is_rollback }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: website-build-${{ env.date }}
           path: website/build
       # For rollbacks, download the specified artifacts
       - name: Download build artifacts (rollback)
         if: ${{ inputs.is_rollback }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: website-build-${{ inputs.artifact_date }}
           path: website/build
@@ -67,7 +67,7 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Deploy to github pages
-        uses: JamesIves/github-pages-deploy-action@6c2d9db40f9296374acc17b90404b6e8864128c8 # v4.7.3
+        uses: JamesIves/github-pages-deploy-action@9d877eea73427180ae43cf98e8914934fe157a1a  # v4
         with:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: gh-pages # The branch the action should deploy to.

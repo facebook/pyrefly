@@ -731,6 +731,38 @@ class Foo:
             .with_is_def_statement(false)
             .with_defining_class(get_class_ref("test", "Foo", context))
             .with_overridden_base_method(get_method_ref("builtins", "object", "__init__", context)),
+            create_function_definition(
+                "__replace__",
+                ScopeParent::Class {
+                    location: create_location(5, 7, 5, 10),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::PosOnly {
+                            name: Some("self".into()),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "Foo", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::KwOnly {
+                            name: "x".into(),
+                            annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                            required: false,
+                        },
+                        FunctionParameter::KwOnly {
+                            name: "y".into(),
+                            annotation: PysaType::from_class_type(context.stdlib.str(), context),
+                            required: false,
+                        },
+                    ],
+                    PysaType::from_class(&get_class("test", "Foo", context), context),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "Foo", context)),
         ]
     },
 );
@@ -1148,6 +1180,66 @@ class B(A):
             .with_is_def_statement(false)
             .with_defining_class(get_class_ref("test", "A", context))
             .with_overridden_base_method(get_method_ref("builtins", "object", "__init__", context)),
+            create_function_definition(
+                "__replace__",
+                ScopeParent::Class {
+                    location: create_location(5, 7, 5, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::PosOnly {
+                            name: Some("self".into()),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "A", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::KwOnly {
+                            name: "x".into(),
+                            annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                            required: false,
+                        },
+                    ],
+                    PysaType::from_class(&get_class("test", "A", context), context),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "A", context)),
+            create_function_definition(
+                "__replace__",
+                ScopeParent::Class {
+                    location: create_location(8, 7, 8, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::PosOnly {
+                            name: Some("self".into()),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "B", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::KwOnly {
+                            name: "x".into(),
+                            annotation: PysaType::from_class_type(context.stdlib.int(), context),
+                            required: false,
+                        },
+                    ],
+                    PysaType::from_class(&get_class("test", "B", context), context),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "B", context))
+            .with_overridden_base_method(get_method_ref(
+                "test",
+                "A",
+                "__replace__",
+                context,
+            )),
         ]
     },
 );

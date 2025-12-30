@@ -162,6 +162,7 @@ pub const NEW: Name = Name::new_static("__new__");
 pub const NEXT: Name = Name::new_static("__next__");
 pub const POS: Name = Name::new_static("__pos__");
 pub const POST_INIT: Name = Name::new_static("__post_init__");
+pub const REPLACE: Name = Name::new_static("__replace__");
 pub const REPR: Name = Name::new_static("__repr__");
 pub const SET: Name = Name::new_static("__set__");
 pub const SETATTR: Name = Name::new_static("__setattr__");

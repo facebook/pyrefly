@@ -476,7 +476,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         let tparams = vec![TParam {
             quantified: q.clone(),
-            variance: PreInferenceVariance::PInvariant,
+            variance: PreInferenceVariance::Invariant,
         }];
         OverloadType::Forall(Forall {
             tparams: Arc::new(TParams::new(tparams)),

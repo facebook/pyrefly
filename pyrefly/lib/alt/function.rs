@@ -10,6 +10,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
@@ -57,7 +58,6 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::graph::index::Idx;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncFlags;
 use crate::types::callable::FuncMetadata;
@@ -459,7 +459,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &mut parent_param_hints,
             errors,
         );
-        let mut tparams = self.scoped_type_params(def.type_params.as_deref());
+        let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
         let legacy_tparams = legacy_tparams
             .iter()
             .filter_map(|key| self.get_idx(*key).deref().parameter().cloned());

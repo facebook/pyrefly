@@ -212,11 +212,17 @@ impl Ast {
         Identifier::new(x.id, x.range)
     }
 
+    pub fn is_synthesized_empty_name(x: &ExprName) -> bool {
+        x.id.as_str().is_empty() && x.range.is_empty()
+    }
+
     /// Calls a function on all of the names bound by this lvalue expression.
     pub fn expr_lvalue<'a>(x: &'a Expr, f: &mut impl FnMut(&'a ExprName)) {
         match x {
             Expr::Name(x) => {
-                f(x);
+                if !Self::is_synthesized_empty_name(x) {
+                    f(x);
+                }
             }
             Expr::Tuple(x) => {
                 for x in &x.elts {

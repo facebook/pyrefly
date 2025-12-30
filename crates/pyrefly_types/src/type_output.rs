@@ -299,7 +299,7 @@ mod tests {
                 None,
                 Restriction::Unrestricted,
             ),
-            variance: PreInferenceVariance::PInvariant,
+            variance: PreInferenceVariance::Invariant,
         };
         let tparam2 = TParam {
             quantified: Quantified::new(
@@ -309,7 +309,7 @@ mod tests {
                 None,
                 Restriction::Unrestricted,
             ),
-            variance: PreInferenceVariance::PInvariant,
+            variance: PreInferenceVariance::Invariant,
         };
         let tparam3 = TParam {
             quantified: Quantified::new(
@@ -319,7 +319,7 @@ mod tests {
                 None,
                 Restriction::Unrestricted,
             ),
-            variance: PreInferenceVariance::PInvariant,
+            variance: PreInferenceVariance::Invariant,
         };
 
         let tparams = Arc::new(TParams::new(vec![tparam1, tparam2, tparam3]));

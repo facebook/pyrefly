@@ -52,6 +52,7 @@ pub mod ruff_visitors;
 pub mod small_set1;
 pub mod suggest;
 pub mod task_heap;
+pub mod telemetry;
 pub mod test_path;
 pub mod thread_pool;
 pub mod trace;

@@ -1150,7 +1150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If this is not the last entry, we have to make a type-dependent decision and also narrow the
             // result; both operations require us to force `Var` first or they become unpredictable.
             if i < last_index {
-                t = self.force_for_narrowing(&t);
+                t = self.force_for_narrowing(&t, value.range(), errors);
             }
             if i < last_index && should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);
@@ -1404,10 +1404,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             kw.value.range(),
                         ))
                     }
-                    "covariant" => try_set_variance(kw, PreInferenceVariance::PCovariant),
-                    "contravariant" => try_set_variance(kw, PreInferenceVariance::PContravariant),
-                    "invariant" => try_set_variance(kw, PreInferenceVariance::PInvariant),
-                    "infer_variance" => try_set_variance(kw, PreInferenceVariance::PUndefined),
+                    "covariant" => try_set_variance(kw, PreInferenceVariance::Covariant),
+                    "contravariant" => try_set_variance(kw, PreInferenceVariance::Contravariant),
+                    "invariant" => try_set_variance(kw, PreInferenceVariance::Invariant),
+                    "infer_variance" => try_set_variance(kw, PreInferenceVariance::Undefined),
                     "name" => {
                         if arg_name {
                             self.error(
@@ -1478,7 +1478,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ));
         }
 
-        let variance = variance.unwrap_or(PreInferenceVariance::PInvariant);
+        let variance = variance.unwrap_or(PreInferenceVariance::Invariant);
 
         TypeVar::new(
             name,
@@ -2189,10 +2189,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::TypedDict(typed_dict) => {
                     let key_ty = self.expr_infer(slice, errors);
+                    // Don't warn on anonymous typed dicts
+                    let warn_on_not_required_access = matches!(typed_dict, TypedDict::TypedDict(_));
                     self.distribute_over_union(&key_ty, |ty| match ty {
                         Type::Literal(Lit::Str(field_name)) => {
                             let fields = self.typed_dict_fields(&typed_dict);
-                            if let Some(field) = fields.get(&Name::new(field_name)) {
+                            let key_name = Name::new(field_name);
+                            if let Some(field) = fields.get(&key_name) {
+                                if warn_on_not_required_access && !field.required {
+                                    errors.add(
+                                        slice.range(),
+                                        ErrorInfo::Kind(ErrorKind::NotRequiredKeyAccess),
+                                        vec1![format!(
+                                            "TypedDict key `{}` may be absent",
+                                            key_name
+                                        ),
+                                        format!(
+                                            "Hint: guard this access with `'{}' in obj` or `obj.get('{}')`",
+                                            key_name, key_name
+                                        )],
+                                    );
+                                }
                                 field.ty.clone()
                             } else if let ExtraItems::Extra(extra) =
                                 self.typed_dict_extra_items(&typed_dict)
@@ -2205,7 +2222,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     field_name
                                 )];
                                 if let Some(suggestion) = best_suggestion(
-                                    &Name::new(field_name),
+                                    &key_name,
                                     fields.keys().map(|candidate| (candidate, 0usize)),
                                 ) {
                                     msg.push(format!("Did you mean `{suggestion}`?"));

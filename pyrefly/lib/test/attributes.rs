@@ -412,7 +412,6 @@ def f(a: A):
 );
 
 testcase!(
-    bug = "TODO(stroxler): We are always promoting literals. It is sound to preserve literals for read-only attributes",
     test_final_attribute_assigned_in_init,
     r#"
 from typing import assert_type, Final, Literal
@@ -420,7 +419,7 @@ class A:
     def __init__(self):
         self.x: Final = 0
 def f(a: A):
-    assert_type(a.x, Literal[0])  # E: assert_type(int, Literal[0])
+    assert_type(a.x, Literal[0])
     "#,
 );
 
@@ -1739,7 +1738,7 @@ def get_type_t[T]() -> type[T]:
     return cast(type[T], 0)
 def foo[T](x: type[T]):
     # mypy reveals the same thing we do (the type of `type.__new__`), while pyright reveals `Unknown`.
-    reveal_type(get_type_t().__new__)  # E: Overload[(cls: type[type], o: object, /) -> type, [Self](cls: type[Self], name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwds: Any) -> Self]
+    reveal_type(get_type_t().__new__)  # E: Overload[[Self@type](cls: type[Self@type], o: object, /) -> type, [Self](cls: type[Self], name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwds: Any) -> Self]
     "#,
 );
 

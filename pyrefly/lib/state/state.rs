@@ -21,7 +21,6 @@ use std::sync::RwLockReadGuard;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 
 use dupe::Dupe;
 use dupe::OptionDupedExt;
@@ -44,6 +43,8 @@ use pyrefly_util::small_set1::SmallSet1;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::task_heap::TaskHeap;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::telemetry::TelemetryTransactionStats;
 use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::upgrade_lock::UpgradeLock;
@@ -58,6 +59,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::trace;
 use vec1::vec1;
+use web_time::Instant;
 
 use crate::alt::answers::AnswerEntry;
 use crate::alt::answers::AnswerTable;
@@ -279,6 +281,7 @@ impl<'a> TransactionData<'a> {
         if self.base == readable.now {
             Some(Transaction {
                 data: self,
+                stats: Default::default(),
                 readable,
             })
         } else {
@@ -294,14 +297,20 @@ impl<'a> TransactionData<'a> {
 /// in a transaction.
 pub struct Transaction<'a> {
     data: TransactionData<'a>,
+    stats: Mutex<TelemetryTransactionStats>,
     readable: RwLockReadGuard<'a, StateData>,
 }
 
 impl<'a> Transaction<'a> {
     /// Drops the lock and retains just the underlying data.
-    pub(crate) fn save(self) -> TransactionData<'a> {
-        let Transaction { data, readable } = self;
+    pub(crate) fn save(self, telemetry: &mut TelemetryEvent) -> TransactionData<'a> {
+        let Transaction {
+            data,
+            stats,
+            readable,
+        } = self;
         drop(readable);
+        telemetry.set_transaction_stats(stats.into_inner());
         data
     }
 
@@ -867,6 +876,7 @@ impl<'a> Transaction<'a> {
                             // continue around the loop - failed to get the lock, but we really want it
                         }
                     }
+                    self.stats.lock().dirty_rdeps += dirtied.len();
                     self.data.dirty.lock().extend(dirtied);
                 }
                 if let Some(load) = load_result
@@ -982,33 +992,30 @@ impl<'a> Transaction<'a> {
 
     /// Return the module, plus true if the module was newly created.
     fn get_module_ex(&self, handle: &Handle, require: Require) -> (ArcId<ModuleDataMut>, bool) {
-        let mut created = None;
-        let res = self
-            .data
-            .updated_modules
-            .ensure(handle, || {
-                if let Some(m) = self.readable.modules.get(handle) {
-                    ArcId::new(m.clone_for_mutation())
-                } else {
-                    let config = self.data.state.get_config(handle.module(), handle.path());
-                    let res = ArcId::new(ModuleDataMut::new(
-                        handle.dupe(),
-                        require,
-                        config,
-                        self.data.now,
-                    ));
-                    created = Some(res.dupe());
-                    res
-                }
-            })
-            .dupe();
+        let mut created = false;
+        let (res, inserted) = self.data.updated_modules.ensure(handle, || {
+            if let Some(m) = self.readable.modules.get(handle) {
+                ArcId::new(m.clone_for_mutation())
+            } else {
+                created = true;
+                let config = self.data.state.get_config(handle.module(), handle.path());
+                ArcId::new(ModuleDataMut::new(
+                    handle.dupe(),
+                    require,
+                    config,
+                    self.data.now,
+                ))
+            }
+        });
         // Due to race conditions, we might create two ModuleDataMut, but only the first is returned.
         // Figure out if we won the race, and thus are the person who actually did the creation.
-        let created = Some(&res) == created.as_ref();
-        if created && let Some(subscriber) = &self.data.subscriber {
-            subscriber.start_work(handle);
+        if inserted {
+            self.stats.lock().modules += 1;
+            if created && let Some(subscriber) = &self.data.subscriber {
+                subscriber.start_work(handle);
+            }
         }
-        (res, created)
+        (res.dupe(), created)
     }
 
     fn add_error(
@@ -1143,6 +1150,7 @@ impl<'a> Transaction<'a> {
                 Some(v) => v.dupe(),
                 None => Arc::new(LoaderFindCache::new(loader.dupe())),
             })
+            .0
             .dupe()
     }
 
@@ -1178,6 +1186,8 @@ impl<'a> Transaction<'a> {
     }
 
     fn run_step(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
+        let run_start = Instant::now();
+
         self.data.now.next();
         let sys_infos = handles
             .iter()
@@ -1207,6 +1217,11 @@ impl<'a> Transaction<'a> {
         self.data.state.threads.spawn_many(|| {
             cancelled.fetch_or(self.work().is_err(), Ordering::Relaxed);
         });
+
+        let mut stats = self.stats.lock();
+        stats.run_steps += 1;
+        stats.run_time += run_start.elapsed();
+
         if cancelled.into_inner() {
             Err(Cancelled)
         } else {
@@ -1233,6 +1248,7 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
+        self.stats.lock().cycle_rdeps += dirty.len();
 
         let mut dirty_set: std::sync::MutexGuard<'_, SmallSet<ArcId<ModuleDataMut>>> =
             self.data.dirty.lock();
@@ -1785,6 +1801,7 @@ impl State {
         let stdlib = readable.stdlib.clone();
         Transaction {
             readable,
+            stats: Default::default(),
             data: TransactionData {
                 state: self,
                 stdlib,
@@ -1842,12 +1859,17 @@ impl State {
         }
     }
 
-    pub fn commit_transaction(&self, transaction: CommittingTransaction) {
+    pub fn commit_transaction(
+        &self,
+        transaction: CommittingTransaction,
+        telemetry: Option<&mut TelemetryEvent>,
+    ) {
         debug!("Committing transaction");
         let CommittingTransaction {
             transaction:
                 Transaction {
                     readable,
+                    stats,
                     data:
                         TransactionData {
                             stdlib,
@@ -1868,6 +1890,13 @@ impl State {
         } = transaction;
         // Drop the read lock the transaction holds.
         drop(readable);
+
+        let mut stats = stats.into_inner();
+        stats.committed = true;
+
+        if let Some(telemetry) = telemetry {
+            telemetry.set_transaction_stats(stats);
+        }
 
         // If you make a transaction dirty, e.g. by calling an invalidate method,
         // you must subsequently call `run` to drain the dirty queue.
@@ -1903,10 +1932,11 @@ impl State {
         require: Require,
         default_require: Require,
         subscriber: Option<Box<dyn Subscriber>>,
+        telemetry: Option<&mut TelemetryEvent>,
     ) {
         let mut transaction = self.new_committable_transaction(default_require, subscriber);
         transaction.transaction.run(handles, require);
-        self.commit_transaction(transaction);
+        self.commit_transaction(transaction, telemetry);
     }
 
     pub fn run_with_committing_transaction(
@@ -1914,8 +1944,9 @@ impl State {
         mut transaction: CommittingTransaction<'_>,
         handles: &[Handle],
         require: Require,
+        telemetry: Option<&mut TelemetryEvent>,
     ) {
         transaction.transaction.run(handles, require);
-        self.commit_transaction(transaction);
+        self.commit_transaction(transaction, telemetry);
     }
 }

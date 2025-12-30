@@ -129,6 +129,34 @@ the non-stubs package's `.pyi` files, then falls back to a `.py` file. See
 [Absolute Imports](#absolute-imports) for details on when non-stubs packages
 are allowed to be used for types, and how you can override that behavior.
 
+## Bundled Third Party Stubs
+
+Pyrefly bundles stubs for several popular third party libraries along with its binary which are
+used for type checking and IDE features. These bundled stubs have special import resolution rules which differ
+from how installed stubs might be treated. The decision tree below describes the scenarios in which third party stubs
+are used.
+
+
+```
+- Pyrefly config file present?
+   - Yes
+      - Is the package installed?
+         - Yes
+            - Are stubs installed by user?
+               - Yes
+                  Installed stubs are used.
+               - No
+                  UntypedImport error.
+         - No
+            MissingImport error.
+   - No
+      - Is the package installed?
+         - Yes
+            Bundled stubs used.
+         - No
+            MissingSourceForStubs error.
+```
+
 ## Editable Installs
 
 When using static analysis tools with an editable install, the editable install should be configured to use `.pth`

@@ -13,6 +13,7 @@ use std::hash::Hash;
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModuleStyle;
@@ -63,7 +64,6 @@ use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::types::annotation::Annotation;
 use crate::types::class::Class;
@@ -167,6 +167,9 @@ impl DisplayWith<Bindings> for AnyIdx {
     }
 }
 
+/// Any key that sets `EXPORTED` to `true` should not include positions
+/// Incremental updates depend on knowing when a file's exports changed, which uses equality between exported keys
+/// Moving code around should not cause all dependencies to be re-checked
 pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + Ranged + 'static {
     const EXPORTED: bool = false;
     type Value: Debug + DisplayWith<Bindings>;
@@ -241,7 +244,7 @@ impl Keyed for KeyClassSynthesizedFields {
         AnyIdx::KeyClassSynthesizedFields(idx)
     }
 }
-impl Exported for KeyVariance {}
+impl Exported for KeyClassSynthesizedFields {}
 impl Keyed for KeyVariance {
     const EXPORTED: bool = true;
     type Value = BindingVariance;
@@ -250,8 +253,7 @@ impl Keyed for KeyVariance {
         AnyIdx::KeyVariance(idx)
     }
 }
-
-impl Exported for KeyClassSynthesizedFields {}
+impl Exported for KeyVariance {}
 impl Keyed for KeyExport {
     const EXPORTED: bool = true;
     type Value = BindingExport;
@@ -1133,6 +1135,7 @@ pub struct ReturnExplicit {
     pub is_generator: bool,
     pub is_async: bool,
     pub range: TextRange,
+    pub is_unreachable: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1384,7 +1387,12 @@ pub enum Binding {
     SuperInstance(SuperStyle, TextRange),
     /// The result of assigning to an attribute. This operation cannot change the *type* of the
     /// name to which we are assigning, but it *can* change the live attribute narrows.
-    AssignToAttribute(ExprAttribute, Box<ExprOrBinding>),
+    AssignToAttribute {
+        attr: ExprAttribute,
+        value: Box<ExprOrBinding>,
+        /// `Final` fields may be assigned inside `__init__`
+        allow_assign_to_final: bool,
+    },
     /// The result of assigning to a subscript, used for narrowing.
     AssignToSubscript(ExprSubscript, Box<ExprOrBinding>),
     /// A placeholder binding, used to force the solving of some other `K::Value` (for
@@ -1657,13 +1665,18 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, "SuperInstance::Implicit({}, {v})", ctx.display(*k))
             }
             Self::SuperInstance(SuperStyle::Any, _range) => write!(f, "SuperInstance::Any"),
-            Self::AssignToAttribute(attr, x) => {
+            Self::AssignToAttribute {
+                attr,
+                value,
+                allow_assign_to_final,
+            } => {
                 write!(
                     f,
-                    "AssignToAttribute({}, {}, {})",
+                    "AssignToAttribute({}, {}, {}, allow_assign_to_final={})",
                     m.display(&attr.value),
                     attr.attr,
-                    x.display_with(ctx)
+                    value.display_with(ctx),
+                    allow_assign_to_final
                 )
             }
             Self::AssignToSubscript(subscript, x) => {
@@ -1787,7 +1800,7 @@ impl Binding {
             | Binding::PatternMatchClassKeyword(_, _, _)
             | Binding::ExceptionHandler(_, _)
             | Binding::SuperInstance(_, _)
-            | Binding::AssignToAttribute(_, _)
+            | Binding::AssignToAttribute { .. }
             | Binding::UsageLink(_)
             | Binding::SelfTypeLiteral(..)
             | Binding::AssignToSubscript(_, _)
@@ -1881,12 +1894,12 @@ pub enum AnnotationTarget {
 impl Display for AnnotationTarget {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Param(name) => write!(f, "param {name}"),
-            Self::ArgsParam(name) => write!(f, "args {name}"),
-            Self::KwargsParam(name) => write!(f, "kwargs {name}"),
-            Self::Return(name) => write!(f, "{name} return"),
-            Self::Assign(name, _initialized) => write!(f, "var {name}"),
-            Self::ClassMember(name) => write!(f, "attr {name}"),
+            Self::Param(name) => write!(f, "parameter `{name}`"),
+            Self::ArgsParam(name) => write!(f, "args `{name}`"),
+            Self::KwargsParam(name) => write!(f, "kwargs `{name}`"),
+            Self::Return(name) => write!(f, "`{name}` return"),
+            Self::Assign(name, _initialized) => write!(f, "variable `{name}`"),
+            Self::ClassMember(name) => write!(f, "attribute `{name}`"),
         }
     }
 }
@@ -2245,6 +2258,7 @@ impl BindingLegacyTypeParam {
 pub enum BindingYield {
     Yield(Option<Idx<KeyAnnotation>>, ExprYield),
     Invalid(ExprYield),
+    Unreachable(ExprYield),
 }
 
 impl BindingYield {
@@ -2252,6 +2266,7 @@ impl BindingYield {
         match self {
             Self::Yield(_, x) => x,
             Self::Invalid(x) => x,
+            Self::Unreachable(x) => x,
         }
     }
 }
@@ -2267,6 +2282,7 @@ impl DisplayWith<Bindings> for BindingYield {
 pub enum BindingYieldFrom {
     YieldFrom(Option<Idx<KeyAnnotation>>, IsAsync, ExprYieldFrom),
     Invalid(ExprYieldFrom),
+    Unreachable(ExprYieldFrom),
 }
 
 impl BindingYieldFrom {
@@ -2274,6 +2290,7 @@ impl BindingYieldFrom {
         match self {
             Self::YieldFrom(_, _, x) => x,
             Self::Invalid(x) => x,
+            Self::Unreachable(x) => x,
         }
     }
 }

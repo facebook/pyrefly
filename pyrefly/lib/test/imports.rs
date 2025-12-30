@@ -1077,3 +1077,60 @@ testcase!(
 x: X = X()
 "#,
 );
+
+fn env_extra_builtins_single_underscore() -> TestEnv {
+    TestEnv::one_with_path(
+        "__builtins__",
+        "__builtins__.pyi",
+        r#"
+def gettext(message: str) -> str: ...
+def _(message: str) -> str: ...
+"#,
+    )
+}
+
+testcase!(
+    test_extra_builtins_single_underscore,
+    env_extra_builtins_single_underscore(),
+    r#"
+from typing import assert_type
+# Single underscore `_` is a common alias for gettext and should be exported from builtins
+assert_type(gettext("a"), str)
+assert_type(_("b"), str)
+"#,
+);
+
+fn env_assign_to_ellipsis() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "foo_stub",
+        "foo_stub.pyi",
+        r#"
+X = ...
+"#,
+    );
+    env.add_with_path(
+        "bar_source",
+        "bar_source.py",
+        r#"
+Y = ...
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_var_assigned_to_ellipsis,
+    env_assign_to_ellipsis(),
+    r#"
+from foo_stub import X
+from bar_source import Y
+from typing import Any, assert_type, reveal_type
+
+assert_type(X, Any)
+assert_type(X.anything, Any)
+
+reveal_type(Y)  # E: Ellipsis
+Y.anything  # E: `EllipsisType` has no attribute `anything`
+    "#,
+);

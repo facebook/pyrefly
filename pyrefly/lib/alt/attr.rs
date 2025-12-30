@@ -59,6 +59,7 @@ use crate::types::read_only::ReadOnlyReason;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
+use crate::types::types::BoundMethodType;
 use crate::types::types::Overload;
 use crate::types::types::SuperObj;
 use crate::types::types::Type;
@@ -455,6 +456,9 @@ enum AttributeBase1 {
     /// Attribute lookup on a base as part of a subset check against a protocol.
     ProtocolSubset(Box<AttributeBase1>),
     Intersect(Vec<AttributeBase1>, Vec<AttributeBase1>),
+    /// Bound methods prefer exposing builtin `types.MethodType` attributes but fall back to the
+    /// underlying function's attributes when the builtin ones are missing.
+    BoundMethod(BoundMethodType),
 }
 
 impl AttributeBase1 {
@@ -725,6 +729,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         base: &Type,
         name: &Name,
         got: &ExprOrBinding,
+        allow_assign_to_final: bool,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
@@ -740,6 +745,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             base,
             name,
             got,
+            allow_assign_to_final,
             range,
             errors,
             None,
@@ -846,6 +852,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         base: &Type,
         attr_name: &Name,
         got: TypeOrExpr,
+        allow_assign_to_final: bool,
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
@@ -935,6 +942,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         class_base,
                         attr_name,
                         got,
+                        allow_assign_to_final,
                         range,
                         errors,
                         context,
@@ -1080,10 +1088,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             })
         {
+            // `as_attribute_base` promotes literals, so we should promote here too
+            // In the future, we should refactor `get_protocol_attribute` to reuse the `AttributeBase`, to ensure the logic is identical
+            let got = got.clone().promote_literals(self.stdlib);
             if (!got_attrs.is_empty())
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
-                let got_type_display = self.for_display(got.clone());
                 for (got_attr, _) in got_attrs.iter() {
                     self.is_attribute_subset(got_attr, &want, &mut |got, want| {
                         is_subset(got, want)
@@ -1091,7 +1101,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .map_err(|err| {
                         SubsetError::IncompatibleAttribute(Box::new((
                             protocol.name().clone(),
-                            got_type_display.clone(),
+                            self.for_display(got.clone()),
                             attr_name.clone(),
                             err,
                         )))
@@ -1327,6 +1337,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     acc.found_class_attribute(attr, base)
                 } else {
                     self.lookup_attr_from_attribute_base1((**protocol_base).clone(), attr_name, acc)
+                }
+            }
+            AttributeBase1::BoundMethod(bound_func) => {
+                let method_type_base =
+                    AttributeBase1::ClassInstance(self.stdlib.method_type().clone());
+                let found_len = acc.found.len();
+                let not_found_len = acc.not_found.len();
+                let error_len = acc.internal_error.len();
+                self.lookup_attr_from_attribute_base1(method_type_base, attr_name, acc);
+                if acc.found.len() == found_len {
+                    acc.not_found.truncate(not_found_len);
+                    acc.internal_error.truncate(error_len);
+                    let mut func_bases = Vec::new();
+                    self.as_attribute_base1(bound_func.clone().as_type(), &mut func_bases);
+                    for base1 in func_bases {
+                        self.lookup_attr_from_attribute_base1(base1, attr_name, acc);
+                    }
+                } else {
+                    acc.not_found.truncate(not_found_len);
+                    acc.internal_error.truncate(error_len);
                 }
             }
             AttributeBase1::ClassObject(class) => {
@@ -1913,9 +1943,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.stdlib.function_type().clone()
                 },
             )),
-            Type::BoundMethod(_) => acc.push(AttributeBase1::ClassInstance(
-                self.stdlib.method_type().clone(),
-            )),
+            Type::BoundMethod(bound_method) => {
+                acc.push(AttributeBase1::BoundMethod(bound_method.func.clone()));
+            }
             Type::Ellipsis => {
                 if let Some(cls) = self.stdlib.ellipsis_type() {
                     acc.push(AttributeBase1::ClassInstance(cls.clone()))
@@ -1940,6 +1970,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for ty in members {
                     self.as_attribute_base1(Type::type_form(ty), acc)
                 }
+            }
+            Type::Type(box Type::Intersect(box (_, fallback))) => {
+                // TODO(rechen): implement attribute access on `type[A & B]`
+                self.as_attribute_base1(Type::type_form(fallback), acc)
             }
             Type::Quantified(quantified) => match quantified.restriction() {
                 Restriction::Bound(ty) => {
@@ -2348,6 +2382,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AttributeBase1::ClassObject(class) => {
                 self.completions_class(class.class_object(), expected_attribute_name, res)
+            }
+            AttributeBase1::BoundMethod(bound_func) => {
+                self.completions_class_type(
+                    self.stdlib.method_type(),
+                    expected_attribute_name,
+                    res,
+                );
+                let mut func_bases = Vec::new();
+                self.as_attribute_base1(bound_func.clone().as_type(), &mut func_bases);
+                for base1 in func_bases {
+                    self.completions_inner1(&base1, expected_attribute_name, res);
+                }
             }
             AttributeBase1::TypeAny(_) | AttributeBase1::TypeNever => self.completions_class_type(
                 self.stdlib.builtins_type(),

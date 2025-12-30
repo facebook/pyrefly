@@ -324,6 +324,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ConstructorKind::TypeOfClass,
                 )))
             }
+            Type::Type(box Type::Intersect(box (_, fallback))) => {
+                // TODO(rechen): implement calling `type[A & B]`
+                self.as_call_target_impl(Type::type_form(fallback), quantified, dunder_call)
+            }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
                 Restriction::Bound(bound) => match bound {
@@ -498,6 +502,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let callee_ty =
             self.type_of_attr_get(ty, method_name, range, errors, context, "Expr::call_method");
+        self.record_resolved_trace(range, callee_ty.clone());
         self.make_call_target_and_call(
             callee_ty,
             method_name,
@@ -1243,6 +1248,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                     )
                 }
+                Some(CalleeKind::Function(FunctionKind::DataclassReplace)) => {
+                    self.call_dataclasses_replace(
+                        ty,
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range,
+                        hint,
+                        errors,
+                    )
+                }
                 // Treat assert_type and reveal_type like pseudo-builtins for convenience. Note that we still
                 // log a name-not-found error, but we also assert/reveal the type as requested.
                 None if ty.is_error() && is_special_name(&x.func, "assert_type") => self
@@ -1288,28 +1304,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 //     f = staticmethod(f)
                 // Check if this call applies a decorator with known typing effects to a function.
                 _ if let Some(ret) = self.maybe_apply_function_decorator(ty, &args, &kws, errors) => ret,
-                _ => {
-                    let callable = self.as_call_target_or_error(
-                        ty.clone(),
-                        CallStyle::FreeForm,
-                        x.func.range(),
-                        errors,
-                        None,
-                    );
-                    self.call_infer_with_range(
-                        callable,
-                        &args,
-                        &kws,
-                        x.arguments.range,
-                        Some(x.func.range()),
-                        errors,
-                        None,
-                        hint,
-                        None,
-                    )
-                }
+                _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors),
             })
         }
+    }
+
+    pub fn freeform_call_infer(
+        &self,
+        ty: Type,
+        args: &[CallArg],
+        kws: &[CallKeyword],
+        callee_range: TextRange,
+        arg_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let callable =
+            self.as_call_target_or_error(ty, CallStyle::FreeForm, callee_range, errors, None);
+        self.call_infer_with_range(
+            callable,
+            args,
+            kws,
+            arg_range,
+            Some(callee_range),
+            errors,
+            None,
+            hint,
+            None,
+        )
     }
 
     fn has_exactly_two_posargs(&self, arguments: &Arguments) -> bool {

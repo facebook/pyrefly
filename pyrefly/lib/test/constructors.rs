@@ -422,7 +422,7 @@ from typing import Self
 class A:
     def __new__(cls: type[Self]): ...
 A.__new__(A)  # OK
-A.__new__(int) # E: Argument `type[int]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+A.__new__(int) # E: `int` is not assignable to upper bound `A` of type variable `Self@A`
     "#,
 );
 
@@ -432,7 +432,7 @@ testcase!(
 class A:
     def __new__(cls): ...
 A.__new__(A)  # OK
-A.__new__(int)  # E: Argument `type[int]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+A.__new__(int)  # E: `int` is not assignable to upper bound `A` of type variable `Self@A`
     "#,
 );
 

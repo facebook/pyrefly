@@ -12,6 +12,7 @@ use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::module::Module;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
 use regex::Regex;
@@ -183,6 +184,12 @@ impl ReportArgs {
 
     fn parse_functions(module: &Module, bindings: Bindings) -> Vec<Function> {
         let mut functions = Vec::new();
+        let module_prefix = if module.name() != ModuleName::unknown() {
+            format!("{}.", module.name())
+        } else {
+            String::new()
+        };
+
         for idx in bindings.keys::<Key>() {
             if let Key::Definition(id) = bindings.idx_to_key(idx)
                 && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
@@ -192,14 +199,23 @@ impl ReportArgs {
                 let func_name = if let Some(class_key) = fun.class_key {
                     match bindings.get(class_key) {
                         BindingClass::ClassDef(cls) => {
-                            format!("{}.{}", cls.def.name, fun.def.name)
+                            // Build full qualified name using nesting context
+                            let parent_path = module.display(&cls.parent).to_string();
+                            if parent_path.is_empty() {
+                                format!("{}{}.{}", module_prefix, cls.def.name, fun.def.name)
+                            } else {
+                                format!(
+                                    "{}{}.{}.{}",
+                                    module_prefix, parent_path, cls.def.name, fun.def.name
+                                )
+                            }
                         }
                         BindingClass::FunctionalClassDef(..) => {
                             continue;
                         }
                     }
                 } else {
-                    format!("{}", fun.def.name)
+                    format!("{}{}", module_prefix, fun.def.name)
                 };
                 // Get return annotation from ReturnTypeKind
                 let return_annotation = {
@@ -303,5 +319,147 @@ impl ReportArgs {
         println!("{}", json);
 
         Ok(CommandExitStatus::Success)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+
+    use super::*;
+    use crate::state::require::Require;
+    use crate::test::util::TestEnv;
+
+    /// Helper to create a module from source code for testing
+    fn create_test_module(code: &str) -> Module {
+        Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::memory(PathBuf::from("test.py")),
+            Arc::new(code.to_owned()),
+        )
+    }
+
+    #[test]
+    fn test_parse_suppressions() {
+        let code = r#"
+x = 1  # pyrefly: ignore[error-code]
+y = 2
+z = 3  # pyrefly: ignore[code1, code2]
+"#;
+        let module = create_test_module(code);
+        let suppressions = ReportArgs::parse_suppressions(&module);
+
+        assert_eq!(suppressions.len(), 2);
+
+        // Suppression with single error code
+        assert_eq!(suppressions[0].kind, "ignore");
+        assert_eq!(suppressions[0].codes, vec!["error-code"]);
+        assert_eq!(suppressions[0].location.start.line, 2);
+
+        // Suppression with multiple error codes
+        assert_eq!(suppressions[1].kind, "ignore");
+        assert_eq!(suppressions[1].codes, vec!["code1", "code2"]);
+        assert_eq!(suppressions[1].location.start.line, 4);
+    }
+
+    #[test]
+    fn test_parse_functions() {
+        let code = r#"
+def foo(x: int, y: str) -> bool:
+    return True
+def foo_unannotated(x, y):
+    return True
+class C:
+    def bar(self, x: int, y: str) -> bool:
+        return True
+    class Inner:
+        def baz(self, x: int, y: str) -> bool:
+            return True
+"#;
+        let (state, handle_fn) = TestEnv::one("test", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let transaction = state.transaction();
+
+        let module = transaction.get_module_info(&handle).unwrap();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+
+        let functions = ReportArgs::parse_functions(&module, bindings);
+
+        assert_eq!(functions.len(), 4);
+
+        // functions[0]: foo - fully annotated top-level function
+        let foo = &functions[0];
+        assert_eq!(foo.name, "test.foo");
+        assert_eq!(foo.return_annotation, Some("bool".to_owned()));
+        assert_eq!(foo.parameters.len(), 2);
+        assert_eq!(foo.parameters[0].name, "x");
+        assert_eq!(foo.parameters[0].annotation, Some("int".to_owned()));
+        assert_eq!(foo.parameters[1].name, "y");
+        assert_eq!(foo.parameters[1].annotation, Some("str".to_owned()));
+
+        // functions[1]: foo_unannotated - no annotations
+        let foo_unannotated = &functions[1];
+        assert_eq!(foo_unannotated.name, "test.foo_unannotated");
+        assert_eq!(foo_unannotated.return_annotation, None);
+        assert_eq!(foo_unannotated.parameters.len(), 2);
+        assert_eq!(foo_unannotated.parameters[0].name, "x");
+        assert_eq!(foo_unannotated.parameters[0].annotation, None);
+        assert_eq!(foo_unannotated.parameters[1].name, "y");
+        assert_eq!(foo_unannotated.parameters[1].annotation, None);
+
+        // functions[2]: C.bar - method in class C
+        let c_bar = &functions[2];
+        assert_eq!(c_bar.name, "test.C.bar");
+        assert_eq!(c_bar.return_annotation, Some("bool".to_owned()));
+        assert_eq!(c_bar.parameters.len(), 3);
+        assert_eq!(c_bar.parameters[0].name, "self");
+        assert_eq!(c_bar.parameters[0].annotation, None);
+        assert_eq!(c_bar.parameters[1].name, "x");
+        assert_eq!(c_bar.parameters[1].annotation, Some("int".to_owned()));
+        assert_eq!(c_bar.parameters[2].name, "y");
+        assert_eq!(c_bar.parameters[2].annotation, Some("str".to_owned()));
+
+        // functions[3]: C.Inner.baz - method in nested class Inner
+        let inner_baz = &functions[3];
+        assert_eq!(inner_baz.name, "test.C.Inner.baz");
+        assert_eq!(inner_baz.return_annotation, Some("bool".to_owned()));
+        assert_eq!(inner_baz.parameters.len(), 3);
+        assert_eq!(inner_baz.parameters[0].name, "self");
+        assert_eq!(inner_baz.parameters[0].annotation, None);
+        assert_eq!(inner_baz.parameters[1].name, "x");
+        assert_eq!(inner_baz.parameters[1].annotation, Some("int".to_owned()));
+        assert_eq!(inner_baz.parameters[2].name, "y");
+        assert_eq!(inner_baz.parameters[2].annotation, Some("str".to_owned()));
+    }
+
+    #[test]
+    fn test_unknown_module() {
+        let code = r#"
+def foo():
+    pass
+"#;
+        let module = Module::new(
+            ModuleName::unknown(),
+            ModulePath::memory(PathBuf::from("test.py")),
+            Arc::new(code.to_owned()),
+        );
+        let (state, handle_fn) = TestEnv::one("__unknown__", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("__unknown__");
+        let transaction = state.transaction();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+
+        let functions = ReportArgs::parse_functions(&module, bindings);
+
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].name, "foo");
     }
 }

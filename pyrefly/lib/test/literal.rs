@@ -326,11 +326,12 @@ assert_type(result5, str)
 );
 
 testcase!(
-    test_literal_string_as_container,
+    test_literal_string_as_collection,
     r#"
-from typing import Container
-s: str = "foo"
-x1: Container[str] = s
-x2: Container[str] = "foo"
-    "#,
+from collections.abc import Container, Collection, Sequence
+
+a: Container[str] = ""
+b: Collection[str] = ""
+c: Sequence[str] = ""
+"#,
 );

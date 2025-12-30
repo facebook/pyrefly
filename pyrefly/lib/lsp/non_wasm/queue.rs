@@ -24,6 +24,10 @@ use lsp_types::DidChangeWorkspaceFoldersParams;
 use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
 use lsp_types::DidSaveTextDocumentParams;
+use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::telemetry::TelemetryEventKind;
+use pyrefly_util::telemetry::TelemetryTaskStats;
 use tracing::debug;
 use tracing::info;
 
@@ -191,30 +195,26 @@ impl LspQueue {
     }
 }
 
-pub struct HeavyTask(Box<dyn FnOnce(&Server) + Send + Sync + 'static>);
+pub struct HeavyTask(Box<dyn FnOnce(&Server, &mut TelemetryEvent) + Send + Sync + 'static>);
 
 impl HeavyTask {
-    pub fn new(f: impl FnOnce(&Server) + Send + Sync + 'static) -> Self {
-        Self(Box::new(f))
-    }
-
-    pub fn run(self, server: &Server) {
-        self.0(server)
+    fn run(self, server: &Server, telemetry: &mut TelemetryEvent) {
+        self.0(server, telemetry);
     }
 }
 
 /// A queue for heavy tasks that should be run in the background thread.
-pub struct HeavyTaskQueue<T> {
-    task_sender: Sender<(T, Instant)>,
-    task_receiver: Receiver<(T, Instant)>,
+pub struct HeavyTaskQueue {
+    task_sender: Sender<(HeavyTask, TelemetryEventKind, Instant)>,
+    task_receiver: Receiver<(HeavyTask, TelemetryEventKind, Instant)>,
     stop_sender: Sender<()>,
     stop_receiver: Receiver<()>,
-    queue_name: String,
+    queue_name: &'static str,
+    next_task_id: AtomicUsize,
 }
 
-impl<T> HeavyTaskQueue<T> {
-    pub fn new(queue_name: &str) -> Self {
-        let queue_name = queue_name.to_owned();
+impl HeavyTaskQueue {
+    pub fn new(queue_name: &'static str) -> Self {
         let (task_sender, task_receiver) = crossbeam_channel::unbounded();
         let (stop_sender, stop_receiver) = crossbeam_channel::unbounded();
         Self {
@@ -223,17 +223,22 @@ impl<T> HeavyTaskQueue<T> {
             stop_sender,
             stop_receiver,
             queue_name,
+            next_task_id: AtomicUsize::new(1),
         }
     }
 
-    pub fn queue_task(&self, task: T) {
+    pub fn queue_task(
+        &self,
+        kind: TelemetryEventKind,
+        f: Box<dyn FnOnce(&Server, &mut TelemetryEvent) + Send + Sync + 'static>,
+    ) {
         self.task_sender
-            .send((task, Instant::now()))
+            .send((HeavyTask(f), kind, Instant::now()))
             .expect("Failed to queue heavy task");
         debug!("Enqueued task on {} heavy task queue", self.queue_name);
     }
 
-    pub fn run_until_stopped(&self, f: impl Fn(T)) {
+    pub fn run_until_stopped(&self, server: &Server, telemetry: &impl Telemetry) {
         let mut receiver_selector = Select::new_biased();
         // Biased selector will pick the receiver with lower index over higher ones,
         // so we register priority_events_receiver first.
@@ -249,18 +254,24 @@ impl<T> HeavyTaskQueue<T> {
                     return;
                 }
                 i if i == task_receiver_index => {
-                    let (task, enqueued) = selected
+                    let (task, kind, enqueued) = selected
                         .recv(&self.task_receiver)
                         .expect("Failed to receive heavy task");
                     debug!("Dequeued task on {} heavy task queue", self.queue_name);
-                    let task_start = Instant::now();
-                    f(task);
-                    let task_end = Instant::now();
+                    let mut telemetry_event =
+                        TelemetryEvent::new_dequeued(kind, enqueued, server.telemetry_state());
+                    let queue_duration = telemetry_event.queue;
+                    telemetry_event.set_task_stats(TelemetryTaskStats::new(
+                        self.queue_name,
+                        self.next_task_id.fetch_add(1, Ordering::Relaxed),
+                    ));
+                    task.run(server, &mut telemetry_event);
+                    let process_duration = telemetry_event.finish_and_record(telemetry, None);
                     info!(
                         "Ran task on {} heavy task queue. Queue time: {:.2}, task time: {:.2}",
                         self.queue_name,
-                        (task_start - enqueued).as_secs_f32(),
-                        (task_end - task_start).as_secs_f32()
+                        queue_duration.as_secs_f32(),
+                        process_duration.as_secs_f32()
                     );
                 }
                 _ => unreachable!(),

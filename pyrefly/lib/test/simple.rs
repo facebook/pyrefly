@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::test::util::TestEnv;
 use crate::test::util::testcase_for_macro;
 use crate::testcase;
@@ -360,9 +362,44 @@ y = "bar"  # E: `y` is marked final
 );
 
 testcase!(
+    test_final_field,
+    r#"
+from typing import Final
+class C:
+    x: Final[int] = 1
+    uninitialized: Final[str]
+    def __init__(self):
+        self.x = 42  # E: Cannot set field `x`
+        self.uninitialized = "ok"
+"#,
+);
+
+testcase!(
+    test_final_reassign,
+    r#"
+from typing import Final
+x: Final[int] = 0
+x = 1  # E: `x` is marked final
+x += 1  # E: Cannot assign to variable `x` because it is marked final
+y = x = 3 # E: Cannot assign to variable `x` because it is marked final
+y = (x := 3) # E: Cannot assign to variable `x` because it is marked final
+"#,
+);
+
+testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type
+reveal_type()  # E: reveal_type needs 1 positional argument, got 0
+reveal_type(1)  # E: revealed type: Literal[1]
+    "#,
+);
+
+testcase!(
+    test_typing_extensions_reveal_type,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+from typing_extensions import reveal_type
 reveal_type()  # E: reveal_type needs 1 positional argument, got 0
 reveal_type(1)  # E: revealed type: Literal[1]
     "#,
@@ -1543,6 +1580,14 @@ testcase!(
     r#"
 # Used to crash, https://github.com/facebook/pyrefly/issues/518
 if"":=  # E: Assignment expression target must be an identifier # E: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_invalid_attribute_walrus,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/1903
+(:=).:  # E: Type cannot be declared in assignment to non-self attribute `:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Parse error: Expected an expression
 "#,
 );
 

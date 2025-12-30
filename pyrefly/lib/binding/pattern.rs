@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::nesting_context::NestingContext;
 use ruff_python_ast::AtomicNodeIndex;
@@ -36,7 +37,6 @@ use crate::binding::scope::FlowStyle;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::types::facet::FacetKind;
 
 impl<'a> BindingsBuilder<'a> {
@@ -233,12 +233,16 @@ impl<'a> BindingsBuilder<'a> {
                     );
                     // We're not sure whether the pattern matches all possible instances of a class, and
                     // the placeholder prevents negative narrowing from removing the class in later branches.
-                    let placeholder = NarrowOps::from_single_narrow_op_for_subject(
-                        subject.clone(),
-                        AtomicNarrowOp::Placeholder,
-                        x.cls.range(),
-                    );
-                    narrow_for_subject.and_all(placeholder);
+                    // However, if there are no arguments, it's just an isinstance check, so we don't need
+                    // the placeholder.
+                    if !x.arguments.patterns.is_empty() || !x.arguments.keywords.is_empty() {
+                        let placeholder = NarrowOps::from_single_narrow_op_for_subject(
+                            subject.clone(),
+                            AtomicNarrowOp::Placeholder,
+                            x.cls.range(),
+                        );
+                        narrow_for_subject.and_all(placeholder);
+                    }
                     narrow_for_subject
                 } else {
                     NarrowOps::new()

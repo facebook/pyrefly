@@ -359,8 +359,12 @@ impl Playground {
 
         let handles: Vec<Handle> = self.handles.values().map(|handle| handle.dupe()).collect();
 
-        self.state
-            .run_with_committing_transaction(transaction, &handles, Require::Everything);
+        self.state.run_with_committing_transaction(
+            transaction,
+            &handles,
+            Require::Everything,
+            None,
+        );
         Some(format!(
             "{}.{}",
             desired_version.major, desired_version.minor
@@ -382,8 +386,12 @@ impl Playground {
 
             let handles: Vec<Handle> = self.handles.values().map(|handle| handle.dupe()).collect();
 
-            self.state
-                .run_with_committing_transaction(transaction, &handles, Require::Everything);
+            self.state.run_with_committing_transaction(
+                transaction,
+                &handles,
+                Require::Everything,
+                None,
+            );
 
             if self.handles.contains_key(&filename) {
                 self.active_filename = filename;
@@ -675,7 +683,7 @@ mod tests {
             "Parse error: Expected `import`, found newline",
         ];
         let expected_details = &[
-            "  Looked in these locations:\n  Build system source database",
+            "  Did you mean `nt`?\n  Looked in these locations:\n  Build system source database",
             "",
         ];
         let expected_error_kinds = &[ErrorKind::MissingImport, ErrorKind::ParseError];

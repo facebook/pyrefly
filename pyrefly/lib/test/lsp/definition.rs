@@ -1181,11 +1181,15 @@ Definition Result:
 
 25 | dict["foo"]
             ^
-Definition Result: None
+Definition Result:
+3618 |     def __getitem__(self, key: _KT, /) -> _VT:
+               ^^^^^^^^^^^
 
 27 | dict["bar"]
             ^
-Definition Result: None
+Definition Result:
+3618 |     def __getitem__(self, key: _KT, /) -> _VT:
+               ^^^^^^^^^^^
 "#
         .trim(),
         report.trim(),

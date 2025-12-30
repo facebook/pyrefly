@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fs;
@@ -32,7 +33,9 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::facet::FacetKind;
+use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::SliceExt;
@@ -48,7 +51,6 @@ use ruff_python_ast::ExprContext;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
-use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
@@ -66,6 +68,7 @@ use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
 
 use crate::ModuleInfo;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
@@ -81,9 +84,15 @@ use crate::state::lsp_attributes::AttributeContext;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
+use crate::state::state::TransactionHandle;
 use crate::types::callable::Param;
 use crate::types::module::ModuleType;
+use crate::types::type_var::Restriction;
 use crate::types::types::Type;
+
+mod quick_fixes;
+
+pub(crate) use self::quick_fixes::extract_function::LocalRefactorCodeAction;
 
 fn default_true() -> bool {
     true
@@ -792,23 +801,23 @@ impl<'a> Transaction<'a> {
                     }
                 };
 
-                if self.get_bindings(handle)?.is_valid_key(&key) {
-                    if let Some(ExprCall {
-                        node_index: _,
-                        range: _,
-                        func,
-                        arguments,
-                    }) = &self.callee_at(handle, position)
-                        && func.range() == id.range
-                        && let Some(ret) = self.get_chosen_overload_trace(handle, arguments.range)
-                    {
-                        Some(ret)
-                    } else {
-                        self.get_type(handle, &key)
-                    }
-                } else {
-                    None
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
                 }
+                let mut ty = self.get_type(handle, &key)?;
+                let call_args_range = self.callee_at(handle, position).and_then(
+                    |ExprCall {
+                         func, arguments, ..
+                     }| (func.range() == id.range).then_some(arguments.range),
+                );
+                if let Some(arguments_range) = call_args_range {
+                    if let Some(ret) = self.get_chosen_overload_trace(handle, arguments_range) {
+                        return Some(ret);
+                    }
+                    ty = self.coerce_type_to_callable(handle, ty);
+                }
+                Some(ty)
             }
             Some(IdentifierWithContext {
                 identifier: _,
@@ -908,6 +917,67 @@ impl<'a> Transaction<'a> {
                 }
             }
             None => self.type_from_expression_at(handle, position),
+        }
+    }
+
+    /// If `ty` represents a callable instance (e.g., a class with `__call__`), return the
+    /// bound `__call__` signature. Otherwise, return the type unchanged.
+    ///
+    /// This enables IDE features like hover and signature help to show parameter lists
+    /// when calling instances that implement `__call__`, matching Python's runtime behavior.
+    ///
+    /// Note that we should only use this when we already know the value is being used as a
+    /// callee, since this drops the original type information in favor of a callable type.
+    pub(crate) fn coerce_type_to_callable(&self, handle: &Handle, ty: Type) -> Type {
+        if ty.is_toplevel_callable() {
+            return ty;
+        }
+        let original = ty.clone();
+        self.ad_hoc_solve(handle, |solver| Self::callable_from_type(&solver, ty))
+            .and_then(|callable| callable)
+            .unwrap_or(original)
+    }
+
+    /// Extract a callable type from `ty` by invoking the solver to find its `__call__` method.
+    /// Recursively walks through type wrappers (Union, TypeAlias, Type, Quantified).
+    /// Returns `None` if the type is not callable.
+    fn callable_from_type(solver: &AnswersSolver<TransactionHandle<'_>>, ty: Type) -> Option<Type> {
+        if ty.is_toplevel_callable() {
+            return Some(ty);
+        }
+        match ty {
+            Type::ClassType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
+            Type::SelfType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
+            Type::Union(box Union { members, .. }) => Self::callable_from_types(solver, members),
+            Type::TypeAlias(alias) => Self::callable_from_type(solver, alias.as_type()),
+            Type::Type(box inner) => Self::callable_from_type(solver, inner),
+            Type::Quantified(box quantified) => match quantified.restriction {
+                Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
+                Restriction::Constraints(options) => Self::callable_from_types(solver, options),
+                Restriction::Unrestricted => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Convert a collection of types into a single callable union, returning `None` if the list
+    /// was empty or any member failed to coerce into a callable.
+    fn callable_from_types(
+        solver: &AnswersSolver<TransactionHandle<'_>>,
+        types: Vec<Type>,
+    ) -> Option<Type> {
+        if types.is_empty() {
+            return None;
+        }
+        let mut converted = Vec::with_capacity(types.len());
+        for ty in types {
+            let callable = Self::callable_from_type(solver, ty)?;
+            converted.push(callable);
+        }
+        if converted.len() == 1 {
+            converted.into_iter().next()
+        } else {
+            Some(solver.unions(converted))
         }
     }
 
@@ -1297,6 +1367,21 @@ impl<'a> Transaction<'a> {
                         && let Some(operand_type) = answers.get_type_trace(unaryop.operand.range())
                     {
                         return Some((operand_type, dunder_name));
+                    }
+                    None
+                }
+                AnyNodeRef::ExprSubscript(subscript) => {
+                    let dunder_name = match subscript.ctx {
+                        ExprContext::Load => Some(dunder::GETITEM),
+                        ExprContext::Store => Some(dunder::SETITEM),
+                        ExprContext::Del => Some(dunder::DELITEM),
+                        ExprContext::Invalid => None,
+                    };
+                    if let Some(dunder_name) = dunder_name
+                        && let Some(answers) = self.get_answers(handle)
+                        && let Some(base_type) = answers.get_type_trace(subscript.value.range())
+                    {
+                        return Some((base_type, dunder_name));
                     }
                     None
                 }
@@ -1729,7 +1814,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Produce code actions that makes edits local to the file.
-    pub fn local_quickfix_code_actions(
+    pub fn local_quickfix_code_actions_sorted(
         &self,
         handle: &Handle,
         range: TextRange,
@@ -1745,18 +1830,39 @@ impl<'a> Transaction<'a> {
                     let error_range = error.range();
                     if error_range.contains_range(range) {
                         let unknown_name = module_info.code_at(error_range);
-                        for handle_to_import_from in self.search_exports_exact(unknown_name) {
+                        for (handle_to_import_from, export) in
+                            self.search_exports_exact(unknown_name)
+                        {
                             let (position, insert_text, _) = insert_import_edit(
                                 &ast,
                                 self.config_finder(),
                                 handle.dupe(),
-                                handle_to_import_from,
+                                handle_to_import_from.dupe(),
                                 unknown_name,
                                 import_format,
                             );
                             let range = TextRange::at(position, TextSize::new(0));
-                            let title = format!("Insert import: `{}`", insert_text.trim());
-                            code_actions.push((title, module_info.dupe(), range, insert_text));
+                            let is_deprecated = export.deprecation.is_some();
+                            let title = format!(
+                                "Insert import: `{}`{}",
+                                insert_text.trim(),
+                                if is_deprecated { " (deprecated)" } else { "" }
+                            );
+
+                            let is_private_import = handle_to_import_from
+                                .module()
+                                .components()
+                                .last()
+                                .is_some_and(|component| component.as_str().starts_with('_'));
+
+                            code_actions.push((
+                                title,
+                                module_info.dupe(),
+                                range,
+                                insert_text,
+                                is_deprecated,
+                                is_private_import,
+                            ));
                         }
 
                         for module_name in self.search_modules_fuzzy(unknown_name) {
@@ -1770,7 +1876,18 @@ impl<'a> Transaction<'a> {
                                     import_regular_import_edit(&ast, module_handle);
                                 let range = TextRange::at(position, TextSize::new(0));
                                 let title = format!("Insert import: `{}`", insert_text.trim());
-                                code_actions.push((title, module_info.dupe(), range, insert_text));
+                                let is_private_import = module_name
+                                    .components()
+                                    .last()
+                                    .is_some_and(|component| component.as_str().starts_with('_'));
+                                code_actions.push((
+                                    title,
+                                    module_info.dupe(),
+                                    range,
+                                    insert_text,
+                                    false,
+                                    is_private_import,
+                                ));
                             }
                         }
                     }
@@ -1778,8 +1895,52 @@ impl<'a> Transaction<'a> {
                 _ => {}
             }
         }
-        code_actions.sort_by(|(title1, _, _, _), (title2, _, _, _)| title1.cmp(title2));
-        Some(code_actions)
+
+        // Sort code actions: non-private first, then non-deprecated, then alphabetically
+        code_actions.sort_by(
+            |(title1, _, _, _, is_deprecated1, is_private1),
+             (title2, _, _, _, is_deprecated2, is_private2)| {
+                match (is_private1, is_private2) {
+                    (true, false) => Ordering::Greater,
+                    (false, true) => Ordering::Less,
+                    _ => match (is_deprecated1, is_deprecated2) {
+                        (true, false) => Ordering::Greater,
+                        (false, true) => Ordering::Less,
+                        _ => title1.cmp(title2),
+                    },
+                }
+            },
+        );
+
+        // Keep only the first suggestion for each unique import text (after sorting,
+        // this will be the public/non-deprecated version)
+        code_actions.dedup_by(|a, b| a.3 == b.3);
+
+        // Drop the deprecated flag and return
+        Some(
+            code_actions
+                .into_iter()
+                .map(|(title, module, range, insert_text, _, _)| {
+                    (title, module, range, insert_text)
+                })
+                .collect(),
+        )
+    }
+
+    pub fn extract_function_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_function::extract_function_code_actions(self, handle, selection)
+    }
+
+    pub fn extract_variable_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_variable::extract_variable_code_actions(self, handle, selection)
     }
 
     /// Determines whether a module is a third-party package.
@@ -2623,6 +2784,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
+        in_string_literal: bool,
     ) {
         if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
@@ -2632,56 +2794,139 @@ impl<'a> Transaction<'a> {
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
-            Self::add_literal_completions_from_type(param.as_type(), completions);
+            Self::add_literal_completions_from_type(
+                param.as_type(),
+                completions,
+                in_string_literal,
+            );
         }
     }
 
-    fn add_literal_completions_from_type(param_type: &Type, completions: &mut Vec<CompletionItem>) {
+    fn add_literal_completions_from_type(
+        param_type: &Type,
+        completions: &mut Vec<CompletionItem>,
+        in_string_literal: bool,
+    ) {
         match param_type {
             Type::Literal(lit) => {
+                // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
+                let label = lit.to_string_escaped(true);
+                let insert_text = if in_string_literal {
+                    if let Lit::Str(s) = lit {
+                        s.to_string()
+                    } else {
+                        label.clone()
+                    }
+                } else {
+                    label.clone()
+                };
                 completions.push(CompletionItem {
-                    // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
-                    label: lit.to_string_escaped(true),
+                    label,
                     kind: Some(CompletionItemKind::VALUE),
                     detail: Some(format!("{param_type}")),
+                    insert_text: Some(insert_text),
                     ..Default::default()
                 });
             }
             Type::Union(box Union { members, .. }) => {
                 for member in members {
-                    Self::add_literal_completions_from_type(member, completions);
+                    Self::add_literal_completions_from_type(member, completions, in_string_literal);
                 }
             }
             _ => {}
         }
     }
 
-    fn subscript_string_literal_at(
+    fn type_contains_typed_dict(ty: &Type) -> bool {
+        match ty {
+            Type::TypedDict(_) | Type::PartialTypedDict(_) => true,
+            Type::Union(box Union { members, .. }) => {
+                members.iter().any(Self::type_contains_typed_dict)
+            }
+            _ => false,
+        }
+    }
+
+    fn expr_has_typed_dict_type(&self, handle: &Handle, expr: &Expr) -> bool {
+        self.get_type_trace(handle, expr.range())
+            .map(|ty| Self::type_contains_typed_dict(&ty))
+            .unwrap_or(false)
+    }
+
+    /// Extracts typed dict access from `.get()` method calls.
+    /// This handles both `d.get("key")` and `d["key"]` patterns - the subscript
+    /// case is handled in `dict_key_string_literal_at`.
+    fn typed_dict_get_string_literal(
+        &self,
+        handle: &Handle,
+        call: &ExprCall,
+    ) -> Option<(Expr, ExprStringLiteral)> {
+        let Expr::Attribute(attr) = call.func.as_ref() else {
+            return None;
+        };
+        if attr.attr.id.as_str() != "get" {
+            return None;
+        }
+        if !self.expr_has_typed_dict_type(handle, attr.value.as_ref()) {
+            return None;
+        }
+        // If there's already a string literal, we want to provide completions
+        // for the key name inside the quotes (e.g., `d.get("k|")` -> suggest "key")
+        if let Some(Expr::StringLiteral(lit)) = call.arguments.args.first() {
+            return Some((attr.value.as_ref().clone(), lit.clone()));
+        }
+        if let Some(lit) =
+            call.arguments
+                .keywords
+                .iter()
+                .find_map(|kw| match (&kw.arg, &kw.value) {
+                    (Some(id), Expr::StringLiteral(lit)) if id.id.as_str() == "key" => Some(lit),
+                    _ => None,
+                })
+        {
+            return Some((attr.value.as_ref().clone(), lit.clone()));
+        }
+        None
+    }
+
+    fn dict_key_string_literal_at(
+        &self,
+        handle: &Handle,
         module: &ModModule,
         position: TextSize,
-    ) -> Option<(ExprSubscript, ExprStringLiteral)> {
+    ) -> Option<(Expr, ExprStringLiteral)> {
         let nodes = Ast::locate_node(module, position);
-        let mut best: Option<(u8, TextSize, ExprSubscript, ExprStringLiteral)> = None;
+        let mut best: Option<(u8, TextSize, Expr, ExprStringLiteral)> = None;
         for node in nodes {
-            if let AnyNodeRef::ExprSubscript(sub) = node
-                && let Expr::StringLiteral(lit) = sub.slice.as_ref()
-            {
-                let (priority, dist) = Self::string_literal_priority(position, lit.range());
-                let should_update = match &best {
-                    Some((best_prio, best_dist, _, _)) => {
-                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+            let candidate = match node {
+                AnyNodeRef::ExprSubscript(sub) => {
+                    if let Expr::StringLiteral(lit) = sub.slice.as_ref() {
+                        Some((sub.value.as_ref().clone(), lit.clone()))
+                    } else {
+                        None
                     }
-                    None => true,
-                };
-                if should_update {
-                    best = Some((priority, dist, sub.clone(), lit.clone()));
-                    if priority == 0 && dist == TextSize::from(0) {
-                        break;
-                    }
+                }
+                AnyNodeRef::ExprCall(call) => self.typed_dict_get_string_literal(handle, call),
+                _ => None,
+            };
+            let Some((base_expr, literal)) = candidate else {
+                continue;
+            };
+            let (priority, dist) = Self::string_literal_priority(position, literal.range());
+            let should_update = match &best {
+                Some((best_prio, best_dist, _, _)) => {
+                    priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                }
+                None => true,
+            };
+            if should_update {
+                best = Some((priority, dist, base_expr, literal));
+                if priority == 0 && dist == TextSize::from(0) {
+                    break;
                 }
             }
         }
-        best.map(|(_, _, sub, lit)| (sub, lit))
+        best.map(|(_, _, base_expr, literal)| (base_expr, literal))
     }
 
     fn string_literal_priority(position: TextSize, range: TextRange) -> (u8, TextSize) {
@@ -2760,7 +3005,8 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
     ) {
-        let Some((subscript, string_lit)) = Self::subscript_string_literal_at(module, position)
+        let Some((base_expr, string_lit)) =
+            self.dict_key_string_literal_at(handle, module, position)
         else {
             return;
         };
@@ -2775,13 +3021,13 @@ impl<'a> Transaction<'a> {
         if position < lower_bound || position > literal_range.end() {
             return;
         }
-        let base_expr = subscript.value.as_ref();
         let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
 
         if let Some(bindings) = self.get_bindings(handle) {
-            let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
+            let base_info = if let Some((identifier, facets)) = Self::expression_facets(&base_expr)
+            {
                 Some((identifier, facets))
-            } else if let Expr::Name(name) = base_expr {
+            } else if let Expr::Name(name) = &base_expr {
                 Some((Ast::expr_name_identifier(name.clone()), Vec::new()))
             } else {
                 None
@@ -2992,7 +3238,8 @@ impl<'a> Transaction<'a> {
                                     _ => Some(CompletionItemKind::FIELD),
                                 };
                                 let ty = &x.ty;
-                                let detail = ty.clone().map(|t| t.as_hover_string());
+                                let detail =
+                                    ty.clone().map(|t| t.as_lsp_string(LspDisplayMode::Hover));
                                 let documentation = self.get_docstring_for_attribute(handle, x);
                                 result.push(CompletionItem {
                                     label: x.name.as_str().to_owned(),
@@ -3057,7 +3304,10 @@ impl<'a> Transaction<'a> {
                         self.add_local_variable_completions(handle, None, position, &mut result);
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
-                    self.add_literal_completions(handle, position, &mut result);
+                    let in_string_literal = nodes
+                        .iter()
+                        .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)));
+                    self.add_literal_completions(handle, position, &mut result, in_string_literal);
                     self.add_dict_key_completions(
                         handle,
                         mod_module.as_ref(),
@@ -3099,20 +3349,61 @@ impl<'a> Transaction<'a> {
         (result, is_incomplete)
     }
 
-    pub fn search_exports_exact(&self, name: &str) -> Vec<Handle> {
+    fn export_from_location(
+        &self,
+        handle: &Handle,
+        export_name: &Name,
+        location: &ExportLocation,
+    ) -> Option<(Handle, Export)> {
+        match location {
+            ExportLocation::ThisModule(export) => Some((handle.dupe(), export.clone())),
+            ExportLocation::OtherModule(module, original_name) => {
+                let target_name = original_name.clone().unwrap_or_else(|| export_name.clone());
+                self.resolve_named_import(handle, *module, target_name, FindPreference::default())
+            }
+        }
+    }
+
+    /// Used to avoid making use of reexports of private modules for some LSP
+    /// uses like auto-import (where we want to import the public API).
+    /// - Returns true if both modules should be shown in auto-import suggestions.
+    /// - Handles stdlib patterns where a public module (`io`) re-exports from a
+    ///   private implementation module (`_io`).
+    fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
+        let canonical_components = canonical.module().components();
+        let canonical_component = canonical_components
+            .last()
+            .map(|name| name.as_str())
+            .unwrap_or("");
+        let original_components = original.module().components();
+        let original_component = original_components
+            .last()
+            .map(|name| name.as_str())
+            .unwrap_or("");
+        canonical_component.starts_with('_')
+            && canonical_component.trim_start_matches('_') == original_component
+    }
+
+    pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
         self.search_exports(|handle, exports| {
-            if let Some(export) = exports.get(&Name::new(name)) {
-                match export {
-                    ExportLocation::ThisModule(_) => vec![handle.dupe()],
-                    // Re-exported modules like `foo` in `from from_module import foo`
-                    // should likely be ignored in autoimport suggestions
-                    // because the original export in from_module will show it.
-                    // The current strategy will prevent intended re-exports from showing up in
-                    // result list, but it's better than showing thousands of likely bad results.
-                    ExportLocation::OtherModule(..) => Vec::new(),
+            let name = Name::new(name);
+            match exports.get(&name) {
+                Some(location) => {
+                    if let Some((canonical_handle, export)) =
+                        self.export_from_location(handle, &name, location)
+                    {
+                        let mut results = vec![(canonical_handle.dupe(), export.clone())];
+                        if canonical_handle != *handle
+                            && Self::should_include_reexport(handle, &canonical_handle)
+                        {
+                            results.push((handle.dupe(), export));
+                        }
+                        results
+                    } else {
+                        Vec::new()
+                    }
                 }
-            } else {
-                Vec::new()
+                None => Vec::new(),
             }
         })
     }
@@ -3122,13 +3413,21 @@ impl<'a> Transaction<'a> {
             let matcher = SkimMatcherV2::default().smart_case();
             let mut results = Vec::new();
             for (name, location) in exports.iter() {
-                let name = name.as_str();
-                if let Some(score) = matcher.fuzzy_match(name, pattern) {
-                    match location {
-                        ExportLocation::OtherModule(..) => {}
-                        ExportLocation::ThisModule(export) => {
-                            results.push((score, handle.dupe(), name.to_owned(), export.clone()));
-                        }
+                let name_str = name.as_str();
+                if let Some(score) = matcher.fuzzy_match(name_str, pattern)
+                    && let Some((canonical_handle, export)) =
+                        self.export_from_location(handle, name, location)
+                {
+                    results.push((
+                        score,
+                        canonical_handle.dupe(),
+                        name_str.to_owned(),
+                        export.clone(),
+                    ));
+                    if canonical_handle != *handle
+                        && Self::should_include_reexport(handle, &canonical_handle)
+                    {
+                        results.push((score, handle.dupe(), name_str.to_owned(), export));
                     }
                 }
             }
