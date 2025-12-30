@@ -13,7 +13,6 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 pydantic_testcase!(
-    bug = "we could support ranges, but this is not for v1",
     test_field_right_type,
     r#"
 from pydantic import BaseModel, Field
@@ -23,6 +22,75 @@ class Model(BaseModel):
 Model(x=5) 
 Model(x=0)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
 Model(x=15)  # E: Argument value `Literal[15]` violates Pydantic `lt` constraint `Literal[10]` for field `x`
+"#,
+);
+
+pydantic_testcase!(
+    test_field_range_ge_le,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(ge=0, le=10)
+
+Model(x=0)
+Model(x=10)
+Model(x=-1)  # E: Argument value `Literal[-1]` violates Pydantic `ge` constraint `Literal[0]` for field `x`
+Model(x=11)  # E: Argument value `Literal[11]` violates Pydantic `le` constraint `Literal[10]` for field `x`
+"#,
+);
+
+pydantic_testcase!(
+    test_field_range_positional,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(gt=0, kw_only=False)
+    y: int = Field(lt=3, kw_only=False)
+
+Model(1, 2)
+Model(0, 2)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
+Model(1, 3)  # E: Argument value `Literal[3]` violates Pydantic `lt` constraint `Literal[3]` for field `y`
+"#,
+);
+
+pydantic_testcase!(
+    test_field_range_kw_only,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(ge=1, kw_only=True)
+
+Model(x=1)
+Model(x=0)  # E: Argument value `Literal[0]` violates Pydantic `ge` constraint `Literal[1]` for field `x`
+"#,
+);
+
+pydantic_testcase!(
+    test_field_range_alias,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel, validate_by_name=True, validate_by_alias=True):
+    x: int = Field(gt=0, validation_alias="y")
+
+Model(x=0)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
+Model(y=0)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
+"#,
+);
+
+pydantic_testcase!(
+    test_field_range_alias_only,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel, validate_by_name=False, validate_by_alias=True):
+    x: int = Field(gt=0, validation_alias="y")
+
+Model(y=0)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
+Model(x=0)  # E: Missing argument `y`
 "#,
 );
 

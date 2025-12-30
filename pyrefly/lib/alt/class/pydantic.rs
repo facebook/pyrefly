@@ -58,6 +58,7 @@ use crate::types::class::Class;
 use crate::types::types::Type;
 
 fn int_literal_from_type(ty: &Type) -> Option<&LitInt> {
+    // We only currently enforce range constraints for literal ints.
     match ty {
         Type::Literal(Lit::Int(lit)) => Some(lit),
         _ => None,
@@ -94,6 +95,12 @@ impl PydanticRangeConstraints {
 struct PydanticParamConstraint {
     field_name: Name,
     constraints: PydanticRangeConstraints,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum PydanticParamKey {
+    Position(usize),
+    Name(Name),
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -457,14 +464,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        fn int_literal_from_type(ty: &Type) -> Option<&LitInt> {
-            // We only currently enforce range constraints for literal defaults, so carve out
-            // the `Literal[int]` case and ignore everything else.
-            match ty {
-                Type::Literal(Lit::Int(lit)) => Some(lit),
-                _ => None,
-            }
-        }
         let Some(default_ty) = &keywords.default else {
             return;
         };
@@ -551,30 +550,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &[CallKeyword],
         errors: &ErrorCollector,
     ) {
-        let Some((positional_slots, constraints)) =
-            self.collect_pydantic_constraint_params(cls, dataclass)
-        else {
+        let Some(constraints) = self.collect_pydantic_constraint_params(cls, dataclass) else {
             return;
         };
 
         let infer_errors = self.error_swallower();
-        let mut positional_index = 0;
-        for arg in args {
-            if positional_index >= positional_slots.len() {
-                break;
-            }
-            let slot = positional_slots.get(positional_index);
-            positional_index += 1;
-            let Some(slot) = slot else {
-                break;
-            };
-            let Some(param_name) = slot.clone() else {
-                continue;
-            };
+        for (index, arg) in args.iter().enumerate() {
             match arg {
                 CallArg::Arg(value) => {
                     let value_ty = value.infer(self, &infer_errors);
-                    if let Some(info) = constraints.get(&param_name) {
+                    if let Some(info) = constraints.get(&PydanticParamKey::Position(index)) {
                         self.emit_pydantic_argument_constraint(
                             &value_ty,
                             info,
@@ -594,7 +579,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let Some(identifier) = kw.arg.as_ref() else {
                 continue;
             };
-            if let Some(info) = constraints.get(&identifier.id) {
+            let key = PydanticParamKey::Name(identifier.id.clone());
+            if let Some(info) = constraints.get(&key) {
                 let value_ty = kw.value.infer(self, &infer_errors);
                 self.emit_pydantic_argument_constraint(&value_ty, info, kw.range, errors);
             }
@@ -605,9 +591,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         dataclass: &DataclassMetadata,
-    ) -> Option<(Vec<Option<Name>>, SmallMap<Name, PydanticParamConstraint>)> {
-        let mut positional_slots: Vec<Option<Name>> = Vec::new();
+    ) -> Option<SmallMap<PydanticParamKey, PydanticParamConstraint>> {
         let mut constraints = SmallMap::new();
+        let mut position = 0;
 
         for (field_name, _field, keywords) in self.iter_fields(cls, dataclass, true) {
             if !keywords.init {
@@ -615,37 +601,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
 
             let constraint = PydanticRangeConstraints::from_keywords(&keywords);
-            let constraint_template = constraint.as_ref().map(|c| PydanticParamConstraint {
+
+            if let Some(info) = constraint.as_ref().map(|c| PydanticParamConstraint {
                 field_name: field_name.clone(),
                 constraints: c.clone(),
-            });
-
-            if keywords.init_by_name && !keywords.is_kw_only() {
-                positional_slots.push(constraint_template.as_ref().map(|_| field_name.clone()));
-            } else if keywords.init_by_name {
-                // kw-only parameter with no positional slot
-            }
-
-            if let Some(alias) = &keywords.init_by_alias
-                && !keywords.is_kw_only()
-            {
-                positional_slots.push(constraint_template.as_ref().map(|_| alias.clone()));
-            }
-
-            if let Some(info) = constraint_template {
+            }) {
                 if keywords.init_by_name {
-                    constraints.insert(field_name.clone(), info.clone());
+                    constraints.insert(PydanticParamKey::Name(field_name.clone()), info.clone());
                 }
                 if let Some(alias) = &keywords.init_by_alias {
-                    constraints.insert(alias.clone(), info.clone());
+                    constraints.insert(PydanticParamKey::Name(alias.clone()), info.clone());
                 }
+            }
+
+            if keywords.init_by_name && !keywords.is_kw_only() {
+                if let Some(info) = constraint.as_ref() {
+                    constraints.insert(
+                        PydanticParamKey::Position(position),
+                        PydanticParamConstraint {
+                            field_name: field_name.clone(),
+                            constraints: info.clone(),
+                        },
+                    );
+                }
+                position += 1;
+            }
+
+            if let Some(_alias) = &keywords.init_by_alias
+                && !keywords.is_kw_only()
+            {
+                if let Some(info) = constraint.as_ref() {
+                    constraints.insert(
+                        PydanticParamKey::Position(position),
+                        PydanticParamConstraint {
+                            field_name: field_name.clone(),
+                            constraints: info.clone(),
+                        },
+                    );
+                }
+                position += 1;
             }
         }
 
         if constraints.is_empty() {
             None
         } else {
-            Some((positional_slots, constraints))
+            Some(constraints)
         }
     }
 
