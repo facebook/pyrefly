@@ -1278,16 +1278,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         ty.transform(&mut |ty| match ty {
             Type::SpecialForm(SpecialForm::Tuple) => {
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    vec1![
+                        "Cannot determine the type parameter for generic class `tuple`".to_owned(),
+                        "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),
+                    ],
+                );
                 *ty = Type::unbounded_tuple(Type::Any(AnyStyle::Implicit));
             }
             Type::SpecialForm(SpecialForm::Callable) => {
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    vec1![
+                        "Cannot determine the type parameter for generic class `Callable`".to_owned(),
+                        "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),
+                    ],
+                );
                 *ty = Type::callable_ellipsis(Type::Any(AnyStyle::Implicit))
             }
             Type::SpecialForm(SpecialForm::Type) => {
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    vec1![
+                        "Cannot determine the type parameter for generic class `type`".to_owned(),
+                        "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),
+                    ],
+                );
                 *ty = Type::type_form(Type::Any(AnyStyle::Implicit))
             }
             Type::ClassDef(cls) => {
                 if cls.is_builtin("tuple") {
+                    errors.add(
+                        range,
+                        ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                        vec1![
+                            "Cannot determine the type parameter for generic class `tuple`".to_owned(),
+                            "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),
+                        ],
+                    );
                     *ty = Type::type_form(Type::unbounded_tuple(Type::Any(AnyStyle::Implicit)));
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = Type::type_form(Type::any_explicit())
