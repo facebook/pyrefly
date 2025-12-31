@@ -414,34 +414,24 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             return Ok(());
         }
 
-        // For class-level coinductive reasoning: if the `got` type's type arguments
-        // contain Vars, we're likely in a recursive pattern (e.g., checking method return
-        // types that reference the same classes). Use (Class, Class) matching to detect
-        // cycles that would otherwise be missed due to fresh Var creation.
-        let class_check = if let Type::ClassType(got_class) = &got {
-            // Check if any targ contains a Var (indicating we're in recursive pattern)
-            let mut contains_var = false;
-            for targ in got_class.targs().as_slice() {
-                targ.universe(&mut |t| contains_var |= matches!(t, Type::Var(_)));
-                if contains_var {
-                    break;
-                }
+        // For class-level coinductive reasoning: when we're in a nested protocol check
+        // (recursive_assumptions.len() > 1), track (got_class, protocol_class) pairs to
+        // detect cycles that would otherwise be missed due to fresh Var creation when
+        // checking Forall types against protocols. We only do this for nested checks
+        // because the top-level check doesn't have fresh Vars yet.
+        let class_check = if self.recursive_assumptions.len() > 1
+            && let Type::ClassType(got_class) = &got
+        {
+            let key = (
+                got_class.class_object().clone(),
+                protocol.class_object().clone(),
+            );
+            if !self.class_protocol_assumptions.insert(key.clone()) {
+                // Coinductive: assume this recursive class-level check succeeds
+                self.recursive_assumptions.shift_remove(&recursive_check);
+                return Ok(());
             }
-
-            if contains_var {
-                let key = (
-                    got_class.class_object().clone(),
-                    protocol.class_object().clone(),
-                );
-                if !self.class_protocol_assumptions.insert(key.clone()) {
-                    // Coinductive: assume this recursive class-level check succeeds
-                    self.recursive_assumptions.shift_remove(&recursive_check);
-                    return Ok(());
-                }
-                Some(key)
-            } else {
-                None
-            }
+            Some(key)
         } else {
             None
         };
