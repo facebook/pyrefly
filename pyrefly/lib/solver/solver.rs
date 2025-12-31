@@ -1434,6 +1434,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         let name = q.name.clone();
                         let bound = q.restriction().as_type(self.type_order.stdlib());
                         drop(v1_ref);
+                        drop(variables);
+                        // When checking `$T <: t2` where `$T` has bound `B`:
+                        // If `B <: t2`, then any value of `$T` (which is a subtype of `B`)
+                        // is also a subtype of `t2`, so the constraint is satisfied.
+                        // This handles cases like `$T: int` vs `Any | SomeType` where
+                        // the bound `int` is a subtype of the target type.
+                        if self.is_subset_eq(&bound, t2).is_ok() {
+                            return Ok(());
+                        }
+                        let variables = self.solver.variables.lock();
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         drop(variables);
                         if let Err(e) = self.is_subset_eq(t2, &bound) {

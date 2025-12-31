@@ -1164,3 +1164,32 @@ class A:
 assert_type(f(), int)
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1960
+// When a class with bounded type parameters is used as a constructor
+// and the __init__ parameter type is a union involving the type parameter,
+// the bound check should pass when the bound is assignable to the expected type.
+testcase!(
+    test_callable_constructor_bounded_typevar_with_union_param,
+    r#"
+from collections.abc import Callable
+
+
+class Box[U]:
+    pass
+
+
+class Result[T: int]:
+    def __init__(self, x: T | Box[T]) -> None:
+        pass
+
+
+def f[T: int](factory: Callable[[T], Result[T]]) -> None:
+    pass
+
+
+# This should not error - Result's constructor satisfies the Callable constraint
+# because Result.__init__ takes (T | Box[T]) which is a supertype of T
+f(factory=Result)
+"#,
+);
