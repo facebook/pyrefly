@@ -192,30 +192,43 @@ impl<'a> super::Transaction<'a> {
         let nodes = Ast::locate_node(module, position);
         let mut best: Option<(u8, TextSize, ExprDict, ExprStringLiteral)> = None;
         for node in nodes {
-            if let AnyNodeRef::ExprDict(dict) = node {
-                for item in &dict.items {
-                    let Some(key_expr) = item.key.as_ref() else {
-                        continue;
-                    };
-                    if let Expr::StringLiteral(literal) = key_expr {
-                        let (priority, dist) =
-                            Self::string_literal_priority(position, literal.range());
-                        let should_update = match &best {
-                            Some((best_prio, best_dist, _, _)) => {
-                                priority < *best_prio
-                                    || (priority == *best_prio && dist < *best_dist)
-                            }
-                            None => true,
-                        };
-                        if should_update {
-                            best = Some((priority, dist, dict.clone(), literal.clone()));
-                            if priority == 0 && dist == TextSize::from(0) {
-                                break;
-                            }
-                        }
+            let AnyNodeRef::ExprDict(dict) = node else {
+                continue;
+            };
+            let mut best_in_dict: Option<(u8, TextSize, ExprStringLiteral)> = None;
+            for item in &dict.items {
+                let Some(key_expr) = item.key.as_ref() else {
+                    continue;
+                };
+                let Expr::StringLiteral(literal) = key_expr else {
+                    continue;
+                };
+                let (priority, dist) = Self::string_literal_priority(position, literal.range());
+                let should_update = match &best_in_dict {
+                    Some((best_prio, best_dist, _)) => {
+                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                    }
+                    None => true,
+                };
+                if should_update {
+                    best_in_dict = Some((priority, dist, literal.clone()));
+                    if priority == 0 && dist == TextSize::from(0) {
+                        break;
                     }
                 }
-                if matches!(best, Some((0, dist, _, _)) if dist == TextSize::from(0)) {
+            }
+            let Some((priority, dist, literal)) = best_in_dict else {
+                continue;
+            };
+            let should_update = match &best {
+                Some((best_prio, best_dist, _, _)) => {
+                    priority < *best_prio || (priority == *best_prio && dist < *best_dist)
+                }
+                None => true,
+            };
+            if should_update {
+                best = Some((priority, dist, dict.clone(), literal));
+                if priority == 0 && dist == TextSize::from(0) {
                     break;
                 }
             }
@@ -282,7 +295,7 @@ impl<'a> super::Transaction<'a> {
         })
     }
 
-    fn add_dict_key_completions(
+    pub(super) fn add_dict_key_completions(
         &self,
         handle: &Handle,
         module: &ModModule,
