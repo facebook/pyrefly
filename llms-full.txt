@@ -2917,6 +2917,32 @@ for val in x:  # not-iterable
   ...
 ```
 
+## not-required-key-access
+
+This warning indicates that a [`TypedDict`](https://typing.python.org/en/latest/spec/typeddict.html)
+key marked `NotRequired` (or inherited from a `total=False` TypedDict) is being accessed without
+first ensuring that the key is present. Even if the value type is non-optional, the key itself may
+not exist at runtime, so Pyrefly encourages guarding the access with an `in` check or a `.get()`
+call.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+from typing import NotRequired, TypedDict
+
+class Movie(TypedDict):
+    title: str
+    year: NotRequired[int]
+
+def describe(movie: Movie) -> int:
+    return movie["year"]  # not-required-key-access
+
+def safe_describe(movie: Movie) -> int:
+    if "year" in movie:
+        return movie["year"]  # OK: key presence established
+    raise ValueError("Missing year")
+```
+
 ## open-unpacking
 
 This error is reported on an attempt to unpack an
