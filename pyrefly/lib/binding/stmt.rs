@@ -977,7 +977,13 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     match x.asname {
                         Some(asname) => {
-                            self.scopes.register_import(&asname);
+                            // `import X as X` is an explicit re-export per Python typing spec.
+                            // Don't flag it as unused.
+                            if asname.id == x.name.id {
+                                self.scopes.register_reexport_import(&asname);
+                            } else {
+                                self.scopes.register_import(&asname);
+                            }
                             self.bind_definition(
                                 &asname,
                                 Binding::Module(m, m.components(), None),
@@ -1156,6 +1162,9 @@ impl<'a> BindingsBuilder<'a> {
                     );
                 }
             } else {
+                // `from X import Y as Y` is an explicit re-export per Python typing spec.
+                // Check this before consuming x.asname.
+                let is_reexport = x.asname.as_ref().is_some_and(|a| a.id == x.name.id);
                 let original_name_range = if x.asname.is_some() {
                     Some(x.name.range)
                 } else {
@@ -1205,8 +1214,11 @@ impl<'a> BindingsBuilder<'a> {
                 };
                 // __future__ imports have side effects even if not explicitly used,
                 // so we skip the unused import check for them.
+                // See: https://typing.python.org/en/latest/spec/distributing.html#import-conventions
                 if m == ModuleName::future() {
                     self.scopes.register_future_import(&asname);
+                } else if is_reexport {
+                    self.scopes.register_reexport_import(&asname);
                 } else {
                     self.scopes.register_import(&asname);
                 }

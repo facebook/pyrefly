@@ -1827,6 +1827,14 @@ impl Scopes {
         self.register_import_internal(name, true);
     }
 
+    /// Register an import that uses the `X as X` pattern (e.g., `import os as os`
+    /// or `from math import tau as tau`). Per the Python typing spec, this is an
+    /// explicit re-export and should not be flagged as unused.
+    /// See: https://typing.python.org/en/latest/spec/distributing.html#import-conventions
+    pub fn register_reexport_import(&mut self, name: &Identifier) {
+        self.register_import_internal(name, true);
+    }
+
     fn register_import_internal(&mut self, name: &Identifier, skip_unused_check: bool) {
         if matches!(self.current().kind, ScopeKind::Module) {
             self.current_mut().imports.insert(
