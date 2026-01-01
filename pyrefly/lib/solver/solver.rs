@@ -1440,7 +1440,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         // is also a subtype of `t2`, so the constraint is satisfied.
                         // This handles cases like `$T: int` vs `Any | SomeType` where
                         // the bound `int` is a subtype of the target type.
+                        // We set the variable to the bound to ensure it gets resolved.
                         if self.is_subset_eq(&bound, t2).is_ok() {
+                            let variables = self.solver.variables.lock();
+                            variables.update(*v1, Variable::Answer(bound));
                             return Ok(());
                         }
                         let variables = self.solver.variables.lock();
