@@ -2510,9 +2510,11 @@ impl<'a> BindingsBuilder<'a> {
         let mut flow_infos = merge_item.branches;
         // Track the number of branch values before adding base (for LoopDefinitelyRuns)
         let n_branch_flow_infos = flow_infos.len();
-        // Track if base has a value for this name (for LoopDefinitelyRuns init check)
-        let base_has_value = merge_item.base.as_ref().is_some_and(|b| b.value.is_some());
-        let base_has_name = merge_item.base.is_some();
+        // Track if base has a binding for this name (value or narrow) for loop init checks.
+        let base_has_binding = merge_item
+            .base
+            .as_ref()
+            .is_some_and(|base| base.value.is_some() || base.narrow.is_some());
         // If this is a loop, we want to use the current default in any phis we produce,
         // and the base flow is part of the merge for type inference purposes.
         let loop_prior = if merge_style.is_loop()
@@ -2567,17 +2569,27 @@ impl<'a> BindingsBuilder<'a> {
             }
             branch_idxs.insert(branch_idx);
         }
-        // For LoopDefinitelyRuns, a name is always defined if:
-        // - It was defined before the loop (base_has_value), OR
-        // - It's defined in all loop body branches (since the loop definitely runs at least once)
-        // For regular loops and other merges, a name is always defined if it's in all branches.
         let is_name_exists_in_all_branch_flow = match merge_style {
             MergeStyle::Loop => n_branch_flow_infos == n_branches.saturating_sub(1),
             _ => n_branch_flow_infos == n_branches,
         };
+        let has_uninitialized_style = styles.iter().any(|style| {
+            matches!(
+                style,
+                FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized
+            )
+        });
+        // For LoopDefinitelyRuns, a name is always defined if:
+        // - It was defined before the loop (base_has_binding), OR
+        // - It's defined in all loop body branches (since the loop definitely runs at least once).
+        // For Loop, the name must exist in the base flow and in all loop body branches.
+        // For BoolOp, avoid propagating uninitialized styles across the merge.
+        // For other merges, a name is always defined if it appears in every branch flow.
         let this_name_always_defined = match merge_style {
-            MergeStyle::Loop => base_has_name && is_name_exists_in_all_branch_flow,
-            MergeStyle::LoopDefinitelyRuns => base_has_value || is_name_exists_in_all_branch_flow,
+            MergeStyle::Loop => base_has_binding && is_name_exists_in_all_branch_flow,
+            MergeStyle::LoopDefinitelyRuns => base_has_binding || is_name_exists_in_all_branch_flow,
+            MergeStyle::BoolOp if has_uninitialized_style => false,
+            MergeStyle::BoolOp => false,
             _ => is_name_exists_in_all_branch_flow,
         };
         match value_idxs.len() {
