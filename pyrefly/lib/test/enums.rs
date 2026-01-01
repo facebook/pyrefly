@@ -45,7 +45,7 @@ class MyEnum(Enum):
 
 assert_type(MyEnum.X, Literal[MyEnum.X])
 assert_type(MyEnum["X"], Literal[MyEnum.X])
-assert_type(MyEnum.__PRIVATE, int)
+assert_type(MyEnum.__PRIVATE, int)  # E: Class `MyEnum` has no class attribute `__PRIVATE` [missing-attribute]
 assert_type(MyEnum.X.name, Literal["X"])
 assert_type(MyEnum.X._name_, Literal["X"])
 assert_type(MyEnum.X.value, int)
