@@ -1743,6 +1743,28 @@ class AndFilter(Filter):
 );
 
 testcase!(
+    test_private_attr_in_unittest_testcase,
+    r#"
+from __future__ import annotations
+import copy
+import typing
+from unittest import TestCase
+
+class FilterTest(TestCase):
+    __filters: list[int] = []
+
+    def setUp(self) -> None:
+        self.__filters = []
+
+    def test_deepcopy(self) -> None:
+        other = typing.cast(FilterTest, copy.deepcopy(self))
+        self.__filters.append(len(other.__filters))
+        other.__filters.append(1)
+        FilterTest.__filters.append(2)
+    "#,
+);
+
+testcase!(
     test_crtp_example, // CRTP = Curiously recurring template pattern
     r#"
 from typing import Any, assert_type

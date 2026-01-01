@@ -54,8 +54,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ret = if args.len() == 2 {
             let expr_a = &args[0];
             let expr_b = &args[1];
-            let a = self.expr_infer_with_hint(expr_a, hint, errors);
-            let b = self.expr_untype(expr_b, TypeFormContext::FunctionArgument, errors);
+            let a_raw = self.expr_infer_with_hint(expr_a, hint, errors);
+            let b_raw = self.expr_untype(expr_b, TypeFormContext::FunctionArgument, errors);
+            let skip_assert = a_raw.is_error() || b_raw.is_error();
             let self_form = Type::SpecialForm(SpecialForm::SelfType);
             let normalize_type = |ty: Type, expr: &Expr| {
                 let mut ty = self
@@ -76,21 +77,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Make sure to keep this as the final step before comparison.
                 ty.sort_unions_and_drop_names()
             };
-            let a = normalize_type(a, expr_a);
-            let b = normalize_type(b, expr_b);
-            if a != b {
-                self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::AssertType),
-                    format!(
-                        "assert_type({}, {}) failed",
-                        self.for_display(a.clone()),
-                        self.for_display(b)
-                    ),
-                );
+            let a = normalize_type(a_raw, expr_a);
+            let b = normalize_type(b_raw, expr_b);
+            if skip_assert {
+                a
+            } else {
+                if a != b {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::AssertType),
+                        format!(
+                            "assert_type({}, {}) failed",
+                            self.for_display(a.clone()),
+                            self.for_display(b)
+                        ),
+                    );
+                }
+                a
             }
-            a
         } else {
             self.error(
                 errors,
