@@ -444,7 +444,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 || ErrorContext::UnaryOp(x.op.as_str().to_owned(), self.for_display(t.clone()));
             match t {
                 Type::Literal(lit) if let Some(ret) = f(lit) => ret,
-                Type::ClassType(_) | Type::SelfType(_) => {
+                Type::ClassType(_) | Type::SelfType(_) | Type::Quantified(_) => {
                     self.call_method_or_error(t, method, x.range, &[], &[], errors, Some(&context))
                 }
                 Type::Literal(Lit::Enum(lit_enum)) => self.call_method_or_error(
