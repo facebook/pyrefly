@@ -539,22 +539,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         todo_ctx: &str,
     ) -> Type {
         let mut attr_base = self.as_attribute_base(base.clone());
-        let is_private_attr = Ast::is_mangled_attr(attr_name);
-        let private_context_holder = if is_private_attr {
-            self.bindings()
-                .private_attr_context(range)
-                .map(|(idx, class_name)| (self.get_idx(idx), class_name))
-        } else {
-            None
-        };
-        if let (Some(attr_base_mut), Some((context_holder, context_name))) =
-            (attr_base.as_mut(), private_context_holder.as_ref())
-        {
-            if let Some(context_class) = context_holder.as_ref().0.as_ref() {
-                self.extend_private_attr_bases_for_context(attr_base_mut, context_class);
-            } else {
-                self.extend_private_attr_bases_for_context_name(attr_base_mut, context_name);
-            }
+        if let Some(attr_base_mut) = attr_base.as_mut() {
+            self.extend_private_attr_base_if_needed(attr_base_mut, attr_name, range);
         }
         let lookup_result = attr_base.clone().map_or_else(
             || LookupResult::internal_error(InternalError::AttributeBaseUndefined(base.clone())),
@@ -596,6 +582,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 msg,
             );
             Type::any_error()
+        }
+    }
+
+    fn extend_private_attr_base_if_needed(
+        &self,
+        attr_base: &mut AttributeBase,
+        attr_name: &Name,
+        range: TextRange,
+    ) {
+        if !Ast::is_mangled_attr(attr_name) {
+            return;
+        }
+        if let Some((context_idx, class_name)) = self.bindings().private_attr_context(range) {
+            let context_holder = self.get_idx(context_idx);
+            if let Some(context_class) = context_holder.as_ref().0.as_ref() {
+                self.extend_private_attr_bases_for_context(attr_base, context_class);
+            } else {
+                self.extend_private_attr_bases_for_context_name(attr_base, &class_name);
+            }
         }
     }
 
@@ -964,7 +969,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // a type for narrowing.
         let mut should_narrow = true;
         let mut narrowed_types = Vec::new();
-        let Some(attr_base) = self.as_attribute_base(base.clone()) else {
+        let Some(mut attr_base) = self.as_attribute_base(base.clone()) else {
             self.error(
                 errors,
                 range,
@@ -974,6 +979,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             return None;
         };
+        self.extend_private_attr_base_if_needed(&mut attr_base, attr_name, range);
         let (lookup_found, lookup_not_found, lookup_error) = self
             .lookup_attr_from_base(attr_base.clone(), attr_name)
             .decompose();
@@ -1103,7 +1109,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) {
-        let Some(attr_base) = self.as_attribute_base(base.clone()) else {
+        let Some(mut attr_base) = self.as_attribute_base(base.clone()) else {
             self.error(
                 errors,
                 range,
@@ -1113,6 +1119,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             return;
         };
+        self.extend_private_attr_base_if_needed(&mut attr_base, attr_name, range);
         let (lookup_found, lookup_not_found, lookup_error) = self
             .lookup_attr_from_base(attr_base.clone(), attr_name)
             .decompose();

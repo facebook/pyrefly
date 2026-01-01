@@ -1720,6 +1720,29 @@ class C:
 );
 
 testcase!(
+    test_private_attr_reassignment_after_deepcopy,
+    r#"
+from __future__ import annotations
+import copy
+import typing
+
+class Filter:
+    def __deepcopy__(self, memo: typing.Dict[typing.Any, typing.Any]) -> Filter:
+        return self
+
+class AndFilter(Filter):
+    def __init__(self, filters: typing.Optional[typing.Sequence[Filter]] = None) -> None:
+        super().__init__()
+        self.__filters = copy.copy(filters) if filters else list()
+
+    def __deepcopy__(self, memo: typing.Dict[typing.Any, typing.Any]) -> AndFilter:
+        result = typing.cast(AndFilter, super().__deepcopy__(memo))
+        result.__filters = copy.deepcopy(self.__filters, memo)
+        return result
+    "#,
+);
+
+testcase!(
     test_crtp_example, // CRTP = Curiously recurring template pattern
     r#"
 from typing import Any, assert_type
