@@ -436,6 +436,11 @@ pub struct Flow {
     // We continue to analyze the rest of the code after a flow terminates, but
     // we don't include terminated flows when merging after loops and branches.
     has_terminated: bool,
+    // This flag is set in a subset of cases when has_terminated is set; it's more conservative so it can be used for error reporting.
+    // The key differences are as follows:
+    // - Static tests based on stuff like sys.version_info don't exclude branches at runtime, since the program may execute in different environments
+    // - With-blocks may swallow exceptions, so we cannot guarantee that future blocks are definitely unreachable
+    is_definitely_unreachable: bool,
 }
 
 impl Flow {
@@ -778,11 +783,12 @@ fn is_test_setup_method(method_name: &Name) -> bool {
 }
 
 /// Things we collect from inside a function
+/// The boolean flag is set when we know for sure the statement is definitely unreachable.
 #[derive(Default, Clone, Debug)]
 pub struct YieldsAndReturns {
-    pub returns: Vec<(Idx<Key>, StmtReturn)>,
-    pub yields: Vec<(Idx<KeyYield>, ExprYield)>,
-    pub yield_froms: Vec<(Idx<KeyYieldFrom>, ExprYieldFrom)>,
+    pub returns: Vec<(Idx<Key>, StmtReturn, bool)>,
+    pub yields: Vec<(Idx<KeyYield>, ExprYield, bool)>,
+    pub yield_froms: Vec<(Idx<KeyYieldFrom>, ExprYieldFrom, bool)>,
 }
 
 #[derive(Clone, Debug)]
@@ -980,6 +986,8 @@ pub struct Scope {
     variables: SmallMap<Name, VariableUsage>,
     /// Depth of finally blocks we're in. Resets in new function scopes (PEP 765).
     finally_depth: usize,
+    /// Depth of with blocks we're in. Resets in new function scopes.
+    with_depth: usize,
 }
 
 impl Scope {
@@ -995,6 +1003,7 @@ impl Scope {
             imports: SmallMap::new(),
             variables: SmallMap::new(),
             finally_depth: 0,
+            with_depth: 0,
         }
     }
 
@@ -1162,6 +1171,16 @@ impl Scopes {
     pub fn in_function_scope(&self) -> bool {
         self.iter_rev()
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
+    }
+
+    /// Enter a with block.
+    pub fn enter_with(&mut self) {
+        self.current_mut().with_depth += 1;
+    }
+
+    /// Exit a with block.
+    pub fn exit_with(&mut self) {
+        self.current_mut().with_depth -= 1;
     }
 
     /// Enter a finally block (PEP 765).
@@ -1540,6 +1559,11 @@ impl Scopes {
         matches!(self.current().kind, ScopeKind::Comprehension { .. })
     }
 
+    /// Check if we're currently in a type alias scope.
+    pub fn in_type_alias(&self) -> bool {
+        matches!(self.current().kind, ScopeKind::TypeAlias)
+    }
+
     /// Check if we're in a synchronous comprehension.
     /// A comprehension is synchronous unless we're in an async function.
     pub fn in_sync_comprehension(&self) -> bool {
@@ -1803,6 +1827,14 @@ impl Scopes {
         self.register_import_internal(name, true);
     }
 
+    /// Register an import that uses the `X as X` pattern (e.g., `import os as os`
+    /// or `from math import tau as tau`). Per the Python typing spec, this is an
+    /// explicit re-export and should not be flagged as unused.
+    /// See: https://typing.python.org/en/latest/spec/distributing.html#import-conventions
+    pub fn register_reexport_import(&mut self, name: &Identifier) {
+        self.register_import_internal(name, true);
+    }
+
     fn register_import_internal(&mut self, name: &Identifier, skip_unused_check: bool) {
         if matches!(self.current().kind, ScopeKind::Module) {
             self.current_mut().imports.insert(
@@ -1894,6 +1926,7 @@ impl Scopes {
         if let Some(innermost) = scope.loops.last_mut() {
             innermost.exits.push((exit, flow));
             scope.flow.has_terminated = true;
+            scope.flow.is_definitely_unreachable = true;
             true
         } else {
             false
@@ -1909,8 +1942,20 @@ impl Scopes {
         mem::swap(&mut self.current_mut().flow, flow);
     }
 
-    pub fn mark_flow_termination(&mut self) {
+    pub fn mark_flow_termination(&mut self, from_static_test: bool) {
         self.current_mut().flow.has_terminated = true;
+        if self.current_mut().with_depth == 0 && !from_static_test {
+            self.current_mut().flow.is_definitely_unreachable = true;
+        }
+    }
+
+    pub fn set_definitely_unreachable(&mut self, is_definitely_unreachable: bool) {
+        self.current_mut().flow.is_definitely_unreachable = is_definitely_unreachable;
+    }
+
+    /// Check if the current flow has definitely terminated (e.g., after a return, raise, break, or continue)
+    pub fn is_definitely_unreachable(&self) -> bool {
+        self.current().flow.is_definitely_unreachable
     }
 
     /// Whenever we enter the scope of a method *and* we see a matching
@@ -1966,10 +2011,13 @@ impl Scopes {
         &mut self,
         ret: CurrentIdx,
         x: StmtReturn,
+        is_unreachable: bool,
     ) -> Result<(), (CurrentIdx, StmtReturn)> {
         match self.current_yields_and_returns_mut() {
             Some(yields_and_returns) => {
-                yields_and_returns.returns.push((ret.into_idx(), x));
+                yields_and_returns
+                    .returns
+                    .push((ret.into_idx(), x, is_unreachable));
                 Ok(())
             }
             None => Err((ret, x)),
@@ -1983,10 +2031,11 @@ impl Scopes {
         &mut self,
         idx: Idx<KeyYield>,
         x: ExprYield,
+        is_unreachable: bool,
     ) -> Result<(), ExprYield> {
         match self.current_yields_and_returns_mut() {
             Some(yields_and_returns) => {
-                yields_and_returns.yields.push((idx, x));
+                yields_and_returns.yields.push((idx, x, is_unreachable));
                 Ok(())
             }
             None => Err(x),
@@ -2000,10 +2049,13 @@ impl Scopes {
         &mut self,
         idx: Idx<KeyYieldFrom>,
         x: ExprYieldFrom,
+        is_unreachable: bool,
     ) -> Result<(), ExprYieldFrom> {
         match self.current_yields_and_returns_mut() {
             Some(yields_and_returns) => {
-                yields_and_returns.yield_froms.push((idx, x));
+                yields_and_returns
+                    .yield_froms
+                    .push((idx, x, is_unreachable));
                 Ok(())
             }
             None => Err(x),
@@ -2677,6 +2729,7 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             live_branches
         };
+        let all_are_unreachable = flows.iter().all(|f| f.is_definitely_unreachable);
 
         // For a regular loop, we merge the base so there's one extra branch being merged.
         // For LoopDefinitelyRuns, we don't count the base as an extra branch because we
@@ -2713,6 +2766,7 @@ impl<'a> BindingsBuilder<'a> {
         let flow = Flow {
             info: merged_flow_infos,
             has_terminated,
+            is_definitely_unreachable: all_are_unreachable,
         };
         self.scopes.current_mut().flow = flow
     }

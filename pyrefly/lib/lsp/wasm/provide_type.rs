@@ -8,6 +8,7 @@
 //! Experimental LSP method that shows the type of something using fully-qualified names
 //! See https://github.com/facebook/pyrefly/issues/1181
 
+use dupe::Dupe;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::Position;
@@ -19,6 +20,7 @@ use pyrefly_types::display::TypeDisplayContext;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::state::require::Require;
 use crate::state::state::Transaction;
 
 #[derive(Debug)]
@@ -43,10 +45,16 @@ pub struct ProvideTypeResponse {
 }
 
 pub fn provide_type(
-    transaction: &Transaction<'_>,
+    transaction: &mut Transaction<'_>,
     handle: &Handle,
     positions: Vec<Position>,
 ) -> Option<ProvideTypeResponse> {
+    // This LSP method works for unopened files.
+    // Check if the file is already loaded in memory. If not, load it.
+    let was_loaded = transaction.get_module_info(handle).is_some();
+    if !was_loaded {
+        transaction.run(&[handle.dupe()], Require::Everything);
+    }
     let info = transaction.get_module_info(handle)?;
     let mut contents = Vec::new();
 

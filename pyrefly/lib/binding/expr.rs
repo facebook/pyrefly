@@ -436,10 +436,10 @@ impl<'a> BindingsBuilder<'a> {
         // One example of this is in the standard library, in `_collections_abc.pyi`:
         // https://github.com/python/cpython/blob/965662ee4a986605b60da470d9e7c1e9a6f922b3/Lib/_collections_abc.py#L92
         let (yields_and_returns, _, _, _) = self.scopes.pop_function_scope();
-        for (idx, y) in yields_and_returns.yields {
+        for (idx, y, _) in yields_and_returns.yields {
             self.insert_binding_idx(idx, BindingYield::Invalid(y));
         }
-        for (idx, y) in yields_and_returns.yield_froms {
+        for (idx, y, _) in yields_and_returns.yield_froms {
             self.insert_binding_idx(idx, BindingYieldFrom::Invalid(y));
         }
     }
@@ -485,7 +485,10 @@ impl<'a> BindingsBuilder<'a> {
         let mut yield_link = self.declare_current_idx(Key::YieldLink(x.range));
         let idx = self.idx_for_promise(KeyYield(x.range));
         self.ensure_expr_opt(x.value.as_deref_mut(), yield_link.usage());
-        if let Err(oops_top_level) = self.scopes.record_or_reject_yield(idx, x) {
+        if let Err(oops_top_level) =
+            self.scopes
+                .record_or_reject_yield(idx, x, self.scopes.is_definitely_unreachable())
+        {
             self.insert_binding_idx(idx, BindingYield::Invalid(oops_top_level));
         }
         self.insert_binding_current(yield_link, Binding::UsageLink(LinkedKey::Yield(idx)));
@@ -495,7 +498,10 @@ impl<'a> BindingsBuilder<'a> {
         let mut yield_from_link = self.declare_current_idx(Key::YieldLink(x.range));
         let idx = self.idx_for_promise(KeyYieldFrom(x.range));
         self.ensure_expr(&mut x.value, yield_from_link.usage());
-        if let Err(oops_top_level) = self.scopes.record_or_reject_yield_from(idx, x) {
+        if let Err(oops_top_level) =
+            self.scopes
+                .record_or_reject_yield_from(idx, x, self.scopes.is_definitely_unreachable())
+        {
             self.insert_binding_idx(idx, BindingYieldFrom::Invalid(oops_top_level));
         }
         self.insert_binding_current(
@@ -759,7 +765,7 @@ impl<'a> BindingsBuilder<'a> {
             {
                 x.recurse_mut(&mut |x| self.ensure_expr(x, usage));
                 // Control flow doesn't proceed after sys.exit(), exit(), quit(), or os._exit().
-                self.scopes.mark_flow_termination();
+                self.scopes.mark_flow_termination(false);
             }
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
@@ -863,7 +869,17 @@ impl<'a> BindingsBuilder<'a> {
             // binding that we crash looking for if we don't do this.
             Expr::Call(_) => self.ensure_expr(x, static_type_usage),
             // Bind walrus so we don't crash when looking up the assigned name later.
-            Expr::Named(_) => self.ensure_expr(x, static_type_usage),
+            // Named expressions are not allowed inside type aliases (PEP 695).
+            Expr::Named(named) => {
+                if self.scopes.in_type_alias() {
+                    self.error(
+                        named.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "Named expression cannot be used within a type alias".to_owned(),
+                    );
+                }
+                self.ensure_expr(x, static_type_usage);
+            }
             // Bind yield and yield from so we don't crash when checking return type later.
             Expr::Yield(_) => {
                 self.ensure_expr(x, static_type_usage);

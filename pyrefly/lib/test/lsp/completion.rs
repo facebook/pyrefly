@@ -270,6 +270,69 @@ Completion Results:
 }
 
 #[test]
+fn dict_key_completion_from_typed_dict_get() {
+    let code = r#"
+from typing import TypedDict
+
+class Dimension(TypedDict):
+    x: int
+    y: int
+    z: int
+
+dim: Dimension
+dim.get("")
+#        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.contains(
+            r#"
+Completion Results:
+- (Field) x: int
+- (Field) y: int
+- (Field) z: int
+"#
+            .trim()
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn dict_key_completion_from_typed_dict_get_keyword() {
+    let code = r#"
+from typing import TypedDict
+
+class Dimension(TypedDict):
+    x: int
+    y: int
+    z: int
+
+dim: Dimension
+dim.get(key="")
+#             ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.contains(
+            r#"
+Completion Results:
+- (Value) 'x': Literal['x'] inserting `x`
+- (Field) x: int
+- (Field) y: int
+- (Field) z: int
+"#
+            .trim()
+        ),
+        "{report}"
+    );
+}
+
+#[test]
 fn dot_complete_with_deprecated_method() {
     let code = r#"
 from warnings import deprecated

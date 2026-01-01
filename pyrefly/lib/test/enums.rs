@@ -430,7 +430,7 @@ testcase!(
     test_magic_enum_attr_3_10,
     TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
     r#"
-from typing_extensions import assert_type
+from typing_extensions import assert_type, Any
 import enum
 class E(enum.Enum):
     _value_: int
@@ -439,7 +439,7 @@ class E(enum.Enum):
     @enum._magic_enum_attr
     def foo(self) -> str: ...
 e = E.E0
-assert_type(e.foo, str)
+assert_type(e.foo, Any)
     "#,
 );
 
@@ -447,7 +447,7 @@ testcase!(
     test_magic_enum_attr_3_11,
     TestEnv::new_with_version(PythonVersion::new(3, 11, 0)),
     r#"
-from typing_extensions import assert_type, Any
+from typing_extensions import assert_type
 import enum
 class E(enum.Enum):
     _value_: int

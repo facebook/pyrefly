@@ -971,6 +971,20 @@ impl Type {
         }
     }
 
+    pub fn contains_type_variable(&self) -> bool {
+        match self {
+            // In `A[X]`, the only part we need to check for type variables is `X`.
+            Self::ClassType(cls) => cls
+                .targs()
+                .as_slice()
+                .iter()
+                .any(|t| t.contains_type_variable()),
+            Self::Union(x) => x.members.iter().any(|t| t.contains_type_variable()),
+            Self::Intersect(x) => x.0.iter().any(|t| t.contains_type_variable()),
+            _ => self.any(Type::is_type_variable),
+        }
+    }
+
     pub fn is_kind_param_spec(&self) -> bool {
         match self {
             Type::Ellipsis

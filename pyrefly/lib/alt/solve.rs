@@ -652,8 +652,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 let mut ann = self.expr_annotation(&unpacked_slice[0], type_form_context, errors);
-                if qualifier == Qualifier::ClassVar && ann.get_type().any(|x| x.is_type_variable())
-                {
+                if qualifier == Qualifier::ClassVar && ann.get_type().contains_type_variable() {
                     self.error(
                         errors,
                         unpacked_slice[0].range(),
@@ -1458,6 +1457,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn collect_unseen_type_params(ty: &Type, seen: &SmallSet<Name>, unseen: &mut Vec<Name>) {
+        match ty {
+            Type::ClassType(cls) => {
+                // In `A[X]`, `X` is the only part we need to check for type params.
+                for t in cls.targs().as_slice() {
+                    Self::collect_unseen_type_params(t, seen, unseen);
+                }
+            }
+            Type::Union(x) => {
+                for t in x.members.iter() {
+                    Self::collect_unseen_type_params(t, seen, unseen);
+                }
+            }
+            Type::Intersect(x) => {
+                for t in x.0.iter() {
+                    Self::collect_unseen_type_params(t, seen, unseen);
+                }
+            }
+            _ => ty.universe(&mut |t| {
+                let name = match t {
+                    Type::TypeVar(t) => t.qname().id(),
+                    Type::TypeVarTuple(t) => t.qname().id(),
+                    Type::ParamSpec(p) => p.qname().id(),
+                    _ => return,
+                };
+                if !seen.contains(name) {
+                    unseen.push(name.clone());
+                }
+            }),
+        }
+    }
+
     fn validate_type_params(
         &self,
         range: TextRange,
@@ -1489,17 +1520,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if let Some(default) = tparam.quantified.default() {
                 let mut out_of_scope_names = Vec::new();
-                default.universe(&mut |t| {
-                    let name = match t {
-                        Type::TypeVar(t) => t.qname().id(),
-                        Type::TypeVarTuple(t) => t.qname().id(),
-                        Type::ParamSpec(p) => p.qname().id(),
-                        _ => return,
-                    };
-                    if !seen.contains(name) {
-                        out_of_scope_names.push(name);
-                    }
-                });
+                Self::collect_unseen_type_params(default, &seen, &mut out_of_scope_names);
                 if !out_of_scope_names.is_empty() {
                     self.error(errors, range, ErrorInfo::Kind(ErrorKind::InvalidTypeVar), format!(
                         "Default of type parameter `{}` refers to out-of-scope type parameter{} {}",
@@ -2799,7 +2820,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                             e.range(),
                             ErrorInfo::Kind(ErrorKind::BadAssignment),
-                            "Assignment target is marked final".to_owned(),
+                            format!(
+                                "Cannot assign to {} because it is marked final",
+                                annot.target
+                            ),
                         );
                     }
                     self.expr(e, annot.ty(self.stdlib).as_ref().map(|t| (t, tcc)), errors)
@@ -2836,7 +2860,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                             *range,
                             ErrorInfo::Kind(ErrorKind::BadAssignment),
-                            "Assignment target is marked final".to_owned(),
+                            format!(
+                                "Cannot assign to {} because it is marked final",
+                                annot.target
+                            ),
                         );
                     }
                     if let Some(annot_ty) = annot.ty(self.stdlib)
@@ -2982,6 +3009,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Some(annot.annotation.qualifiers.contains(&Qualifier::TypeAlias)),
                             ty,
                         )
+                    }
+                    None if matches!(&**expr, Expr::EllipsisLiteral(_))
+                        && self.module().path().is_interface() =>
+                    {
+                        // `x = ...` in a stub file means that the type of `x` is unknown
+                        (None, Type::any_implicit())
                     }
                     None => (None, self.expr(expr, None, errors)),
                 };
@@ -3193,8 +3226,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::ReturnExplicit(x) => {
                 let annot = x.annot.map(|k| self.get_idx(k));
                 let hint = annot.as_ref().and_then(|ann| ann.ty(self.stdlib));
-
-                if x.is_async && x.is_generator {
+                if x.is_unreachable {
+                    if let Some(box expr) = &x.expr {
+                        self.expr_infer(expr, errors);
+                    }
+                    self.error(
+                        errors,
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::Unreachable),
+                        "This `return` statement is unreachable".to_owned(),
+                    )
+                } else if x.is_async && x.is_generator {
                     if let Some(box expr) = &x.expr {
                         self.expr_infer(expr, errors);
                         self.error(
@@ -3732,6 +3774,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 Arc::new(YieldResult::any_error())
             }
+            BindingYield::Unreachable(x) => {
+                if let Some(expr) = x.value.as_ref() {
+                    self.expr_infer(expr, errors);
+                }
+                self.error(
+                    errors,
+                    x.range,
+                    ErrorInfo::Kind(ErrorKind::Unreachable),
+                    "This `yield` expression is unreachable".to_owned(),
+                );
+                Arc::new(YieldResult::any_error())
+            }
         }
     }
 
@@ -3806,6 +3860,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     x.range,
                     ErrorInfo::Kind(ErrorKind::InvalidYield),
                     "Invalid `yield from` outside of a function".to_owned(),
+                );
+                Arc::new(YieldFromResult::any_error())
+            }
+            BindingYieldFrom::Unreachable(x) => {
+                self.expr_infer(&x.value, errors);
+                self.error(
+                    errors,
+                    x.range,
+                    ErrorInfo::Kind(ErrorKind::Unreachable),
+                    "This `yield from` expression is unreachable".to_owned(),
                 );
                 Arc::new(YieldFromResult::any_error())
             }
@@ -4080,8 +4144,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
-        if type_form_context == TypeFormContext::TypeVarConstraint && ty.any(Type::is_type_variable)
-        {
+        if type_form_context == TypeFormContext::TypeVarConstraint && ty.contains_type_variable() {
             return self.error(
                 errors,
                 range,

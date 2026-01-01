@@ -2189,10 +2189,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::TypedDict(typed_dict) => {
                     let key_ty = self.expr_infer(slice, errors);
+                    // Don't warn on anonymous typed dicts
+                    let warn_on_not_required_access = matches!(typed_dict, TypedDict::TypedDict(_));
                     self.distribute_over_union(&key_ty, |ty| match ty {
                         Type::Literal(Lit::Str(field_name)) => {
                             let fields = self.typed_dict_fields(&typed_dict);
-                            if let Some(field) = fields.get(&Name::new(field_name)) {
+                            let key_name = Name::new(field_name);
+                            if let Some(field) = fields.get(&key_name) {
+                                if warn_on_not_required_access && !field.required {
+                                    errors.add(
+                                        slice.range(),
+                                        ErrorInfo::Kind(ErrorKind::NotRequiredKeyAccess),
+                                        vec1![format!(
+                                            "TypedDict key `{}` may be absent",
+                                            key_name
+                                        ),
+                                        format!(
+                                            "Hint: guard this access with `'{}' in obj` or `obj.get('{}')`",
+                                            key_name, key_name
+                                        )],
+                                    );
+                                }
                                 field.ty.clone()
                             } else if let ExtraItems::Extra(extra) =
                                 self.typed_dict_extra_items(&typed_dict)
@@ -2205,7 +2222,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     field_name
                                 )];
                                 if let Some(suggestion) = best_suggestion(
-                                    &Name::new(field_name),
+                                    &key_name,
                                     fields.keys().map(|candidate| (candidate, 0usize)),
                                 ) {
                                     msg.push(format!("Did you mean `{suggestion}`?"));

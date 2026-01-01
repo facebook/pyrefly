@@ -74,6 +74,11 @@ pub enum AtomicNarrowOp {
     TypeNotEq(Expr),
     In(Expr),
     NotIn(Expr),
+    /// Unlike `In`, which models `<value> in <container>`, this tracks a `'key' in <subject>`
+    /// guard where `<subject>` is the dict-like name/facet being narrowed.
+    HasKey(Name),
+    /// The negated version of `HasKey`, representing `'key' not in <subject>`.
+    NotHasKey(Name),
     /// Used to narrow tuple types based on length
     LenEq(Expr),
     LenNotEq(Expr),
@@ -151,6 +156,8 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::TypeNotEq(expr) => write!(f, "TypeNotEq({})", expr.display_with(ctx)),
             AtomicNarrowOp::In(expr) => write!(f, "In({})", expr.display_with(ctx)),
             AtomicNarrowOp::NotIn(expr) => write!(f, "NotIn({})", expr.display_with(ctx)),
+            AtomicNarrowOp::HasKey(key) => write!(f, "HasKey({key})"),
+            AtomicNarrowOp::NotHasKey(key) => write!(f, "NotHasKey({key})"),
             AtomicNarrowOp::LenEq(expr) => write!(f, "LenEq({})", expr.display_with(ctx)),
             AtomicNarrowOp::LenNotEq(expr) => write!(f, "LenNotEq({})", expr.display_with(ctx)),
             AtomicNarrowOp::LenGt(expr) => write!(f, "LenGt({})", expr.display_with(ctx)),
@@ -218,6 +225,8 @@ impl AtomicNarrowOp {
             Self::NotEq(v) => Self::Eq(v.clone()),
             Self::In(v) => Self::NotIn(v.clone()),
             Self::NotIn(v) => Self::In(v.clone()),
+            Self::HasKey(k) => Self::NotHasKey(k.clone()),
+            Self::NotHasKey(k) => Self::HasKey(k.clone()),
             Self::LenEq(v) => Self::LenNotEq(v.clone()),
             Self::LenGt(v) => Self::LenLte(v.clone()),
             Self::LenGte(v) => Self::LenLt(v.clone()),
@@ -492,6 +501,12 @@ impl NarrowOps {
                         getattr_name = Some(Name::new(value.to_string()));
                     }
                 }
+                // This represents the LHS of whatever comparison operation we're currently on
+                // For `a <= b < c`, this will be `b` for `b < c`
+                let mut curr_left = left;
+                // Generated narrows normally apply to the leftmost expression of the comparison
+                // Narrows that affect other expressions are stored here
+                let mut rhs_narrows = Vec::new();
                 let mut ops = cmp_ops
                     .iter()
                     .zip(comparators)
@@ -535,20 +550,63 @@ impl NarrowOps {
                             }
                             (CmpOp::Eq, _) => AtomicNarrowOp::Eq(right.clone()),
                             (CmpOp::NotEq, _) => AtomicNarrowOp::NotEq(right.clone()),
-                            (CmpOp::In, None) => AtomicNarrowOp::In(right.clone()),
-                            (CmpOp::NotIn, None) => AtomicNarrowOp::NotIn(right.clone()),
+                            (CmpOp::In, None) => {
+                                if let Expr::StringLiteral(ExprStringLiteral {
+                                    value: key, ..
+                                }) = curr_left
+                                {
+                                    let rhs_narrow = NarrowOps::from_single_narrow_op(
+                                        right,
+                                        AtomicNarrowOp::HasKey(Name::new(key.to_string())),
+                                        range,
+                                    );
+                                    rhs_narrows.push(rhs_narrow);
+                                    return None;
+                                }
+                                AtomicNarrowOp::In(right.clone())
+                            }
+                            (CmpOp::NotIn, None) => {
+                                if let Expr::StringLiteral(ExprStringLiteral {
+                                    value: key, ..
+                                }) = curr_left
+                                {
+                                    let rhs_narrow = NarrowOps::from_single_narrow_op(
+                                        right,
+                                        AtomicNarrowOp::NotHasKey(Name::new(key.to_string())),
+                                        range,
+                                    );
+                                    rhs_narrows.push(rhs_narrow);
+                                    return None;
+                                }
+                                AtomicNarrowOp::NotIn(right.clone())
+                            }
                             _ => {
                                 return None;
                             }
                         };
+                        curr_left = right;
                         Some((op, range))
                     });
                 match ops.next() {
-                    None => Self::new(),
+                    None => {
+                        let mut rhs_narrows = rhs_narrows.iter();
+                        if let Some(first) = rhs_narrows.next() {
+                            let mut narrow_ops = first.clone();
+                            for rhs_narrow in rhs_narrows {
+                                narrow_ops.and_all(rhs_narrow.clone());
+                            }
+                            narrow_ops
+                        } else {
+                            Self::new()
+                        }
+                    }
                     Some((op, range)) => {
                         let mut narrow_ops = NarrowOps::from_single_narrow_op(left, op, range);
                         for (op, range) in ops {
                             narrow_ops.and_all(NarrowOps::from_single_narrow_op(left, op, range));
+                        }
+                        for rhs_narrow in rhs_narrows {
+                            narrow_ops.and_all(rhs_narrow);
                         }
                         narrow_ops
                     }

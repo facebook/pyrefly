@@ -250,14 +250,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let mut res = Vec::new();
-        for right in self.as_class_info(right.clone()) {
-            if let Some(left_untyped) = self.untype_opt(left.clone(), range, errors)
-                && let Some(right) = self.unwrap_class_object_silently(&right)
-            {
-                res.push(self.issubclass_result(
+
+        let narrow = |left: &Type, right| {
+            if let Some(left_untyped) = self.untype_opt(left.clone(), range, errors) {
+                self.issubclass_result(
                     self.intersect_with_fallback(&left_untyped, &right, &|| right.clone()),
                     left,
-                ))
+                )
+            } else {
+                left.clone()
+            }
+        };
+
+        for right in self.as_class_info(right.clone()) {
+            if let Some(right_unwrapped) = self.unwrap_class_object_silently(&right) {
+                // Handle type vars specially: we need to enforce restrictions and avoid
+                // simplifying them away.
+                let mut quantifieds = Vec::new();
+                let mut nonquantifieds = Vec::new();
+                self.map_over_union(left, |left| {
+                    if let Type::Quantified(q) = left {
+                        quantifieds.push((**q).clone());
+                    } else {
+                        nonquantifieds.push(left.clone());
+                    }
+                });
+                for q in quantifieds {
+                    // The only time it's safe to simplify a quantified away is when the entire intersection is Never.
+                    let intersection = narrow(
+                        &q.restriction().as_type(self.stdlib),
+                        right_unwrapped.clone(),
+                    );
+                    res.push(if matches!(&intersection, Type::Type(t) if t.is_never()) {
+                        intersection
+                    } else {
+                        intersect(vec![q.to_type(), right.clone()], right.clone())
+                    })
+                }
+                if !nonquantifieds.is_empty() {
+                    res.push(narrow(&self.unions(nonquantifieds), right_unwrapped))
+                }
             } else {
                 res.push(left.clone())
             }
@@ -660,6 +692,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // `hasattr` and `getattr` are handled in `narrow`
             AtomicNarrowOp::HasAttr(_) => ty.clone(),
             AtomicNarrowOp::NotHasAttr(_) => ty.clone(),
+            AtomicNarrowOp::HasKey(_) => ty.clone(),
+            AtomicNarrowOp::NotHasKey(_) => ty.clone(),
             AtomicNarrowOp::GetAttr(_, _) => ty.clone(),
             AtomicNarrowOp::NotGetAttr(_, _) => ty.clone(),
             AtomicNarrowOp::TypeGuard(t, arguments) => {
@@ -884,6 +918,57 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> TypeInfo {
         match op {
+            NarrowOp::Atomic(subject, AtomicNarrowOp::HasKey(key)) => {
+                let base_ty = match subject {
+                    Some(facet_subject) => {
+                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
+                    }
+                    None => self.force_for_narrowing(type_info.ty(), range, errors),
+                };
+                if matches!(base_ty, Type::TypedDict(_)) {
+                    let key_facet = FacetKind::Key(key.to_string());
+                    let facets = match subject {
+                        Some(facet_subject) => {
+                            let mut new_facets = facet_subject.chain.facets().clone();
+                            new_facets.push(key_facet);
+                            new_facets
+                        }
+                        None => Vec1::new(key_facet),
+                    };
+                    let chain = FacetChain::new(facets);
+                    // Apply a facet narrow w/ that key's type, so that the usual subscript inference
+                    // code path which raises a warning for NotRequired keys does not execute later
+                    let value_ty = self.get_facet_chain_type(type_info, &chain, range);
+                    type_info.with_narrow(chain.facets(), value_ty)
+                } else {
+                    type_info.clone()
+                }
+            }
+            NarrowOp::Atomic(subject, AtomicNarrowOp::NotHasKey(key)) => {
+                let base_ty = match subject {
+                    Some(facet_subject) => {
+                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
+                    }
+                    None => self.force_for_narrowing(type_info.ty(), range, errors),
+                };
+                if matches!(base_ty, Type::TypedDict(_)) {
+                    let key_facet = FacetKind::Key(key.to_string());
+                    let facets = match subject {
+                        Some(facet_subject) => {
+                            let mut new_facets = facet_subject.chain.facets().clone();
+                            new_facets.push(key_facet);
+                            new_facets
+                        }
+                        None => Vec1::new(key_facet),
+                    };
+                    // Invalidate existing facet narrows
+                    let mut type_info = type_info.clone();
+                    type_info.update_for_assignment(&facets, None);
+                    type_info
+                } else {
+                    type_info.clone()
+                }
+            }
             NarrowOp::Atomic(subject, AtomicNarrowOp::HasAttr(attr)) => {
                 let base_ty = match subject {
                     Some(facet_subject) => {
@@ -988,6 +1073,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 let mut narrowed = type_info.with_narrow(facet_subject.chain.facets(), ty);
                 // For certain types of narrows, we can also narrow the parent of the current subject
+                // If `.get()` on a dict or TypedDict is falsy, the key may not be present at all
+                // We should invalidate any existing narrows
                 if let Some((last, prefix)) = facet_subject.chain.facets().split_last() {
                     match Vec1::try_from(prefix) {
                         Ok(prefix_facets) => {

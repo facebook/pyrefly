@@ -845,12 +845,12 @@ impl FunctionKind {
             ("dataclasses", None, "dataclass") => Self::Dataclass,
             ("dataclasses", None, "field") => Self::DataclassField,
             ("dataclasses", None, "replace") => Self::DataclassReplace,
-            ("typing", None, "overload") => Self::Overload,
-            ("typing", None, "override") => Self::Override,
-            ("typing", None, "cast") => Self::Cast,
-            ("typing", None, "assert_type") => Self::AssertType,
-            ("typing", None, "reveal_type") => Self::RevealType,
-            ("typing", None, "final") => Self::Final,
+            ("typing" | "typing_extensions", None, "overload") => Self::Overload,
+            ("typing" | "typing_extensions", None, "override") => Self::Override,
+            ("typing" | "typing_extensions", None, "cast") => Self::Cast,
+            ("typing" | "typing_extensions", None, "assert_type") => Self::AssertType,
+            ("typing" | "typing_extensions", None, "reveal_type") => Self::RevealType,
+            ("typing" | "typing_extensions", None, "final") => Self::Final,
             ("typing" | "typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
             ("typing" | "typing_extensions", None, "dataclass_transform") => {
                 Self::DataclassTransform

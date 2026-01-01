@@ -1019,6 +1019,83 @@ def f(x: int):
 );
 
 testcase!(
+    test_issubclass_typevar_object,
+    r#"
+from typing import TypeVar
+
+class Foo:
+    @classmethod
+    def check(cls) -> None:
+        ...
+
+T = TypeVar("T", bound=type[object])
+
+def needs_foo(cls: type[Foo]) -> None:
+    cls.check()
+
+def check(t: T) -> T:
+    if issubclass(t, Foo):
+        needs_foo(t)
+        t.check()
+        return t
+    return t
+    "#,
+);
+
+testcase!(
+    test_isinstance_typevar_intersection,
+    r#"
+def test[T: int | str](value: T) -> T:
+    if isinstance(value, int):
+        return value
+    else:
+        return value
+    "#,
+);
+
+testcase!(
+    test_issubclass_typevar_nondisjoint_classes,
+    r#"
+from typing import reveal_type
+
+class A: ...
+class B: ...
+
+def f[T: type[A]](x: T) -> T:
+    if issubclass(x, B):
+        reveal_type(x)  # E: type[B] & T
+    return x
+    "#,
+);
+
+testcase!(
+    test_issubclass_typevar_disjoint_classes,
+    r#"
+from typing import assert_type, Never
+def f[T: type[int]](x: T) -> T:
+    if issubclass(x, str):
+        assert_type(x, type[Never])
+    return x
+    "#,
+);
+
+testcase!(
+    test_issubclass_typevar_union,
+    r#"
+from typing import assert_type, Never
+def f1[T: type[str]](x: T | type[bytes]) -> T | type[bytes]:
+    if issubclass(x, int):
+        assert_type(x, type[Never])
+    return x
+
+def f2[T: type[str] | type[bytes]](x: T) -> T:
+    if issubclass(x, int):
+        assert_type(x, type[Never])
+    return x
+    "#,
+);
+
+testcase!(
     test_typeguard_instance_method,
     r#"
 from typing import TypeGuard, assert_type

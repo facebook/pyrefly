@@ -1446,17 +1446,6 @@
       "severity": "error",
       "stop_column": 29,
       "stop_line": 135
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "Expected to yield a value of type `int`, but a bare `yield` gives `None` instead",
-      "description": "Expected to yield a value of type `int`, but a bare `yield` gives `None` instead",
-      "line": 190,
-      "name": "invalid-yield",
-      "severity": "error",
-      "stop_column": 10,
-      "stop_line": 190
     }
   ],
   "annotations_methods.py": [
@@ -9590,8 +9579,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot assign to var x because it is marked final",
-      "description": "Cannot assign to var x because it is marked final",
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
       "line": 145,
       "name": "bad-assignment",
       "severity": "error",
@@ -9601,8 +9590,8 @@
     {
       "code": -2,
       "column": 15,
-      "concise_description": "Assignment target is marked final",
-      "description": "Assignment target is marked final",
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
       "line": 147,
       "name": "bad-assignment",
       "severity": "error",

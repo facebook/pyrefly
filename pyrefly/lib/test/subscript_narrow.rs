@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -209,13 +210,14 @@ def use2(mapping: dict[str, int | None]) -> None:
         assert_type(mapping.get("foo"), int)
         assert_type(mapping["foo"], int)
     else:
-        assert_type(mapping.get("foo"), Literal[0] | None)
-        assert_type(mapping["foo"], Literal[0] | None)
+        assert_type(mapping.get("foo"), int | None)
+        assert_type(mapping["foo"], int | None)
 "#,
 );
 
 testcase!(
     test_typeddict_get_literal_key_narrow,
+    TestEnv::new().enable_not_required_key_access_error(),
     r#"
 from typing import TypedDict, assert_type, Literal
 
@@ -236,8 +238,114 @@ def use2(mapping: TD) -> None:
         assert_type(mapping.get("foo"), int)
         assert_type(mapping["foo"], int)
     else:
-        assert_type(mapping.get("foo"), Literal[0] | None)
-        assert_type(mapping["foo"], Literal[0] | None)
+        assert_type(mapping.get("foo"), int | None)
+        assert_type(mapping["foo"], int | None)  # E: TypedDict key `foo` may be absent
+"#,
+);
+
+testcase!(
+    test_typeddict_contains_not_required_key_basic,
+    TestEnv::new().enable_not_required_key_access_error(),
+    r#"
+from typing import TypedDict, NotRequired, assert_type
+
+class TD(TypedDict):
+    foo: NotRequired[int]
+
+def use(mapping: TD) -> None:
+    if "foo" in mapping:
+        assert_type(mapping["foo"], int)
+        if "foo" not in mapping:
+            mapping["foo"]  # E: TypedDict key `foo` may be absent
+    else:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+    if "foo" not in mapping:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+    else:
+        assert_type(mapping["foo"], int)
+"#,
+);
+
+testcase!(
+    test_typeddict_contains_not_required_key_get,
+    TestEnv::new().enable_not_required_key_access_error(),
+    r#"
+from typing import TypedDict, NotRequired, assert_type
+
+class TD(TypedDict):
+    foo: NotRequired[int]
+
+def use(mapping: TD) -> None:
+    if mapping.get("foo"):
+        assert_type(mapping["foo"], int)
+    else:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+    mapping["foo"]  # E: TypedDict key `foo` may be absent
+"#,
+);
+
+testcase!(
+    test_non_total_typed_dict_not_required_key_warning,
+    TestEnv::new().enable_not_required_key_access_error(),
+    r#"
+from typing import TypedDict
+
+class TD(TypedDict, total=False):
+    foo: int
+
+def bad(mapping: TD) -> int:
+    return mapping["foo"]  # E: TypedDict key `foo` may be absent
+"#,
+);
+
+testcase!(
+    test_typeddict_contains_not_required_key_compound_condition,
+    TestEnv::new().enable_not_required_key_access_error(),
+    r#"
+from typing import TypedDict, NotRequired, assert_type
+
+class TD(TypedDict):
+    foo: NotRequired[int]
+    bar: NotRequired[int]
+
+def use(mapping: TD, cond: bool) -> None:
+    if "foo" in mapping and "bar" in mapping:
+        assert_type(mapping["foo"], int)
+        assert_type(mapping["bar"], int)
+    else:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+        mapping["bar"]  # E: TypedDict key `bar` may be absent
+
+    if "foo" in mapping or "bar" in mapping:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+        mapping["bar"]  # E: TypedDict key `bar` may be absent
+    else:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+        mapping["bar"]  # E: TypedDict key `bar` may be absent
+
+    if "foo" not in mapping and "bar" not in mapping:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+        mapping["bar"]  # E: TypedDict key `bar` may be absent
+    else:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+        mapping["bar"]  # E: TypedDict key `bar` may be absent
+
+    if "foo" not in mapping or "bar" not in mapping:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+        mapping["bar"]  # E: TypedDict key `bar` may be absent
+    else:
+        assert_type(mapping["foo"], int)
+        assert_type(mapping["bar"], int)
+
+    if "foo" in mapping and cond:
+        assert_type(mapping["foo"], int)
+    else:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+
+    if "foo" in mapping or cond:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
+    else:
+        mapping["foo"]  # E: TypedDict key `foo` may be absent
 "#,
 );
 

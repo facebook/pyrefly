@@ -112,6 +112,7 @@ pub struct TestEnv {
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
+    not_required_key_access_error: bool,
     default_require_level: Require,
 }
 
@@ -133,6 +134,7 @@ impl TestEnv {
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
             missing_override_decorator_error: false,
+            not_required_key_access_error: false,
             default_require_level: Require::Exports,
         }
     }
@@ -198,6 +200,11 @@ impl TestEnv {
 
     pub fn enable_missing_override_decorator_error(mut self) -> Self {
         self.missing_override_decorator_error = true;
+        self
+    }
+
+    pub fn enable_not_required_key_access_error(mut self) -> Self {
+        self.not_required_key_access_error = true;
         self
     }
 
@@ -299,6 +306,9 @@ impl TestEnv {
         }
         if self.missing_override_decorator_error {
             errors.set_error_severity(ErrorKind::MissingOverrideDecorator, Severity::Error);
+        }
+        if self.not_required_key_access_error {
+            errors.set_error_severity(ErrorKind::NotRequiredKeyAccess, Severity::Error);
         }
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for (name, path, _) in self.modules.iter() {

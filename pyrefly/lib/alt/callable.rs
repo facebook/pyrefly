@@ -1138,7 +1138,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     call_errors,
                     range,
                     ErrorInfo::new(kind.as_error_kind(), context),
-                    kind.format_error(&e.got, &e.want, self.module().name()),
+                    kind.format_error(
+                        &self.for_display(e.got),
+                        &self.for_display(e.want),
+                        self.module().name(),
+                    ),
                 );
             }
         }
