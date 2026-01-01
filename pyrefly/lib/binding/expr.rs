@@ -771,6 +771,10 @@ impl<'a> BindingsBuilder<'a> {
                 let name = Ast::expr_name_identifier(x.clone());
                 self.ensure_name(&name, usage, &mut None);
             }
+            Expr::Attribute(attr) => {
+                self.record_private_attr_access(attr);
+                self.ensure_expr(&mut attr.value, usage);
+            }
             Expr::Yield(x) => {
                 self.record_yield(x.clone());
             }

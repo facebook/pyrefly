@@ -168,6 +168,7 @@ impl<'a> BindingsBuilder<'a> {
                     method.recognized_attribute_defining_method
                         && matches!(method.instance_or_class, MethodSelfKind::Instance)
                 });
+        self.record_private_attr_access(&attr);
         self.ensure_expr(&mut attr.value, user.usage());
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());

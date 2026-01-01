@@ -8,6 +8,7 @@
 use std::iter;
 
 use dupe::Dupe;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
@@ -390,6 +391,21 @@ impl NotFoundOn {
             NotFoundOn::Module(module) => AttributeBase1::Module(module.clone()),
         }
     }
+
+    fn from_attr_base(base: &AttributeBase1) -> Option<Self> {
+        match base {
+            AttributeBase1::ClassInstance(class_type) => Some(NotFoundOn::ClassInstance(
+                class_type.class_object().dupe(),
+                base.clone(),
+            )),
+            AttributeBase1::ClassObject(class_base) => Some(NotFoundOn::ClassObject(
+                class_base.class_object().dupe(),
+                base.clone(),
+            )),
+            AttributeBase1::Module(module) => Some(NotFoundOn::Module(module.clone())),
+            _ => None,
+        }
+    }
 }
 
 impl InternalError {
@@ -544,8 +560,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         let mut types = Vec::new();
         let mut error_messages = Vec::new();
-        let (found, not_found, error) = lookup_result.decompose();
-        for (attr, _) in found {
+        let (found, mut not_found, error) = lookup_result.decompose();
+        let allow_private_attr = self.bindings().private_attr_context(range).is_some();
+        let is_private_attr = Ast::is_mangled_attr(attr_name);
+        for (attr, found_on) in found {
+            if is_private_attr && !allow_private_attr {
+                if let Some(not_found_entry) = NotFoundOn::from_attr_base(&found_on) {
+                    not_found.push(not_found_entry);
+                }
+                continue;
+            }
             match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
                 Err(err) => error_messages.push(err.to_error_msg(attr_name)),

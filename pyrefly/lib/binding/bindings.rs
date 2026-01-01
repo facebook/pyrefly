@@ -162,6 +162,7 @@ struct BindingsInner {
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
+    private_attr_context: SmallMap<TextRange, Name>,
 }
 
 impl Display for Bindings {
@@ -204,6 +205,7 @@ pub struct BindingsBuilder<'a> {
     unused_variables: Vec<UnusedVariable>,
     semantic_checker: SemanticSyntaxChecker,
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
+    private_attr_context: SmallMap<TextRange, Name>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -250,6 +252,10 @@ impl Bindings {
 
     pub fn unused_variables(&self) -> &[UnusedVariable] {
         &self.0.unused_variables
+    }
+
+    pub fn private_attr_context(&self, range: TextRange) -> Option<&Name> {
+        self.0.private_attr_context.get(&range)
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -411,6 +417,7 @@ impl Bindings {
             unused_variables: Vec::new(),
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_syntax_errors: RefCell::new(Vec::new()),
+            private_attr_context: SmallMap::new(),
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -475,6 +482,7 @@ impl Bindings {
             unused_parameters: builder.unused_parameters,
             unused_imports: builder.unused_imports,
             unused_variables: builder.unused_variables,
+            private_attr_context: builder.private_attr_context,
         }))
     }
 
@@ -676,6 +684,15 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn record_unused_variables(&mut self, unused: Vec<UnusedVariable>) {
         self.unused_variables.extend(unused);
+    }
+
+    pub(crate) fn record_private_attr_access(&mut self, attr: &ExprAttribute) {
+        if Ast::is_mangled_attr(&attr.attr.id)
+            && let Some(class_name) = self.scopes.enclosing_class_name()
+        {
+            self.private_attr_context
+                .insert(attr.range(), class_name.id.clone());
+        }
     }
 
     pub(crate) fn with_await_context<R>(
