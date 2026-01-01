@@ -3476,9 +3476,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Access is disallowed for instance-only attributes and for attributes whose
     /// type contains a class-scoped type parameter - e.g., `class A[T]: x: T`.
     pub fn get_class_attribute(&self, cls: &ClassBase, name: &Name) -> Option<ClassAttribute> {
-        // Private (double-underscore) attributes are only directly accessible on `Self` from
-        // within the defining class.
-        if Ast::is_mangled_attr(name) && !matches!(cls, ClassBase::SelfType(_)) {
+        // Private (double-underscore) attributes are name-mangled at runtime and shouldn't be
+        // accessible via class objects outside the defining class. Those accesses should behave
+        // as if the attribute doesn't exist (`C.__v` should error even though `_C__v` exists).
+        if Ast::is_mangled_attr(name) {
             return None;
         }
         self.get_class_member(cls.class_object(), name)
@@ -3491,6 +3492,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class: &ClassType,
         name: &Name,
     ) -> Option<ClassAttribute> {
+        if Ast::is_mangled_attr(name) {
+            return None;
+        }
         self.get_class_member(class.class_object(), name)
             .map(|field| {
                 self.as_class_attribute(

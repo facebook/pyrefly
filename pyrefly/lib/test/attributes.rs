@@ -1686,6 +1686,8 @@ testcase!(
     r#"
 class C:
     __v: int = 0
+    def foo(self):
+        self.__v
 
 c = C()
 c.__v  # E: Object of class `C` has no attribute `__v`
