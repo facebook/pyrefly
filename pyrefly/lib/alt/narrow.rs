@@ -959,13 +959,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 type_info.clone().with_ty(ty)
             }
             NarrowOp::Atomic(Some(facet_subject), op) => {
-                if let AtomicNarrowOp::Call(func, args) | AtomicNarrowOp::NotCall(func, args) = op
-                    && self
+                let resolved_call_op = match op {
+                    AtomicNarrowOp::Call(func, args) => {
+                        self.resolve_narrowing_call(func.as_ref(), args, errors)
+                    }
+                    AtomicNarrowOp::NotCall(func, args) => self
                         .resolve_narrowing_call(func.as_ref(), args, errors)
-                        .is_none()
-                {
+                        .map(|resolved_op| resolved_op.negate()),
+                    _ => None,
+                };
+                let op_for_narrow = if let Some(resolved_op) = resolved_call_op.as_ref() {
+                    resolved_op
+                } else if matches!(op, AtomicNarrowOp::Call(..) | AtomicNarrowOp::NotCall(..)) {
                     return type_info.clone();
-                }
+                } else {
+                    op
+                };
                 if facet_subject.origin == FacetOrigin::GetMethod
                     && !self.supports_dict_get_subject(type_info, facet_subject, range)
                 {
@@ -973,7 +982,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 let ty = self.atomic_narrow(
                     &self.get_facet_chain_type(type_info, &facet_subject.chain, range),
-                    op,
+                    op_for_narrow,
                     range,
                     errors,
                 );
@@ -986,7 +995,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let base_ty =
                                 self.get_facet_chain_type(type_info, &prefix_chain, range);
                             if let Some(narrowed_ty) =
-                                self.atomic_narrow_for_facet(&base_ty, last, op, range, errors)
+                                self.atomic_narrow_for_facet(
+                                    &base_ty,
+                                    last,
+                                    op_for_narrow,
+                                    range,
+                                    errors,
+                                )
                                 && narrowed_ty != base_ty
                             {
                                 narrowed = narrowed.with_narrow(prefix_chain.facets(), narrowed_ty);
@@ -995,7 +1010,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         _ => {
                             let base_ty = type_info.ty();
                             if let Some(narrowed_ty) =
-                                self.atomic_narrow_for_facet(base_ty, last, op, range, errors)
+                                self.atomic_narrow_for_facet(
+                                    base_ty,
+                                    last,
+                                    op_for_narrow,
+                                    range,
+                                    errors,
+                                )
                                 && narrowed_ty != *base_ty
                             {
                                 narrowed = narrowed.clone().with_ty(narrowed_ty);

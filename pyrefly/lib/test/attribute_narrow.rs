@@ -132,6 +132,41 @@ def f(x: str):
 );
 
 testcase!(
+    test_missing_attribute_call_does_not_narrow_overload,
+    r#"
+from typing import overload
+class History:
+    pass
+@overload
+def open_like(path: str) -> int: ...
+@overload
+def open_like(path: bytes) -> int: ...
+def open_like(path: object) -> int:
+    return 0
+def f(history: History):
+    if (
+        len(history.filename)  # E: Object of class `History` has no attribute `filename`
+        or open_like(
+            history.filename  # E: Object of class `History` has no attribute `filename`
+        )
+    ):
+        pass
+"#,
+);
+
+testcase!(
+    test_missing_attribute_call_does_not_narrow_union,
+    r#"
+def f(x: int | str):
+    if (
+        len(x.missing)  # E: Object of class `int` has no attribute `missing`\nObject of class `str` has no attribute `missing`
+        or x.missing  # E: Object of class `int` has no attribute `missing`\nObject of class `str` has no attribute `missing`
+    ):
+        pass
+"#,
+);
+
+testcase!(
     test_attr_assignment_introduction,
     r#"
 from typing import Any, Literal, assert_type
