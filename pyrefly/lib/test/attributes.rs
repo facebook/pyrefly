@@ -1684,14 +1684,38 @@ class C(B):
 testcase!(
     test_private_attr_access_outside_class,
     r#"
+from __future__ import annotations
 class C:
     __v: int = 0
     def foo(self):
         self.__v
+    def bar(self, c: C):
+        c.__v
 
 c = C()
 c.__v  # E: Object of class `C` has no attribute `__v`
 C.__v  # E: Class `C` has no class attribute `__v`
+    "#,
+);
+
+testcase!(
+    test_private_attr_access_inside_class_via_class_name,
+    r#"
+from __future__ import annotations
+class C:
+    __v: int = 0
+
+    @classmethod
+    def clsm(cls):
+        C.__v
+        cls.__v
+
+    @staticmethod
+    def stat():
+        C.__v
+
+    def takes_other(self, other: C):
+        other.__v
     "#,
 );
 

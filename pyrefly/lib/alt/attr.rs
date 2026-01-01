@@ -391,21 +391,6 @@ impl NotFoundOn {
             NotFoundOn::Module(module) => AttributeBase1::Module(module.clone()),
         }
     }
-
-    fn from_attr_base(base: &AttributeBase1) -> Option<Self> {
-        match base {
-            AttributeBase1::ClassInstance(class_type) => Some(NotFoundOn::ClassInstance(
-                class_type.class_object().dupe(),
-                base.clone(),
-            )),
-            AttributeBase1::ClassObject(class_base) => Some(NotFoundOn::ClassObject(
-                class_base.class_object().dupe(),
-                base.clone(),
-            )),
-            AttributeBase1::Module(module) => Some(NotFoundOn::Module(module.clone())),
-            _ => None,
-        }
-    }
 }
 
 impl InternalError {
@@ -553,23 +538,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) -> Type {
-        let attr_base = self.as_attribute_base(base.clone());
+        let mut attr_base = self.as_attribute_base(base.clone());
+        let is_private_attr = Ast::is_mangled_attr(attr_name);
+        let private_context_holder = if is_private_attr {
+            self.bindings()
+                .private_attr_context(range)
+                .map(|(idx, class_name)| (self.get_idx(idx), class_name))
+        } else {
+            None
+        };
+        if let (Some(attr_base_mut), Some((context_holder, context_name))) =
+            (attr_base.as_mut(), private_context_holder.as_ref())
+        {
+            if let Some(context_class) = context_holder.as_ref().0.as_ref() {
+                self.extend_private_attr_bases_for_context(attr_base_mut, context_class);
+            } else {
+                self.extend_private_attr_bases_for_context_name(attr_base_mut, context_name);
+            }
+        }
         let lookup_result = attr_base.clone().map_or_else(
             || LookupResult::internal_error(InternalError::AttributeBaseUndefined(base.clone())),
             |attr_base| self.lookup_attr_from_base(attr_base, attr_name),
         );
         let mut types = Vec::new();
         let mut error_messages = Vec::new();
-        let (found, mut not_found, error) = lookup_result.decompose();
-        let allow_private_attr = self.bindings().private_attr_context(range).is_some();
-        let is_private_attr = Ast::is_mangled_attr(attr_name);
-        for (attr, found_on) in found {
-            if is_private_attr && !allow_private_attr {
-                if let Some(not_found_entry) = NotFoundOn::from_attr_base(&found_on) {
-                    not_found.push(not_found_entry);
-                }
-                continue;
-            }
+        let (found, not_found, error) = lookup_result.decompose();
+        for (attr, _) in found {
             match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
                 Err(err) => error_messages.push(err.to_error_msg(attr_name)),
@@ -602,6 +596,90 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 msg,
             );
             Type::any_error()
+        }
+    }
+
+    fn extend_private_attr_bases_for_context(
+        &self,
+        attr_base: &mut AttributeBase,
+        context_class: &Class,
+    ) {
+        for base in attr_base.0.iter_mut() {
+            if let Some(extra) = self.private_attr_base_for_context(base, context_class) {
+                *base = extra;
+            }
+        }
+    }
+
+    fn extend_private_attr_bases_for_context_name(
+        &self,
+        attr_base: &mut AttributeBase,
+        context_name: &Name,
+    ) {
+        for base in attr_base.0.iter_mut() {
+            if let Some(extra) = self.private_attr_base_for_context_name(base, context_name) {
+                *base = extra;
+            }
+        }
+    }
+
+    fn private_attr_base_for_context(
+        &self,
+        base: &AttributeBase1,
+        context_class: &Class,
+    ) -> Option<AttributeBase1> {
+        match base {
+            AttributeBase1::ClassInstance(class_type) => {
+                if self.has_superclass(class_type.class_object(), context_class) {
+                    Some(AttributeBase1::SelfType(class_type.clone()))
+                } else {
+                    None
+                }
+            }
+            AttributeBase1::ClassObject(class_base) => {
+                let (class_obj, class_type) = self.class_base_to_class_type(class_base);
+                if self.has_superclass(class_obj, context_class) {
+                    Some(AttributeBase1::ClassObject(ClassBase::SelfType(class_type)))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn private_attr_base_for_context_name(
+        &self,
+        base: &AttributeBase1,
+        context_name: &Name,
+    ) -> Option<AttributeBase1> {
+        match base {
+            AttributeBase1::ClassInstance(class_type) => {
+                if class_type.class_object().name() == context_name {
+                    Some(AttributeBase1::SelfType(class_type.clone()))
+                } else {
+                    None
+                }
+            }
+            AttributeBase1::ClassObject(class_base) => {
+                let (_, class_type) = self.class_base_to_class_type(class_base);
+                if class_type.class_object().name() == context_name {
+                    Some(AttributeBase1::ClassObject(ClassBase::SelfType(class_type)))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn class_base_to_class_type<'b>(&self, class_base: &'b ClassBase) -> (&'b Class, ClassType) {
+        match class_base {
+            ClassBase::ClassDef(class_type)
+            | ClassBase::ClassType(class_type)
+            | ClassBase::Quantified(_, class_type)
+            | ClassBase::SelfType(class_type)
+            | ClassBase::Protocol(class_type, _) => (class_type.class_object(), class_type.clone()),
         }
     }
 

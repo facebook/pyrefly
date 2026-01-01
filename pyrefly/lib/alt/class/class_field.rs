@@ -3476,6 +3476,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Access is disallowed for instance-only attributes and for attributes whose
     /// type contains a class-scoped type parameter - e.g., `class A[T]: x: T`.
     pub fn get_class_attribute(&self, cls: &ClassBase, name: &Name) -> Option<ClassAttribute> {
+        if Ast::is_mangled_attr(name) && !matches!(cls, ClassBase::SelfType(_)) {
+            return None;
+        }
         self.get_class_member(cls.class_object(), name)
             .map(|field| self.as_class_attribute(name, &field, cls))
     }
@@ -3486,6 +3489,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class: &ClassType,
         name: &Name,
     ) -> Option<ClassAttribute> {
+        if Ast::is_mangled_attr(name) {
+            return None;
+        }
         self.get_class_member(class.class_object(), name)
             .map(|field| {
                 self.as_class_attribute(

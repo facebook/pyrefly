@@ -162,7 +162,7 @@ struct BindingsInner {
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
-    private_attr_context: SmallMap<TextRange, Name>,
+    private_attr_context: SmallMap<TextRange, (Idx<KeyClass>, Name)>,
 }
 
 impl Display for Bindings {
@@ -205,7 +205,7 @@ pub struct BindingsBuilder<'a> {
     unused_variables: Vec<UnusedVariable>,
     semantic_checker: SemanticSyntaxChecker,
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
-    private_attr_context: SmallMap<TextRange, Name>,
+    private_attr_context: SmallMap<TextRange, (Idx<KeyClass>, Name)>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -254,8 +254,8 @@ impl Bindings {
         &self.0.unused_variables
     }
 
-    pub fn private_attr_context(&self, range: TextRange) -> Option<&Name> {
-        self.0.private_attr_context.get(&range)
+    pub fn private_attr_context(&self, range: TextRange) -> Option<(Idx<KeyClass>, Name)> {
+        self.0.private_attr_context.get(&range).cloned()
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -688,10 +688,11 @@ impl<'a> BindingsBuilder<'a> {
 
     pub(crate) fn record_private_attr_access(&mut self, attr: &ExprAttribute) {
         if Ast::is_mangled_attr(&attr.attr.id)
+            && let Some((class_key, _)) = self.scopes.enclosing_class_and_metadata_keys()
             && let Some(class_name) = self.scopes.enclosing_class_name()
         {
             self.private_attr_context
-                .insert(attr.range(), class_name.id.clone());
+                .insert(attr.range(), (class_key, class_name.id.clone()));
         }
     }
 
