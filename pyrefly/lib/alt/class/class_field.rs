@@ -3250,6 +3250,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn get_instance_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
+        // Private (double-underscore) attributes are name-mangled at runtime and are only
+        // directly accessible within the defining class.
+        if Ast::is_mangled_attr(name) {
+            return None;
+        }
         self.get_class_member(cls.class_object(), name)
             .map(|field| self.as_instance_attribute(name, &field, &Instance::of_class(cls)))
     }
@@ -3265,6 +3270,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self_type: Type,
         name: &Name,
     ) -> Option<ClassAttribute> {
+        // Private attributes are not visible through protocol-typed instances.
+        if Ast::is_mangled_attr(name) {
+            return None;
+        }
         self.get_class_member(cls.class_object(), name)
             .map(|field| {
                 self.as_instance_attribute(name, &field, &Instance::of_protocol(cls, self_type))
@@ -3332,6 +3341,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         upper_bound: &ClassType,
         name: &Name,
     ) -> Option<ClassAttribute> {
+        // Private attributes are not visible on non-`Self` instances.
+        if Ast::is_mangled_attr(name) {
+            return None;
+        }
         let quantified_with_specific_upper_bound = match quantified.restriction() {
             Restriction::Constraints(_) => {
                 quantified.with_restriction(Restriction::Constraints(vec![
@@ -3358,6 +3371,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         td: &TypedDictInner,
         name: &Name,
     ) -> Option<ClassAttribute> {
+        // Private attributes are not visible on TypedDict instances.
+        if Ast::is_mangled_attr(name) {
+            return None;
+        }
         if let Some(meta) = self
             .get_metadata_for_class(td.class_object())
             .typed_dict_metadata()
@@ -3398,6 +3415,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         super_obj: &SuperObj,
         name: &Name,
     ) -> Option<ClassAttribute> {
+        // Private attributes are name-mangled and should not be resolved via `super()`.
+        if Ast::is_mangled_attr(name) {
+            return None;
+        }
         match super_obj {
             SuperObj::Instance(obj) => self
                 .get_super_class_member(obj.class_object(), Some(start_lookup_cls), name)
@@ -3455,6 +3476,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Access is disallowed for instance-only attributes and for attributes whose
     /// type contains a class-scoped type parameter - e.g., `class A[T]: x: T`.
     pub fn get_class_attribute(&self, cls: &ClassBase, name: &Name) -> Option<ClassAttribute> {
+        // Private (double-underscore) attributes are only directly accessible on `Self` from
+        // within the defining class.
+        if Ast::is_mangled_attr(name) && !matches!(cls, ClassBase::SelfType(_)) {
+            return None;
+        }
         self.get_class_member(cls.class_object(), name)
             .map(|field| self.as_class_attribute(name, &field, cls))
     }

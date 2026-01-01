@@ -1682,6 +1682,18 @@ class C(B):
 );
 
 testcase!(
+    test_private_attr_access_outside_class,
+    r#"
+class C:
+    __v: int = 0
+
+c = C()
+c.__v  # E: Object of class `C` has no attribute `__v`
+C.__v  # E: Class `C` has no class attribute `__v`
+    "#,
+);
+
+testcase!(
     test_crtp_example, // CRTP = Curiously recurring template pattern
     r#"
 from typing import Any, assert_type
