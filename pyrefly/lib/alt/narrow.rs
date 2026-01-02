@@ -17,6 +17,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::Int;
 use ruff_python_ast::Number;
+use ruff_python_ast::Operator;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -217,6 +218,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         self.unions(res)
+    }
+
+    fn allow_negative_isinstance_classinfo(
+        &self,
+        classinfo: &Expr,
+        errors: &ErrorCollector,
+    ) -> bool {
+        match classinfo {
+            Expr::BinOp(binary_expression) if binary_expression.op == Operator::BitOr => {
+                self.allow_negative_isinstance_classinfo(&binary_expression.left, errors)
+                    && self.allow_negative_isinstance_classinfo(&binary_expression.right, errors)
+            }
+            Expr::Starred(starred_expression) => {
+                self.allow_negative_isinstance_classinfo(&starred_expression.value, errors)
+            }
+            Expr::Tuple(tuple_expression) => tuple_expression
+                .elts
+                .iter()
+                .all(|element| self.allow_negative_isinstance_classinfo(element, errors)),
+            Expr::NoneLiteral(_) => true,
+            // Default case
+            _ => matches!(
+                self.expr_infer(classinfo, errors),
+                Type::ClassDef(_)
+                    | Type::TypeAlias(_)
+                    | Type::Type(box Type::SpecialForm(_))
+                    | Type::None
+            ),
+        }
     }
 
     fn narrow_is_not_instance(&self, left: &Type, right: &Type) -> Type {
@@ -671,7 +701,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::IsNotInstance(v) => {
                 let right = self.expr_infer(v, errors);
-                self.narrow_is_not_instance(ty, &right)
+                if self.allow_negative_isinstance_classinfo(v, errors) {
+                    self.narrow_is_not_instance(ty, &right)
+                } else {
+                    ty.clone()
+                }
             }
             AtomicNarrowOp::TypeEq(v) => {
                 // If type(X) == Y then X can't be a subclass of Y
