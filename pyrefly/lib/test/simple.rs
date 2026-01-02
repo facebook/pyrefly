@@ -845,6 +845,19 @@ c2: type[C, C] = C  # E: Expected 1 type argument for `type`, got 2
 );
 
 testcase!(
+    test_type_without_argument_is_equivalent_to_type_any,
+    r#"
+from typing import assert_type, Any
+def f(x: type) -> None:
+    g(x)
+    assert_type(x, type[Any])
+def g(x: type[Any]) -> None:
+    f(x)
+    assert_type(x, type)
+"#,
+);
+
+testcase!(
     test_annotated,
     r#"
 from typing import Annotated, assert_type
@@ -1402,7 +1415,7 @@ def g(x: type) -> None: ...
 f(int)
 f(Type)
 f(type)
-f(42)  # E: not assignable to parameter `x` with type `type[Unknown]`
+f(42)  # E: not assignable to parameter `x` with type `type`
 
 g(int)
 g(Type)
