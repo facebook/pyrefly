@@ -264,6 +264,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     Type::type_form(self.union(l, r))
                 } else if x.op == Operator::Add
+                    && let Type::Literal(Lit::Int(l)) = lhs
+                    && let Type::Literal(Lit::Int(r)) = rhs
+                {
+                    Type::Literal(Lit::Int(l.add(r)))
+                } else if x.op == Operator::Add
                     && ((*lhs == Type::LiteralString && rhs.is_literal_string())
                         || (*rhs == Type::LiteralString && lhs.is_literal_string()))
                 {
@@ -314,6 +319,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && rhs.is_literal_string()
                 {
                     Type::LiteralString
+                } else if x.op == Operator::Add
+                    && let Type::Literal(Lit::Int(l)) = lhs
+                    && let Type::Literal(Lit::Int(r)) = rhs
+                {
+                    Type::Literal(Lit::Int(l.add(r)))
                 } else if x.op == Operator::Add
                     && let Type::Tuple(ref l) = base
                     && let Type::Tuple(r) = rhs
