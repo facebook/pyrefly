@@ -1334,15 +1334,11 @@ testcase!(
     r#"
 class A:
     __secret: int = 0
-    def ok(self) -> int:
-        return self.__secret
 
-    @classmethod
-    def ok_cls(cls) -> int:
-        return cls.__secret
+exposed = A.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
 
-def bad(a: A) -> int:
-    return a.__secret  # E: Private attribute `__secret` of class `A` cannot be accessed outside the class where it is defined
+class B:
+    leaked = A.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
 "#,
 );
 

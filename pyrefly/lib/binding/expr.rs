@@ -518,6 +518,10 @@ impl<'a> BindingsBuilder<'a> {
         self.with_semantic_checker(|semantic, context| semantic.visit_expr(x, context));
 
         match x {
+            Expr::Attribute(attr) => {
+                self.check_private_attribute_usage(attr);
+                self.ensure_expr(&mut attr.value, usage);
+            }
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
                 self.start_fork_and_branch(x.range);
@@ -796,6 +800,22 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 x.recurse_mut(&mut |x| self.ensure_expr(x, usage));
             }
+        }
+    }
+
+    fn check_private_attribute_usage(&mut self, attr: &ExprAttribute) {
+        if self.scopes.in_function_scope() {
+            return;
+        }
+        if Ast::is_mangled_attr(&attr.attr.id) {
+            self.error(
+                attr.attr.range,
+                ErrorInfo::Kind(ErrorKind::NoAccess),
+                format!(
+                    "Private attribute `{}` cannot be accessed outside of its defining class",
+                    attr.attr.id
+                ),
+            );
         }
     }
 

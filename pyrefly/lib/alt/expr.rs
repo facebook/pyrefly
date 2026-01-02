@@ -51,7 +51,6 @@ use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
-use crate::alt::attr::NoAccessReason;
 use crate::alt::callable::CallArg;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
@@ -69,7 +68,6 @@ use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
-use crate::types::class::Class;
 use crate::types::facet::FacetKind;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
@@ -274,25 +272,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .arc_clone(),
             Expr::Attribute(x) => {
                 let base = self.expr_infer_type_info_with_hint(&x.value, None, errors);
-                if Ast::is_mangled_attr(&x.attr.id)
-                    && !self.is_private_attr_access_allowed(&x.value, &base)
-                {
-                    let msg = if let Some(cls) = self.private_attr_owner_class(base.ty()) {
-                        NoAccessReason::PrivateAttributeOutsideClass(cls).to_error_msg(&x.attr.id)
-                    } else {
-                        format!(
-                            "Private attribute `{}` cannot be accessed outside the class where it is defined",
-                            x.attr.id
-                        )
-                    };
-                    self.error(
-                        errors,
-                        x.attr.range,
-                        ErrorInfo::new(ErrorKind::NoAccess, None),
-                        msg,
-                    );
-                    return TypeInfo::of_ty(Type::any_error());
-                }
                 self.record_external_attribute_definition_index(
                     base.ty(),
                     x.attr.id(),
@@ -1226,37 +1205,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         false
-    }
-
-    fn is_private_attr_access_allowed(&self, base_expr: &Expr, base: &TypeInfo) -> bool {
-        if let Expr::Name(name) = base_expr {
-            match name.id.as_str() {
-                "self" | "cls" | "mcs" => return true,
-                _ => {}
-            }
-        }
-        self.ty_is_self_type_like(base.ty())
-    }
-
-    fn ty_is_self_type_like(&self, ty: &Type) -> bool {
-        match ty {
-            Type::SelfType(_) | Type::Type(box Type::SelfType(_)) => true,
-            Type::Union(box Union { members, .. }) => {
-                members.iter().any(|m| self.ty_is_self_type_like(m))
-            }
-            _ => false,
-        }
-    }
-
-    fn private_attr_owner_class(&self, ty: &Type) -> Option<Class> {
-        match ty {
-            Type::SelfType(cls) | Type::ClassType(cls) => Some(cls.class_object().dupe()),
-            Type::Type(box inner) => self.private_attr_owner_class(inner),
-            Type::Union(box Union { members, .. }) => members
-                .iter()
-                .find_map(|m| self.private_attr_owner_class(m)),
-            _ => None,
-        }
     }
 
     pub fn attr_infer_for_type(
