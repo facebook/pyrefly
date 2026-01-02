@@ -90,6 +90,27 @@ impl PartialEq for CalcId {
 
 impl Eq for CalcId {}
 
+#[cfg(test)]
+impl CalcId {
+    /// Create a test CalcId. Different idx values create different CalcIds.
+    /// All test CalcIds share the same test Bindings module.
+    pub(crate) fn for_test(idx: usize) -> Self {
+        use crate::binding::binding::AnyIdx;
+        use std::sync::OnceLock;
+
+        // Create a single shared test Bindings that all test CalcIds will use.
+        // Since CalcId equality compares (module(), anyidx), and all test CalcIds
+        // have the same module, they'll be equal iff their AnyIdx is equal.
+        static TEST_BINDINGS: OnceLock<crate::binding::bindings::Bindings> = OnceLock::new();
+
+        let bindings = TEST_BINDINGS.get_or_init(|| {
+            crate::binding::bindings::Bindings::for_test("test_module")
+        });
+
+        CalcId(bindings.clone(), AnyIdx::KeyTParams(Idx::new(idx)))
+    }
+}
+
 impl Ord for CalcId {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.1.cmp(&other.1) {
@@ -289,6 +310,7 @@ impl Cycle {
 }
 
 /// Represents the current cycle state prior to attempting a particular calculation.
+#[derive(Debug)]
 enum CycleState {
     /// The current idx is not participating in any currently detected cycle (though it
     /// remains possible we will detect one here).
@@ -333,7 +355,13 @@ impl Cycles {
     }
 
     fn pre_calculate_state(&self, current: &CalcId) -> CycleState {
-        if let Some(active_cycle) = self.0.borrow_mut().last_mut() {
+        let mut cycles = self.0.borrow_mut();
+        for cycle in cycles.iter() {
+            if *current == cycle.break_at {
+                return CycleState::BreakAt;
+            }
+        }
+        if let Some(active_cycle) = cycles.last_mut() {
             active_cycle.pre_calculate_state(current)
         } else {
             CycleState::NoDetectedCycle
@@ -870,5 +898,129 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// operation that may error but never report errors from it.
     pub fn error_swallower(&self) -> ErrorCollector {
         ErrorCollector::new(self.module().dupe(), ErrorStyle::Never)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Manually construct a Cycle for testing.
+    /// Since we're inside the module, we can access private fields.
+    fn make_test_cycle(break_at: CalcId) -> Cycle {
+        Cycle {
+            break_at: break_at.clone(),
+            recursion_stack: Vec::new(),
+            unwind_stack: vec![break_at.clone()],
+            unwound: Vec::new(),
+            detected_at: break_at,
+        }
+    }
+
+    #[test]
+    fn test_nested_cycles_bug() {
+        // This test demonstrates the nested cycle bug:
+        // When multiple cycles are active, pre_calculate_state should check
+        // ALL cycles for break_at matches, not just the most recent one.
+
+        // Create three different CalcIds (representing different bindings)
+        let calc_a = CalcId::for_test(1);
+        let calc_b = CalcId::for_test(2);
+
+        // Create Cycles instance
+        let cycles = Cycles::new();
+
+        // Scenario:
+        // 1. First cycle detected with break_at = A
+        let cycle1 = make_test_cycle(calc_a.clone());
+        cycles.0.borrow_mut().push(cycle1);
+
+        // 2. While unwinding the first cycle, a second cycle is detected
+        //    with break_at = B
+        let cycle2 = make_test_cycle(calc_b.clone());
+        cycles.0.borrow_mut().push(cycle2);
+
+        // 3. Now we encounter calc_a again (from within the nested cycle context)
+        //    BUGGY: pre_calculate_state only checks the most recent cycle (cycle2)
+        //            since calc_a != calc_b, returns NoDetectedCycle
+        //    CORRECT: Should check ALL cycles, find calc_a == cycle1.break_at,
+        //             and return BreakAt
+
+        let state = cycles.pre_calculate_state(&calc_a);
+
+        // With the bug, this will be NoDetectedCycle
+        // After the fix, this will be BreakAt
+        assert!(
+            matches!(state, CycleState::BreakAt),
+            "pre_calculate_state should return BreakAt when current matches ANY cycle's break_at, \
+             not just the most recent cycle. Got: {:?}",
+            state
+        );
+    }
+
+    #[test]
+    fn test_single_cycle_still_works() {
+        // Ensure we don't break normal single-cycle behavior
+        let calc_a = CalcId::for_test(1);
+
+        let cycles = Cycles::new();
+        let cycle = make_test_cycle(calc_a.clone());
+        cycles.0.borrow_mut().push(cycle);
+
+        // When we encounter calc_a, it should return BreakAt
+        let state = cycles.pre_calculate_state(&calc_a);
+        assert!(
+            matches!(state, CycleState::BreakAt),
+            "Single cycle case should still work correctly"
+        );
+    }
+
+    #[test]
+    fn test_no_cycles_returns_no_detected_cycle() {
+        // When there are no active cycles, should return NoDetectedCycle
+        let calc_a = CalcId::for_test(1);
+        let cycles = Cycles::new();
+
+        let state = cycles.pre_calculate_state(&calc_a);
+        assert!(
+            matches!(state, CycleState::NoDetectedCycle),
+            "Should return NoDetectedCycle when there are no active cycles"
+        );
+    }
+
+    #[test]
+    fn test_nested_cycles_different_break_points() {
+        // Test with 3 nested cycles, checking we find the right one
+        let calc_a = CalcId::for_test(1);
+        let calc_b = CalcId::for_test(2);
+        let calc_c = CalcId::for_test(3);
+
+        let cycles = Cycles::new();
+
+        // Add three nested cycles with different break points
+        cycles.0.borrow_mut().push(make_test_cycle(calc_a.clone()));
+        cycles.0.borrow_mut().push(make_test_cycle(calc_b.clone()));
+        cycles.0.borrow_mut().push(make_test_cycle(calc_c.clone()));
+
+        // Check that we find the right break_at even from the first cycle
+        let state_a = cycles.pre_calculate_state(&calc_a);
+        assert!(
+            matches!(state_a, CycleState::BreakAt),
+            "Should find calc_a in first cycle"
+        );
+
+        // Check middle cycle
+        let state_b = cycles.pre_calculate_state(&calc_b);
+        assert!(
+            matches!(state_b, CycleState::BreakAt),
+            "Should find calc_b in second cycle"
+        );
+
+        // Check most recent cycle
+        let state_c = cycles.pre_calculate_state(&calc_c);
+        assert!(
+            matches!(state_c, CycleState::BreakAt),
+            "Should find calc_c in third (most recent) cycle"
+        );
     }
 }
