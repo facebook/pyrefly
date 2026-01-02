@@ -11,9 +11,11 @@ use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::callable::Callable;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
+use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::Forall;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
@@ -1220,7 +1222,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let builtins_type_classtype = self.stdlib.builtins_type();
         self.get_instance_attribute(builtins_type_classtype, attr_name)
-            .and_then(|attr| attr.as_instance_method())
+            .and_then(|attr| match attr {
+                ClassAttribute::Property(getter, _, _) => {
+                    // HACK:
+                    // There are some properties on `type` that will not be
+                    // resolved by `as_instance_method`, e.g. `__mro__`. For
+                    // these, we use the return type of the getter.
+                    // In a normal property call, we would need to call
+                    // `call_property_getter`, but since `type` is a builtin
+                    // class, we take a shortcut here to just get the return
+                    // type.
+                    match getter {
+                        Type::BoundMethod(box BoundMethod {
+                            func:
+                                BoundMethodType::Function(Function {
+                                    signature: Callable { ret, .. },
+                                    ..
+                                }),
+                            ..
+                        }) => Some(ret.clone()),
+                        _ => None,
+                    }
+                }
+                _ => attr.as_instance_method(),
+            })
             .unwrap_or_else(fallback)
     }
 

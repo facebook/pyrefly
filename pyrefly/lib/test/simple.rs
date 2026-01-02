@@ -1412,6 +1412,16 @@ g(42)  # E: not assignable to parameter `x` with type `type`
 );
 
 testcase!(
+    test_typing_type_properties,
+    r#"
+from typing import Type, assert_type, reveal_type
+def f(x: Type) -> None:
+    assert_type(x.__mro__, tuple[type, ...])
+    assert_type(x.__base__, type | None)
+"#,
+);
+
+testcase!(
     test_round,
     r#"
 from typing import assert_type
