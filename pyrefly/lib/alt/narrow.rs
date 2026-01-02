@@ -1081,30 +1081,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let prefix_chain = FacetChain::new(prefix_facets);
                             let base_ty =
                                 self.get_facet_chain_type(type_info, &prefix_chain, range);
-                            if let Some(narrowed_ty) =
-                                self.atomic_narrow_for_facet(
-                                    &base_ty,
-                                    last,
-                                    op_for_narrow,
-                                    range,
-                                    errors,
-                                )
-                                && narrowed_ty != base_ty
+                            if let Some(narrowed_ty) = self.atomic_narrow_for_facet(
+                                &base_ty,
+                                last,
+                                op_for_narrow,
+                                range,
+                                errors,
+                            ) && narrowed_ty != base_ty
                             {
                                 narrowed = narrowed.with_narrow(prefix_chain.facets(), narrowed_ty);
                             }
                         }
                         _ => {
                             let base_ty = type_info.ty();
-                            if let Some(narrowed_ty) =
-                                self.atomic_narrow_for_facet(
-                                    base_ty,
-                                    last,
-                                    op_for_narrow,
-                                    range,
-                                    errors,
-                                )
-                                && narrowed_ty != *base_ty
+                            if let Some(narrowed_ty) = self.atomic_narrow_for_facet(
+                                base_ty,
+                                last,
+                                op_for_narrow,
+                                range,
+                                errors,
+                            ) && narrowed_ty != *base_ty
                             {
                                 narrowed = narrowed.clone().with_ty(narrowed_ty);
                             }
