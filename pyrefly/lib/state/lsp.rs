@@ -1007,7 +1007,19 @@ impl<'a> Transaction<'a> {
                     Some((def_handle, export))
                 }
             }
-            IntermediateDefinition::Module(name) => {
+            IntermediateDefinition::Module(import_range, name) => {
+                if matches!(preference.import_behavior, ImportBehavior::StopAtEverything) {
+                    return Some((
+                        handle.dupe(),
+                        Export {
+                            location: import_range,
+                            symbol_kind: Some(SymbolKind::Module),
+                            docstring_range: None,
+                            deprecation: None,
+                            special_export: None,
+                        },
+                    ));
+                }
                 let handle = match preference.prefer_pyi {
                     true => self.import_handle(handle, name, None).finding()?,
                     false => self

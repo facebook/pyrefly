@@ -36,7 +36,7 @@ const KEY_TO_DEFINITION_INITIAL_GAS: Gas = Gas::new(100);
 pub enum IntermediateDefinition {
     Local(Export),
     NamedImport(TextRange, ModuleName, Name, Option<TextRange>),
-    Module(ModuleName),
+    Module(TextRange, ModuleName),
 }
 
 pub fn key_to_intermediate_definition(
@@ -139,7 +139,7 @@ fn create_intermediate_definition_from(
                     // actual module that corresponds to the key must be `x.y`.
                     name.dupe()
                 };
-                return Some(IntermediateDefinition::Module(imported_module_name));
+                return Some(IntermediateDefinition::Module(def_key.range(), imported_module_name));
             }
             Binding::Function(idx, ..) => {
                 let func = bindings.get(*idx);
