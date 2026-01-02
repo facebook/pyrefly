@@ -251,8 +251,6 @@ pub enum NoAccessReason {
     SettingDescriptorOnClass(Class),
     /// Calling a method via `super()` when no implementation is available (e.g. abstract protocol or abstract base method).
     SuperMethodNeedsImplementation(Class),
-    /// Private attributes (double-underscore) may only be accessed from inside their defining class.
-    PrivateAttributeOutsideClass(Class),
 }
 
 #[derive(Debug)]
@@ -312,12 +310,6 @@ impl NoAccessReason {
                 let class_name = class.name();
                 format!(
                     "Method `{attr_name}` inherited from class `{class_name}` has no implementation and cannot be accessed via `super()`"
-                )
-            }
-            NoAccessReason::PrivateAttributeOutsideClass(class) => {
-                let class_name = class.name();
-                format!(
-                    "Private attribute `{attr_name}` of class `{class_name}` cannot be accessed outside the class where it is defined"
                 )
             }
         }
