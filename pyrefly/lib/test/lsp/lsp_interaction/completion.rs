@@ -602,3 +602,78 @@ fn test_completion_complete_with_local_completions() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_completion_incomplete_with_local_completions_blocking_autoimport() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("autoimport_common_prefix"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    // Open b.py which has UsersController, and a.py which has UsersManager
+    interaction.client.did_open("b.py");
+    interaction.client.did_open("a.py");
+
+    // Type "Users" (5 characters, above MIN_CHARACTERS_TYPED_AUTOIMPORT = 3)
+    // in b.py. Local completion UsersController exists, so autoimport is skipped.
+    // But is_incomplete should still be true because the local completion might
+    // not match as the user continues typing (e.g., "UsersM" should show UsersManager).
+    interaction
+        .client
+        .did_change("b.py", "class UsersController:\n    pass\n\nUsers");
+
+    interaction
+        .client
+        .completion("b.py", 3, 5)
+        .expect_completion_response_with(|list| {
+            // Should have local completion UsersController
+            let has_users_controller = list
+                .items
+                .iter()
+                .any(|item| item.label == "UsersController");
+            // is_incomplete should be true so client asks again when typing more
+            has_users_controller && list.is_incomplete
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_autoimport_shown_when_local_no_longer_matches() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("autoimport_common_prefix"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    // Open b.py which has UsersController, and a.py which has UsersManager
+    interaction.client.did_open("b.py");
+    interaction.client.did_open("a.py");
+
+    // Type "UsersM" - this should NOT match local "UsersController" (no 'M' in it)
+    // but SHOULD match autoimport "UsersManager" from a.py
+    interaction
+        .client
+        .did_change("b.py", "class UsersController:\n    pass\n\nUsersM");
+
+    interaction
+        .client
+        .completion("b.py", 3, 6)
+        .expect_completion_response_with(|list| {
+            // Should have autoimport completion UsersManager
+            let has_users_manager = list.items.iter().any(|item| item.label == "UsersManager");
+            // Should NOT have UsersController (doesn't match "UsersM")
+            let has_users_controller = list
+                .items
+                .iter()
+                .any(|item| item.label == "UsersController");
+            has_users_manager && !has_users_controller
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}

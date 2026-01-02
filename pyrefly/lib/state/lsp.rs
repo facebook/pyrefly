@@ -3136,11 +3136,17 @@ impl<'a> Transaction<'a> {
                         supports_completion_item_details,
                     );
                 }
-                // If autoimport completions were skipped due to character threshold,
-                // mark the results as incomplete so clients keep asking for completions.
-                // This ensures autoimport completions will be checked once the threshold is reached,
-                // even if local completions are currently available.
-                if identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
+                // Mark results as incomplete in the following cases so clients keep asking
+                // for completions as the user types more:
+                // 1. If identifier is below MIN_CHARACTERS_TYPED_AUTOIMPORT threshold,
+                //    autoimport completions are skipped and will be checked once threshold
+                //    is reached.
+                // 2. If local completions exist and blocked autoimport completions,
+                //    the local completions might not match as the user continues typing,
+                //    and autoimport completions should then be shown.
+                if identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT
+                    || has_local_completions
+                {
                     is_incomplete = true;
                 }
                 self.add_builtins_autoimport_completions(handle, Some(&identifier), &mut result);
