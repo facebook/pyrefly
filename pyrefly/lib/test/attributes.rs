@@ -1330,6 +1330,23 @@ def test(x: LiteralString):
 );
 
 testcase!(
+    test_private_attribute_outside_class,
+    r#"
+class A:
+    __secret: int = 0
+    def ok(self) -> int:
+        return self.__secret
+
+    @classmethod
+    def ok_cls(cls) -> int:
+        return cls.__secret
+
+def bad(a: A) -> int:
+    return a.__secret  # E: Private attribute `__secret` of class `A` cannot be accessed outside the class where it is defined
+"#,
+);
+
+testcase!(
     test_attribute_access_on_type_callable,
     r#"
 from typing import Callable
