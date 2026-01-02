@@ -918,7 +918,7 @@ def f(x: Cat | Dog):
 testcase!(
     test_typeis_union,
     r#"
-from typing import TypeIs, assert_type
+from typing import TypeIs, assert_type, reveal_type
 class A: ...
 class B: ...
 class C: ...
@@ -930,7 +930,7 @@ def f(x:  A | B | C, y: A | C):
     else:
         assert_type(x, C)
     if is_a_or_b(y):
-        assert_type(y, A)
+        reveal_type(y)  # E: (B & C) | A
     else:
         assert_type(y, C)
     "#,
@@ -2023,7 +2023,7 @@ testcase!(
     test_callable,
     r#"
 from typing import Callable
-def f(x: int | Callable[[], int]) -> int:
+def f(x: int | Callable[[], int]) -> object:
     if callable(x):
         return x()
     else:
@@ -2256,5 +2256,23 @@ def test(unknown):
         s = unknown.foo
     if len(s) > 0:
       s[0]
+    "#,
+);
+
+testcase!(
+    test_typeis_narrow_to_intersection_not_never,
+    r#"
+from typing import TypeIs, reveal_type
+
+class A: ...
+
+def f(x: object) -> TypeIs[A]:
+    return True
+
+class B: ...
+
+def g(b: B):
+    if f(b):
+        reveal_type(b)  # E: A & B
     "#,
 );
