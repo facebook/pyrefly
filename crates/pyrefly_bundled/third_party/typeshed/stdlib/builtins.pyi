@@ -4099,7 +4099,7 @@ def breakpoint(*args: Any, **kws: Any) -> None:
     By default, this drops you into the pdb debugger.
     """
     ...
-def callable(obj: object, /) -> TypeIs[Callable[..., object]]:
+def callable(obj: object, /) -> TypeIs[Callable[..., Any]]:
     """
     Return whether the object is callable (i.e., some kind of function).
 
