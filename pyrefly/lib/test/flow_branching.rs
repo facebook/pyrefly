@@ -401,7 +401,7 @@ def test(x: int):
         case 1:
             assert_type(x, Literal[1])
         case 2 as q:
-            assert_type(x, int)
+            assert_type(x, Literal[2])
             assert_type(q, Literal[2])
         case q:
             assert_type(x, int)
@@ -518,7 +518,7 @@ def fun(x: A | B | C) -> None:
             assert_type(x, B)
     match x:
         case B(3, "B") as y:
-            assert_type(x, A | B | C)
+            assert_type(x, B)
             assert_type(y, B)
     match x:
         case A(1, "a") | B(2, "b"):
@@ -635,7 +635,7 @@ def test(x: Foo | Bar) -> None:
             assert_type(x, Bar)
             assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
         case Bar(a) as b:
-            assert_type(x, Foo | Bar)
+            assert_type(x, Bar)
             assert_type(b, Bar)
             assert_type(a, str)
             assert_type(b, Bar)
