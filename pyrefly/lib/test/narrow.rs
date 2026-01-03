@@ -1457,6 +1457,18 @@ def f(a: A | list[int]):
 );
 
 testcase!(
+    test_dict_literal_key_isinstance_narrowing,
+    r#"
+from typing import Literal, reveal_type
+def get_value(x: dict[Literal["value"], int] | int) -> int | None:
+    if isinstance(x, dict):
+        return x.get("value")
+    reveal_type(x) # E: revealed type: int
+    return x
+    "#,
+);
+
+testcase!(
     test_nested_or_with_multiple_vars,
     r#"
 from typing import assert_type
