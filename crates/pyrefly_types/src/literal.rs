@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::char;
 use std::fmt;
 use std::fmt::Display;
 
@@ -62,10 +61,15 @@ impl Display for Lit {
             }
             Lit::Bytes(bytes) => {
                 write!(f, "b'")?;
-                for byte in bytes {
-                    match char::from_u32(*byte as u32) {
-                        Some(ch) => write!(f, "{ch}")?,
-                        None => write!(f, "\\x{byte:02x}")?,
+                for byte in bytes.iter().copied() {
+                    match byte {
+                        b'\t' => write!(f, "\\t")?,
+                        b'\n' => write!(f, "\\n")?,
+                        b'\r' => write!(f, "\\r")?,
+                        b'\\' => write!(f, "\\\\")?,
+                        b'\'' => write!(f, "\\'")?,
+                        0x20..=0x7e => write!(f, "{}", byte as char)?,
+                        _ => write!(f, "\\x{byte:02x}")?,
                     }
                 }
                 write!(f, "'")

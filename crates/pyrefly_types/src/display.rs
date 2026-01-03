@@ -1267,6 +1267,13 @@ pub mod tests {
             Type::Literal(Lit::Bool(false)).to_string(),
             "Literal[False]"
         );
+        assert_eq!(
+            Type::Literal(Lit::Bytes(
+                vec![b' ', b'\t', b'\n', b'\r', 0x0b, 0x0c].into_boxed_slice()
+            ))
+            .to_string(),
+            r"Literal[b' \t\n\r\x0b\x0c']"
+        );
 
         // Enum literals (not all of these types make sense, we're only providing what's relevant)
         let my_enum = ClassType::new(fake_class("MyEnum", "mod.ule", 5), TArgs::default());
