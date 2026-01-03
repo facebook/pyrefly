@@ -9897,39 +9897,6 @@
     },
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(Any, tuple[type, ...]) failed",
-      "description": "assert_type(Any, tuple[type, ...]) failed",
-      "line": 102,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 45,
-      "stop_line": 102
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(Any, tuple[type, ...]) failed",
-      "description": "assert_type(Any, tuple[type, ...]) failed",
-      "line": 106,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 45,
-      "stop_line": 106
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(Any, tuple[type, ...]) failed",
-      "description": "assert_type(Any, tuple[type, ...]) failed",
-      "line": 110,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 45,
-      "stop_line": 110
-    },
-    {
-      "code": -2,
       "column": 5,
       "concise_description": "Class `object` has no class attribute `unknown`",
       "description": "Class `object` has no class attribute `unknown`",

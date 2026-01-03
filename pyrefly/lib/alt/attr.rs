@@ -1220,7 +1220,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let builtins_type_classtype = self.stdlib.builtins_type();
         self.get_instance_attribute(builtins_type_classtype, attr_name)
-            .and_then(|attr| attr.as_instance_method())
+            .and_then(|attr| match attr {
+                ClassAttribute::Property(getter, _, _) => {
+                    let error_swallower = self.error_swallower();
+                    let fake_range = TextRange::default();
+                    let ty = self.call_property_getter(getter, fake_range, &error_swallower, None);
+                    if error_swallower.is_empty() {
+                        Some(ty)
+                    } else {
+                        // Should not happen here, but just in case
+                        None
+                    }
+                }
+                _ => attr.as_instance_method(),
+            })
             .unwrap_or_else(fallback)
     }
 

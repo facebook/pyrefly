@@ -284,9 +284,6 @@
     "Line 84: Unexpected errors ['assert_type(type, type[Any]) failed']",
     "Line 99: Unexpected errors ['Object of class `type` has no attribute `unknown`']",
     "Line 100: Unexpected errors ['Object of class `type` has no attribute `unknown`']",
-    "Line 102: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
-    "Line 106: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
-    "Line 110: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
     "Line 139: Unexpected errors ['assert_type(type, type[Any]) failed']"
   ],
   "tuples_type_compat.py": [],
