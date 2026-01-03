@@ -929,7 +929,13 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
-        match self.scopes.look_up_name_for_read(name) {
+        let name_read_info = if matches!(usage, Usage::StaticTypeInformation) {
+            self.scopes
+                .look_up_name_for_read_in_static_type_context(name)
+        } else {
+            self.scopes.look_up_name_for_read(name)
+        };
+        match name_read_info {
             NameReadInfo::Flow {
                 idx,
                 initialized: is_initialized,

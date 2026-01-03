@@ -111,6 +111,27 @@ def test(o: C):
 );
 
 testcase!(
+    test_overload_method_name_matches_class,
+    r#"
+from typing import assert_type, overload
+
+class A:
+    @overload
+    def B(self, x: int) -> B: ...
+    @overload
+    def B(self, x: str) -> B: ...
+    def B(self, x):
+        return B()
+
+class B:
+    x: int
+
+assert_type(A().B(0).x, int)
+assert_type(A().B("1").x, int)
+    "#,
+);
+
+testcase!(
     test_overload_arg_errors,
     r#"
 from typing import overload, assert_type

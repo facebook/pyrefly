@@ -2251,12 +2251,36 @@ impl Scopes {
     /// Look up the information needed to create a `Usage` binding for a read of a name
     /// in the current scope stack.
     pub fn look_up_name_for_read(&self, name: Hashed<&Name>) -> NameReadInfo {
+        self.look_up_name_for_read_impl(name, false)
+    }
+
+    /// Look up a name for a static type context (annotations, type aliases, etc).
+    pub fn look_up_name_for_read_in_static_type_context(
+        &self,
+        name: Hashed<&Name>,
+    ) -> NameReadInfo {
+        self.look_up_name_for_read_impl(name, true)
+    }
+
+    fn look_up_name_for_read_impl(
+        &self,
+        name: Hashed<&Name>,
+        skip_class_flow_function_definitions: bool,
+    ) -> NameReadInfo {
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
             if let Some(flow_info) = scope.flow.get_info_hashed(name)
                 && flow_barrier < FlowBarrier::BlockFlow
             {
+                if skip_class_flow_function_definitions
+                    && is_class
+                    && flow_info
+                        .value()
+                        .is_some_and(|value| matches!(value.style, FlowStyle::FunctionDef(..)))
+                {
+                    return None;
+                }
                 let initialized = if flow_barrier == FlowBarrier::AllowFlowUnchecked {
                     // Just assume the name is initialized without checking.
                     InitializedInFlow::Yes
