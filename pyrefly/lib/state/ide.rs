@@ -127,6 +127,16 @@ fn create_intermediate_definition_from(
                     *original_name_range,
                 ));
             }
+            Binding::ImportViaGetattr(m, _name) => {
+                // For __getattr__ imports, the name doesn't exist directly in the module,
+                // so we point to __getattr__ instead.
+                return Some(IntermediateDefinition::NamedImport(
+                    def_key.range(),
+                    *m,
+                    pyrefly_python::dunder::GETATTR.clone(),
+                    None,
+                ));
+            }
             Binding::Module(name, path, ..) => {
                 let imported_module_name = if path.len() == 1 {
                     // This corresponds to the case for `import x.y` -- the corresponding key would

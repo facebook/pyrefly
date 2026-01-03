@@ -7,6 +7,7 @@
 
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -1190,6 +1191,10 @@ impl<'a> BindingsBuilder<'a> {
                         self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
                     Binding::Import(m, x.name.id.clone(), original_name_range)
+                } else if exported.contains_key(&dunder::GETATTR) {
+                    // Module has __getattr__, which means any attribute can be accessed.
+                    // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
+                    Binding::ImportViaGetattr(m, x.name.id.clone())
                 } else {
                     let x_as_module_name = m.append(&x.name.id);
                     let (finding, error) = match self.lookup.get(x_as_module_name) {

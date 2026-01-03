@@ -1501,7 +1501,8 @@ impl<'a> BindingsBuilder<'a> {
                     Binding::TypeVar(..)
                     | Binding::ParamSpec(..)
                     | Binding::TypeVarTuple(..)
-                    | Binding::Import(..),
+                    | Binding::Import(..)
+                    | Binding::ImportViaGetattr(..),
                 )
                 | None => Some((
                     KeyLegacyTypeParam(ShortIdentifier::new(name)),
