@@ -79,13 +79,27 @@ impl<'a> BindingsBuilder<'a> {
             Pattern::MatchAs(p) => {
                 // If there's no name for this pattern, refine the variable being matched
                 // If there is a new name, refine that instead
+                let original_subject = match_subject.clone();
+                let alias_name = p.name.as_ref().map(|name| name.id.clone());
                 let mut subject = match_subject;
                 if let Some(name) = &p.name {
                     self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
                     subject = Some(NarrowingSubject::Name(name.id.clone()));
                 };
                 if let Some(pattern) = p.pattern {
-                    self.bind_pattern(subject, *pattern, subject_idx)
+                    let mut narrow_ops = self.bind_pattern(subject, *pattern, subject_idx);
+                    if let (Some(alias_name), Some(original_subject)) =
+                        (&alias_name, &original_subject)
+                        && alias_name != original_subject.name()
+                        && let Some((alias_op, range)) = narrow_ops.0.get(alias_name).cloned()
+                    {
+                        narrow_ops.and_for_subject(
+                            original_subject,
+                            alias_op.rebase_subject(original_subject),
+                            range,
+                        );
+                    }
+                    narrow_ops
                 } else {
                     NarrowOps::new()
                 }
