@@ -1174,6 +1174,8 @@ pub enum ReturnTypeKind {
         /// We keep this just so we can scan for `@abstractmethod` and use the info to decide
         /// whether to skip the validation.
         decorators: Box<[Idx<KeyDecorator>]>,
+        /// The class this function belongs to, if any. Used to skip validation for protocol methods.
+        class_key: Option<Idx<KeyClass>>,
         implicit_return: Idx<Key>,
         is_generator: bool,
         has_explicit_return: bool,
