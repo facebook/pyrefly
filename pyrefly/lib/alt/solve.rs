@@ -3561,6 +3561,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::Import(m, name, _aliased) => self
                 .get_from_export(*m, None, &KeyExport(name.clone()))
                 .arc_clone(),
+            Binding::ImportViaGetattr(m, _name) => {
+                // Import via module-level __getattr__ for incomplete stubs.
+                // Get the return type of __getattr__.
+                let getattr_ty = self
+                    .get_from_export(*m, None, &KeyExport(dunder::GETATTR.clone()))
+                    .arc_clone();
+                getattr_ty
+                    .callable_return_type()
+                    .unwrap_or(Type::any_implicit())
+            }
             Binding::ClassDef(x, _decorators) => match &self.get_idx(*x).0 {
                 None => Type::any_implicit(),
                 Some(cls) => {
