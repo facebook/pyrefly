@@ -89,6 +89,29 @@ from lib import foo_renamed
 }
 
 #[test]
+fn hover_on_module_function_shows_function() {
+    let lib = r#"
+def foo() -> None: ...
+"#;
+    let code = r#"
+import lib
+
+lib.foo()
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert!(
+        report.contains("(function) foo"),
+        "Expected function label, got: {report}"
+    );
+    assert!(
+        !report.contains("(method) foo"),
+        "Did not expect method label, got: {report}"
+    );
+}
+
+#[test]
 fn hover_shows_unpacked_kwargs_fields() {
     let code = r#"
 from typing import TypedDict, Unpack
