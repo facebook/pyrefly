@@ -287,6 +287,27 @@ assert_type(~c, Literal[100])
 );
 
 testcase!(
+    test_unary_dunders_typevar_bound,
+    r#"
+from typing import Self
+
+class Foo:
+    def __neg__(self) -> Self:
+        return self
+    def __pos__(self) -> Self:
+        return self
+    def __invert__(self) -> Self:
+        return self
+
+def test[F: Foo](foo: F) -> F:
+    a: F = -foo
+    b: F = +foo
+    c: F = ~foo
+    return c
+    "#,
+);
+
+testcase!(
     test_unary_error,
     r#"
 +None  # E: Unary `+` is not supported on `None`
