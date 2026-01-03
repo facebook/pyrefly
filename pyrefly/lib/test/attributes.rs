@@ -1249,6 +1249,19 @@ def test(x: LiteralString):
 );
 
 testcase!(
+    test_private_attribute_outside_class,
+    r#"
+class A:
+    __secret: int = 0
+
+exposed = A.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+
+class B:
+    leaked = A.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+"#,
+);
+
+testcase!(
     test_attribute_access_on_type_callable,
     r#"
 from typing import Callable
