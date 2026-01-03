@@ -219,13 +219,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.unions(res)
     }
 
-    fn narrow_is_not_instance(&self, left: &Type, right: &Type) -> Type {
+    fn narrow_is_not_instance(&self, left_type: &Type, right_type: &Type) -> Type {
         let mut res = Vec::new();
-        for right in self.as_class_info(right.clone()) {
-            if let Some(right) = self.unwrap_class_object_silently(&right) {
-                res.push(self.subtract(left, &right))
+        for right_class_info_type in self.as_class_info(right_type.clone()) {
+            if let Some(runtime_type) = self.unwrap_class_object_silently(&right_class_info_type) {
+                let type_without_runtime_type_matches =
+                    self.distribute_over_union(left_type, |union_member_type| {
+                        if union_member_type.is_any() {
+                            return union_member_type.clone();
+                        }
+
+                        let does_union_member_type_match_runtime_type =
+                            match (union_member_type, &runtime_type) {
+                                (
+                                    Type::ClassType(union_member_class_type),
+                                    Type::ClassType(runtime_class_type),
+                                ) => self.has_superclass(
+                                    union_member_class_type.class_object(),
+                                    runtime_class_type.class_object(),
+                                ),
+                                (
+                                    Type::TypedDict(_) | Type::PartialTypedDict(_),
+                                    Type::ClassType(runtime_class_type),
+                                ) => self.has_superclass(
+                                    self.stdlib.dict_object(),
+                                    runtime_class_type.class_object(),
+                                ),
+                                _ => false,
+                            };
+
+                        if does_union_member_type_match_runtime_type
+                            || self.is_subset_eq(union_member_type, &runtime_type)
+                        {
+                            Type::never()
+                        } else {
+                            union_member_type.clone()
+                        }
+                    });
+                res.push(type_without_runtime_type_matches)
             } else {
-                res.push(left.clone())
+                res.push(left_type.clone())
             }
         }
         self.intersects(&res)
