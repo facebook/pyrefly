@@ -19,6 +19,7 @@ use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::Forallable;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::prelude::SliceExt;
@@ -913,6 +914,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 }
+            }
+            Type::Type(box Type::Any(AnyStyle::Implicit)) => {
+                // `type[Any]` is canoicalized from `type` or `Type`
+                let type_obj = self.stdlib.builtins_type().class_object();
+                let metadata = self.get_metadata_for_class(type_obj);
+                BaseClassParseResult::Parsed({
+                    ParsedBaseClass {
+                        class_object: type_obj.dupe(),
+                        range,
+                        metadata,
+                    }
+                })
             }
             _ => {
                 if is_new_type || !ty.is_any() {

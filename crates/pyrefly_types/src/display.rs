@@ -708,6 +708,7 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str(ta.name.as_str())
                 }
             }
+            Type::Type(box Type::Any(AnyStyle::Implicit)) => output.write_str("type"),
             Type::Type(ty) => {
                 output.write_str("type[")?;
                 self.fmt_helper_generic(ty, false, output)?;
