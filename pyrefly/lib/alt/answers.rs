@@ -464,7 +464,7 @@ impl Answers {
                     match key_to_intermediate_definition(bindings, key) {
                         None => continue,
                         Some(IntermediateDefinition::Local(_)) => continue,
-                        Some(IntermediateDefinition::Module(_)) => continue,
+                        Some(IntermediateDefinition::Module(..)) => continue,
                         Some(IntermediateDefinition::NamedImport(
                             _import_key,
                             module_name,
