@@ -91,6 +91,19 @@ class A:
 );
 
 testcase!(
+    test_unannotated_attribute_tuple_literal_promotion,
+    r#"
+from typing import assert_type
+class A:
+    def __init__(self):
+        self.x = (42, 42)
+def f(a: A):
+    assert_type(a.x, tuple[int, int])
+    a.x = (0, 0)
+    "#,
+);
+
+testcase!(
     test_super_object_bad_assignment,
     r#"
 class A:
