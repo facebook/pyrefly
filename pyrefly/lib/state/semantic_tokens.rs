@@ -228,15 +228,40 @@ impl SemanticTokenBuilder {
         key: &Key,
         definition_module: ModuleName,
         symbol_kind: SymbolKind,
+        current_module: ModuleName,
     ) {
         let reference_range = key.range();
         let (token_type, mut token_modifiers) =
             symbol_kind.to_lsp_semantic_token_type_with_modifiers();
+
+        let is_import = matches!(key, Key::Import(..));
+        // check if this is a local definition key (like Key::Definition).
+        let is_local_definition_key = matches!(
+            key,
+            Key::Definition(_)
+                | Key::MutableCapture(_)
+                | Key::CompletedPartialType(_)
+                | Key::PartialTypeWithUpstreamsCompleted(_)
+                | Key::FacetAssign(_)
+                | Key::Delete(_)
+        );
+
+        let is_truly_local_definition =
+            is_local_definition_key && definition_module == current_module;
+
+        let is_local_definition =
+            !is_import && !is_local_definition_key && definition_module == current_module;
+
+        let is_bound_name_to_local =
+            matches!(key, Key::BoundName(_)) && definition_module == current_module;
         let is_default_library = {
             let module_name_str = definition_module.as_str();
-            module_name_str == "builtins"
+            (module_name_str == "builtins"
                 || module_name_str == "typing"
-                || module_name_str == "typing_extensions"
+                || module_name_str == "typing_extensions")
+                && !is_truly_local_definition
+                && !is_local_definition
+                && !is_bound_name_to_local
         };
         if is_default_library {
             token_modifiers.push(SemanticTokenModifier::DEFAULT_LIBRARY);
@@ -303,7 +328,7 @@ impl SemanticTokenBuilder {
                 x.recurse(&mut |x| self.process_stmt(x));
             }
             Stmt::Assign(assign) => {
-                if self.is_disabled(assign.range()) {
+                if !self.is_disabled(assign.range()) {
                     for target in &assign.targets {
                         if let Expr::Name(name) = target {
                             self.push_if_in_range(
