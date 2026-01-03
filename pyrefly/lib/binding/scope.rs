@@ -1031,19 +1031,28 @@ impl Scope {
         )
     }
 
-    pub fn function(range: TextRange, is_async: bool) -> Self {
+    fn function_with_flow_barrier(
+        range: TextRange,
+        is_async: bool,
+        flow_barrier: FlowBarrier,
+    ) -> Self {
         Self::new(
             range,
-            FlowBarrier::BlockFlow,
+            flow_barrier,
             ScopeKind::Function(ScopeFunction::new(is_async)),
         )
     }
+
+    pub fn function(range: TextRange, is_async: bool) -> Self {
+        Self::function_with_flow_barrier(range, is_async, FlowBarrier::BlockFlow)
+    }
+
+    fn nested_function(range: TextRange, is_async: bool) -> Self {
+        Self::function_with_flow_barrier(range, is_async, FlowBarrier::AllowFlowUnchecked)
+    }
+
     pub fn lambda(range: TextRange, is_async: bool) -> Self {
-        Self::new(
-            range,
-            FlowBarrier::AllowFlowUnchecked,
-            ScopeKind::Function(ScopeFunction::new(is_async)),
-        )
+        Self::function_with_flow_barrier(range, is_async, FlowBarrier::AllowFlowUnchecked)
     }
 
     pub fn method(range: TextRange, name: Identifier, is_async: bool) -> Self {
@@ -1356,6 +1365,8 @@ impl Scopes {
     ) {
         if in_class {
             self.push(Scope::method(range, name.clone(), is_async));
+        } else if self.in_function_scope() {
+            self.push(Scope::nested_function(range, is_async));
         } else {
             self.push(Scope::function(range, is_async));
         }
