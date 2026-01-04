@@ -409,13 +409,16 @@ impl<'a> DefinitionsBuilder<'a> {
                 }
             }
             Stmt::ImportFrom(x) => {
-                let name = self.module_name.new_maybe_relative(
+                let maybe_imported_module = self.module_name.new_maybe_relative(
                     self.is_init,
                     x.level,
-                    x.module.as_ref().map(|x| &x.id),
+                    x.module.as_ref().map(|m| &m.id),
                 );
+                let is_relative_self_import = self.is_init
+                    && x.module.is_none()
+                    && maybe_imported_module == Some(self.module_name);
                 if self.is_init
-                    && let Some(imported_module) = name
+                    && let Some(imported_module) = maybe_imported_module
                     && let Some(submodule) =
                         implicitly_imported_submodule(self.module_name, imported_module)
                 {
@@ -423,33 +426,41 @@ impl<'a> DefinitionsBuilder<'a> {
                 }
                 for a in &x.names {
                     if &a.name == "*" {
-                        if let Some(module) = name {
+                        if let Some(module) = maybe_imported_module {
                             self.inner.import_all.insert(module, a.name.range);
                         }
-                    } else {
-                        let style = match name {
-                            None => DefinitionStyle::ImportInvalidRelative,
-                            Some(name) => {
-                                if a.asname.as_ref().map(|x| &x.id) == Some(&a.name.id) {
-                                    DefinitionStyle::ImportAsEq(name)
-                                } else if a.asname.is_some() {
-                                    DefinitionStyle::ImportAs(name, a.name.id.clone())
-                                } else {
-                                    DefinitionStyle::Import(name)
-                                }
-                            }
-                        };
-                        if matches!(&style, &DefinitionStyle::ImportAsEq(_))
-                            && a.name.id == dunder::ALL
-                            && let Some(module) = name
-                        {
-                            self.inner.dunder_all = DunderAll {
-                                kind: DunderAllKind::Specified,
-                                entries: vec![DunderAllEntry::Module(x.range, module)],
+                        continue;
+                    }
+                    if is_relative_self_import {
+                        let binding = a.asname.as_ref().unwrap_or(&a.name);
+                        if binding.id == a.name.id {
+                            self.inner
+                                .implicitly_imported_submodules
+                                .insert(binding.id.clone());
+                        }
+                    }
+                    let style = match maybe_imported_module {
+                        None => DefinitionStyle::ImportInvalidRelative,
+                        Some(name) => {
+                            if a.asname.as_ref().map(|x| &x.id) == Some(&a.name.id) {
+                                DefinitionStyle::ImportAsEq(name)
+                            } else if a.asname.is_some() {
+                                DefinitionStyle::ImportAs(name, a.name.id.clone())
+                            } else {
+                                DefinitionStyle::Import(name)
                             }
                         }
-                        self.add_identifier(a.asname.as_ref().unwrap_or(&a.name), style);
+                    };
+                    if matches!(style, DefinitionStyle::ImportAsEq(_))
+                        && a.name.id == dunder::ALL
+                        && let Some(module) = maybe_imported_module
+                    {
+                        self.inner.dunder_all = DunderAll {
+                            kind: DunderAllKind::Specified,
+                            entries: vec![DunderAllEntry::Module(x.range, module)],
+                        }
                     }
+                    self.add_identifier(a.asname.as_ref().unwrap_or(&a.name), style);
                 }
             }
             Stmt::ClassDef(StmtClassDef {
