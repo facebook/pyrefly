@@ -526,12 +526,21 @@ x5: X = ["foo"]  # Not OK
 );
 
 testcase!(
-    bug = "Doesn't detect as a TypeAlias, but it is one. Maybe this is reasonable.",
     test_type_alias_with_string,
     r#"
-class Y: pass
-class C[T]: pass
-X = C["Y"] # E: Expected a type form, got instance of `Literal['Y']`
+from typing import TYPE_CHECKING, assert_type
+
+if TYPE_CHECKING:
+    class A: 
+        pass
+
+class C[T]: 
+    pass
+
+x = C["A"]()
+
+assert_type(x, C[A])
+C["1"]()  # E: Expected a type form, got instance of `Literal[1]`
 "#,
 );
 
