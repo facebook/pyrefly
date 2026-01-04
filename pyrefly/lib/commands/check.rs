@@ -148,6 +148,9 @@ pub struct CheckArgs {
     /// Behavior-related configuration options
     #[command(flatten, next_help_heading = "Behavior")]
     behavior: BehaviorArgs,
+    /// Suppress all output
+    #[arg(long, short = 'q', help = "Suppress all output")]
+    quiet: bool,
 }
 
 /// Arguments for snippet checking (excludes behavior args that don't apply to snippets)
@@ -184,6 +187,7 @@ impl SnippetCheckArgs {
                 remove_unused_ignores: false,
                 all: false,
             },
+            quiet: false,
         };
         match check_args.run_once_with_snippet(self.code, config_finder) {
             Ok((status, _)) => Ok(status),
@@ -806,9 +810,13 @@ impl CheckArgs {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         let type_check_start = Instant::now();
-        transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+        if !self.quiet {
+            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+        }
         transaction.run(handles, require);
-        transaction.set_subscriber(None);
+        if !self.quiet {
+            transaction.set_subscriber(None);
+        }
 
         let loads = if self.behavior.check_all {
             transaction.get_all_errors()
@@ -899,7 +907,9 @@ impl CheckArgs {
         if self.output.summary != Summary::None {
             let suppress_count = errors.suppressed.len();
             if suppress_count == 0 {
-                info!("{}", count(shown_errors_count, "error"))
+                if !self.quiet || shown_errors_count > 0 {
+                    info!("{}", count(shown_errors_count, "error"))
+                }
             } else {
                 info!(
                     "{} ({} suppressed)",
