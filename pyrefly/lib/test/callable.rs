@@ -1146,6 +1146,23 @@ def f():
 );
 
 testcase!(
+    test_walrus_reuse_name_in_if_condition,
+    r#"
+from re import compile
+
+interface_re = compile(r"^foo")
+ipv4_re = compile(r"bar$")
+line = str()
+
+if match := interface_re.match(line):
+    pass
+
+if line and (match := ipv4_re.search(line)):
+    print(match)
+    "#,
+);
+
+testcase!(
     test_unbound_local_name_error_in_def,
     r#"
 def f():
