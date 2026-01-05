@@ -170,43 +170,6 @@ fn assert_no_extract_action(code: &str) {
     );
 }
 
-fn compute_extract_field_actions(
-    code: &str,
-) -> (
-    ModuleInfo,
-    Vec<Vec<(Module, TextRange, String)>>,
-    Vec<String>,
-) {
-    let (handles, state) =
-        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
-    let handle = handles.get("main").unwrap();
-    let transaction = state.transaction();
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let selection = find_marked_range(module_info.contents());
-    let actions = transaction
-        .extract_field_code_actions(handle, selection)
-        .unwrap_or_default();
-    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
-        actions.iter().map(|action| action.edits.clone()).collect();
-    let titles = actions.iter().map(|action| action.title.clone()).collect();
-    (module_info, edit_sets, titles)
-}
-
-fn apply_first_extract_field_action(code: &str) -> Option<String> {
-    let (module_info, actions, _) = compute_extract_field_actions(code);
-    let edits = actions.first()?;
-    Some(apply_refactor_edits_for_module(&module_info, edits))
-}
-
-fn assert_no_extract_field_action(code: &str) {
-    let (_, actions, _) = compute_extract_field_actions(code);
-    assert!(
-        actions.is_empty(),
-        "expected no extract-field actions, found {}",
-        actions.len()
-    );
-}
-
 #[test]
 fn basic_test() {
     let report = get_batched_lsp_operations_report_allow_error(
@@ -851,9 +814,57 @@ def sink(values):
     assert_no_extract_variable_action(code);
 }
 
-#[test]
-fn extract_field_basic_instance_method() {
-    let code = r#"
+mod extract_field_tests {
+    use pretty_assertions::assert_eq;
+
+    use super::Module;
+    use super::ModuleInfo;
+    use super::Require;
+    use super::TextRange;
+    use super::apply_refactor_edits_for_module;
+    use super::find_marked_range;
+    use super::mk_multi_file_state_assert_no_errors;
+
+    fn compute_extract_field_actions(
+        code: &str,
+    ) -> (
+        ModuleInfo,
+        Vec<Vec<(Module, TextRange, String)>>,
+        Vec<String>,
+    ) {
+        let (handles, state) =
+            mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+        let handle = handles.get("main").unwrap();
+        let transaction = state.transaction();
+        let module_info = transaction.get_module_info(handle).unwrap();
+        let selection = find_marked_range(module_info.contents());
+        let actions = transaction
+            .extract_field_code_actions(handle, selection)
+            .unwrap_or_default();
+        let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+            actions.iter().map(|action| action.edits.clone()).collect();
+        let titles = actions.iter().map(|action| action.title.clone()).collect();
+        (module_info, edit_sets, titles)
+    }
+
+    fn apply_first_extract_field_action(code: &str) -> Option<String> {
+        let (module_info, actions, _) = compute_extract_field_actions(code);
+        let edits = actions.first()?;
+        Some(apply_refactor_edits_for_module(&module_info, edits))
+    }
+
+    fn assert_no_extract_field_action(code: &str) {
+        let (_, actions, _) = compute_extract_field_actions(code);
+        assert!(
+            actions.is_empty(),
+            "expected no extract-field actions, found {}",
+            actions.len()
+        );
+    }
+
+    #[test]
+    fn extract_field_basic_instance_method() {
+        let code = r#"
 GLOBAL_FACTOR = 3
 
 class Processor:
@@ -865,8 +876,9 @@ class Processor:
             # EXTRACT-END
         )
 "#;
-    let updated = apply_first_extract_field_action(code).expect("expected extract field action");
-    let expected = r#"
+        let updated =
+            apply_first_extract_field_action(code).expect("expected extract field action");
+        let expected = r#"
 GLOBAL_FACTOR = 3
 
 class Processor:
@@ -879,12 +891,12 @@ class Processor:
             # EXTRACT-END
         )
 "#;
-    assert_eq!(expected.trim(), updated.trim());
-}
+        assert_eq!(expected.trim(), updated.trim());
+    }
 
-#[test]
-fn extract_field_rejects_method_local_dependencies() {
-    let code = r#"
+    #[test]
+    fn extract_field_rejects_method_local_dependencies() {
+        let code = r#"
 class Collector:
     def process(self, values):
         interim = len(values)
@@ -894,12 +906,12 @@ class Collector:
             # EXTRACT-END
         )
 "#;
-    assert_no_extract_field_action(code);
-}
+        assert_no_extract_field_action(code);
+    }
 
-#[test]
-fn extract_field_classmethod_uses_cls_receiver() {
-    let code = r#"
+    #[test]
+    fn extract_field_classmethod_uses_cls_receiver() {
+        let code = r#"
 GLOBAL = 7
 
 class Builder:
@@ -911,8 +923,9 @@ class Builder:
             # EXTRACT-END
         )
 "#;
-    let updated = apply_first_extract_field_action(code).expect("expected extract field action");
-    let expected = r#"
+        let updated =
+            apply_first_extract_field_action(code).expect("expected extract field action");
+        let expected = r#"
 GLOBAL = 7
 
 class Builder:
@@ -925,7 +938,40 @@ class Builder:
             # EXTRACT-END
         )
 "#;
-    assert_eq!(expected.trim(), updated.trim());
+        assert_eq!(expected.trim(), updated.trim());
+    }
+
+    #[test]
+    fn extract_field_nested_class_inserts_into_inner_class() {
+        let code = r#"
+GLOBAL = 1
+
+class Outer:
+    class Inner:
+        def compute(self):
+            return (
+                # EXTRACT-START
+                GLOBAL + 2
+                # EXTRACT-END
+            )
+"#;
+        let updated =
+            apply_first_extract_field_action(code).expect("expected extract field action");
+        let expected = r#"
+GLOBAL = 1
+
+class Outer:
+    class Inner:
+        extracted_field = GLOBAL + 2
+        def compute(self):
+            return (
+                # EXTRACT-START
+                self.extracted_field
+                # EXTRACT-END
+            )
+"#;
+        assert_eq!(expected.trim(), updated.trim());
+    }
 }
 
 #[test]

@@ -7,4 +7,5 @@
 
 pub(crate) mod extract_field;
 pub(crate) mod extract_function;
+mod extract_shared;
 pub(crate) mod extract_variable;

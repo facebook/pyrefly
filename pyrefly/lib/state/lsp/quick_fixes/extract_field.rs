@@ -11,10 +11,8 @@ use pyrefly_build::handle::Handle;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
-use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
@@ -22,9 +20,11 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use super::extract_function::LocalRefactorCodeAction;
-use super::extract_variable::is_exact_expression;
-use super::extract_variable::line_indent_and_start;
-use super::extract_variable::split_selection;
+use super::extract_shared::first_parameter_name;
+use super::extract_shared::function_has_decorator;
+use super::extract_shared::is_exact_expression;
+use super::extract_shared::line_indent_and_start;
+use super::extract_shared::split_selection;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 
@@ -125,7 +125,7 @@ fn find_field_context_in_class(
     for stmt in &class_def.body {
         match stmt {
             Stmt::FunctionDef(function_def) if function_def.range().contains_range(selection) => {
-                if is_static_method(function_def) {
+                if function_has_decorator(function_def, "staticmethod") {
                     return None;
                 }
                 let receiver_name = first_parameter_name(&function_def.parameters)?;
@@ -164,32 +164,6 @@ fn field_insertion_point(class_def: &StmtClassDef, source: &str) -> Option<(Stri
     }
     let (class_indent, _) = line_indent_and_start(source, class_def.range().start())?;
     Some((format!("{class_indent}    "), class_def.range().end()))
-}
-
-fn first_parameter_name(parameters: &Parameters) -> Option<String> {
-    if let Some(param) = parameters.posonlyargs.first() {
-        return Some(param.name().id.to_string());
-    }
-    parameters
-        .args
-        .first()
-        .map(|param| param.name().id.to_string())
-}
-
-fn is_static_method(function_def: &StmtFunctionDef) -> bool {
-    function_def
-        .decorator_list
-        .iter()
-        .any(|decorator| decorator_matches_name(&decorator.expression, "staticmethod"))
-}
-
-fn decorator_matches_name(decorator: &Expr, expected: &str) -> bool {
-    match decorator {
-        Expr::Name(identifier) => identifier.id.as_str() == expected,
-        Expr::Attribute(attribute) => attribute.attr.as_str() == expected,
-        Expr::Call(call) => decorator_matches_name(call.func.as_ref(), expected),
-        _ => false,
-    }
 }
 
 struct IdentifierRef {
