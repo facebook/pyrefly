@@ -15,6 +15,7 @@ use itertools::izip;
 use pyrefly_python::dunder;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::read_only::ReadOnlyReason;
+use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -1081,6 +1082,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_params(&l.params, &u.params)?;
                 self.is_subset_eq(&l.ret, &u.ret)
             }
+
+            // Callable is not allowed as an argument to type.
+            // https://typing.python.org/en/latest/spec/special-types.html#type
+            (
+                Type::Type(box (Type::Callable(_) | Type::SpecialForm(SpecialForm::Callable))),
+                Type::ClassType(cls),
+            ) if cls.is_builtin("type") => Err(SubsetError::TypeCannotAcceptSpecialForms(
+                SpecialForm::Callable,
+            )),
+            (
+                Type::Type(box (Type::Callable(_) | Type::SpecialForm(SpecialForm::Callable))),
+                Type::Type(_),
+            ) => Err(SubsetError::TypeCannotAcceptSpecialForms(
+                SpecialForm::Callable,
+            )),
+
             (Type::TypedDict(got), Type::TypedDict(want)) => self.is_subset_typed_dict(got, want),
             (Type::TypedDict(got), Type::PartialTypedDict(want)) => {
                 self.is_subset_partial_typed_dict(got, want)

@@ -9853,6 +9853,17 @@
     },
     {
       "code": -2,
+      "column": 7,
+      "concise_description": "Argument `type[Callable]` is not assignable to parameter `x` with type `type[@_]` in function `func5`",
+      "description": "Argument `type[Callable]` is not assignable to parameter `x` with type `type[@_]` in function `func5`\n  `type` cannot accept special form `Callable` as an argument",
+      "line": 70,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 70
+    },
+    {
+      "code": -2,
       "column": 12,
       "concise_description": "Expected 1 type argument for `type`, got 2",
       "description": "Expected 1 type argument for `type`, got 2",

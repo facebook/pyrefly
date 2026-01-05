@@ -2009,3 +2009,22 @@ def test():
     x: (yield from [1])  # E:
     "#,
 );
+
+testcase!(
+    test_passing_callable_as_type_not_allowed,
+    r#"
+from typing import Callable, Type, Any
+def takes_type(x: type): ...
+def takes_Type(x: Type): ...
+def takes_type_any(x: type[Any]): ...
+def takes_Type_any(x: Type[Any]): ...
+takes_type(Callable) # E: is not assignable to parameter `x` with type `type` in function
+takes_type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type` in function
+takes_Type(Callable) # E: is not assignable to parameter `x` with type `type[Unknown]` in function
+takes_Type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Unknown]` in function
+takes_type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+"#,
+);

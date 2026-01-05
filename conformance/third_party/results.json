@@ -3,7 +3,7 @@
   "pass": 106,
   "fail": 32,
   "pass_rate": 0.77,
-  "differences": 133,
+  "differences": 132,
   "passing": [
     "aliases_explicit.py",
     "aliases_newtype.py",
@@ -144,7 +144,7 @@
     "qualifiers_annotated.py": 6,
     "qualifiers_final_annotation.py": 7,
     "specialtypes_never.py": 1,
-    "specialtypes_type.py": 5
+    "specialtypes_type.py": 4
   },
   "comment": "@generated"
 }
