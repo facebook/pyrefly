@@ -78,3 +78,50 @@ ERROR * Missing type stubs for `django` * (glob)
  INFO * revealed type: Module[django.forms] * (glob)
 [1]
 ```
+
+## Test `-q`/`--quiet` flag
+
+No `--quiet` flag given for a correct program:
+
+```sh
+echo >$TMPDIR/a.py "a: int = 1"
+
+$PYREFLY check $TMPDIR/a.py
+ INFO 0 errors
+```
+
+The `--quiet` flag is given for a correct program, so not output printed:
+
+```sh
+$PYREFLY check --quiet $TMPDIR/a.py
+```
+
+With the `--quiet` flag, the error are reported regardless:
+
+```sh
+echo >$TMPDIR/b.py "b: str = 1"                  
+```
+
+```sh
+$PYREFLY check --quiet $TMPDIR/b.py
+ERROR `Literal[1]` is not assignable to `str` [bad-assignment]
+ --> /var/folders/yt/48q9hkh95x7fg1ps8sr95wd40000gn/T/b.py:1:10
+  |
+1 | b: str = 1
+  |          ^
+  |
+ INFO 1 error
+```
+
+Without the `--quiet` flag, the error are reported regardless as before:
+
+```sh
+$PYREFLY check $TMPDIR/b.py
+ERROR `Literal[1]` is not assignable to `str` [bad-assignment]
+ --> /var/folders/yt/48q9hkh95x7fg1ps8sr95wd40000gn/T/b.py:1:10
+  |
+1 | b: str = 1
+  |          ^
+  |
+ INFO 1 error
+```
