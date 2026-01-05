@@ -96,7 +96,7 @@ The `--quiet` flag is given for a correct program, so not output printed:
 $PYREFLY check --quiet $TMPDIR/a.py
 ```
 
-With the `--quiet` flag, the error are reported regardless:
+With the `--quiet` flag, the errors are reported regardless:
 
 ```sh
 echo >$TMPDIR/b.py "b: str = 1"                  
@@ -113,7 +113,7 @@ ERROR `Literal[1]` is not assignable to `str` [bad-assignment]
  INFO 1 error
 ```
 
-Without the `--quiet` flag, the error are reported regardless as before:
+Without the `--quiet` flag, the errors are reported regardless as before:
 
 ```sh
 $PYREFLY check $TMPDIR/b.py
