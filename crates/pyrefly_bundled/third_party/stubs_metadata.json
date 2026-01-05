@@ -5,8 +5,6 @@
       "source": "PyPI",
       "repository": "https://github.com/youtype/mypy_boto3_builder",
       "pypi": "https://pypi.org/project/boto3-stubs/",
-      "license": "MIT",
-      "author": "Vlad Emelianov",
       "bundled_date": "2025-12-08",
       "notes": "Type annotations for boto3, generated with mypy-boto3-builder"
     },
@@ -14,8 +12,6 @@
       "source": "PyPI",
       "repository": "https://github.com/youtype/botocore-stubs",
       "pypi": "https://pypi.org/project/botocore-stubs/",
-      "license": "MIT",
-      "author": "Vlad Emelianov",
       "bundled_date": "2025-12-08",
       "notes": "Type annotations for botocore"
     },
@@ -23,8 +19,6 @@
       "source": "PyPI",
       "repository": "https://github.com/goszpeti/conan-stubs",
       "pypi": "https://pypi.org/project/conan-stubs/",
-      "license": "MIT",
-      "author": "Peter Gosztolya",
       "bundled_date": "2025-12-08",
       "notes": "Type stubs for Conan package manager"
     },
@@ -32,8 +26,6 @@
       "source": "PyPI",
       "repository": "https://github.com/hoel-bagard/matplotlib-stubs",
       "pypi": "https://pypi.org/project/matplotlib-stubs/",
-      "license": "MIT",
-      "author": "Hoël Bagard",
       "bundled_date": "2025-12-10",
       "notes": "Unofficial type stubs for matplotlib, derived from Microsoft's python-type-stubs"
     },
@@ -41,8 +33,6 @@
       "source": "PyPI",
       "repository": "https://github.com/pandas-dev/pandas-stubs",
       "pypi": "https://pypi.org/project/pandas-stubs/",
-      "license": "BSD-3-Clause",
-      "author": "pandas development team",
       "version": "2.3.3.251201",
       "bundled_date": "2025-12-08",
       "notes": "Official pandas type stubs"
@@ -51,8 +41,6 @@
       "source": "GitHub",
       "repository": "https://github.com/microsoft/python-type-stubs",
       "path_in_repo": "stubs/skimage",
-      "license": "MIT",
-      "author": "Microsoft Corporation",
       "bundled_date": "2025-12-10",
       "notes": "Type stubs for scikit-image from Microsoft's python-type-stubs repo"
     },
@@ -60,8 +48,6 @@
       "source": "GitHub",
       "repository": "https://github.com/microsoft/python-type-stubs",
       "path_in_repo": "stubs/sklearn",
-      "license": "MIT",
-      "author": "Microsoft Corporation",
       "bundled_date": "2025-12-10",
       "notes": "Type stubs for scikit-learn from Microsoft's python-type-stubs repo"
     },
@@ -69,8 +55,6 @@
       "source": "GitHub",
       "repository": "https://github.com/microsoft/python-type-stubs",
       "path_in_repo": "stubs/sympy-stubs",
-      "license": "MIT",
-      "author": "Microsoft Corporation",
       "bundled_date": "2025-12-10",
       "notes": "Type stubs for SymPy from Microsoft's python-type-stubs repo"
     },
@@ -78,8 +62,6 @@
       "source": "GitHub",
       "repository": "https://github.com/microsoft/python-type-stubs",
       "path_in_repo": "stubs/vispy",
-      "license": "MIT",
-      "author": "Microsoft Corporation",
       "bundled_date": "2025-12-10",
       "notes": "Type stubs for VisPy from Microsoft's python-type-stubs repo"
     }
