@@ -139,7 +139,10 @@ fn create_intermediate_definition_from(
                     // actual module that corresponds to the key must be `x.y`.
                     name.dupe()
                 };
-                return Some(IntermediateDefinition::Module(def_key.range(), imported_module_name));
+                return Some(IntermediateDefinition::Module(
+                    def_key.range(),
+                    imported_module_name,
+                ));
             }
             Binding::Function(idx, ..) => {
                 let func = bindings.get(*idx);
