@@ -763,6 +763,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) {
+        // Check if this is a slots violation FIRST (before __setattr__ lookup).
+        // This is important because object.__setattr__ is always found, but we still
+        // want to emit a more specific error for slots violations.
+        if let NotFoundOn::ClassInstance(class, _) = &not_found {
+            if let Some(msg) = self.check_attr_violates_slots(class, attr_name) {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::new(ErrorKind::MissingAttribute, context),
+                    msg,
+                );
+                return;
+            }
+        }
+
         let (setattr_found, setattr_not_found, setattr_error) = self
             .lookup_magic_dunder_attr(attr_base, &dunder::SETATTR)
             .decompose();
@@ -799,6 +814,85 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 not_found.to_error_msg(attr_name),
             );
         }
+    }
+
+    /// Check if assigning to an attribute violates `__slots__` restrictions.
+    ///
+    /// Returns `Some(error_message)` if the attribute is not allowed by slots,
+    /// `None` if the attribute is allowed or no slots restrictions apply.
+    fn check_attr_violates_slots(&self, class: &Class, attr_name: &Name) -> Option<String> {
+        // Collect slots from the class and all ancestors.
+        // According to CPython semantics:
+        // - If any class in MRO has `__dict__` in slots, allow everything
+        // - If any class in MRO is missing `__slots__`, it has implicit `__dict__`, allow everything
+        // - Otherwise, the attribute must be in the union of all slots in the MRO
+
+        let mut all_slots: SmallSet<Name> = SmallSet::new();
+        let mut has_any_slots = false;
+
+        // Check current class - compute slots metadata on-demand to ensure fields are solved
+        let metadata = self.get_metadata_for_class(class);
+        let slots = self.compute_slots_metadata(class, metadata.dataclass_metadata());
+        match slots {
+            Some(slots) => {
+                if slots.has_dict_slot {
+                    return None; // __dict__ in slots allows any attribute
+                }
+                has_any_slots = true;
+                all_slots.extend(slots.slots.iter().cloned());
+            }
+            None => {
+                // Current class has no __slots__ definition, so it has implicit __dict__.
+                // This means the instance can have arbitrary attributes.
+                return None;
+            }
+        }
+
+        // Check ancestors
+        let mro = self.get_mro_for_class(class);
+        for ancestor in mro.ancestors(self.stdlib) {
+            // Special case: `object` is the root of all classes and implicitly allows
+            // __slots__ to work. Don't treat object's lack of __slots__ as having __dict__.
+            if ancestor.is_builtin("object") {
+                continue;
+            }
+
+            let anc_class = ancestor.class_object();
+            let anc_metadata = self.get_metadata_for_class(anc_class);
+            let anc_slots =
+                self.compute_slots_metadata(anc_class, anc_metadata.dataclass_metadata());
+            match anc_slots {
+                Some(slots) => {
+                    if slots.has_dict_slot {
+                        return None; // __dict__ in ancestor's slots allows any attribute
+                    }
+                    has_any_slots = true;
+                    all_slots.extend(slots.slots.iter().cloned());
+                }
+                None => {
+                    // Ancestor has no __slots__ definition, so it has implicit __dict__.
+                    // This means the class can have arbitrary attributes.
+                    return None;
+                }
+            }
+        }
+
+        // If no class in the hierarchy has __slots__, there are no restrictions.
+        if !has_any_slots {
+            return None;
+        }
+
+        // Check if the attribute is in the combined slots.
+        if all_slots.contains(attr_name) {
+            return None;
+        }
+
+        // Attribute is not in slots - this is a violation.
+        Some(format!(
+            "Cannot assign to attribute `{}`: not listed in `__slots__` of class `{}`",
+            attr_name,
+            class.name()
+        ))
     }
 
     fn check_delattr(
@@ -926,6 +1020,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 Attribute::ClassAttribute(class_attr) => {
+                    // Check slots restriction before allowing the write.
+                    // This covers instance attribute assignments like `self.y = 3`.
+                    let instance_class_for_slots = match &found_on {
+                        AttributeBase1::ClassInstance(cls) => Some(cls.class_object()),
+                        AttributeBase1::SelfType(cls) => Some(cls.class_object()),
+                        _ => None,
+                    };
+                    if let Some(class) = instance_class_for_slots {
+                        if let Some(msg) = self.check_attr_violates_slots(class, attr_name) {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::new(ErrorKind::MissingAttribute, context),
+                                msg,
+                            );
+                            should_narrow = false;
+                            continue;
+                        }
+                    }
+
                     // If we are writing to an instance, we may need access to
                     // the class to special-case dataclass converters.
                     let instance_class = match &found_on {
