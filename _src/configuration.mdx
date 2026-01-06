@@ -598,6 +598,141 @@ allowlist or denylist). Regular
 - Default: `true`
 - Flag equivalent: `--use-ignore-files`
 
+### `build-system`
+
+Pyrefly supports integrating into build systems to discover targets to type
+check and their dependencies. It currently natively supports
+[Buck2](https://buck2.build), as well as arbitrary build systems via custom
+queries.
+
+**Note that support for build systems is currently unstable, and breakage may
+occur without notice. Support will likely be lower priority than other issues
+for a while.**
+
+#### Buck2
+
+To configure Pyrefly to use Buck2 as a build system, add the following to your
+`pyrefly.toml`:
+
+```toml
+[build-system]
+type = "buck"
+# Optional: The isolation dir for Buck2 to use.
+isolation-dir = "pyrefly"
+# Optional: Extra flags passed to Buck2.
+extras = ["--verbose", "4"]
+```
+
+Behind the scenes, Pyrefly will run the
+`prelude//python/sourcedb/pyrefly.bxl:main` [BXL
+script](https://buck2.build/docs/bxl/) to get the necessary information about
+the targets to type check.
+
+Here is a description of the supported optional options:
+
+**`isolation-dir`**
+
+Name of the isolation dir to use when running the BXL query (see `buck2 --help`
+or [Buck's documentation](https://buck2.build/docs/concepts/isolation_dir/) for
+more information about isolation dirs).
+
+Type: string
+Default: none (Buck's own default is `v2`)
+
+**`extras`**
+
+Extra command line arguments passed to `buck2` when running the query.
+
+- Type: list of strings
+- Default: `[]`
+
+#### Custom queries
+
+Arbitrary build systems can be integrated using the `custom` type:
+
+```toml
+[build-system]
+type = "custom"
+command = ["some", "command", "..."]
+```
+
+Here is a description of the supported options:.
+
+**`command`**
+
+The command executed to query the build system about available targets.
+
+Pyrefly will call this in the form `<command...> @<argfile>`, where `<argfile>`
+has the format:
+
+```text
+--
+<arg-flag>
+<arg>
+...
+```
+
+`<arg-flag>` is either `--file` or `--target`, depending on the type of
+`<arg>`, and `<arg>` is an absolute path to a file or a build system's target.
+
+The command should output a JSON file with the following structure:
+
+```json
+{
+    "root": "/path/to/this/repository",
+    "db": {
+        "//colorama:py-stubs": {
+            "srcs": {
+                "colorama": [
+                    "colorama/__init__.pyi"
+                ]
+            },
+            "deps": [],
+            "buildfile_path": "colorama/BUCK",
+            "python_version": "3.12",
+            "python_platform": "linux"
+        },
+        "//colorama:py": {
+            "srcs": {
+                "colorama": [
+                    "colorama/__init__.py"
+                ]
+            },
+            "deps": ["//colorama:py-stubs"],
+            "buildfile_path": "colorama/BUCK",
+            "python_version": "3.12",
+            "python_platform": "linux"
+        },
+        "//colorama:colorama": {
+            "alias": "//colorama:py"
+        }
+    }
+}
+```
+
+Where:
+
+- `root` is the absolute path the root of the repository.
+- `db` is a map from target names to either:
+    - library target definitions (e.g. `//colorama:py` and `//colorama:py-stubs` here)
+    - target aliases (e.g. `//colorama:colorama` here)
+
+For reference, the command invoked as part of the Buck2 integration is:
+
+```sh
+buck2 [--isolation-dir <isolation_dir>] bxl --reuse-current-config [<extras>...] prelude//python/sourcedb/pyrefly.bxl:main @<argfile>
+```
+
+- Type: list of strings
+- Default: none (the option is required)
+
+**`repo_root`**
+
+Path to the root of the repository.
+
+- Type: path
+- Default: none
+
 ### `permissive-ignores`
 
 Should Pyrefly ignore errors based on annotations from other tools, e.g. `# pyre-ignore` or `# mypy: ignore`?

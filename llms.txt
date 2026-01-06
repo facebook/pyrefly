@@ -16,6 +16,7 @@
 - [Migrating from Pyright](migrating-from-pyright): How to switch your type checker configuration from Pyright to Pyrefly
 - [Migration Guides](migrating-to-pyrefly): How to switch from another type checker to Pyrefly
 - [Experimental Pydantic Support](pydantic): Pyrefly experimental support for Pydantic.
+- [Pydantic Lax Mode Type Conversions](pydantic-lax-conversions): Complete reference of how Pyrefly converts types in Pydantic lax mode.
 - [FAQ](pyrefly-faq): Frequently Asked Questions about Pyrefly, a PEP 484 compliant Type Checker for Python and IDE extension.
 - [Typing Features and PEPS](python-features-and-peps): Typing features and associated PEPs available in each Python version.
 - [Python Typing 101](python-typing-for-beginners): A gentle, example‑driven introduction to static type hints in Python.
