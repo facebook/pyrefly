@@ -1191,30 +1191,31 @@ impl<'a> BindingsBuilder<'a> {
                         self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
                     Binding::Import(m, x.name.id.clone(), original_name_range)
-                } else if exported.contains_key(&dunder::GETATTR) {
-                    // Module has __getattr__, which means any attribute can be accessed.
-                    // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
-                    Binding::ImportViaGetattr(m, x.name.id.clone())
                 } else {
+                    // Try submodule lookup first, then fall back to __getattr__
                     let x_as_module_name = m.append(&x.name.id);
                     let (finding, error) = match self.lookup.get(x_as_module_name) {
                         FindingOrError::Finding(finding) => (true, finding.error),
                         FindingOrError::Error(error) => (false, Some(error)),
                     };
-                    let error = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
-                    if error {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                            format!("Could not import `{}` from `{m}`", x.name.id),
-                        );
-                    }
+                    let is_not_found = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
                     if finding {
                         Binding::Module(x_as_module_name, x_as_module_name.components(), None)
-                    } else if error {
-                        Binding::Type(Type::any_error())
+                    } else if exported.contains_key(&dunder::GETATTR) {
+                        // Module has __getattr__, which means any attribute can be accessed.
+                        // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
+                        Binding::ImportViaGetattr(m, x.name.id.clone())
                     } else {
-                        Binding::Type(Type::any_explicit())
+                        if is_not_found {
+                            self.error(
+                                x.range,
+                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                                format!("Could not import `{}` from `{m}`", x.name.id),
+                            );
+                            Binding::Type(Type::any_error())
+                        } else {
+                            Binding::Type(Type::any_explicit())
+                        }
                     }
                 };
                 // __future__ imports have side effects even if not explicitly used,

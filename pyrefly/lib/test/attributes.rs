@@ -971,6 +971,26 @@ assert_type(y, Any)
 );
 
 testcase!(
+    test_module_getattr_explicit_export_priority,
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+x: str
+def __getattr__(name: str) -> int: ...
+"#,
+    ),
+    r#"
+from typing import assert_type
+from foo import x, y
+# x is explicitly defined as str, should not use __getattr__
+assert_type(x, str)
+# y is not defined, should use __getattr__ and be int
+assert_type(y, int)
+    "#,
+);
+
+testcase!(
     test_any_subclass,
     r#"
 from typing import Any, assert_type
