@@ -107,6 +107,7 @@ use crate::export::special::SpecialExport;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
+use crate::types::callable::Callable;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
@@ -2627,6 +2628,47 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    fn wrap_callable_legacy_typevars(&self, ty: Type) -> Type {
+        match ty {
+            Type::Callable(callable) => {
+                let (callable, tparams) = self.promote_callable_legacy_typevars(*callable);
+                if tparams.is_empty() {
+                    Type::Callable(Box::new(callable))
+                } else {
+                    Forallable::Callable(callable).forall(Arc::new(TParams::new(tparams)))
+                }
+            }
+            _ => ty,
+        }
+    }
+
+    fn promote_callable_legacy_typevars(&self, mut callable: Callable) -> (Callable, Vec<TParam>) {
+        let mut seen_type_vars: SmallMap<TypeVar, Quantified> = SmallMap::new();
+        let mut tparams = Vec::new();
+        callable.visit_mut(&mut |ty| {
+            if let Type::TypeVar(tv) = ty {
+                let q = seen_type_vars
+                    .entry(tv.dupe())
+                    .or_insert_with(|| {
+                        let q = Quantified::type_var(
+                            tv.qname().id().clone(),
+                            self.uniques,
+                            tv.default().cloned(),
+                            tv.restriction().clone(),
+                        );
+                        tparams.push(TParam {
+                            quantified: q.clone(),
+                            variance: tv.variance(),
+                        });
+                        q
+                    })
+                    .clone();
+                *ty = Type::Quantified(Box::new(q));
+            }
+        });
+        (callable, tparams)
+    }
+
     fn check_implicit_return_against_annotation(
         &self,
         implicit_return: Arc<TypeInfo>,
@@ -3065,7 +3107,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                             )
                         }
-                        _ => ty,
+                        _ => {
+                            let ty = if annot_key.is_some() {
+                                self.wrap_callable_legacy_typevars(ty)
+                            } else {
+                                ty
+                            };
+                            ty
+                        }
                     }
                 }
             }
