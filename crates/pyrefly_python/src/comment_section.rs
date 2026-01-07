@@ -63,7 +63,7 @@ impl CommentSection {
 
         let hashes = captures.get(1)?.as_str();
         let level = hashes.len();
-        let title = captures.get(2)?.as_str().trim().to_string();
+        let title = captures.get(2)?.as_str().trim().to_owned();
 
         // Calculate the range for the entire line
         // If the line is too long to fit in TextSize (> u32::MAX bytes), we skip it.
