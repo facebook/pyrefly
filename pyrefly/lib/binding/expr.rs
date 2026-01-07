@@ -33,15 +33,18 @@ use vec1::vec1;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingDecorator;
+use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
+use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
+use crate::binding::binding::PrivateAttributeAccessExpect;
 use crate::binding::binding::SuperStyle;
 use crate::binding::bindings::AwaitContext;
 use crate::binding::bindings::BindingsBuilder;
@@ -804,10 +807,21 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn check_private_attribute_usage(&mut self, attr: &ExprAttribute) {
-        if self.scopes.in_function_scope() {
+        if !Ast::is_mangled_attr(&attr.attr.id) {
             return;
         }
-        if Ast::is_mangled_attr(&attr.attr.id) {
+        if let Some(method_ctx) = self.scopes.current_method_context() {
+            let expect = PrivateAttributeAccessExpect {
+                value: (*attr.value).clone(),
+                attr: attr.attr.clone(),
+                class_idx: method_ctx.class_idx,
+                self_name: method_ctx.self_name.clone(),
+            };
+            self.insert_binding(
+                KeyExpect(attr.attr.range()),
+                BindingExpect::PrivateAttributeAccess(expect),
+            );
+        } else {
             self.error(
                 attr.attr.range,
                 ErrorInfo::Kind(ErrorKind::NoAccess),

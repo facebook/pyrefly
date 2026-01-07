@@ -818,6 +818,12 @@ struct ScopeFunction {
 }
 
 #[derive(Clone, Debug)]
+pub struct MethodScopeContext {
+    pub class_idx: Idx<KeyClass>,
+    pub self_name: Option<Name>,
+}
+
+#[derive(Clone, Debug)]
 struct ParameterUsage {
     range: TextRange,
     used: bool,
@@ -2159,6 +2165,33 @@ impl Scopes {
             (Some(method_name), Some(class_key)) => Some((method_name, class_key)),
             _ => None,
         }
+    }
+
+    pub fn current_method_context(&self) -> Option<MethodScopeContext> {
+        let mut in_method_scope = false;
+        let mut method_self_name: Option<Name> = None;
+        for scope in self.iter_rev() {
+            match &scope.kind {
+                ScopeKind::Function(_) if !in_method_scope => {
+                    return None;
+                }
+                ScopeKind::Method(method_scope) if !in_method_scope => {
+                    in_method_scope = true;
+                    method_self_name = method_scope
+                        .self_name
+                        .as_ref()
+                        .map(|identifier| identifier.id.clone());
+                }
+                ScopeKind::Class(class_scope) if in_method_scope => {
+                    return Some(MethodScopeContext {
+                        class_idx: class_scope.indices.class_idx,
+                        self_name: method_self_name,
+                    });
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Get the name of the (innermost) enclosing class, if any.

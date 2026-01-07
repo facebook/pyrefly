@@ -87,6 +87,7 @@ use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NoneIfRecursive;
+use crate::binding::binding::PrivateAttributeAccessExpect;
 use crate::binding::binding::RaisedException;
 use crate::binding::binding::ReturnTypeKind;
 use crate::binding::binding::SizeExpectation;
@@ -1795,8 +1796,95 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 errors,
             ),
+            BindingExpect::PrivateAttributeAccess(expectation) => {
+                self.check_private_attribute_access(expectation, errors);
+            }
         }
         Arc::new(EmptyAnswer)
+    }
+
+    fn check_private_attribute_access(
+        &self,
+        expect: &PrivateAttributeAccessExpect,
+        errors: &ErrorCollector,
+    ) {
+        let class_binding = self.get_idx(expect.class_idx);
+        let Some(owner) = class_binding.0.as_ref() else {
+            return;
+        };
+        if expect
+            .self_name
+            .as_ref()
+            .is_some_and(|name| Self::expr_matches_name(&expect.value, name))
+        {
+            return;
+        }
+        let value_type = self.expr_infer(&expect.value, errors);
+        if self.private_attr_type_allows(owner, &value_type) {
+            return;
+        }
+        self.error(
+            errors,
+            expect.attr.range(),
+            ErrorInfo::Kind(ErrorKind::NoAccess),
+            format!(
+                "Private attribute `{}` cannot be accessed outside of its defining class",
+                expect.attr.id
+            ),
+        );
+    }
+
+    fn expr_matches_name(expr: &Expr, expected: &Name) -> bool {
+        matches!(expr, Expr::Name(name) if &name.id == expected)
+    }
+
+    fn private_attr_type_allows(&self, owner: &Class, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => {
+                self.has_superclass(cls.class_object(), owner)
+            }
+            Type::ClassDef(cls) => self.has_superclass(cls, owner),
+            Type::Union(box union) => union
+                .members
+                .iter()
+                .all(|member| self.private_attr_type_allows(owner, member)),
+            Type::Intersect(box (members, fallback)) => {
+                members
+                    .iter()
+                    .all(|member| self.private_attr_type_allows(owner, member))
+                    && self.private_attr_type_allows(owner, fallback)
+            }
+            Type::Type(inner) => self.private_attr_type_allows(owner, inner),
+            Type::TypeAlias(alias) => {
+                self.private_attr_type_allows(owner, &alias.as_value(self.stdlib))
+            }
+            Type::Quantified(q) | Type::QuantifiedValue(q) => {
+                self.private_attr_restriction_allows(owner, q.restriction())
+            }
+            Type::TypeVar(var) => self.private_attr_restriction_allows(owner, var.restriction()),
+            Type::Literal(lit) => match lit {
+                Lit::Enum(lit_enum) => self.has_superclass(lit_enum.class.class_object(), owner),
+                _ => false,
+            },
+            Type::Never(_) => true,
+            Type::TypeGuard(inner) | Type::TypeIs(inner) => {
+                self.private_attr_type_allows(owner, inner)
+            }
+            _ => false,
+        }
+    }
+
+    fn private_attr_restriction_allows(&self, owner: &Class, restriction: &Restriction) -> bool {
+        match restriction {
+            Restriction::Bound(bound) => self.private_attr_type_allows(owner, bound),
+            Restriction::Constraints(constraints) => {
+                !constraints.is_empty()
+                    && constraints
+                        .iter()
+                        .all(|constraint| self.private_attr_type_allows(owner, constraint))
+            }
+            Restriction::Unrestricted => false,
+        }
     }
 
     /// Check if a module path should be skipped for indexing purposes.

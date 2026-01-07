@@ -1343,6 +1343,48 @@ class B:
 );
 
 testcase!(
+    test_private_attribute_inside_class,
+    r#"
+class A:
+    __secret: int = 0
+
+    def reveal(self) -> int:
+        return self.__secret
+
+    @classmethod
+    def reveal_cls(cls) -> int:
+        return cls.__secret
+
+    @staticmethod
+    def reveal_static() -> int:
+        return A.__secret
+"#,
+);
+
+testcase!(
+    test_private_attribute_on_peer_instance,
+    r#"
+class F:
+    __v: int
+
+    def equals(self, other: "F") -> bool:
+        return self.__v == other.__v
+"#,
+);
+
+testcase!(
+    test_private_attribute_in_subclass_method,
+    r#"
+class A:
+    __secret: int = 0
+
+class B(A):
+    def leak(self) -> int:
+        return A.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+"#,
+);
+
+testcase!(
     test_attribute_access_on_type_callable,
     r#"
 from typing import Callable

@@ -100,7 +100,7 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 11);
-assert_words!(BindingExpect, 11);
+assert_words!(BindingExpect, 19);
 assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 23);
 assert_words!(BindingTParams, 10);
@@ -555,6 +555,14 @@ pub enum ExprOrBinding {
     Binding(Binding),
 }
 
+#[derive(Clone, Debug)]
+pub struct PrivateAttributeAccessExpect {
+    pub value: Expr,
+    pub attr: Identifier,
+    pub class_idx: Idx<KeyClass>,
+    pub self_name: Option<Name>,
+}
+
 impl DisplayWith<Bindings> for ExprOrBinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
@@ -594,6 +602,8 @@ pub enum BindingExpect {
         narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
         subject_range: TextRange,
     },
+    /// Track private attribute accesses that need semantic validation.
+    PrivateAttributeAccess(PrivateAttributeAccessExpect),
 }
 
 impl DisplayWith<Bindings> for BindingExpect {
@@ -643,6 +653,13 @@ impl DisplayWith<Bindings> for BindingExpect {
                 ctx.display(*new),
                 ctx.display(*existing),
                 name
+            ),
+            Self::PrivateAttributeAccess(expectation) => write!(
+                f,
+                "PrivateAttributeAccess({}, {}, {})",
+                m.display(&expectation.value),
+                expectation.attr.id,
+                ctx.display(expectation.class_idx)
             ),
             Self::MatchExhaustiveness {
                 subject_idx,
