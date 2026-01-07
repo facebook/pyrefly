@@ -193,8 +193,10 @@ fn add_comment_section_ranges(
                     pyrefly_util::lined_buffer::LineNumber::from_zero_indexed(end_line + 1)
                 )
             } else {
-                // Last line in file
-                TextSize::from(module.contents().len() as u32)
+                // Last line in file - use the actual end of content
+                // Safely convert length to TextSize
+                TextSize::try_from(module.contents().len())
+                    .unwrap_or_else(|_| TextSize::new(u32::MAX))
             };
             
             let range = TextRange::new(line_start, line_end);

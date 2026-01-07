@@ -55,6 +55,9 @@ pub struct CommentSection {
 impl CommentSection {
     /// Parse a single line to check if it's a comment section.
     /// Returns Some(CommentSection) if the line matches the pattern.
+    /// 
+    /// Note: Returns None if the line length exceeds TextSize limits (extremely rare
+    /// for comment lines, which are typically short).
     pub fn parse(line: &str, line_number: u32, line_start: TextSize) -> Option<Self> {
         let captures = RE_COMMENT_SECTION.captures(line)?;
         
@@ -63,6 +66,8 @@ impl CommentSection {
         let title = captures.get(2)?.as_str().trim().to_string();
         
         // Calculate the range for the entire line
+        // If the line is too long to fit in TextSize (> u32::MAX bytes), we skip it.
+        // This is extremely unlikely for a comment line.
         let line_len = TextSize::try_from(line.len()).ok()?;
         let range = TextRange::new(line_start, line_start + line_len);
         

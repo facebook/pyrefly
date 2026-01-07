@@ -39,12 +39,13 @@ impl<'a> Transaction<'a> {
 fn add_comment_section_symbols(symbols: &mut Vec<DocumentSymbol>, module_info: &Module) {
     let sections = CommentSection::extract_from_module(module_info);
     
-    // Build a hierarchical structure for comment sections
-    let mut section_stack: Vec<(usize, &CommentSection)> = Vec::new();
+    // Build a hierarchical structure for comment sections using indices
+    // Stack contains (level, index in section_symbols)
+    let mut section_stack: Vec<(usize, Vec<usize>)> = Vec::new();
     let mut section_symbols: Vec<DocumentSymbol> = Vec::new();
     
     for section in &sections {
-        // Pop sections from stack that are at the same or lower level
+        // Pop sections from stack that are at the same or higher level
         while let Some((level, _)) = section_stack.last() {
             if *level >= section.level {
                 section_stack.pop();
@@ -64,22 +65,26 @@ fn add_comment_section_symbols(symbols: &mut Vec<DocumentSymbol>, module_info: &
             children: Some(Vec::new()),
         };
         
-        if let Some((_, parent_section)) = section_stack.last() {
+        if let Some((_, path)) = section_stack.last() {
             // This is a nested section, add it as a child to its parent
-            // We need to find the parent symbol in section_symbols
-            if let Some(parent_symbol) = section_symbols.iter_mut().rev().find(|s| {
-                s.name == parent_section.title && s.kind == lsp_types::SymbolKind::STRING
-            }) {
-                if let Some(ref mut children) = parent_symbol.children {
-                    children.push(symbol);
-                }
+            // Navigate to the parent using the path
+            let mut current = &mut section_symbols;
+            for &idx in path {
+                current = current[idx].children.as_mut().unwrap();
             }
+            let new_idx = current.len();
+            current.push(symbol);
+            
+            // Update the path for this section
+            let mut new_path = path.clone();
+            new_path.push(new_idx);
+            section_stack.push((section.level, new_path));
         } else {
             // Top-level section
+            let new_idx = section_symbols.len();
             section_symbols.push(symbol);
+            section_stack.push((section.level, vec![new_idx]));
         }
-        
-        section_stack.push((section.level, section));
     }
     
     symbols.extend(section_symbols);
