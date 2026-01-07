@@ -23,13 +23,13 @@ impl<'a> Transaction<'a> {
         let module_info = self.get_module_info(handle)?;
 
         let mut result = Vec::new();
-        
+
         // Extract comment sections
         let sections = CommentSection::extract_from_module(&module_info);
-        
+
         // Build symbols with comment sections and AST symbols integrated
         build_symbols_with_sections(&ast.body, &sections, &mut result, &module_info);
-        
+
         Some(result)
     }
 }
@@ -45,19 +45,19 @@ fn build_symbols_with_sections(
     module_info: &Module,
 ) {
     use ruff_text_size::Ranged;
-    
+
     // Build a hierarchical structure tracking current section context
     // Stack contains (level, path to section in result tree)
     let mut section_stack: Vec<(usize, Vec<usize>)> = Vec::new();
     let mut section_idx = 0;
-    
+
     for stmt in stmts {
         let stmt_line = module_info.to_lsp_range(stmt.range()).start.line;
-        
+
         // Process any comment sections that come before this statement
         while section_idx < sections.len() && sections[section_idx].line_number <= stmt_line {
             let section = &sections[section_idx];
-            
+
             // Pop sections from stack that are at the same or higher level
             while let Some((level, _)) = section_stack.last() {
                 if *level >= section.level {
@@ -66,7 +66,7 @@ fn build_symbols_with_sections(
                     break;
                 }
             }
-            
+
             let symbol = DocumentSymbol {
                 name: section.title.clone(),
                 detail: None,
@@ -77,13 +77,13 @@ fn build_symbols_with_sections(
                 selection_range: module_info.to_lsp_range(section.range),
                 children: Some(Vec::new()),
             };
-            
+
             if let Some((_, path)) = section_stack.last() {
                 // Add as child of parent section
                 let current = navigate_to_path_mut(result, path);
                 let new_idx = current.len();
                 current.push(symbol);
-                
+
                 let mut new_path = path.clone();
                 new_path.push(new_idx);
                 section_stack.push((section.level, new_path));
@@ -93,10 +93,10 @@ fn build_symbols_with_sections(
                 result.push(symbol);
                 section_stack.push((section.level, vec![new_idx]));
             }
-            
+
             section_idx += 1;
         }
-        
+
         // Add the AST symbol as a child of the current section (if any)
         if let Some((_, path)) = section_stack.last() {
             // Navigate to the current section and add symbol as its child
@@ -107,11 +107,11 @@ fn build_symbols_with_sections(
             recurse_stmt_adding_symbols(stmt, result, module_info);
         }
     }
-    
+
     // Process any remaining comment sections at the end of the file
     while section_idx < sections.len() {
         let section = &sections[section_idx];
-        
+
         while let Some((level, _)) = section_stack.last() {
             if *level >= section.level {
                 section_stack.pop();
@@ -119,7 +119,7 @@ fn build_symbols_with_sections(
                 break;
             }
         }
-        
+
         let symbol = DocumentSymbol {
             name: section.title.clone(),
             detail: None,
@@ -130,12 +130,12 @@ fn build_symbols_with_sections(
             selection_range: module_info.to_lsp_range(section.range),
             children: Some(Vec::new()),
         };
-        
+
         if let Some((_, path)) = section_stack.last() {
             let current = navigate_to_path_mut(result, path);
             let new_idx = current.len();
             current.push(symbol);
-            
+
             let mut new_path = path.clone();
             new_path.push(new_idx);
             section_stack.push((section.level, new_path));
@@ -144,7 +144,7 @@ fn build_symbols_with_sections(
             result.push(symbol);
             section_stack.push((section.level, vec![new_idx]));
         }
-        
+
         section_idx += 1;
     }
 }
