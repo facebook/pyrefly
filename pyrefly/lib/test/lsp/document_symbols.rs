@@ -1133,3 +1133,183 @@ items: List[str] = ["a", "b", "c"]
         report.trim(),
     );
 }
+
+#[test]
+fn test_comment_sections_in_symbols() {
+    let code = r#"
+# Section 1 ----
+
+x = 1
+
+## Section 1.1 ----
+
+def foo():
+    pass
+
+# Section 2 ----
+
+class MyClass:
+    pass
+"#;
+    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+
+[
+  {
+    "name": "Section 1",
+    "kind": 15,
+    "range": {
+      "start": {
+        "line": 1,
+        "character": 0
+      },
+      "end": {
+        "line": 1,
+        "character": 16
+      }
+    },
+    "selectionRange": {
+      "start": {
+        "line": 1,
+        "character": 0
+      },
+      "end": {
+        "line": 1,
+        "character": 16
+      }
+    },
+    "children": [
+      {
+        "name": "Section 1.1",
+        "kind": 15,
+        "range": {
+          "start": {
+            "line": 5,
+            "character": 0
+          },
+          "end": {
+            "line": 5,
+            "character": 19
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 5,
+            "character": 0
+          },
+          "end": {
+            "line": 5,
+            "character": 19
+          }
+        },
+        "children": []
+      }
+    ]
+  },
+  {
+    "name": "Section 2",
+    "kind": 15,
+    "range": {
+      "start": {
+        "line": 10,
+        "character": 0
+      },
+      "end": {
+        "line": 10,
+        "character": 16
+      }
+    },
+    "selectionRange": {
+      "start": {
+        "line": 10,
+        "character": 0
+      },
+      "end": {
+        "line": 10,
+        "character": 16
+      }
+    },
+    "children": []
+  },
+  {
+    "name": "x",
+    "kind": 13,
+    "range": {
+      "start": {
+        "line": 3,
+        "character": 0
+      },
+      "end": {
+        "line": 3,
+        "character": 5
+      }
+    },
+    "selectionRange": {
+      "start": {
+        "line": 3,
+        "character": 0
+      },
+      "end": {
+        "line": 3,
+        "character": 1
+      }
+    }
+  },
+  {
+    "name": "foo",
+    "kind": 12,
+    "range": {
+      "start": {
+        "line": 7,
+        "character": 0
+      },
+      "end": {
+        "line": 8,
+        "character": 8
+      }
+    },
+    "selectionRange": {
+      "start": {
+        "line": 7,
+        "character": 4
+      },
+      "end": {
+        "line": 7,
+        "character": 7
+      }
+    },
+    "children": []
+  },
+  {
+    "name": "MyClass",
+    "kind": 5,
+    "range": {
+      "start": {
+        "line": 12,
+        "character": 0
+      },
+      "end": {
+        "line": 13,
+        "character": 8
+      }
+    },
+    "selectionRange": {
+      "start": {
+        "line": 12,
+        "character": 6
+      },
+      "end": {
+        "line": 12,
+        "character": 13
+      }
+    },
+    "children": []
+  }
+]
+"#
+        .trim(),
+        report.trim(),
+    );
+}

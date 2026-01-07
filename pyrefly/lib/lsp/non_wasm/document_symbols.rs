@@ -7,6 +7,7 @@
 
 use lsp_types::DocumentSymbol;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::comment_section::CommentSection;
 use pyrefly_python::module::Module;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -22,10 +23,66 @@ impl<'a> Transaction<'a> {
         let module_info = self.get_module_info(handle)?;
 
         let mut result = Vec::new();
+        
+        // Add comment sections as symbols
+        add_comment_section_symbols(&mut result, &module_info);
+        
+        // Add regular AST symbols
         ast.body
             .visit(&mut |stmt| recurse_stmt_adding_symbols(stmt, &mut result, &module_info));
         Some(result)
     }
+}
+
+/// Add comment sections as document symbols.
+#[allow(deprecated)] // The `deprecated` field
+fn add_comment_section_symbols(symbols: &mut Vec<DocumentSymbol>, module_info: &Module) {
+    let sections = CommentSection::extract_from_module(module_info);
+    
+    // Build a hierarchical structure for comment sections
+    let mut section_stack: Vec<(usize, &CommentSection)> = Vec::new();
+    let mut section_symbols: Vec<DocumentSymbol> = Vec::new();
+    
+    for section in &sections {
+        // Pop sections from stack that are at the same or lower level
+        while let Some((level, _)) = section_stack.last() {
+            if *level >= section.level {
+                section_stack.pop();
+            } else {
+                break;
+            }
+        }
+        
+        let symbol = DocumentSymbol {
+            name: section.title.clone(),
+            detail: None,
+            kind: lsp_types::SymbolKind::STRING, // Use STRING kind for sections
+            tags: None,
+            deprecated: None,
+            range: module_info.to_lsp_range(section.range),
+            selection_range: module_info.to_lsp_range(section.range),
+            children: Some(Vec::new()),
+        };
+        
+        if let Some((_, parent_section)) = section_stack.last() {
+            // This is a nested section, add it as a child to its parent
+            // We need to find the parent symbol in section_symbols
+            if let Some(parent_symbol) = section_symbols.iter_mut().rev().find(|s| {
+                s.name == parent_section.title && s.kind == lsp_types::SymbolKind::STRING
+            }) {
+                if let Some(ref mut children) = parent_symbol.children {
+                    children.push(symbol);
+                }
+            }
+        } else {
+            // Top-level section
+            section_symbols.push(symbol);
+        }
+        
+        section_stack.push((section.level, section));
+    }
+    
+    symbols.extend(section_symbols);
 }
 
 #[allow(deprecated)] // The `deprecated` field
