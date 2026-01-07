@@ -164,7 +164,7 @@ fn add_comment_section_ranges(
     module: &Module,
 ) {
     let sections = CommentSection::extract_from_module(module);
-    
+
     for (i, section) in sections.iter().enumerate() {
         // Find the end of this section by looking for the next section at the same or higher level
         let end_line = if let Some(next_section_idx) = sections[i + 1..]
@@ -186,11 +186,11 @@ fn add_comment_section_ranges(
         // Only create a folding range if there's at least one line to fold
         if end_line > section.line_number {
             let line_start = module.lined_buffer().line_start(
-                pyrefly_util::lined_buffer::LineNumber::from_zero_indexed(section.line_number)
+                pyrefly_util::lined_buffer::LineNumber::from_zero_indexed(section.line_number),
             );
             let line_end = if (end_line as usize) < module.lined_buffer().line_count() {
                 module.lined_buffer().line_start(
-                    pyrefly_util::lined_buffer::LineNumber::from_zero_indexed(end_line + 1)
+                    pyrefly_util::lined_buffer::LineNumber::from_zero_indexed(end_line + 1),
                 )
             } else {
                 // Last line in file - use the actual end of content
@@ -198,7 +198,7 @@ fn add_comment_section_ranges(
                 TextSize::try_from(module.contents().len())
                     .unwrap_or_else(|_| TextSize::new(u32::MAX))
             };
-            
+
             let range = TextRange::new(line_start, line_end);
             ranges.push((range, Some(FoldingRangeKind::Region)));
         }
