@@ -1278,16 +1278,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         ty.transform(&mut |ty| match ty {
             Type::SpecialForm(SpecialForm::Tuple) => {
+                Self::add_implicit_any_error(errors, range, "tuple", None);
                 *ty = Type::unbounded_tuple(Type::Any(AnyStyle::Implicit));
             }
             Type::SpecialForm(SpecialForm::Callable) => {
+                Self::add_implicit_any_error(errors, range, "Callable", None);
                 *ty = Type::callable_ellipsis(Type::Any(AnyStyle::Implicit))
             }
             Type::SpecialForm(SpecialForm::Type) => {
+                Self::add_implicit_any_error(errors, range, "type", None);
                 *ty = Type::type_form(Type::Any(AnyStyle::Implicit))
             }
             Type::ClassDef(cls) => {
                 if cls.is_builtin("tuple") {
+                    Self::add_implicit_any_error(errors, range, "tuple", None);
                     *ty = Type::type_form(Type::unbounded_tuple(Type::Any(AnyStyle::Implicit)));
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = Type::type_form(Type::any_explicit())
