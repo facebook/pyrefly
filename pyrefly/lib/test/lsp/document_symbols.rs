@@ -1337,7 +1337,7 @@ DEBUG = True
 b = 2
 "#;
     let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
-    
+
     // Verify the structure:
     // - "Imports" should contain:
     //   - "Standard Library" (subsection)
@@ -1347,27 +1347,28 @@ b = 2
     // - "Configuration" should contain:
     //   - DEBUG (variable)
     //   - b (variable)
-    
-    let symbols: Vec<lsp_types::DocumentSymbol> = serde_json::from_str(&report.split('\n').skip(2).collect::<Vec<_>>().join("\n")).unwrap();
-    
+
+    let symbols: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_str(&report.split('\n').skip(2).collect::<Vec<_>>().join("\n")).unwrap();
+
     // Check top-level sections
     assert_eq!(symbols.len(), 2);
     assert_eq!(symbols[0].name, "Imports");
     assert_eq!(symbols[1].name, "Configuration");
-    
+
     // Check "Imports" children
     let imports_children = symbols[0].children.as_ref().unwrap();
     assert_eq!(imports_children.len(), 2);
     assert_eq!(imports_children[0].name, "Standard Library");
     assert_eq!(imports_children[1].name, "Another second level");
-    
+
     // Check "Standard Library" children
     let std_lib_children = imports_children[0].children.as_ref().unwrap();
     assert_eq!(std_lib_children.len(), 2);
     assert_eq!(std_lib_children[0].name, "a");
     assert_eq!(std_lib_children[1].name, "greeting");
-    
-    // Check "Configuration" children  
+
+    // Check "Configuration" children
     let config_children = symbols[1].children.as_ref().unwrap();
     assert_eq!(config_children.len(), 2);
     assert_eq!(config_children[0].name, "DEBUG");
