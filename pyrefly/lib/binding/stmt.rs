@@ -670,6 +670,9 @@ impl<'a> BindingsBuilder<'a> {
                         // We don't track first-usage in this context, since we won't analyze the usage anyway.
                         let mut e = illegal_target.clone();
                         self.ensure_expr(&mut e, &mut Usage::StaticTypeInformation);
+                        // Even though the assignment target is invalid, we still need to analyze the RHS so errors
+                        // (like invalid walrus targets) are reported.
+                        self.ensure_expr(&mut x.value, &mut Usage::StaticTypeInformation);
                     }
                 }
             }

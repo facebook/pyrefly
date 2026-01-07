@@ -1613,6 +1613,14 @@ testcase!(
 );
 
 testcase!(
+    test_crash_on_augassign_walrus_rhs,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/1991
+1 += (c := 1)  # E: Parse error: Invalid augmented assignment target
+"#,
+);
+
+testcase!(
     test_check_invalid_rhs,
     r#"
 def f(x): pass
