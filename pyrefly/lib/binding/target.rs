@@ -417,17 +417,23 @@ impl<'a> BindingsBuilder<'a> {
         make_binding: impl FnOnce(Option<&Expr>, Option<Idx<KeyAnnotation>>) -> Binding,
         ensure_assigned: bool,
     ) {
-        let mut user = self.declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
+        let identifier = ShortIdentifier::expr_name(name);
+        // The parser may synthesize empty identifiers when recovering from invalid syntax
+        // (e.g. reserved keywords used as assignment targets). Those identifiers should not
+        // participate in bindings because they have no static definition entry. Treat them as
+        // anonymous bindings so we still analyze the RHS for additional diagnostics.
+        let mut user = if Ast::is_synthesized_empty_name(name) {
+            self.declare_current_idx(Key::Anon(name.range))
+        } else {
+            self.declare_current_idx(Key::Definition(identifier))
+        };
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
-        let ann = if !Ast::is_synthesized_empty_name(name) {
-            self.bind_current(&name.id, &user, FlowStyle::Other)
-        } else {
-            // Parser error recovery can synthesize walrus targets with empty identifiers.
-            // Pretend the name binding succeeded so we still analyze the RHS, but skip
-            // putting an entry into the flow-sensitive scope to avoid panics later.
+        let ann = if Ast::is_synthesized_empty_name(name) {
             None
+        } else {
+            self.bind_current(&name.id, &user, FlowStyle::Other)
         };
         let binding = make_binding(assigned.as_deref(), ann);
         self.insert_binding_current(user, binding);
@@ -455,6 +461,13 @@ impl<'a> BindingsBuilder<'a> {
         mut value: Box<Expr>,
         direct_ann: Option<(&Expr, Idx<KeyAnnotation>)>,
     ) -> Option<Idx<KeyAnnotation>> {
+        if name.id.as_str().is_empty() {
+            let range = value.range();
+            let mut user = self.declare_current_idx(Key::Anon(range));
+            self.ensure_expr(&mut value, user.usage());
+            self.insert_binding_current(user, Binding::Expr(None, *value));
+            return None;
+        }
         let identifier = ShortIdentifier::new(name);
         let mut current = self.declare_current_idx(Key::Definition(identifier));
         let pinned_idx = self.idx_for_promise(Key::CompletedPartialType(identifier));

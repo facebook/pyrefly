@@ -120,6 +120,13 @@ match p:
 );
 
 testcase!(
+    test_keyword_assignment_reports_parse_error,
+    r#"
+async = 1  # E: Parse error: Expected `def`, `with` or `for` to follow `async`, found `=`
+"#,
+);
+
+testcase!(
     test_duplicate_type_parameter_function,
     r#"
 def f[T, T](x: T) -> T:  # E: duplicate type parameter
