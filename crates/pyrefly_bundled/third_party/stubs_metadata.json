@@ -5,28 +5,26 @@
       "source": "PyPI",
       "repository": "https://github.com/youtype/mypy_boto3_builder",
       "pypi": "https://pypi.org/project/boto3-stubs/",
-      "bundled_date": "2025-12-08",
-      "notes": "Type annotations for boto3, generated with mypy-boto3-builder"
+      "notes": "Type annotations for boto3, generated and uploaded to PyPI (no public source commit)"
     },
     "botocore-stubs": {
       "source": "PyPI",
       "repository": "https://github.com/youtype/botocore-stubs",
       "pypi": "https://pypi.org/project/botocore-stubs/",
-      "bundled_date": "2025-12-08",
+      "commit": "9130333e94bc3e0b83cfdc468c20ad71f18c07e2",
       "notes": "Type annotations for botocore"
     },
     "conans-stubs": {
       "source": "PyPI",
       "repository": "https://github.com/goszpeti/conan-stubs",
       "pypi": "https://pypi.org/project/conan-stubs/",
-      "bundled_date": "2025-12-08",
-      "notes": "Type stubs for Conan package manager"
+      "notes": "Type stubs for Conan package manager (pulled from PyPI, no public source commit)"
     },
     "matplotlib-stubs": {
       "source": "PyPI",
       "repository": "https://github.com/hoel-bagard/matplotlib-stubs",
       "pypi": "https://pypi.org/project/matplotlib-stubs/",
-      "bundled_date": "2025-12-10",
+      "commit": "59fdaf216331aa54996e5f1149e6ee096ca63557",
       "notes": "Unofficial type stubs for matplotlib, derived from Microsoft's python-type-stubs"
     },
     "pandas-stubs": {
@@ -34,35 +32,35 @@
       "repository": "https://github.com/pandas-dev/pandas-stubs",
       "pypi": "https://pypi.org/project/pandas-stubs/",
       "version": "2.3.3.251201",
-      "bundled_date": "2025-12-08",
+      "commit": "87f07afc534d46eab66f814d26a4cee1e8dd22d3",
       "notes": "Official pandas type stubs"
     },
     "skimage-stubs": {
       "source": "GitHub",
       "repository": "https://github.com/microsoft/python-type-stubs",
       "path_in_repo": "stubs/skimage",
-      "bundled_date": "2025-12-10",
+      "commit": "692c37c3969d22612b295ddf7e7af5907204a386",
       "notes": "Type stubs for scikit-image from Microsoft's python-type-stubs repo"
     },
     "sklearn-stubs": {
       "source": "GitHub",
       "repository": "https://github.com/microsoft/python-type-stubs",
       "path_in_repo": "stubs/sklearn",
-      "bundled_date": "2025-12-10",
+      "commit": "ee6d039e893b5401e4b85c6229bafed3b984a941",
       "notes": "Type stubs for scikit-learn from Microsoft's python-type-stubs repo"
     },
     "sympy-stubs": {
       "source": "GitHub",
       "repository": "https://github.com/microsoft/python-type-stubs",
       "path_in_repo": "stubs/sympy-stubs",
-      "bundled_date": "2025-12-10",
+      "commit": "76ca3704d162cf76920f5871d82cbc3831372e31",
       "notes": "Type stubs for SymPy from Microsoft's python-type-stubs repo"
     },
     "vispy-stubs": {
       "source": "GitHub",
       "repository": "https://github.com/microsoft/python-type-stubs",
       "path_in_repo": "stubs/vispy",
-      "bundled_date": "2025-12-10",
+      "commit": "1daa19a7be6ea91b49b2c5fd8125c8ec05b6bb97",
       "notes": "Type stubs for VisPy from Microsoft's python-type-stubs repo"
     }
   }
