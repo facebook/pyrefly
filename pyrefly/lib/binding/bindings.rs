@@ -644,6 +644,16 @@ impl<'a> BindingsBuilder<'a> {
         CurrentIdx::new(self.idx_for_promise(key))
     }
 
+    pub fn existing_binding_idx(&self, key: &Key) -> Option<Idx<Key>> {
+        let entry = self.table.get::<Key>();
+        let idx = entry.0.key_to_idx(key)?;
+        if entry.1.get(idx).is_some() {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
     /// Insert a binding into the bindings table immediately, given a `key`
     pub fn insert_binding<K: Keyed>(&mut self, key: K, value: K::Value) -> Idx<K>
     where

@@ -329,14 +329,16 @@ impl<'a> BindingsBuilder<'a> {
                 // We ignore such names for first-usage-tracking purposes, since
                 // we are not going to analyze the code at all.
                 self.ensure_expr(illegal_target, &mut Usage::StaticTypeInformation);
-
                 // Make sure the RHS is properly bound, so that we can report errors there.
-                let mut user = self.declare_current_idx(Key::Anon(illegal_target.range()));
+                let mut usage = Usage::StaticTypeInformation;
                 if ensure_assigned && let Some(assigned) = &mut assigned {
-                    self.ensure_expr(assigned, user.usage());
+                    self.ensure_expr(assigned, &mut usage);
                 }
-                let binding = binding_of(make_assigned_value(assigned.as_deref(), None), None);
-                self.insert_binding_current(user, binding);
+                let key = Key::Anon(illegal_target.range());
+                if self.existing_binding_idx(&key).is_none() {
+                    let binding = binding_of(make_assigned_value(assigned.as_deref(), None), None);
+                    self.insert_binding_overwrite(key, binding);
+                }
             }
         }
     }
@@ -417,24 +419,21 @@ impl<'a> BindingsBuilder<'a> {
         make_binding: impl FnOnce(Option<&Expr>, Option<Idx<KeyAnnotation>>) -> Binding,
         ensure_assigned: bool,
     ) {
+        if Ast::is_synthesized_empty_name(name) {
+            // Parser error recovery can synthesize empty identifiers. Skip creating a binding,
+            // but still analyze any assigned value so we surface downstream errors.
+            if ensure_assigned && let Some(assigned) = &mut assigned {
+                let mut usage = Usage::StaticTypeInformation;
+                self.ensure_expr(assigned, &mut usage);
+            }
+            return;
+        }
         let identifier = ShortIdentifier::expr_name(name);
-        // The parser may synthesize empty identifiers when recovering from invalid syntax
-        // (e.g. reserved keywords used as assignment targets). Those identifiers should not
-        // participate in bindings because they have no static definition entry. Treat them as
-        // anonymous bindings so we still analyze the RHS for additional diagnostics.
-        let mut user = if Ast::is_synthesized_empty_name(name) {
-            self.declare_current_idx(Key::Anon(name.range))
-        } else {
-            self.declare_current_idx(Key::Definition(identifier))
-        };
+        let mut user = self.declare_current_idx(Key::Definition(identifier));
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
-        let ann = if Ast::is_synthesized_empty_name(name) {
-            None
-        } else {
-            self.bind_current(&name.id, &user, FlowStyle::Other)
-        };
+        let ann = self.bind_current(&name.id, &user, FlowStyle::Other);
         let binding = make_binding(assigned.as_deref(), ann);
         self.insert_binding_current(user, binding);
     }
