@@ -1366,6 +1366,18 @@ def f[T](x, y: type[T]) -> T:
 );
 
 testcase!(
+    test_isinstance_type_classinfo_no_negative_narrow,
+    r#"
+from typing import assert_type
+def f(cls: type[int], x: int | str) -> None:
+    if isinstance(x, cls):
+        assert_type(x, int)
+    else:
+        assert_type(x, int | str)
+    "#,
+);
+
+testcase!(
     test_isinstance_type_self,
     r#"
 from typing import Self, TypeGuard
