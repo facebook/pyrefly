@@ -39,7 +39,7 @@ print("Hello, World!")
     // Expect protocol version response
     tsp.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!("0.2.0")),
+        result: Some(serde_json::json!("0.3.0")),
         error: None,
     });
 
@@ -74,7 +74,7 @@ x = 42
     // Expect protocol version response
     tsp.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!("0.2.0")),
+        result: Some(serde_json::json!("0.3.0")),
         error: None,
     });
 
