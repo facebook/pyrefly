@@ -830,43 +830,6 @@ fn match_expr(
                     })
         }
         (
-            Expr::If(ExprIf {
-                test: lhs_test,
-                body: lhs_body,
-                orelse: lhs_orelse,
-                ..
-            }),
-            Expr::If(ExprIf {
-                test: rhs_test,
-                body: rhs_body,
-                orelse: rhs_orelse,
-                ..
-            }),
-        ) => {
-            match_expr(
-                lhs_test,
-                rhs_test,
-                param_set,
-                param_counts,
-                bindings,
-                module_info,
-            ) && match_expr(
-                lhs_body,
-                rhs_body,
-                param_set,
-                param_counts,
-                bindings,
-                module_info,
-            ) && match_expr(
-                lhs_orelse,
-                rhs_orelse,
-                param_set,
-                param_counts,
-                bindings,
-                module_info,
-            )
-        }
-        (
             Expr::Starred(ExprStarred {
                 value: lhs_value, ..
             }),
