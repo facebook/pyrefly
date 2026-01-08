@@ -835,8 +835,8 @@ impl ConfigFile {
         self.handle_from_module_path_with_fallback(module_path, &FallbackSearchPath::Empty)
     }
 
-    pub fn handle_from_module_path_with_fallback<'a>(
-        &'a self,
+    pub fn handle_from_module_path_with_fallback(
+        &self,
         module_path: ModulePath,
         fallback_search_path: &FallbackSearchPath,
     ) -> Handle {

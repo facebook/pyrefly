@@ -137,7 +137,7 @@ impl<'a> BindingsBuilder<'a> {
             NameReadInfo::NotFound,
         );
         if name_is_defined {
-            self.scopes.narrow_in_current_flow(name, narrowed_idx);
+            self.scopes.narrow_in_current_flow(name, narrowed_idx, true);
         }
     }
 
@@ -422,6 +422,7 @@ impl<'a> BindingsBuilder<'a> {
             self.ensure_expr(assigned, user.usage());
         }
         let ann = if !Ast::is_synthesized_empty_name(name) {
+            self.scopes.record_assignment_expr_name(name);
             self.bind_current(&name.id, &user, FlowStyle::Other)
         } else {
             // Parser error recovery can synthesize walrus targets with empty identifiers.
@@ -483,6 +484,7 @@ impl<'a> BindingsBuilder<'a> {
             self.scopes.register_variable(name);
             FlowStyle::Other
         };
+        self.scopes.record_assignment(name);
         let canonical_ann = self.bind_name(&name.id, pinned_idx, style);
         let ann = match direct_ann {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),

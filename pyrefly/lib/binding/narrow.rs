@@ -1098,3 +1098,56 @@ pub fn expr_to_subjects(expr: &Expr) -> Vec<NarrowingSubject> {
     f(expr, &mut res);
     res
 }
+
+pub fn capture_subjects_for_expr(test: Option<&Expr>) -> SmallSet<Name> {
+    fn add_subjects(expr: &Expr, subjects: &mut SmallSet<Name>) {
+        match expr {
+            Expr::BoolOp(ExprBoolOp { values, .. }) => {
+                for value in values {
+                    add_subjects(value, subjects);
+                }
+            }
+            Expr::UnaryOp(ExprUnaryOp {
+                op: UnaryOp::Not,
+                operand,
+                ..
+            }) => add_subjects(operand, subjects),
+            Expr::Compare(ExprCompare {
+                left, comparators, ..
+            }) => {
+                add_subjects(left, subjects);
+                for comparator in comparators {
+                    add_subjects(comparator, subjects);
+                }
+            }
+            Expr::Call(call) => {
+                if let Some(subject) = dict_get_subject_for_call_expr(call) {
+                    let name = match subject {
+                        NarrowingSubject::Name(name) | NarrowingSubject::Facets(name, _) => name,
+                    };
+                    subjects.insert(name);
+                } else if let Some(first) = call.arguments.args.first() {
+                    add_subjects(first, subjects);
+                }
+            }
+            Expr::Named(ExprNamed { target, .. }) => {
+                add_subjects(target, subjects);
+            }
+            Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_) => {
+                for subject in expr_to_subjects(expr) {
+                    let name = match subject {
+                        NarrowingSubject::Name(name) | NarrowingSubject::Facets(name, _) => name,
+                    };
+                    subjects.insert(name);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut subjects = SmallSet::new();
+    if let Some(test) = test {
+        add_subjects(test, &mut subjects);
+    }
+    subjects
+}

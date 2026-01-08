@@ -720,6 +720,84 @@ class Foo:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/40
+testcase!(
+    test_nested_function_capture_preserves_narrow_without_assignment,
+    r#"
+from typing import reveal_type
+
+def foo(x: int | None) -> None:
+    if x is not None:
+        def bar() -> None:
+            reveal_type(x)  # E: revealed type: int
+
+        bar()
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/40
+testcase!(
+    test_nested_function_capture_drops_narrow_on_late_assignment,
+    r#"
+from typing import reveal_type
+
+def foo(x: int | None) -> None:
+    if x is not None:
+        def bar() -> None:
+            reveal_type(x)  # E: revealed type: int | None
+
+        x = None
+        bar()
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/40
+testcase!(
+    test_nested_function_capture_drops_narrow_on_assignment_after_call,
+    r#"
+from typing import reveal_type
+
+def foo(x: int | None) -> None:
+    if x is not None:
+        def bar() -> None:
+            reveal_type(x)  # E: revealed type: int | None
+
+        bar()
+        x = None
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/40
+testcase!(
+    test_nested_function_capture_walrus_lhs_rhs,
+    r#"
+from typing import reveal_type
+
+def foo(x: int | None) -> None:
+    if (y := x) is not None:
+        def bar() -> None:
+            reveal_type(y)  # E: revealed type: int
+            reveal_type(x)  # E: revealed type: int | None
+
+        bar()
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/40
+testcase!(
+    test_nested_function_capture_no_narrow_in_module_scope,
+    r#"
+from typing import reveal_type
+
+x: int | None = None
+if x is not None:
+    def bar() -> None:
+        reveal_type(x)  # E: revealed type: int | None
+
+    bar()
+"#,
+);
+
 testcase!(
     test_dunder_all_mutated_without_def,
     r#"

@@ -50,6 +50,7 @@ use crate::binding::bindings::LegacyTParamId;
 use crate::binding::bindings::NameLookupResult;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::narrow::capture_subjects_for_expr;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
@@ -419,7 +420,13 @@ impl<'a> BindingsBuilder<'a> {
             for x in comp.ifs.iter_mut() {
                 self.ensure_expr(x, &mut Usage::narrowing_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(x));
-                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(comp.range), usage);
+                let capture_subjects = capture_subjects_for_expr(Some(x));
+                self.bind_narrow_ops(
+                    &narrow_ops,
+                    Some(&capture_subjects),
+                    NarrowUseLocation::Span(comp.range),
+                    usage,
+                );
             }
         }
     }
@@ -523,13 +530,20 @@ impl<'a> BindingsBuilder<'a> {
                 self.start_fork_and_branch(x.range);
                 self.ensure_expr(&mut x.test, &mut Usage::narrowing_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
-                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(x.body.range()), usage);
+                let capture_subjects = capture_subjects_for_expr(Some(&x.test));
+                self.bind_narrow_ops(
+                    &narrow_ops,
+                    Some(&capture_subjects),
+                    NarrowUseLocation::Span(x.body.range()),
+                    usage,
+                );
                 self.ensure_expr(&mut x.body, usage);
                 // Negate the narrow ops for the `orelse`, then merge the Flows.
                 // TODO(stroxler): We eventually want to drop all narrows but merge values.
                 self.next_branch();
                 self.bind_narrow_ops(
                     &narrow_ops.negate(),
+                    Some(&capture_subjects),
                     NarrowUseLocation::Span(x.range),
                     usage,
                 );
@@ -563,15 +577,18 @@ impl<'a> BindingsBuilder<'a> {
                     self.ensure_expr(value, &mut Usage::narrowing_from(usage));
                     self.start_fork_and_branch(*range);
                     let mut narrow_ops = get_narrow_ops(self, value, *op);
+                    let mut capture_subjects = capture_subjects_for_expr(Some(value));
                     for value in values {
                         self.bind_narrow_ops(
                             &narrow_ops,
+                            Some(&capture_subjects),
                             NarrowUseLocation::Span(value.range()),
                             usage,
                         );
                         self.ensure_expr(value, &mut Usage::narrowing_from(usage));
                         let new_narrow_ops = get_narrow_ops(self, value, *op);
                         narrow_ops.and_all(new_narrow_ops);
+                        capture_subjects.extend(capture_subjects_for_expr(Some(value)));
                     }
                     // Negate the narrow ops in the base flow and merge.
                     // TODO(stroxler): We eventually want to drop all narrows but merge values.
@@ -579,6 +596,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.next_branch();
                     self.bind_narrow_ops(
                         &narrow_ops.negate(),
+                        Some(&capture_subjects),
                         NarrowUseLocation::End(*range),
                         usage,
                     );
@@ -716,7 +734,7 @@ impl<'a> BindingsBuilder<'a> {
                 for kw in arguments.keywords.iter_mut() {
                     self.ensure_expr(&mut kw.value, usage);
                 }
-                self.bind_narrow_ops(&narrow_op, NarrowUseLocation::Span(*range), usage);
+                self.bind_narrow_ops(&narrow_op, None, NarrowUseLocation::Span(*range), usage);
             }
             Expr::Named(x) => {
                 // For scopes defined in terms of Definitions, we should normally already have the name in Static, but
