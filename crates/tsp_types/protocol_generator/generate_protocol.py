@@ -33,6 +33,27 @@ def load_json_schema(file_path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def value_to_rust_identifier(val: str) -> str:
+    """
+    Convert a string value to a valid Rust enum identifier.
+    
+    Examples:
+        "0.1.0" -> "V010"
+        "0.2.0" -> "V020"
+        "current" -> "Current"
+        "None" -> "None"
+    """
+    # Check if it's a version string like "0.1.0"
+    if re.match(r'^\d+\.\d+\.\d+$', val):
+        # Convert "0.1.0" to "V010"
+        parts = val.split('.')
+        return 'V' + ''.join(parts)
+    # Otherwise, convert to PascalCase
+    # Handle snake_case or kebab-case
+    parts = re.split(r'[_-]', val)
+    return ''.join(part.capitalize() for part in parts)
+
+
 def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
     """
     Convert our TSP JSON format to the lsprotocol internal model format.
@@ -75,21 +96,50 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
             )
         )
 
-    # Also convert stringLiteral types from the "types" object to enumerations
+    # Also convert stringLiteral and stringEnum types from the "types" object to enumerations
     types_obj = tsp_json.get("types", {})
     for type_name, type_def in types_obj.items():
         kind = type_def.get("kind")
         if kind == "stringLiteral":
-            # Convert stringLiteral to string enum
+            # Convert stringLiteral to string enum (simple array of values)
             values = []
             value_list = type_def.get("value", [])
             value_docs = type_def.get("valueDocumentation", {})
             for i, val in enumerate(value_list):
+                # Convert value to a valid Rust identifier
+                # e.g., "0.1.0" -> "V010", "current" -> "Current"
+                rust_name = value_to_rust_identifier(val)
                 values.append(
                     model.EnumItem(
-                        name=val,
+                        name=rust_name,
                         value=val,
                         documentation=value_docs.get(val),
+                    )
+                )
+            enumerations.append(
+                model.Enum(
+                    name=type_name,
+                    type=model.EnumValueType(kind="base", name="string"),
+                    values=values,
+                    documentation=type_def.get("documentation"),
+                    supportsCustomValues=False,
+                )
+            )
+        elif kind == "stringEnum":
+            # Convert stringEnum to string enum (key-value mapping)
+            # Format: { "variant_name": "wire_value", ... }
+            values = []
+            values_map = type_def.get("values", {})
+            value_docs = type_def.get("valueDocumentation", {})
+            for variant_name, wire_value in values_map.items():
+                # Convert variant name to a valid Rust identifier
+                # e.g., "v0_1_0" -> "V010", "current" -> "Current"
+                rust_name = value_to_rust_identifier(variant_name)
+                values.append(
+                    model.EnumItem(
+                        name=rust_name,
+                        value=wire_value,  # The actual wire value
+                        documentation=value_docs.get(variant_name),
                     )
                 )
             enumerations.append(

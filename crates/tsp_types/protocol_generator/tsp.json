@@ -355,8 +355,13 @@
             "documentation": "A type that is declared in source code."
         },
         "TypeServerVersion": {
-            "kind": "stringLiteral",
-            "value": ["v0_1_0", "v0_2_0", "v0_3_0", "current"],
+            "kind": "stringEnum",
+            "values": {
+                "v0_1_0": "0.1.0",
+                "v0_2_0": "0.2.0",
+                "v0_3_0": "0.3.0",
+                "current": "0.4.0"
+            },
             "valueDocumentation": {
                 "v0_1_0": "Initial protocol version",
                 "v0_2_0": "Added new request types and fields",

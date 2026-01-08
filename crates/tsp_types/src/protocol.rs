@@ -172,19 +172,19 @@ pub enum MessageDirection {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 pub enum TypeServerVersion {
     /// Initial protocol version
-    #[serde(rename = "v0_1_0")]
+    #[serde(rename = "0.1.0")]
     V010,
 
     /// Added new request types and fields
-    #[serde(rename = "v0_2_0")]
+    #[serde(rename = "0.2.0")]
     V020,
 
     /// Switch to more complex types
-    #[serde(rename = "v0_3_0")]
+    #[serde(rename = "0.3.0")]
     V030,
 
     /// Switch to Type union and using stubs
-    #[serde(rename = "current")]
+    #[serde(rename = "0.4.0")]
     Current,
 }
 
@@ -220,7 +220,7 @@ pub enum TypeFlags {
 
     /// Indicates if the type came from an alias (a type that refers to another type).
     #[serde(rename = "FromAlias")]
-    FromAlias,
+    Fromalias,
 
     /// Indicates if the type is unpacked (used with TypeVarTuple).
     #[serde(rename = "Unpacked")]
@@ -243,11 +243,11 @@ pub enum TypeVarFlags {
 
     /// Indicates if the type variable is a ParamSpec (as defined in PEP 612).
     #[serde(rename = "IsParamSpec")]
-    IsParamSpec,
+    Isparamspec,
 
     /// Indicates if the type variable is a TypeVarTuple (as defined in PEP 646).
     #[serde(rename = "IsTypeVarTuple")]
-    IsTypeVarTuple,
+    Istypevartuple,
 }
 
 /// Represents the category of a declaration in the type system. This is used to classify declarations such as variables, functions, classes, etc.
@@ -267,11 +267,11 @@ pub enum DeclarationCategory {
 
     /// This is for PEP 695 type parameters.
     #[serde(rename = "TypeParam")]
-    TypeParam,
+    Typeparam,
 
     /// This is for PEP 695 type aliases.
     #[serde(rename = "TypeAlias")]
-    TypeAlias,
+    Typealias,
 
     /// A function is any construct that begins with the `def` keyword and has a body, which can be called with arguments.
     #[serde(rename = "Function")]
@@ -292,73 +292,73 @@ pub enum ClassTypeFlags {
     None,
 
     #[serde(rename = "BuiltIn")]
-    BuiltIn,
+    Builtin,
 
     #[serde(rename = "SpecialBuiltIn")]
-    SpecialBuiltIn,
+    Specialbuiltin,
 
     #[serde(rename = "TypedDictClass")]
-    TypedDictClass,
+    Typeddictclass,
 
     #[serde(rename = "TypedDictMarkedClosed")]
-    TypedDictMarkedClosed,
+    Typeddictmarkedclosed,
 
     #[serde(rename = "TypedDictEffectivelyClosed")]
-    TypedDictEffectivelyClosed,
+    Typeddicteffectivelyclosed,
 
     #[serde(rename = "CanOmitDictValues")]
-    CanOmitDictValues,
+    Canomitdictvalues,
 
     #[serde(rename = "SupportsAbstractMethods")]
-    SupportsAbstractMethods,
+    Supportsabstractmethods,
 
     #[serde(rename = "PropertyClass")]
-    PropertyClass,
+    Propertyclass,
 
     #[serde(rename = "Final")]
     Final,
 
     #[serde(rename = "ProtocolClass")]
-    ProtocolClass,
+    Protocolclass,
 
     #[serde(rename = "PseudoGenericClass")]
-    PseudoGenericClass,
+    Pseudogenericclass,
 
     #[serde(rename = "RuntimeCheckable")]
-    RuntimeCheckable,
+    Runtimecheckable,
 
     #[serde(rename = "TypingExtensionClass")]
-    TypingExtensionClass,
+    Typingextensionclass,
 
     #[serde(rename = "HasCustomClassGetItem")]
-    HasCustomClassGetItem,
+    Hascustomclassgetitem,
 
     #[serde(rename = "TupleClass")]
-    TupleClass,
+    Tupleclass,
 
     #[serde(rename = "EnumClass")]
-    EnumClass,
+    Enumclass,
 
     #[serde(rename = "ClassProperty")]
-    ClassProperty,
+    Classproperty,
 
     #[serde(rename = "DefinedInStub")]
-    DefinedInStub,
+    Definedinstub,
 
     #[serde(rename = "TypeCheckOnly")]
-    TypeCheckOnly,
+    Typecheckonly,
 
     #[serde(rename = "NewTypeClass")]
-    NewTypeClass,
+    Newtypeclass,
 
     #[serde(rename = "ValidTypeAliasClass")]
-    ValidTypeAliasClass,
+    Validtypealiasclass,
 
     #[serde(rename = "SpecialFormClass")]
-    SpecialFormClass,
+    Specialformclass,
 
     #[serde(rename = "IllegalIsinstanceClass")]
-    IllegalIsinstanceClass,
+    Illegalisinstanceclass,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
@@ -369,11 +369,11 @@ pub enum ParamCategory {
 
     /// Variadic positional: def foo(*args: int)
     #[serde(rename = "ArgsList")]
-    ArgsList,
+    Argslist,
 
     /// Variadic keyword: def foo(**kwargs: str)
     #[serde(rename = "KwargsDict")]
-    KwargsDict,
+    Kwargsdict,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
@@ -382,17 +382,17 @@ pub enum FunctionParamFlags {
     None,
 
     #[serde(rename = "NameSynthesized")]
-    NameSynthesized,
+    Namesynthesized,
 
     #[serde(rename = "TypeDeclared")]
-    TypeDeclared,
+    Typedeclared,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 pub enum TypeKind {
     /// unknown, any, never, etc.
     #[serde(rename = "BuiltIn")]
-    BuiltIn,
+    Builtin,
 
     /// Base for source-declared types (rarely used directly)
     #[serde(rename = "Declared")]
@@ -416,7 +416,7 @@ pub enum TypeKind {
 
     /// T, P, Ts in generics
     #[serde(rename = "TypeVar")]
-    TypeVar,
+    Typevar,
 
     /// Functions with multiple @overload signatures
     #[serde(rename = "Overloaded")]
@@ -428,7 +428,7 @@ pub enum TypeKind {
 
     /// Reference by ID for deduplication
     #[serde(rename = "TypeReference")]
-    TypeReference,
+    Typereference,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]

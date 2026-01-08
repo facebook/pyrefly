@@ -19,9 +19,9 @@ use crate::protocol as tsp;
 // ---------------------------------------------------------------------------
 // Backward compatibility shims (manually added)
 // ---------------------------------------------------------------------------
-// Provide the current protocol version as a string constant.
-// This should match the latest version defined in tsp.json TypeServerVersion.
-pub const TSP_PROTOCOL_VERSION: &str = "0.3.0";
+// Provide the current protocol version.
+// This references the generated TypeServerVersion::Current variant.
+pub const TSP_PROTOCOL_VERSION: tsp::TypeServerVersion = tsp::TypeServerVersion::Current;
 
 // Older handlers referenced GetSupportedProtocolVersionParams even though
 // the generator only emits a Request with no params. Provide an empty params
