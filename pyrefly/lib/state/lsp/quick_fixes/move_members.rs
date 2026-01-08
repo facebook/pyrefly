@@ -29,36 +29,36 @@ pub(crate) fn pull_members_up_code_actions(
     handle: &Handle,
     selection: TextRange,
 ) -> Option<Vec<LocalRefactorCodeAction>> {
-    let module_info = transaction.get_module_info(handle)?;
-    let ast = transaction.get_ast(handle)?;
-    let source = module_info.contents();
-    let selection_point = selection_anchor(source, selection);
-    let (class_def, member_stmt) = find_member_context(ast.as_ref(), selection_point)?;
-    let member_name = member_name_from_stmt(member_stmt)?;
-    let member_indent = line_indent_and_start(source, member_stmt.range().start())?.0;
-    let base_classes = base_classes_in_module(ast.as_ref(), class_def);
-    let mut actions = Vec::new();
-    for base_class in base_classes {
-        if class_has_member_named(base_class, &member_name) {
-            continue;
-        }
-        if let Some(action) = build_move_action(
-            &module_info,
-            member_stmt,
-            &member_indent,
-            class_def,
-            base_class,
-            format!("Pull `{member_name}` up to `{}`", base_class.name.id),
-        ) {
-            actions.push(action);
-        }
-    }
-    actions.sort_by(|a, b| a.title.cmp(&b.title));
-    if actions.is_empty() {
-        None
-    } else {
-        Some(actions)
-    }
+    with_move_context(
+        transaction,
+        handle,
+        selection,
+        |module_info, ast, class_def, member_stmt, member_name, member_indent| {
+            let base_classes = base_classes_in_module(ast, class_def);
+            let mut actions = Vec::new();
+            for base_class in base_classes {
+                if class_has_member_named(base_class, member_name) {
+                    continue;
+                }
+                if let Some(action) = build_move_action(
+                    module_info,
+                    member_stmt,
+                    member_indent,
+                    class_def,
+                    base_class,
+                    format!("Pull `{member_name}` up to `{}`", base_class.name.id),
+                ) {
+                    actions.push(action);
+                }
+            }
+            actions.sort_by(|a, b| a.title.cmp(&b.title));
+            if actions.is_empty() {
+                None
+            } else {
+                Some(actions)
+            }
+        },
+    )
 }
 
 /// Builds push-members-down refactor actions for the supplied selection.
@@ -67,6 +67,65 @@ pub(crate) fn push_members_down_code_actions(
     handle: &Handle,
     selection: TextRange,
 ) -> Option<Vec<LocalRefactorCodeAction>> {
+    with_move_context(
+        transaction,
+        handle,
+        selection,
+        |module_info, ast, class_def, member_stmt, member_name, member_indent| {
+            let subclasses = subclasses_in_module(ast, class_def);
+            let mut eligible_subclasses: Vec<&StmtClassDef> = Vec::new();
+            let mut actions = Vec::new();
+            for subclass in subclasses {
+                if class_has_member_named(subclass, member_name) {
+                    continue;
+                }
+                eligible_subclasses.push(subclass);
+                if let Some(action) = build_move_action(
+                    module_info,
+                    member_stmt,
+                    member_indent,
+                    class_def,
+                    subclass,
+                    format!("Push `{member_name}` down to `{}`", subclass.name.id),
+                ) {
+                    actions.push(action);
+                }
+            }
+            if eligible_subclasses.len() > 1
+                && let Some(action) = build_move_action_multi_target(
+                    module_info,
+                    member_stmt,
+                    member_indent,
+                    class_def,
+                    &eligible_subclasses,
+                    format!("Push `{member_name}` down to all subclasses"),
+                )
+            {
+                actions.push(action);
+            }
+            actions.sort_by(|a, b| a.title.cmp(&b.title));
+            if actions.is_empty() {
+                None
+            } else {
+                Some(actions)
+            }
+        },
+    )
+}
+
+fn with_move_context(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    selection: TextRange,
+    build: impl FnOnce(
+        &pyrefly_python::module::Module,
+        &ModModule,
+        &StmtClassDef,
+        &Stmt,
+        &str,
+        &str,
+    ) -> Option<Vec<LocalRefactorCodeAction>>,
+) -> Option<Vec<LocalRefactorCodeAction>> {
     let module_info = transaction.get_module_info(handle)?;
     let ast = transaction.get_ast(handle)?;
     let source = module_info.contents();
@@ -74,45 +133,17 @@ pub(crate) fn push_members_down_code_actions(
     let (class_def, member_stmt) = find_member_context(ast.as_ref(), selection_point)?;
     let member_name = member_name_from_stmt(member_stmt)?;
     let member_indent = line_indent_and_start(source, member_stmt.range().start())?.0;
-    let subclasses = subclasses_in_module(ast.as_ref(), class_def);
-    let mut eligible_subclasses: Vec<&StmtClassDef> = Vec::new();
-    let mut actions = Vec::new();
-    for subclass in subclasses {
-        if class_has_member_named(subclass, &member_name) {
-            continue;
-        }
-        eligible_subclasses.push(subclass);
-        if let Some(action) = build_move_action(
-            &module_info,
-            member_stmt,
-            &member_indent,
-            class_def,
-            subclass,
-            format!("Push `{member_name}` down to `{}`", subclass.name.id),
-        ) {
-            actions.push(action);
-        }
-    }
-    if eligible_subclasses.len() > 1
-        && let Some(action) = build_move_action_multi_target(
-            &module_info,
-            member_stmt,
-            &member_indent,
-            class_def,
-            &eligible_subclasses,
-            format!("Push `{member_name}` down to all subclasses"),
-        )
-    {
-        actions.push(action);
-    }
-    actions.sort_by(|a, b| a.title.cmp(&b.title));
-    if actions.is_empty() {
-        None
-    } else {
-        Some(actions)
-    }
+    build(
+        &module_info,
+        ast.as_ref(),
+        class_def,
+        member_stmt,
+        &member_name,
+        &member_indent,
+    )
 }
 
+/// Locate the class member statement targeted by the selection.
 fn find_member_context<'a>(
     ast: &'a ModModule,
     selection: TextSize,
@@ -128,6 +159,7 @@ fn find_member_context<'a>(
     None
 }
 
+/// Anchor the selection to the first non-whitespace character for member lookup.
 fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
     if selection.is_empty() {
         return selection.start();
@@ -148,6 +180,8 @@ fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
     }
 }
 
+/// Search within a class body (recursing into nested classes) for a member
+/// statement that contains the selection.
 fn find_member_in_class<'a>(
     class_def: &'a StmtClassDef,
     selection: TextSize,
@@ -301,6 +335,7 @@ fn build_move_action_multi_target(
     })
 }
 
+/// Build an insertion edit for placing the member into the target class.
 fn build_insertion_edit(
     module_info: &pyrefly_python::module::Module,
     member_stmt: &Stmt,
@@ -320,6 +355,7 @@ fn build_insertion_edit(
     Some((module_info.dupe(), insert_range, insert_text))
 }
 
+/// Build a removal edit for the member in its origin class, inserting `pass` if needed.
 fn build_removal_edit(
     module_info: &pyrefly_python::module::Module,
     member_stmt: &Stmt,
@@ -336,6 +372,8 @@ fn build_removal_edit(
     Some((module_info.dupe(), removal_range, removal_text))
 }
 
+/// Determine target insertion indentation and range.
+/// Returns `(indent, insert_range, replaces_pass)`.
 fn target_insertion_point(
     class_def: &StmtClassDef,
     source: &str,
@@ -363,6 +401,7 @@ fn target_insertion_point(
     ))
 }
 
+/// Return the `pass` statement if the class body contains only a docstring and a single `pass`.
 fn replaceable_pass_stmt(class_def: &StmtClassDef) -> Option<&Stmt> {
     let mut non_docstring = class_def
         .body
@@ -378,6 +417,7 @@ fn replaceable_pass_stmt(class_def: &StmtClassDef) -> Option<&Stmt> {
     }
 }
 
+/// Determine whether removing `member_stmt` would leave an empty class body.
 fn needs_pass_after_removal(class_def: &StmtClassDef, member_stmt: &Stmt) -> bool {
     let mut non_docstring = class_def
         .body
@@ -388,12 +428,14 @@ fn needs_pass_after_removal(class_def: &StmtClassDef, member_stmt: &Stmt) -> boo
         && only_stmt.is_some_and(|stmt| stmt.range() == member_stmt.range())
 }
 
+/// Remove the full statement line, including leading indent and trailing newline.
 fn statement_removal_range(source: &str, stmt: &Stmt) -> Option<TextRange> {
     let (_, line_start) = line_indent_and_start(source, stmt.range().start())?;
     let line_end = line_end_position(source, stmt.range().end());
     Some(TextRange::new(line_start, line_end))
 }
 
+/// Reindent the member block so it aligns with the target class indentation.
 fn member_text_for_target(
     source: &str,
     range: TextRange,
@@ -429,6 +471,7 @@ fn line_end_position(source: &str, position: TextSize) -> TextSize {
     }
 }
 
+/// Reindent every non-blank line in `text` from `from_indent` to `to_indent`.
 fn reindent_block(text: &str, from_indent: &str, to_indent: &str) -> String {
     let mut result = String::new();
     for line in text.split_inclusive('\n') {
