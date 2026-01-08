@@ -379,25 +379,13 @@ fn replaceable_pass_stmt(class_def: &StmtClassDef) -> Option<&Stmt> {
 }
 
 fn needs_pass_after_removal(class_def: &StmtClassDef, member_stmt: &Stmt) -> bool {
-    let has_docstring = class_def.body.first().is_some_and(is_docstring_stmt);
     let mut non_docstring = class_def
         .body
         .iter()
         .filter(|stmt| !is_docstring_stmt(stmt));
     let only_stmt = non_docstring.next();
-    let is_only_non_docstring = non_docstring.next().is_none()
-        && only_stmt.is_some_and(|stmt| stmt.range() == member_stmt.range());
-
-    if has_docstring {
-        // If the class has a docstring and the member being removed is the only
-        // non-docstring statement, we need to insert a `pass`, since a class
-        // body cannot consist solely of a docstring.
-        return is_only_non_docstring;
-    }
-
-    // For classes without a docstring, we need a `pass` when the member being
-    // removed is the only statement in the class body.
-    is_only_non_docstring
+    non_docstring.next().is_none()
+        && only_stmt.is_some_and(|stmt| stmt.range() == member_stmt.range())
 }
 
 fn statement_removal_range(source: &str, stmt: &Stmt) -> Option<TextRange> {
