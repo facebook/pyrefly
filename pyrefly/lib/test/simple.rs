@@ -2017,3 +2017,19 @@ def test():
     x: (yield from [1])  # E:
     "#,
 );
+
+testcase!(
+    test_union_type_with_bare_string_literal,
+    r#"
+from typing import assert_type, TypeVar
+T = TypeVar("T")
+bad1: int | "str" = "foo"  # E: Cannot construct union type on forward reference string literals
+bad2: int | "str" | T = "foo"  # E: Cannot construct union type on forward reference string literals
+bad3: "str" | int = "foo"  # E: Cannot construct union type on forward reference string literals
+bad4: "str" | int | T = "foo"  # E: Cannot construct union type on forward reference string literals
+ok1: T | "str" = "foo"
+ok2: "str" | T = "foo"
+ok3 = list["str" | T]
+ok4 = (int) | (str)
+"#,
+);
