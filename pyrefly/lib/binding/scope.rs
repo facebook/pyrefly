@@ -2729,7 +2729,19 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             live_branches
         };
-        let all_are_unreachable = flows.iter().all(|f| f.is_definitely_unreachable);
+        // Determine reachability of the merged flow.
+        // For Loop style with empty flows (all branches terminated), the loop body might
+        // never execute (empty iterable), so we use the base flow's reachability.
+        // For LoopDefinitelyRuns, the loop definitely runs, so if all branches terminated,
+        // the flow is unreachable.
+        let all_are_unreachable = if flows.is_empty() {
+            match merge_style {
+                MergeStyle::Loop => base.is_definitely_unreachable,
+                _ => true,
+            }
+        } else {
+            flows.iter().all(|f| f.is_definitely_unreachable)
+        };
 
         // For a regular loop, we merge the base so there's one extra branch being merged.
         // For LoopDefinitelyRuns, we don't count the base as an extra branch because we
