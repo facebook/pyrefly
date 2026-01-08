@@ -16,3 +16,4 @@ pub(crate) mod introduce_parameter;
 pub(crate) mod move_members;
 pub(crate) mod move_module;
 pub(crate) mod types;
+pub(crate) mod use_function;

@@ -809,6 +809,7 @@ pub fn capabilities(
                 CodeActionKind::REFACTOR_EXTRACT,
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
+                CodeActionKind::REFACTOR_REWRITE,
             ]),
             ..Default::default()
         })),
@@ -3224,6 +3225,9 @@ impl Server {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.use_function_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.inline_variable_code_actions(&handle, range) {
