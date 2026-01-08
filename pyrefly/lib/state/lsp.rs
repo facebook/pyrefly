@@ -1947,6 +1947,14 @@ impl<'a> Transaction<'a> {
         quick_fixes::move_members::push_members_down_code_actions(self, handle, selection)
     }
 
+    pub fn use_function_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::use_function::use_function_code_actions(self, handle, selection)
+    }
+
     /// Determines whether a module is a third-party package.
     ///
     /// Checks if the module's path is located within any of the configured
