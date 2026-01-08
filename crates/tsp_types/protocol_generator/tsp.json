@@ -165,7 +165,7 @@
             "typeName": "GetSnapshotRequest",
             "messageDirection": "clientToServer",
             "documentation": "Request from client to get the current snapshot of the type server. A snapshot is a point-in-time representation of the type server's state, including all loaded files and their types. A type server should change its snapshot whenever any type it might have returned is no longer valid. Meaning types are only usable for the snapshot they were returned with. Snapshots are not meant to survive any changes that would make the type server throw away its internal cache. They are merely an identifier to indicate to the client that the type server will accept requests for types from that snapshot.",
-            "params": {
+            "result": {
                 "kind": "base",
                 "name": "number"
             }
@@ -175,7 +175,7 @@
             "typeName": "GetSupportedProtocolVersionRequest",
             "messageDirection": "clientToServer",
             "documentation": "Request to get the version of the protocol the type server supports. Returns a string representation of the protocol version (should be semver format)",
-            "params": {
+            "result": {
                 "kind": "base",
                 "name": "string"
             }
@@ -213,6 +213,147 @@
         }
     ],
     "types": {
+        "Position": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "line",
+                    "type": {
+                        "kind": "base",
+                        "name": "uinteger"
+                    },
+                    "optional": false,
+                    "documentation": "Line position in a document (zero-based)."
+                },
+                {
+                    "name": "character",
+                    "type": {
+                        "kind": "base",
+                        "name": "uinteger"
+                    },
+                    "optional": false,
+                    "documentation": "Character offset on a line in a document (zero-based)."
+                }
+            ],
+            "documentation": "Position in a text document expressed as zero-based line and character offset."
+        },
+        "Range": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "start",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Position"
+                    },
+                    "optional": false,
+                    "documentation": "The range's start position."
+                },
+                {
+                    "name": "end",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Position"
+                    },
+                    "optional": false,
+                    "documentation": "The range's end position."
+                }
+            ],
+            "documentation": "A range in a text document expressed as (zero-based) start and end positions."
+        },
+        "TypeBase": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "kind",
+                    "type": {
+                        "kind": "reference",
+                        "name": "TypeKind"
+                    },
+                    "optional": false,
+                    "documentation": "The kind/category of this type."
+                },
+                {
+                    "name": "flags",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "TypeFlags"
+                        }
+                    },
+                    "optional": true,
+                    "documentation": "Flags that describe the characteristics of this type."
+                }
+            ],
+            "documentation": "Base interface for all type variants. Contains common fields shared by all types."
+        },
+        "DeclarationBase": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "category",
+                    "type": {
+                        "kind": "reference",
+                        "name": "DeclarationCategory"
+                    },
+                    "optional": false,
+                    "documentation": "The category of this declaration."
+                },
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "The name of the declaration."
+                },
+                {
+                    "name": "moduleName",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "The module where this declaration is defined."
+                }
+            ],
+            "documentation": "Base interface for all declaration variants."
+        },
+        "DeclaredType": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "declaration",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Declaration"
+                    },
+                    "optional": true,
+                    "documentation": "The declaration that defines this type."
+                },
+                {
+                    "name": "typeArgs",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    "optional": true,
+                    "documentation": "Type arguments if this is a generic type."
+                }
+            ],
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "TypeBase"
+                }
+            ],
+            "documentation": "A type that is declared in source code."
+        },
         "TypeServerVersion": {
             "kind": "stringLiteral",
             "value": ["v0_1_0", "v0_2_0", "v0_3_0", "current"],
@@ -627,22 +768,22 @@
                 {
                     "name": "parameterDefaultTypes",
                     "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "reference",
-                                "name": "(Type"
-                            },
-                            {
-                                "kind": "array",
-                                "element": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "or",
+                            "items": [
+                                {
                                     "kind": "reference",
-                                    "name": "undefined)"
+                                    "name": "Type"
+                                },
+                                {
+                                    "kind": "base",
+                                    "name": "null"
                                 }
-                            }
-                        ]
+                            ]
+                        }
                     },
-                    "optional": false,
+                    "optional": true,
                     "documentation": "Specialized types of default arguments for each parameter in the \"parameters\" array. If an entry is undefined or the entire array is missing, there is no specialized type, and the original \"defaultType\" should be used. Example: For a generic default value that depends on T, this contains the specialized version."
                 },
                 {
@@ -768,7 +909,7 @@
             "extends": [
                 {
                     "kind": "reference",
-                    "name": "DeclarationBase<DeclarationKind.Regular>"
+                    "name": "DeclarationBase"
                 }
             ]
         },
@@ -789,7 +930,7 @@
             "extends": [
                 {
                     "kind": "reference",
-                    "name": "DeclarationBase<DeclarationKind.Synthesized>"
+                    "name": "DeclarationBase"
                 }
             ]
         },
@@ -904,33 +1045,8 @@
                 {
                     "name": "name",
                     "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "reference",
-                                "name": "'unknown'"
-                            },
-                            {
-                                "kind": "reference",
-                                "name": "'any'"
-                            },
-                            {
-                                "kind": "reference",
-                                "name": "'unbound'"
-                            },
-                            {
-                                "kind": "reference",
-                                "name": "'ellipsis'"
-                            },
-                            {
-                                "kind": "reference",
-                                "name": "'never'"
-                            },
-                            {
-                                "kind": "reference",
-                                "name": "'noreturn'"
-                            }
-                        ]
+                        "kind": "base",
+                        "name": "string"
                     },
                     "optional": false,
                     "documentation": "The name of the built-in type. Limited to specific known built-in types. 'unknown': Type cannot be determined 'any': Accepts any value (gradual typing) 'unbound': Variable not yet bound to a value 'ellipsis': The ... literal 'never': Type that never occurs (e.g., function that always raises) 'noreturn': Function that doesn't return (alias for never)"
@@ -949,7 +1065,7 @@
             "extends": [
                 {
                     "kind": "reference",
-                    "name": "TypeBase<TypeKind.BuiltIn>"
+                    "name": "TypeBase"
                 }
             ]
         },
@@ -988,7 +1104,7 @@
             "extends": [
                 {
                     "kind": "reference",
-                    "name": "DeclaredType<TypeKind.Function>"
+                    "name": "DeclaredType"
                 }
             ]
         },
@@ -1021,7 +1137,7 @@
             "extends": [
                 {
                     "kind": "reference",
-                    "name": "DeclaredType<TypeKind.Class>"
+                    "name": "DeclaredType"
                 }
             ]
         },
@@ -1045,7 +1161,7 @@
             "extends": [
                 {
                     "kind": "reference",
-                    "name": "TypeBase<TypeKind.Union>"
+                    "name": "TypeBase"
                 }
             ]
         },
@@ -1075,7 +1191,7 @@
             "extends": [
                 {
                     "kind": "reference",
-                    "name": "TypeBase<TypeKind.Module>"
+                    "name": "TypeBase"
                 }
             ]
         },
@@ -1108,7 +1224,7 @@
             "extends": [
                 {
                     "kind": "reference",
-                    "name": "TypeBase<TypeKind.Overloaded>"
+                    "name": "TypeBase"
                 }
             ]
         },
@@ -1158,7 +1274,7 @@
             "extends": [
                 {
                     "kind": "reference",
-                    "name": "TypeBase<TypeKind.Synthesized>"
+                    "name": "TypeBase"
                 }
             ]
         },
@@ -1179,7 +1295,7 @@
             "extends": [
                 {
                     "kind": "reference",
-                    "name": "TypeBase<TypeKind.TypeReference>"
+                    "name": "TypeBase"
                 }
             ]
         },
@@ -1191,10 +1307,6 @@
                     {
                         "kind": "base",
                         "name": "number"
-                    },
-                    {
-                        "kind": "reference",
-                        "name": "bigint"
                     },
                     {
                         "kind": "base",
@@ -1235,7 +1347,7 @@
             "kind": "alias",
             "type": {
                 "kind": "reference",
-                "name": "DeclaredType<TypeKind.TypeVar>"
+                "name": "DeclaredType"
             }
         },
         "Type": {
@@ -1245,7 +1357,7 @@
                 "items": [
                     {
                         "kind": "reference",
-                        "name": "| BuiltInType"
+                        "name": "BuiltInType"
                     },
                     {
                         "kind": "reference",

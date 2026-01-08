@@ -45,7 +45,7 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
 
     metadata = tsp_json["metaData"]
 
-    # Convert enumerations
+    # Convert enumerations from the "enumerations" array (if present)
 
     enumerations = []
     for enum_def in tsp_json.get("enumerations", []):
@@ -74,7 +74,35 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
                 supportsCustomValues=enum_def.get("supportsCustomValues", False),
             )
         )
-    # Convert structures
+
+    # Also convert stringLiteral types from the "types" object to enumerations
+    types_obj = tsp_json.get("types", {})
+    for type_name, type_def in types_obj.items():
+        kind = type_def.get("kind")
+        if kind == "stringLiteral":
+            # Convert stringLiteral to string enum
+            values = []
+            value_list = type_def.get("value", [])
+            value_docs = type_def.get("valueDocumentation", {})
+            for i, val in enumerate(value_list):
+                values.append(
+                    model.EnumItem(
+                        name=val,
+                        value=val,
+                        documentation=value_docs.get(val),
+                    )
+                )
+            enumerations.append(
+                model.Enum(
+                    name=type_name,
+                    type=model.EnumValueType(kind="base", name="string"),
+                    values=values,
+                    documentation=type_def.get("documentation"),
+                    supportsCustomValues=False,
+                )
+            )
+
+    # Convert structures from the "structures" array (if present)
 
     structures = []
     for struct_def in tsp_json.get("structures", []):
@@ -96,7 +124,33 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
                 documentation=struct_def.get("documentation"),
             )
         )
-    # Convert type aliases
+
+    # Convert types from the "types" object (interfaces become structures)
+    # Note: types_obj was already created above when processing stringLiteral enums
+    for type_name, type_def in types_obj.items():
+        kind = type_def.get("kind")
+        if kind == "interface":
+            # Convert interface to structure
+            properties = []
+            for prop_def in type_def.get("properties", []):
+                prop_type = convert_type_reference(prop_def["type"])
+                properties.append(
+                    model.Property(
+                        name=prop_def["name"],
+                        type=prop_type,
+                        optional=prop_def.get("optional", False),
+                        documentation=prop_def.get("documentation"),
+                    )
+                )
+            structures.append(
+                model.Structure(
+                    name=type_name,
+                    properties=properties,
+                    documentation=type_def.get("documentation"),
+                )
+            )
+
+    # Convert type aliases from the "typeAliases" array
 
     type_aliases = []
     for alias_def in tsp_json.get("typeAliases", []):
@@ -108,6 +162,23 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
                 documentation=alias_def.get("documentation"),
             )
         )
+
+    # Also convert alias types from the "types" object
+    for type_name, type_def in types_obj.items():
+        kind = type_def.get("kind")
+        if kind == "alias":
+            try:
+                alias_type = convert_type_reference(type_def["type"])
+                type_aliases.append(
+                    model.TypeAlias(
+                        name=type_name,
+                        type=alias_type,
+                        documentation=type_def.get("documentation"),
+                    )
+                )
+            except Exception as e:
+                print(f"Warning: Could not convert alias type '{type_name}': {e}")
+
     # Convert requests
 
     requests = []
@@ -240,6 +311,34 @@ def camel_to_snake(name: str) -> str:
     return camel_to_upper_snake(name).lower()
 
 
+def fix_recursive_types(content: str) -> str:
+    """Add Box indirection to break recursive type cycles.
+    
+    The Type enum is recursive through fields like BuiltInType.possible_type,
+    which creates an infinite size type in Rust. We fix this by wrapping
+    recursive type references in Box.
+    """
+    # Fix fields that contain Option<Type> - wrap in Box
+    # Match pattern: pub fieldname: Option<Type>,
+    content = re.sub(
+        r'(pub \w+: )Option<Type>(,)',
+        r'\1Option<Box<Type>>\2',
+        content
+    )
+    
+    # Fix fields that contain Vec<Type> - these are fine, Vec already provides indirection
+    
+    # Fix direct Type fields (not in Option or Vec)
+    # Be careful not to match Vec<Type> or Option<Type>
+    content = re.sub(
+        r'(pub \w+: )(?<!Option<)(?<!Vec<)Type(,)',
+        r'\1Box<Type>\2',
+        content
+    )
+    
+    return content
+
+
 def generate_constants_rust(tsp_json: Dict[str, Any]) -> str:
     """Generate idiomatic Rust constant definitions (UPPER_SNAKE) from tsp.json."""
     constants = tsp_json.get("constants", [])
@@ -287,11 +386,14 @@ def generate_request_enum(content: str, requests: list[model.Request]) -> str:
     new_str += "pub enum TSPRequests {\n"
     for request in requests:
         new_str += f'    #[serde(rename = "{request.method}")]'
-        request_params = (
-            ""
-            if request.params is None
-            else f"\n        params: {request.params.name},"
-        )
+        # Only include params if it's a named reference type
+        request_params = ""
+        if request.params is not None:
+            if hasattr(request.params, 'name') and request.params.name:
+                request_params = f"\n        params: {request.params.name},"
+            else:
+                # Inline type - use serde_json::Value for flexibility
+                request_params = "\n        params: serde_json::Value,"
         new_str += f"    {request.typeName}{{\n        id: serde_json::Value,{request_params}\n    }},\n"
     new_str += "}\n"
     return content[:end_offset] + "\n\n" + new_str + content[end_offset:]
@@ -651,6 +753,11 @@ def generate_rust_protocol(tsp_json_path: str, output_dir: str) -> None:
         flag_enums = extract_flag_enums_from_tsp(tsp_json)
         for enum_name, mapping in flag_enums.items():
             content = replace_flag_enum(content, enum_name, mapping)
+
+        # Fix recursive types by adding Box indirection
+        # The Type enum is recursive through BuiltInType.possible_type and others
+        content = fix_recursive_types(content)
+
         target_protocol.write_text(content, encoding="utf-8")
         print(f"Successfully generated: {target_protocol}")
         subprocess.run(["cargo", "fmt", "--", str(target_protocol)], check=False)
