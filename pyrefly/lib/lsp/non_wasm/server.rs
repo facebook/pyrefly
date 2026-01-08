@@ -4538,6 +4538,10 @@ impl Server {
                 transaction.extract_function_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "use_function",
+                transaction.use_function_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "extract_superclass",
                 transaction.extract_superclass_code_actions(&handle, range)
             );
