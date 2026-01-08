@@ -600,19 +600,7 @@
       "stop_line": 65
     }
   ],
-  "aliases_recursive.py": [
-    {
-      "code": -2,
-      "column": 45,
-      "concise_description": "Expected a type form, got instance of `Literal['RecursiveMapping']`",
-      "description": "Expected a type form, got instance of `Literal['RecursiveMapping']`",
-      "line": 42,
-      "name": "not-a-type",
-      "severity": "error",
-      "stop_column": 63,
-      "stop_line": 42
-    }
-  ],
+  "aliases_recursive.py": [],
   "aliases_type_statement.py": [
     {
       "code": -2,
