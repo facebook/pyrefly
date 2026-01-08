@@ -36,7 +36,7 @@ fn test_initialize_basic() {
             "definitionProvider": true,
             "typeDefinitionProvider": true,
             "codeActionProvider": {
-                "codeActionKinds": ["quickfix", "refactor.extract"]
+                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.move"]
             },
             "completionProvider": {
                 "triggerCharacters": [".", "'", "\""]
