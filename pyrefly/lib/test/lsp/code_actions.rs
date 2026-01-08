@@ -899,6 +899,214 @@ class ChildB(Base):
 }
 
 #[test]
+fn pull_member_up_with_docstring_replaces_pass() {
+    let code = r#"
+class Super:
+    """Super docstring."""
+    pass
+
+class Sub(Super):
+    # MOVE-START
+    def foo(self):
+        return 1
+    # MOVE-END
+"#;
+    let (module_info, actions, titles) = compute_pull_up_actions(code);
+    assert_eq!(vec!["Pull `foo` up to `Super`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class Super:
+    """Super docstring."""
+    def foo(self):
+        return 1
+
+class Sub(Super):
+    # MOVE-START
+    pass
+    # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn push_member_down_preserves_origin_docstring() {
+    let code = r#"
+class Base:
+    """Base docstring."""
+    # MOVE-START
+    def foo(self):
+        return 1
+    # MOVE-END
+
+class Child(Base):
+    """Child docstring."""
+    pass
+"#;
+    let (module_info, actions, titles) = compute_push_down_actions(code);
+    assert_eq!(vec!["Push `foo` down to `Child`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class Base:
+    """Base docstring."""
+    # MOVE-START
+    pass
+    # MOVE-END
+
+class Child(Base):
+    """Child docstring."""
+    def foo(self):
+        return 1
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn pull_member_up_nested_class() {
+    let code = r#"
+class Outer:
+    class Base:
+        pass
+
+    class Child(Base):
+        # MOVE-START
+        def foo(self):
+            return 1
+        # MOVE-END
+"#;
+    let (module_info, actions, titles) = compute_pull_up_actions(code);
+    assert_eq!(vec!["Pull `foo` up to `Base`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class Outer:
+    class Base:
+        def foo(self):
+            return 1
+
+    class Child(Base):
+        # MOVE-START
+        pass
+        # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn push_member_down_nested_class() {
+    let code = r#"
+class Outer:
+    class Base:
+        # MOVE-START
+        def foo(self):
+            return 1
+        # MOVE-END
+
+    class Child(Base):
+        pass
+"#;
+    let (module_info, actions, titles) = compute_push_down_actions(code);
+    assert_eq!(vec!["Push `foo` down to `Child`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class Outer:
+    class Base:
+        # MOVE-START
+        pass
+        # MOVE-END
+
+    class Child(Base):
+        def foo(self):
+            return 1
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn pull_up_class_attribute() {
+    let code = r#"
+class Base:
+    pass
+
+class Child(Base):
+    # MOVE-START
+    FLAG = 1
+    # MOVE-END
+"#;
+    let (module_info, actions, titles) = compute_pull_up_actions(code);
+    assert_eq!(vec!["Pull `FLAG` up to `Base`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class Base:
+    FLAG = 1
+
+class Child(Base):
+    # MOVE-START
+    pass
+    # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn push_down_class_attribute() {
+    let code = r#"
+class Base:
+    # MOVE-START
+    FLAG: int = 1
+    # MOVE-END
+
+class Child(Base):
+    pass
+"#;
+    let (module_info, actions, titles) = compute_push_down_actions(code);
+    assert_eq!(vec!["Push `FLAG` down to `Child`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class Base:
+    # MOVE-START
+    pass
+    # MOVE-END
+
+class Child(Base):
+    FLAG: int = 1
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn no_pull_up_when_member_exists_in_base() {
+    let code = r#"
+class Base:
+    def foo(self):
+        pass
+
+class Child(Base):
+    # MOVE-START
+    def foo(self):
+        pass
+    # MOVE-END
+"#;
+    let (_module_info, _actions, titles) = compute_pull_up_actions(code);
+    assert!(titles.is_empty(), "expected no pull-up actions");
+}
+
+#[test]
+fn no_push_down_when_member_exists_in_subclass() {
+    let code = r#"
+class Base:
+    # MOVE-START
+    def foo(self):
+        pass
+    # MOVE-END
+
+class Child(Base):
+    def foo(self):
+        pass
+"#;
+    let (_module_info, _actions, titles) = compute_push_down_actions(code);
+    assert!(titles.is_empty(), "expected no push-down actions");
+}
+
+#[test]
 fn extract_variable_name_increments_when_taken() {
     let code = r#"
 def compute():
