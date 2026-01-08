@@ -13,6 +13,8 @@ use ruff_python_ast::CmpOp;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprUnaryOp;
+use ruff_python_ast::HasNodeIndex;
+use ruff_python_ast::NodeIndex;
 use ruff_python_ast::Operator;
 use ruff_python_ast::StmtAugAssign;
 use ruff_python_ast::UnaryOp;
@@ -253,6 +255,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
             && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
         {
+            // Use `node_index` to detect if either side is a forward reference
+            // string literal.
+            // This is needed because in `BindingsBuilder::ensure_type_impl`, we
+            // parse the string literals to expressions and performs an in-place
+            // replacement in the AST. During the process, we marked the
+            // `node_index` of the `Name` expressions to be non-NONE values.
+            // We need this information to check for illegal unions here (such
+            // as "int" | str) that are runtime errors.
+            let is_lhs_forward_ref =
+                x.left.node_index().load() != NodeIndex::NONE && x.left.is_name_expr();
+            let is_rhs_forward_ref =
+                x.right.node_index().load() != NodeIndex::NONE && x.right.is_name_expr();
+
+            // Unless one side is a type variable, we cannot construct union types
+            // on forward reference string literals.
+            let is_type_var = |t: &Type| {
+                matches!(
+                    t,
+                    Type::TypeVar(_)
+                        | Type::Type(box Type::TypeVar(_))
+                        | Type::Quantified(_)
+                        | Type::Type(box Type::Quantified(_))
+                )
+            };
+            if (is_lhs_forward_ref && !is_type_var(&r))
+                || (is_rhs_forward_ref && !is_type_var(&l))
+            {
+                self.error(
+                    errors,
+                    x.range(),
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    "Cannot construct union type on forward reference string literals".to_owned(),
+                );
+            }
             return Type::type_form(self.union(l, r));
         }
 

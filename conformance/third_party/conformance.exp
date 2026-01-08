@@ -1260,6 +1260,28 @@
   "annotations_forward_refs.py": [
     {
       "code": -2,
+      "column": 7,
+      "concise_description": "Cannot construct union type on forward reference string literals",
+      "description": "Cannot construct union type on forward reference string literals",
+      "line": 24,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 24
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "Cannot construct union type on forward reference string literals",
+      "description": "Cannot construct union type on forward reference string literals",
+      "line": 25,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 25
+    },
+    {
+      "code": -2,
       "column": 10,
       "concise_description": "Function call cannot be used in annotations",
       "description": "Function call cannot be used in annotations",

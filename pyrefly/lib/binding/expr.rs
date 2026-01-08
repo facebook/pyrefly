@@ -24,7 +24,9 @@ use ruff_python_ast::ExprNoneLiteral;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
+use ruff_python_ast::HasNodeIndex;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::NodeIndex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -902,6 +904,12 @@ impl<'a> BindingsBuilder<'a> {
                 match Ast::parse_type_literal(literal) {
                     Ok(expr) => {
                         *x = expr;
+                        // This is used to distinguish names coming from parsed
+                        // literals from other names.
+                        if x.is_name_expr() {
+                            // Mark as coming from a parsed literal using a non-NONE value
+                            x.node_index().set(NodeIndex::from(0));
+                        }
                         self.ensure_type_impl(x, tparams_builder, true);
                     }
                     Err(_) => {
