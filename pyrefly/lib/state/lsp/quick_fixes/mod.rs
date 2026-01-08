@@ -11,3 +11,6 @@ mod extract_shared;
 pub(crate) mod extract_variable;
 pub(crate) mod move_members;
 pub(crate) mod move_module;
+pub(crate) mod inline_method;
+pub(crate) mod inline_parameter;
+pub(crate) mod inline_variable;
