@@ -1209,6 +1209,12 @@ impl<'a> Transaction<'a> {
         name: &Identifier,
         preference: FindPreference,
     ) -> Option<FindDefinitionItemWithDocstring> {
+        // Check if this name is used as a constructor call
+        // by looking in the index for constructor references
+        if let Some(constructor_def) = self.find_constructor_definition_from_index(handle, name) {
+            return Some(constructor_def);
+        }
+
         let use_key = Key::BoundName(ShortIdentifier::new(name));
         let (
             handle,
@@ -1226,6 +1232,50 @@ impl<'a> Transaction<'a> {
             docstring_range,
             display_name: Some(name.id.to_string()),
         })
+    }
+
+    /// Find constructor method definitions (__new__ or __init__) for constructor calls.
+    /// This looks up in the index to see if the given name is used in a constructor call,
+    /// and returns the definition of the constructor method that would be invoked.
+    fn find_constructor_definition_from_index(
+        &self,
+        handle: &Handle,
+        name: &Identifier,
+    ) -> Option<FindDefinitionItemWithDocstring> {
+        // Get the index
+        let solutions = self.get_solutions(handle)?;
+        let index_arc = solutions.get_index()?;
+        let index = index_arc.lock();
+
+        // Look up constructor references in the index
+        // The index stores (definition_range, reference_range) pairs grouped by module path
+        for (def_module_path, def_and_ref_ranges) in &index.externally_defined_attribute_references
+        {
+            for (def_range, ref_range) in def_and_ref_ranges {
+                // Check if the reference range matches the name we're looking for
+                if name.range == *ref_range {
+                    // We found a constructor reference! Now we need to get the module info
+                    // for the definition. We'll try all loaded modules to find one with matching path
+                    for load_module_name in self.modules().iter() {
+                        let load_handle = self
+                            .import_handle(handle, *load_module_name, None)
+                            .finding()?;
+                        if let Some(def_module) = self.get_module_info(&load_handle)
+                            && def_module.path() == def_module_path
+                        {
+                            return Some(FindDefinitionItemWithDocstring {
+                                metadata: DefinitionMetadata::Attribute,
+                                definition_range: *def_range,
+                                module: def_module,
+                                docstring_range: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     fn find_definition_for_base_type(

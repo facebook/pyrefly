@@ -16,6 +16,7 @@ use lsp_types::Url;
 use serde_json::json;
 use tempfile::TempDir;
 
+use crate::commands::lsp::IndexingMode;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
@@ -487,20 +488,30 @@ fn goto_type_def_on_list_of_primitives_shows_selector() {
 
 #[test]
 fn test_go_to_def_constructor_calls() {
-    // Note: go-to-definition currently goes to the class definition, not __init__.
+    // go-to-definition on constructor calls should go to __init__
     let root = get_test_files_root();
     let constructor_root = root.path().join("constructor_references");
-    test_go_to_def(
-        constructor_root,
-        None,
-        "usage.py",
-        vec![
-            // Person("Alice", 30) - goes to class Person definition
-            (7, 7, "person.py", 6, 6, 6, 12),
-            // Person("Bob", 25) - goes to class Person definition
-            (8, 7, "person.py", 6, 6, 6, 12),
-        ],
-    );
+
+    // Need to use indexing mode to enable constructor go-to-definition
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(constructor_root.clone());
+    interaction.initialize(InitializeSettings {
+        workspace_folders: None,
+        ..Default::default()
+    });
+    interaction.server.did_open("usage.py");
+
+    // Person("Alice", 30) - goes to Person.__init__ definition
+    interaction.server.definition("usage.py", 7, 7);
+    interaction
+        .client
+        .expect_definition_response_from_root("person.py", 7, 8, 7, 16);
+
+    // Person("Bob", 25) - goes to Person.__init__ definition
+    interaction.server.definition("usage.py", 8, 7);
+    interaction
+        .client
+        .expect_definition_response_from_root("person.py", 7, 8, 7, 16);
 }
 
 #[test]
