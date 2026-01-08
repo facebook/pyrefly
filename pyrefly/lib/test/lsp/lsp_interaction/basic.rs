@@ -41,6 +41,10 @@ fn test_initialize_basic() {
                 "codeActionKinds": ["quickfix", "refactor.extract", "refactor.move"]
                 "codeActionKinds": ["quickfix", "refactor.extract"]
                 "codeActionKinds": ["quickfix", "refactor.extract", "refactor.rewrite"]
+                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.move"]
+                "codeActionKinds": ["quickfix", "refactor.extract"]
+                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.rewrite"]
+                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.move", "refactor.rewrite"]
             },
             "completionProvider": {
                 "triggerCharacters": [".", "'", "\""]
