@@ -1637,7 +1637,7 @@ def add(a, b, param):
     )
 
 def caller():
-    add(1, (1) + (2), b=2)
+    add(1, param=(1) + (2), b=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }

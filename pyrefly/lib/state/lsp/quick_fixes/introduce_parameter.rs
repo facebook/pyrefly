@@ -715,12 +715,13 @@ fn build_call_argument_insertion(
     let insertion_text;
     match insert_style {
         ParameterInsertStyle::Positional => {
-            if let Some(last_arg) = args.last() {
+            if let Some(first_kw) = keywords.first() {
+                let keyword_argument = format!("{param_name}={argument_text}");
+                insertion_point = Some(first_kw.range().start());
+                insertion_text = format!("{keyword_argument}, ");
+            } else if let Some(last_arg) = args.last() {
                 insertion_point = Some(last_arg.range().end());
                 insertion_text = format!(", {argument_text}");
-            } else if let Some(first_kw) = keywords.first() {
-                insertion_point = Some(first_kw.range().start());
-                insertion_text = format!("{argument_text}, ");
             } else {
                 insertion_text = argument_text.to_owned();
             }
