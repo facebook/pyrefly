@@ -155,6 +155,43 @@ fn apply_first_extract_variable_action(code: &str) -> Option<String> {
     Some(apply_refactor_edits_for_module(&module_info, edits))
 }
 
+fn compute_introduce_parameter_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = find_marked_range(module_info.contents());
+    let actions = transaction
+        .introduce_parameter_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_introduce_parameter_action(code: &str, index: usize) -> Option<String> {
+    let (module_info, actions, _) = compute_introduce_parameter_actions(code);
+    let edits = actions.get(index)?;
+    Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn assert_no_introduce_parameter_action(code: &str) {
+    let (_, actions, _) = compute_introduce_parameter_actions(code);
+    assert!(
+        actions.is_empty(),
+        "expected no introduce-parameter actions, found {}",
+        actions.len()
+    );
+}
+
 fn assert_no_extract_variable_action(code: &str) {
     let (_, actions, _) = compute_extract_variable_actions(code);
     assert!(
@@ -1384,6 +1421,310 @@ def sink(values):
     return value
 "#;
     assert_no_extract_variable_action(code);
+}
+
+#[test]
+fn introduce_parameter_basic_refactor() {
+    let code = r#"
+def greet(name):
+    return (
+        # EXTRACT-START
+        "Hello " + name
+        # EXTRACT-END
+    )
+
+def caller():
+    greet("Ada")
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def greet(name, param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    greet("Ada", "Hello " + ("Ada"))
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_replace_all_occurrences() {
+    let code = r#"
+def add_one(x):
+    value = (
+        # EXTRACT-START
+        x + 1
+        # EXTRACT-END
+    )
+    return x + 1
+
+def caller():
+    add_one(3)
+"#;
+    let updated = apply_introduce_parameter_action(code, 1)
+        .expect("expected introduce-parameter replace-all action");
+    let expected = r#"
+def add_one(x, param):
+    value = (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+    return param
+
+def caller():
+    add_one(3, (3) + 1)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_method_callsite_uses_receiver() {
+    let code = r#"
+class Greeter:
+    def __init__(self):
+        self.prefix = "Hi "
+
+    def greet(self, name):
+        return (
+            # EXTRACT-START
+            self.prefix + name
+            # EXTRACT-END
+        )
+
+def caller():
+    greeter = Greeter()
+    greeter.greet("Ada")
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+class Greeter:
+    def __init__(self):
+        self.prefix = "Hi "
+
+    def greet(self, name, param):
+        return (
+            # EXTRACT-START
+            param
+            # EXTRACT-END
+        )
+
+def caller():
+    greeter = Greeter()
+    greeter.greet("Ada", greeter.prefix + ("Ada"))
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_keyword_only_insertion() {
+    let code = r#"
+def mix(x, *, y):
+    return (
+        # EXTRACT-START
+        x + y
+        # EXTRACT-END
+    )
+
+def caller():
+    mix(1, y=2)
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def mix(x, *, param, y):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    mix(1, param=(1) + (2), y=2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_no_args_callsite() {
+    let code = r#"
+def magic():
+    return (
+        # EXTRACT-START
+        1 + 2
+        # EXTRACT-END
+    )
+
+def caller():
+    magic()
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def magic(param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    magic(1 + 2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_staticmethod_callsite() {
+    let code = r#"
+class Utils:
+    @staticmethod
+    def join(a, b):
+        return (
+            # EXTRACT-START
+            a + b
+            # EXTRACT-END
+        )
+
+def caller():
+    Utils.join("Hi ", "Ada")
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+class Utils:
+    @staticmethod
+    def join(a, b, param):
+        return (
+            # EXTRACT-START
+            param
+            # EXTRACT-END
+        )
+
+def caller():
+    Utils.join("Hi ", "Ada", ("Hi ") + ("Ada"))
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_mixed_args_callsite() {
+    let code = r#"
+def add(a, b):
+    return (
+        # EXTRACT-START
+        a + b
+        # EXTRACT-END
+    )
+
+def caller():
+    add(1, b=2)
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def add(a, b, param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    add(1, (1) + (2), b=2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_classmethod_callsite_uses_cls() {
+    let code = r#"
+class Greeter:
+    prefix = "Hi "
+
+    @classmethod
+    def greet(cls, name):
+        return (
+            # EXTRACT-START
+            cls.prefix + name
+            # EXTRACT-END
+        )
+
+def caller():
+    Greeter.greet("Ada")
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+class Greeter:
+    prefix = "Hi "
+
+    @classmethod
+    def greet(cls, name, param):
+        return (
+            # EXTRACT-START
+            param
+            # EXTRACT-END
+        )
+
+def caller():
+    Greeter.greet("Ada", Greeter.prefix + ("Ada"))
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_rejects_local_names() {
+    let code = r#"
+def combine(values):
+    offset = 2
+    return (
+        # EXTRACT-START
+        values[0] + offset
+        # EXTRACT-END
+    )
+"#;
+    assert_no_introduce_parameter_action(code);
+}
+
+#[test]
+fn introduce_parameter_rejects_star_args_callsite() {
+    let code = r#"
+def accept(value):
+    return (
+        # EXTRACT-START
+        value + 1
+        # EXTRACT-END
+    )
+
+def caller():
+    values = [1]
+    accept(*values)
+"#;
+    assert_no_introduce_parameter_action(code);
+}
+
+#[test]
+fn introduce_parameter_rejects_kwargs_callsite() {
+    let code = r#"
+def accept(value):
+    return (
+        # EXTRACT-START
+        value + 1
+        # EXTRACT-END
+    )
+
+def caller():
+    values = {"value": 1}
+    accept(**values)
+"#;
+    assert_no_introduce_parameter_action(code);
 }
 
 mod extract_field_tests {
