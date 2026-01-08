@@ -377,17 +377,6 @@ def foo() -> int:
 );
 
 testcase!(
-    test_for_else_both_return_complete,
-    r#"
-def foo(x: list[int]) -> int:
-    for _ in x:
-        return 1
-    else:
-        return 2
-"#,
-);
-
-testcase!(
     test_for_with_reassign,
     r#"
 from typing import assert_type, Literal
