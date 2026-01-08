@@ -180,15 +180,15 @@ fn enclosing_scope_range(
 ) -> Option<TextRange> {
     let covering_nodes = Ast::locate_node(ast, definition_range.start());
     for node in covering_nodes {
-        if let Some(function_def) = node.as_stmt_function_def() {
-            if function_def.range().contains_range(definition_range) {
-                return Some(function_def.range());
-            }
+        if let Some(function_def) = node.as_stmt_function_def()
+            && function_def.range().contains_range(definition_range)
+        {
+            return Some(function_def.range());
         }
-        if let Some(class_def) = node.as_stmt_class_def() {
-            if class_def.range().contains_range(definition_range) {
-                return Some(class_def.range());
-            }
+        if let Some(class_def) = node.as_stmt_class_def()
+            && class_def.range().contains_range(definition_range)
+        {
+            return Some(class_def.range());
         }
     }
     let module_len = TextSize::try_from(module_len).ok()?;

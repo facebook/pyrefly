@@ -80,7 +80,7 @@ pub(crate) fn inline_method_code_actions(
         &function_def,
         &call,
         receiver_name.as_str(),
-        receiver_text.as_deref(),
+        receiver_text,
         module_info.contents(),
     )?;
     let return_expr = match function_def.body.as_slice() {
@@ -203,7 +203,7 @@ fn build_param_map(
         let arg_value = call
             .arguments
             .find_argument_value(param_name, positional_index)
-            .or_else(|| param.default.as_deref());
+            .or(param.default.as_deref());
         let arg_expr = arg_value?;
         let start = arg_expr.range().start().to_usize();
         let end = arg_expr.range().end().to_usize().min(source.len());
@@ -267,10 +267,10 @@ fn collect_param_replacements(
                     *invalid = true;
                     return;
                 }
-                if matches!(name.ctx, ExprContext::Load) {
-                    if let Some(replacement) = param_map.get(name.id.as_str()) {
-                        replacements.push((name.range(), replacement.clone()));
-                    }
+                if matches!(name.ctx, ExprContext::Load)
+                    && let Some(replacement) = param_map.get(name.id.as_str())
+                {
+                    replacements.push((name.range(), replacement.clone()));
                 }
             }
             _ => {}

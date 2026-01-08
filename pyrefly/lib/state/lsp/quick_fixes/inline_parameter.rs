@@ -131,21 +131,17 @@ fn collect_calls_to_definition(
     let mut calls = Vec::new();
     let mut name_calls = Vec::new();
     ast.visit(&mut |expr| {
-        if let Expr::Call(call) = expr {
-            if let Expr::Name(name) = call.func.as_ref() {
-                let defs = transaction.find_definition(
-                    handle,
-                    name.range.start(),
-                    FindPreference::default(),
-                );
-                if defs.iter().any(|def| {
-                    def.module.path() == module_info.path()
-                        && def.definition_range == definition_range
-                }) {
-                    calls.push(call.clone());
-                } else if name.id.as_str() == function_name {
-                    name_calls.push(call.clone());
-                }
+        if let Expr::Call(call) = expr
+            && let Expr::Name(name) = call.func.as_ref()
+        {
+            let defs =
+                transaction.find_definition(handle, name.range.start(), FindPreference::default());
+            if defs.iter().any(|def| {
+                def.module.path() == module_info.path() && def.definition_range == definition_range
+            }) {
+                calls.push(call.clone());
+            } else if name.id.as_str() == function_name {
+                name_calls.push(call.clone());
             }
         }
     });
