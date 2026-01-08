@@ -169,7 +169,14 @@ def convert_type_reference(type_def: Dict[str, Any]) -> model.LSP_TYPE_SPEC:
     kind = type_def["kind"]
 
     if kind == "base":
-        return model.BaseType(kind="base", name=type_def["name"])
+        # Map TSP base types to LSP base types
+        # LSP model accepts: 'URI', 'DocumentUri', 'integer', 'uinteger', 'decimal', 'RegExp', 'string', 'boolean', 'null'
+        name = type_def["name"]
+        base_type_mapping = {
+            "number": "integer",  # TSP uses 'number', LSP uses 'integer'
+        }
+        name = base_type_mapping.get(name, name)
+        return model.BaseType(kind="base", name=name)
     elif kind == "reference":
         return model.ReferenceType(kind="reference", name=type_def["name"])
     elif kind == "array":
@@ -186,6 +193,21 @@ def convert_type_reference(type_def: Dict[str, Any]) -> model.LSP_TYPE_SPEC:
 
         properties = []
         for prop_def in type_def["value"]["properties"]:
+            prop_type = convert_type_reference(prop_def["type"])
+            properties.append(
+                model.Property(
+                    name=prop_def["name"],
+                    type=prop_type,
+                    optional=prop_def.get("optional", False),
+                    documentation=prop_def.get("documentation"),
+                )
+            )
+        literal_value = model.LiteralValue(properties=properties)
+        return model.LiteralType(kind="literal", value=literal_value)
+    elif kind == "interface":
+        # Handle interface types (similar to literal but properties are at top level)
+        properties = []
+        for prop_def in type_def["properties"]:
             prop_type = convert_type_reference(prop_def["type"])
             properties.append(
                 model.Property(
