@@ -371,7 +371,6 @@ impl<'a> BindingsBuilder<'a> {
         should_infer_return_type: bool,
         stub_or_impl: FunctionStubOrImpl,
         decorators: Box<[Idx<KeyDecorator>]>,
-        class_key: Option<Idx<KeyClass>>,
     ) {
         let is_generator =
             !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
@@ -432,7 +431,6 @@ impl<'a> BindingsBuilder<'a> {
                         annotation,
                         stub_or_impl,
                         decorators,
-                        class_key,
                         implicit_return,
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                         has_explicit_return: !return_keys.is_empty(),
@@ -528,10 +526,33 @@ impl<'a> BindingsBuilder<'a> {
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
     ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
+        // A method in a Protocol with a stub-like body (docstring-only, docstring + pass,
+        // docstring + ellipsis) is treated as a stub. This matches Python typing spec
+        // behavior where Protocol methods don't need implementations.
+        let is_protocol_stub_body = if self.scopes.is_in_protocol_class() {
+            match body.as_slice() {
+                // Docstring only
+                [stmt] if is_docstring(stmt) => true,
+                // Docstring + pass
+                [first, Stmt::Pass(_)] if is_docstring(first) => true,
+                // Docstring + ellipsis
+                [first, Stmt::Expr(expr_stmt)]
+                    if is_docstring(first)
+                        && matches!(expr_stmt.value.as_ref(), Expr::EllipsisLiteral(_)) =>
+                {
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+
         let stub_or_impl = if (body.first().is_some_and(is_docstring)
             && decorators.is_abstract_method)
             || is_ellipse(&body)
             || (body.first().is_some_and(is_docstring) && decorators.is_overload)
+            || is_protocol_stub_body
         {
             FunctionStubOrImpl::Stub
         } else {
@@ -615,7 +636,6 @@ impl<'a> BindingsBuilder<'a> {
                         false, // this disables return type inference
                         stub_or_impl,
                         decorators.decorators.clone(),
-                        class_key,
                     );
                     self_assignments
                 }
@@ -646,7 +666,6 @@ impl<'a> BindingsBuilder<'a> {
                         false, // this disables return type inference
                         stub_or_impl,
                         decorators.decorators.clone(),
-                        class_key,
                     );
                     self_assignments
                 }
@@ -677,7 +696,6 @@ impl<'a> BindingsBuilder<'a> {
                         true,
                         stub_or_impl,
                         decorators.decorators.clone(),
-                        class_key,
                     );
                     self_assignments
                 }

@@ -33,6 +33,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassGeneric;
+use crate::binding::base_class::BaseClassGenericKind;
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAbstractClassCheck;
@@ -111,6 +112,7 @@ impl<'a> BindingsBuilder<'a> {
             consistent_override_check_idx: self
                 .idx_for_promise(KeyConsistentOverrideCheck(def_index)),
             abstract_class_check_idx: self.idx_for_promise(KeyAbstractClassCheck(def_index)),
+            is_protocol: false, // Will be set after processing bases
         };
         // The user - used for first-usage tracking of any expressions we analyze in a class definition -
         // is the `Idx<Key>` of the class object bound to the class name.
@@ -120,7 +122,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn class_def(&mut self, mut x: StmtClassDef, parent: &NestingContext) {
-        let (mut class_object, class_indices) = self.class_object_and_indices(&x.name);
+        let (mut class_object, mut class_indices) = self.class_object_and_indices(&x.name);
         let mut pydantic_config_dict = PydanticConfigDict::default();
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let body = mem::take(&mut x.body);
@@ -195,6 +197,17 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
             base_class
+        });
+
+        // Check if this class directly inherits from Protocol
+        class_indices.is_protocol = bases.iter().any(|base| {
+            matches!(
+                base,
+                BaseClass::Generic(BaseClassGeneric {
+                    kind: BaseClassGenericKind::Protocol,
+                    ..
+                })
+            )
         });
 
         let mut keywords = Vec::new();

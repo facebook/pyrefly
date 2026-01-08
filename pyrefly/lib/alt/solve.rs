@@ -3155,7 +3155,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         annotation,
                         stub_or_impl,
                         decorators,
-                        class_key,
                         implicit_return,
                         is_generator,
                         has_explicit_return,
@@ -3164,18 +3163,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // It will result in an implicit Any type, which is reasonable, but we should
                         // at least error here.
                         let ty = self.get_idx(*annotation).annotation.get_type().clone();
-                        // Check if this method is in a protocol class
-                        let is_in_protocol = class_key.is_some_and(|key| {
-                            self.get_idx(key)
-                                .0
-                                .as_ref()
-                                .is_some_and(|cls| self.get_metadata_for_class(cls).is_protocol())
-                        });
-                        // If the function body is stubbed out, if the function is decorated with
-                        // `@abstractmethod`, or if the function is a method in a protocol class,
-                        // we blindly accept the return type annotation.
+                        // If the function body is stubbed out or if the function is decorated with
+                        // `@abstractmethod`, we blindly accept the return type annotation.
                         if *stub_or_impl != FunctionStubOrImpl::Stub
-                            && !is_in_protocol
                             && !decorators.iter().any(|k| {
                                 let decorator = self.get_idx(*k);
                                 match decorator.ty.callee_kind() {

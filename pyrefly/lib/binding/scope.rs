@@ -690,6 +690,8 @@ pub struct ClassIndices {
     pub variance_idx: Idx<KeyVariance>,
     pub consistent_override_check_idx: Idx<KeyConsistentOverrideCheck>,
     pub abstract_class_check_idx: Idx<KeyAbstractClassCheck>,
+    /// Whether this class directly inherits from Protocol.
+    pub is_protocol: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1229,6 +1231,16 @@ impl Scopes {
             }
         }
         None
+    }
+
+    /// Check if we're currently inside a Protocol class body.
+    pub fn is_in_protocol_class(&self) -> bool {
+        for scope in self.iter_rev() {
+            if let ScopeKind::Class(class_scope) = &scope.kind {
+                return class_scope.indices.is_protocol;
+            }
+        }
+        false
     }
 
     /// Are we inside an async function or method?
