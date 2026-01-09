@@ -248,3 +248,137 @@ def describe_ok_2(x: X):
             print("default")
 "#,
 );
+
+testcase!(
+    test_sequence_pattern_star_capture,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type
+
+def test_seq_pattern(x: Sequence[int]) -> None:
+    match x:
+        case [*values]:
+            assert_type(values, list[int])
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_union,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type
+
+def test_union_seq(x: int | Sequence[int]) -> None:
+    match x:
+        case int(value):
+            assert_type(value, int)
+        case [*values]:
+            assert_type(values, list[int])
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_fixed_length,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type
+
+def test_fixed_len(x: Sequence[int]) -> None:
+    match x:
+        case [a, b]:
+            assert_type(a, int)
+            assert_type(b, int)
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_mixed,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type
+
+def test_mixed(x: Sequence[int]) -> None:
+    match x:
+        case [first, *middle, last]:
+            assert_type(first, int)
+            assert_type(middle, list[int])
+            assert_type(last, int)
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_str_excluded,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type
+
+def test_str_not_sequence(x: str | Sequence[int]) -> None:
+    # str is NOT matched by sequence patterns per PEP 634
+    match x:
+        case [*values]:
+            # If we get here, x must be Sequence[int], not str
+            assert_type(values, list[int])
+        case _:
+            # This could be str or any other non-matching case
+            pass
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_list,
+    r#"
+from typing import assert_type
+
+def test_list_pattern(x: list[int]) -> None:
+    match x:
+        case [*values]:
+            assert_type(values, list[int])
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_tuple,
+    r#"
+from typing import assert_type
+
+def test_tuple_pattern(x: tuple[int, ...]) -> None:
+    match x:
+        case [*values]:
+            assert_type(values, list[int])
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_exhaustive_assert_never,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type, assert_never
+
+def test_seq_pattern(x: Sequence[int]) -> None:
+    match x:
+        case [*values]:
+            assert_type(values, list[int])
+        case _:
+            # This should be unreachable since all sequences match [*values]
+            # But we can't prove exhaustiveness for abstract Sequence types
+            pass
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_union_exhaustive,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type, assert_never
+
+def test_seq_pat_with_union(x: int | Sequence[int]) -> None:
+    match x:
+        case int(value):
+            assert_type(value, int)
+        case [*values]:
+            assert_type(values, list[int])
+        case _:
+            # This case handles any remaining possibilities
+            pass
+"#,
+);

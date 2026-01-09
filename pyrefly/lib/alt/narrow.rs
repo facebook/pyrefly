@@ -88,6 +88,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
+    /// Check if a type is a sequence type (subtype of Sequence[T] for some T).
+    /// This is used for sequence pattern matching in match/case statements.
+    /// Note: str, bytes, and bytearray are excluded as per PEP 634.
+    fn is_sequence_type(&self, ty: &Type) -> bool {
+        // Handle special cases first
+        match ty {
+            // Tuples are sequences
+            Type::Tuple(_) => return true,
+            // str, bytes, and bytearray are NOT matched by sequence patterns per PEP 634
+            Type::ClassType(cls)
+                if cls.is_builtin("str")
+                    || cls.is_builtin("bytes")
+                    || cls.is_builtin("bytearray") =>
+            {
+                return false;
+            }
+            Type::LiteralString => return false,
+            // Any could be anything, treat it as potentially a sequence
+            Type::Any(_) => return true,
+            _ => {}
+        }
+
+        // Check if the type is a subtype of Sequence[T] for some T
+        // We use Any as the type argument since we're just checking if it's a sequence
+        let sequence_ty = self.stdlib.sequence(Type::any_implicit()).to_type();
+        self.is_subset_eq(ty, &sequence_ty)
+    }
+
     pub fn disjoint_base<'b>(&'b self, t: &'b Type) -> &'b Class {
         // TODO: Implement the full disjoint base spec: https://peps.python.org/pep-0800/#specification.
         match t {
@@ -581,6 +609,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return ty.clone();
                 };
                 self.narrow_length_less_than(ty, len + 1)
+            }
+            AtomicNarrowOp::IsSequence => {
+                // Narrow to only sequence types (for sequence pattern matching)
+                // A type is a sequence if it's a subtype of Sequence[T] for some T
+                self.distribute_over_union(ty, |t| {
+                    if self.is_sequence_type(t) {
+                        t.clone()
+                    } else {
+                        Type::never()
+                    }
+                })
+            }
+            AtomicNarrowOp::IsNotSequence => {
+                // Narrow to exclude sequence types (negation of sequence pattern)
+                self.distribute_over_union(ty, |t| {
+                    if self.is_sequence_type(t) {
+                        Type::never()
+                    } else {
+                        t.clone()
+                    }
+                })
             }
             AtomicNarrowOp::In(v) => {
                 let exprs = match v {

@@ -105,23 +105,39 @@ impl<'a> BindingsBuilder<'a> {
                     value: Number::Int(Int::from(num_non_star_patterns as u64)),
                 });
                 if let Some(subject) = &match_subject {
-                    // Narrow the match subject by length
-                    let narrow_op = if num_patterns == num_non_star_patterns {
+                    // Narrow the match subject by:
+                    // 1. IsSequence - confirms the subject is a sequence type
+                    // 2. Length - confirms the sequence has the right length
+                    let len_narrow_op = if num_patterns == num_non_star_patterns {
                         AtomicNarrowOp::LenEq(synthesized_len)
                     } else {
                         AtomicNarrowOp::LenGte(synthesized_len)
                     };
+
+                    // Create a combined narrowing: IsSequence AND LenXxx
+                    let combined_narrow_op = NarrowOp::And(vec![
+                        NarrowOp::Atomic(None, AtomicNarrowOp::IsSequence),
+                        NarrowOp::Atomic(None, len_narrow_op.clone()),
+                    ]);
+
                     subject_idx = self.insert_binding(
                         Key::PatternNarrow(x.range()),
                         Binding::Narrow(
                             subject_idx,
-                            Box::new(NarrowOp::Atomic(None, narrow_op.clone())),
+                            Box::new(combined_narrow_op),
                             NarrowUseLocation::Span(x.range()),
                         ),
                     );
+
+                    // Add both narrowing ops to the returned narrow_ops
                     narrow_ops.and_all(NarrowOps::from_single_narrow_op_for_subject(
                         subject.clone(),
-                        narrow_op,
+                        AtomicNarrowOp::IsSequence,
+                        x.range,
+                    ));
+                    narrow_ops.and_all(NarrowOps::from_single_narrow_op_for_subject(
+                        subject.clone(),
+                        len_narrow_op,
                         x.range,
                     ));
                 }
