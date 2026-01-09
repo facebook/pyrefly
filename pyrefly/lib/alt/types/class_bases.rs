@@ -15,6 +15,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::types::AnyStyle;
 use pyrefly_util::display::commas_iter;
 use ruff_python_ast::Expr;
 use ruff_text_size::Ranged;
@@ -298,6 +299,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                             }
                         }
+                    }
+                    (Type::Type(box Type::Any(AnyStyle::Implicit)), range) => {
+                        // `type` is canonicalized to `Type[Any]`, so we need to handle it here.
+                        let class = self.stdlib.builtins_type().clone();
+                        let bases = self
+                            .get_base_types_for_class(self.stdlib.builtins_type().class_object());
+                        Some((class, bases, range))
                     }
                     (_, _) => None,
                 }
