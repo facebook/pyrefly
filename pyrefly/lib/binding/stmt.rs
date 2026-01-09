@@ -46,6 +46,7 @@ use crate::binding::binding::RaisedException;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::narrow::capture_subjects_for_expr;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
@@ -114,6 +115,7 @@ impl<'a> BindingsBuilder<'a> {
         let test_range = test.range();
         self.ensure_expr(&mut test, &mut Usage::Narrowing(None));
         let narrow_ops = NarrowOps::from_expr(self, Some(&test));
+        let capture_subjects = capture_subjects_for_expr(Some(&test));
         let static_test = self.sys_info.evaluate_bool(&test);
         self.insert_binding(Key::Anon(test_range), Binding::Expr(None, test));
         if let Some(mut msg_expr) = msg {
@@ -123,6 +125,7 @@ impl<'a> BindingsBuilder<'a> {
             let negated_narrow_ops = narrow_ops.negate();
             self.bind_narrow_ops(
                 &negated_narrow_ops,
+                Some(&capture_subjects),
                 NarrowUseLocation::Span(msg_expr.range()),
                 &Usage::Narrowing(None),
             );
@@ -137,6 +140,7 @@ impl<'a> BindingsBuilder<'a> {
         };
         self.bind_narrow_ops(
             &narrow_ops,
+            Some(&capture_subjects),
             NarrowUseLocation::Span(assert_range),
             &Usage::Narrowing(None),
         );
@@ -171,6 +175,7 @@ impl<'a> BindingsBuilder<'a> {
         make_binding: impl FnOnce(Option<Idx<KeyAnnotation>>) -> Binding,
     ) {
         let assigned = self.declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
+        self.scopes.record_assignment_expr_name(name);
         let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
         let binding = make_binding(ann);
         self.insert_binding_current(assigned, binding);
@@ -643,6 +648,7 @@ impl<'a> BindingsBuilder<'a> {
                         // Make sure the name is already initialized - it's current value is part of AugAssign semantics.
                         self.ensure_expr_name(name, assigned.usage());
                         self.ensure_expr(&mut x.value, assigned.usage());
+                        self.scopes.record_assignment_expr_name(name);
                         let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
                         let binding = Binding::AugAssign(ann, x.clone());
                         self.insert_binding_current(assigned, binding);
@@ -755,8 +761,10 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
                 let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
+                let capture_subjects = capture_subjects_for_expr(Some(&x.test));
                 self.bind_narrow_ops(
                     &narrow_ops,
+                    Some(&capture_subjects),
                     NarrowUseLocation::Span(x.range),
                     &Usage::Narrowing(None),
                 );
@@ -789,6 +797,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.start_branch();
                     self.bind_narrow_ops(
                         &negated_prev_ops,
+                        None,
                         NarrowUseLocation::Start(range),
                         &Usage::Narrowing(None),
                     );
@@ -815,6 +824,9 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         NarrowOps::from_expr(self, test.as_ref())
                     };
+                    let capture_subjects = test
+                        .as_ref()
+                        .map(|expr| capture_subjects_for_expr(Some(expr)));
                     if let Some(test_expr) = test {
                         // Typecheck the test condition during solving.
                         self.insert_binding(
@@ -824,6 +836,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     self.bind_narrow_ops(
                         &new_narrow_ops,
+                        capture_subjects.as_ref(),
                         NarrowUseLocation::Span(range),
                         &Usage::Narrowing(None),
                     );

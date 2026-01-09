@@ -1053,6 +1053,9 @@ impl<'a> BindingsBuilder<'a> {
         if matches!(style, FlowStyle::Other) {
             self.scopes.register_variable(name);
         }
+        if !matches!(style, FlowStyle::Uninitialized) {
+            self.scopes.record_assignment(name);
+        }
         let idx = self.insert_binding(Key::Definition(ShortIdentifier::new(name)), binding);
         self.bind_name(&name.id, idx, style)
     }
@@ -1065,6 +1068,9 @@ impl<'a> BindingsBuilder<'a> {
         binding: Binding,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
+        if !matches!(style, FlowStyle::Uninitialized) {
+            self.scopes.record_assignment(name);
+        }
         let idx = self.insert_binding_current(current, binding);
         self.bind_name(&name.id, idx, style)
     }
@@ -1189,6 +1195,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn bind_narrow_ops(
         &mut self,
         narrow_ops: &NarrowOps,
+        capture_subjects: Option<&SmallSet<Name>>,
         use_location: NarrowUseLocation,
         usage: &Usage,
     ) {
@@ -1197,11 +1204,15 @@ impl<'a> BindingsBuilder<'a> {
                 .lookup_name(name, &mut Usage::narrowing_from(usage))
                 .found()
             {
+                let narrow_capture_allowed = capture_subjects
+                    .as_ref()
+                    .is_none_or(|subjects| subjects.contains(name.key().as_str()));
                 let narrowed_idx = self.insert_binding(
                     Key::Narrow(name.into_key().clone(), *op_range, use_location),
                     Binding::Narrow(initial_idx, Box::new(op.clone()), use_location),
                 );
-                self.scopes.narrow_in_current_flow(name, narrowed_idx);
+                self.scopes
+                    .narrow_in_current_flow(name, narrowed_idx, narrow_capture_allowed);
             }
         }
     }

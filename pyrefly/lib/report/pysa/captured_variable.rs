@@ -267,6 +267,7 @@ impl<'a> CapturedVariableVisitor<'a> {
             Binding::CompletedPartialType(idx, _) => {
                 self.get_definition_from_idx(*idx, seen, depth)
             }
+            Binding::Narrow(idx, _, _) => self.get_definition_from_idx(*idx, seen, depth),
             _ => None,
         }
     }

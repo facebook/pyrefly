@@ -21,6 +21,7 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::suggest::best_suggestion;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -28,6 +29,7 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtReturn;
 use ruff_python_ast::name::Name;
@@ -428,6 +430,233 @@ impl Static {
     }
 }
 
+fn record_assignment_in_map(
+    assignments: &mut SmallMap<Name, TextSize>,
+    name: &Name,
+    range: TextRange,
+) {
+    let start = range.start();
+    match assignments.entry(name.clone()) {
+        Entry::Vacant(entry) => {
+            entry.insert(start);
+        }
+        Entry::Occupied(mut entry) => {
+            if start > *entry.get() {
+                *entry.get_mut() = start;
+            }
+        }
+    }
+}
+
+fn record_assignment_lvalue(assignments: &mut SmallMap<Name, TextSize>, target: &Expr) {
+    Ast::expr_lvalue(target, &mut |name| {
+        record_assignment_in_map(assignments, &name.id, name.range);
+    });
+}
+
+fn record_assignment_pattern(assignments: &mut SmallMap<Name, TextSize>, pattern: &Pattern) {
+    Ast::pattern_lvalue(pattern, &mut |ident| {
+        record_assignment_in_map(assignments, &ident.id, ident.range);
+    });
+}
+
+fn record_assignments_in_expr(assignments: &mut SmallMap<Name, TextSize>, expr: &Expr) {
+    match expr {
+        Expr::Named(x) => {
+            record_assignment_lvalue(assignments, &x.target);
+            record_assignments_in_expr(assignments, &x.value);
+        }
+        Expr::Lambda(_) => {}
+        Expr::ListComp(x) => {
+            record_assignments_in_expr(assignments, &x.elt);
+            for comp in &x.generators {
+                record_assignments_in_expr(assignments, &comp.iter);
+                for if_expr in &comp.ifs {
+                    record_assignments_in_expr(assignments, if_expr);
+                }
+            }
+        }
+        Expr::SetComp(x) => {
+            record_assignments_in_expr(assignments, &x.elt);
+            for comp in &x.generators {
+                record_assignments_in_expr(assignments, &comp.iter);
+                for if_expr in &comp.ifs {
+                    record_assignments_in_expr(assignments, if_expr);
+                }
+            }
+        }
+        Expr::DictComp(x) => {
+            record_assignments_in_expr(assignments, &x.key);
+            record_assignments_in_expr(assignments, &x.value);
+            for comp in &x.generators {
+                record_assignments_in_expr(assignments, &comp.iter);
+                for if_expr in &comp.ifs {
+                    record_assignments_in_expr(assignments, if_expr);
+                }
+            }
+        }
+        Expr::Generator(x) => {
+            record_assignments_in_expr(assignments, &x.elt);
+            for comp in &x.generators {
+                record_assignments_in_expr(assignments, &comp.iter);
+                for if_expr in &comp.ifs {
+                    record_assignments_in_expr(assignments, if_expr);
+                }
+            }
+        }
+        _ => {
+            expr.recurse(&mut |expr| record_assignments_in_expr(assignments, expr));
+        }
+    }
+}
+
+fn record_assignments_in_stmts(assignments: &mut SmallMap<Name, TextSize>, stmts: &[Stmt]) {
+    for stmt in stmts {
+        record_assignments_in_stmt(assignments, stmt);
+    }
+}
+
+fn record_assignments_in_stmt(assignments: &mut SmallMap<Name, TextSize>, stmt: &Stmt) {
+    match stmt {
+        Stmt::FunctionDef(x) => {
+            record_assignment_in_map(assignments, &x.name.id, x.name.range);
+        }
+        Stmt::ClassDef(x) => {
+            record_assignment_in_map(assignments, &x.name.id, x.name.range);
+        }
+        Stmt::TypeAlias(x) => {
+            record_assignment_lvalue(assignments, &x.name);
+            record_assignments_in_expr(assignments, &x.value);
+        }
+        Stmt::Assign(x) => {
+            for target in &x.targets {
+                record_assignment_lvalue(assignments, target);
+            }
+            record_assignments_in_expr(assignments, &x.value);
+        }
+        Stmt::AugAssign(x) => {
+            record_assignment_lvalue(assignments, &x.target);
+            record_assignments_in_expr(assignments, &x.value);
+        }
+        Stmt::AnnAssign(x) => {
+            record_assignment_lvalue(assignments, &x.target);
+            if let Some(value) = &x.value {
+                record_assignments_in_expr(assignments, value);
+            }
+        }
+        Stmt::For(x) => {
+            record_assignment_lvalue(assignments, &x.target);
+            record_assignments_in_expr(assignments, &x.iter);
+            record_assignments_in_stmts(assignments, &x.body);
+            record_assignments_in_stmts(assignments, &x.orelse);
+        }
+        Stmt::While(x) => {
+            record_assignments_in_expr(assignments, &x.test);
+            record_assignments_in_stmts(assignments, &x.body);
+            record_assignments_in_stmts(assignments, &x.orelse);
+        }
+        Stmt::If(x) => {
+            record_assignments_in_expr(assignments, &x.test);
+            record_assignments_in_stmts(assignments, &x.body);
+            for clause in &x.elif_else_clauses {
+                if let Some(test) = &clause.test {
+                    record_assignments_in_expr(assignments, test);
+                }
+                record_assignments_in_stmts(assignments, &clause.body);
+            }
+        }
+        Stmt::With(x) => {
+            for item in &x.items {
+                record_assignments_in_expr(assignments, &item.context_expr);
+                if let Some(vars) = &item.optional_vars {
+                    record_assignment_lvalue(assignments, vars);
+                }
+            }
+            record_assignments_in_stmts(assignments, &x.body);
+        }
+        Stmt::Match(x) => {
+            record_assignments_in_expr(assignments, &x.subject);
+            for case in &x.cases {
+                record_assignment_pattern(assignments, &case.pattern);
+                if let Some(guard) = &case.guard {
+                    record_assignments_in_expr(assignments, guard);
+                }
+                record_assignments_in_stmts(assignments, &case.body);
+            }
+        }
+        Stmt::Try(x) => {
+            record_assignments_in_stmts(assignments, &x.body);
+            for handler in &x.handlers {
+                if let Some(handler) = handler.as_except_handler() {
+                    if let Some(name) = &handler.name {
+                        record_assignment_in_map(assignments, &name.id, name.range);
+                    }
+                    if let Some(type_expr) = &handler.type_ {
+                        record_assignments_in_expr(assignments, type_expr);
+                    }
+                    record_assignments_in_stmts(assignments, &handler.body);
+                }
+            }
+            record_assignments_in_stmts(assignments, &x.orelse);
+            record_assignments_in_stmts(assignments, &x.finalbody);
+        }
+        Stmt::Raise(x) => {
+            if let Some(exc) = &x.exc {
+                record_assignments_in_expr(assignments, exc);
+            }
+            if let Some(cause) = &x.cause {
+                record_assignments_in_expr(assignments, cause);
+            }
+        }
+        Stmt::Assert(x) => {
+            record_assignments_in_expr(assignments, &x.test);
+            if let Some(msg) = &x.msg {
+                record_assignments_in_expr(assignments, msg);
+            }
+        }
+        Stmt::Import(x) => {
+            for alias in &x.names {
+                let name = alias.asname.as_ref().unwrap_or(&alias.name);
+                let module_name = ModuleName::from_name(&alias.name.id);
+                let bound_name = if alias.asname.is_some() {
+                    name.id.clone()
+                } else {
+                    module_name.first_component()
+                };
+                record_assignment_in_map(assignments, &bound_name, name.range);
+            }
+        }
+        Stmt::ImportFrom(x) => {
+            for alias in &x.names {
+                if alias.name.id.as_str() == "*" {
+                    continue;
+                }
+                let name = alias.asname.as_ref().unwrap_or(&alias.name);
+                record_assignment_in_map(assignments, &name.id, name.range);
+            }
+        }
+        Stmt::Expr(x) => {
+            record_assignments_in_expr(assignments, &x.value);
+        }
+        Stmt::Return(x) => {
+            if let Some(value) = &x.value {
+                record_assignments_in_expr(assignments, value);
+            }
+        }
+        Stmt::Delete(x) => {
+            for target in &x.targets {
+                record_assignment_lvalue(assignments, target);
+            }
+        }
+        Stmt::Global(_)
+        | Stmt::Nonlocal(_)
+        | Stmt::Pass(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::IpyEscapeCommand(_) => {}
+    }
+}
+
 /// Flow-sensitive information about a name.
 #[derive(Default, Clone, Debug)]
 pub struct Flow {
@@ -485,6 +714,8 @@ struct FlowInfo {
     /// The most recent narrow for this name, if any. Always set to `None` when
     /// `value` is re-bound.
     narrow: Option<FlowNarrow>,
+    /// Is the current narrow safe to capture into nested function scopes?
+    narrow_capture_allowed: bool,
     /// How many consecutive narrows have been recorded since the last value assignment.
     narrow_depth: usize,
     /// An idx used to wrap loop Phi with our guess at the type above the loop.
@@ -517,15 +748,17 @@ impl FlowInfo {
         Self {
             value: Some(FlowValue { idx, style }),
             narrow: None,
+            narrow_capture_allowed: false,
             narrow_depth: 0,
             loop_prior: idx,
         }
     }
 
-    fn new_narrow(idx: Idx<Key>) -> Self {
+    fn new_narrow(idx: Idx<Key>, narrow_capture_allowed: bool) -> Self {
         Self {
             value: None,
             narrow: Some(FlowNarrow { idx }),
+            narrow_capture_allowed,
             narrow_depth: 1,
             loop_prior: idx,
         }
@@ -536,15 +769,17 @@ impl FlowInfo {
             value: Some(FlowValue { idx, style }),
             // Note that any existing narrow is wiped when a new value is bound.
             narrow: None,
+            narrow_capture_allowed: false,
             narrow_depth: 0,
             loop_prior: if in_loop { self.loop_prior } else { idx },
         }
     }
 
-    fn updated_narrow(&self, idx: Idx<Key>, in_loop: bool) -> Self {
+    fn updated_narrow(&self, idx: Idx<Key>, in_loop: bool, narrow_capture_allowed: bool) -> Self {
         Self {
             value: self.value.clone(),
             narrow: Some(FlowNarrow { idx }),
+            narrow_capture_allowed,
             narrow_depth: self.narrow_depth.saturating_add(1),
             loop_prior: if in_loop { self.loop_prior } else { idx },
         }
@@ -552,6 +787,7 @@ impl FlowInfo {
 
     fn clear_narrow(&mut self) {
         self.narrow = None;
+        self.narrow_capture_allowed = false;
         self.narrow_depth = 0;
     }
 
@@ -988,6 +1224,8 @@ pub struct Scope {
     imports: SmallMap<Name, ImportUsage>,
     /// Tracking variables in the current scope (module, function, and method scopes)
     variables: SmallMap<Name, VariableUsage>,
+    /// Latest assignment position for each name in this scope.
+    assignments: SmallMap<Name, TextSize>,
     /// Depth of finally blocks we're in. Resets in new function scopes (PEP 765).
     finally_depth: usize,
     /// Depth of with blocks we're in. Resets in new function scopes.
@@ -1006,8 +1244,18 @@ impl Scope {
             forks: Default::default(),
             imports: SmallMap::new(),
             variables: SmallMap::new(),
+            assignments: SmallMap::new(),
             finally_depth: 0,
             with_depth: 0,
+        }
+    }
+
+    fn init_assignments(&mut self, stmts: &[Stmt]) {
+        if matches!(
+            self.kind,
+            ScopeKind::Module | ScopeKind::Function(_) | ScopeKind::Method(_)
+        ) {
+            record_assignments_in_stmts(&mut self.assignments, stmts);
         }
     }
 
@@ -1035,19 +1283,28 @@ impl Scope {
         )
     }
 
-    pub fn function(range: TextRange, is_async: bool) -> Self {
+    fn function_with_flow_barrier(
+        range: TextRange,
+        is_async: bool,
+        flow_barrier: FlowBarrier,
+    ) -> Self {
         Self::new(
             range,
-            FlowBarrier::BlockFlow,
+            flow_barrier,
             ScopeKind::Function(ScopeFunction::new(is_async)),
         )
     }
+
+    pub fn function(range: TextRange, is_async: bool) -> Self {
+        Self::function_with_flow_barrier(range, is_async, FlowBarrier::BlockFlow)
+    }
+
+    fn nested_function(range: TextRange, is_async: bool) -> Self {
+        Self::function_with_flow_barrier(range, is_async, FlowBarrier::AllowFlowUnchecked)
+    }
+
     pub fn lambda(range: TextRange, is_async: bool) -> Self {
-        Self::new(
-            range,
-            FlowBarrier::AllowFlowUnchecked,
-            ScopeKind::Function(ScopeFunction::new(is_async)),
-        )
+        Self::function_with_flow_barrier(range, is_async, FlowBarrier::AllowFlowUnchecked)
     }
 
     pub fn method(range: TextRange, name: Identifier, is_async: bool) -> Self {
@@ -1318,6 +1575,7 @@ impl Scopes {
             );
             // Presize the flow, as its likely to need as much space as static
             scope.flow.info.reserve(scope.stat.0.capacity());
+            scope.init_assignments(x);
         };
         if top_level {
             // If we are in the top-level scope, all `global` / `nonlocal` directives fail, so we can
@@ -1360,6 +1618,8 @@ impl Scopes {
     ) {
         if in_class {
             self.push(Scope::method(range, name.clone(), is_async));
+        } else if self.in_function_scope() {
+            self.push(Scope::nested_function(range, is_async));
         } else {
             self.push(Scope::function(range, is_async));
         }
@@ -1619,18 +1879,23 @@ impl Scopes {
     /// that only narrow an existing value, not operations that assign a new value at runtime.
     ///
     /// A caller of this function promises to create a binding for `idx`.
-    pub fn narrow_in_current_flow(&mut self, name: Hashed<&Name>, idx: Idx<Key>) {
+    pub fn narrow_in_current_flow(
+        &mut self,
+        name: Hashed<&Name>,
+        idx: Idx<Key>,
+        narrow_capture_allowed: bool,
+    ) {
         let in_loop = self.loop_depth() != 0;
         match self.current_mut().flow.info.entry_hashed(name.cloned()) {
             Entry::Vacant(e) => {
-                e.insert(FlowInfo::new_narrow(idx));
+                e.insert(FlowInfo::new_narrow(idx, narrow_capture_allowed));
             }
             Entry::Occupied(mut e) => {
                 let mut info = e.get().clone();
                 if info.narrow_depth >= MAX_FLOW_NARROW_DEPTH {
                     info.clear_narrow();
                 }
-                *e.get_mut() = info.updated_narrow(idx, in_loop);
+                *e.get_mut() = info.updated_narrow(idx, in_loop, narrow_capture_allowed);
             }
         }
     }
@@ -1894,6 +2159,33 @@ impl Scopes {
                 break;
             }
         }
+    }
+
+    fn record_assignment_at(&mut self, name: &Name, range: TextRange) {
+        if matches!(
+            self.current().kind,
+            ScopeKind::Module | ScopeKind::Function(_) | ScopeKind::Method(_)
+        ) {
+            let start = range.start();
+            match self.current_mut().assignments.entry(name.clone()) {
+                Entry::Vacant(entry) => {
+                    entry.insert(start);
+                }
+                Entry::Occupied(mut entry) => {
+                    if start > *entry.get() {
+                        *entry.get_mut() = start;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn record_assignment(&mut self, name: &Identifier) {
+        self.record_assignment_at(&name.id, name.range);
+    }
+
+    pub fn record_assignment_expr_name(&mut self, name: &ExprName) {
+        self.record_assignment_at(&name.id, name.range);
     }
 
     /// Add an intercepted possible legacy TParam - this is a name that's part
@@ -2281,8 +2573,17 @@ impl Scopes {
     /// Look up the information needed to create a `Usage` binding for a read of a name
     /// in the current scope stack.
     pub fn look_up_name_for_read(&self, name: Hashed<&Name>) -> NameReadInfo {
-        self.visit_scopes(|_, scope, flow_barrier| {
+        let capture_position = self.current().range.start();
+        let mut capture_scope_depth: Option<usize> = None;
+        self.visit_scopes(|lookup_depth, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
+
+            if lookup_depth > 0
+                && capture_scope_depth.is_none()
+                && matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_))
+            {
+                capture_scope_depth = Some(lookup_depth);
+            }
 
             if let Some(flow_info) = scope.flow.get_info_hashed(name)
                 && flow_barrier < FlowBarrier::BlockFlow
@@ -2298,10 +2599,29 @@ impl Scopes {
                 if is_class && matches!(initialized, InitializedInFlow::No) {
                     return None;
                 }
-                return Some(NameReadInfo::Flow {
-                    idx: flow_info.idx(),
-                    initialized,
-                });
+                let use_narrow = if flow_barrier == FlowBarrier::AllowFlowUnchecked {
+                    let is_capture_scope =
+                        capture_scope_depth.is_some_and(|depth| depth == lookup_depth);
+                    if is_capture_scope && flow_info.narrow_capture_allowed {
+                        let assigned_after_capture = scope
+                            .assignments
+                            .get(name.key().as_str())
+                            .is_some_and(|pos| *pos > capture_position);
+                        !assigned_after_capture
+                    } else {
+                        false
+                    }
+                } else {
+                    true
+                };
+                let idx = if use_narrow {
+                    flow_info.idx()
+                } else if let Some(value) = flow_info.value() {
+                    value.idx
+                } else {
+                    flow_info.idx()
+                };
+                return Some(NameReadInfo::Flow { idx, initialized });
             }
             // Class body scopes are dynamic, not static, so if we don't find a name in the
             // current flow we keep looking. In every other kind of scope, anything the Python
@@ -2727,6 +3047,7 @@ impl<'a> BindingsBuilder<'a> {
                 FlowInfo {
                     value: None,
                     narrow: Some(FlowNarrow { idx: merged_idx }),
+                    narrow_capture_allowed: false,
                     narrow_depth: 1,
                     loop_prior: merged_loop_prior(merged_idx),
                 }
@@ -2752,6 +3073,7 @@ impl<'a> BindingsBuilder<'a> {
                         ),
                     }),
                     narrow: Some(FlowNarrow { idx: merged_idx }),
+                    narrow_capture_allowed: false,
                     narrow_depth: 1,
                     loop_prior: merged_loop_prior(merged_idx),
                 }
@@ -2777,6 +3099,7 @@ impl<'a> BindingsBuilder<'a> {
                         ),
                     }),
                     narrow: None,
+                    narrow_capture_allowed: false,
                     narrow_depth: 0,
                     loop_prior: merged_loop_prior(merged_idx),
                 }
@@ -2969,6 +3292,7 @@ impl<'a> BindingsBuilder<'a> {
         // finishes), we're at the loopback flow but the test (if there is one) is negated.
         self.bind_narrow_ops(
             &narrow_ops.negate(),
+            None,
             NarrowUseLocation::Span(other_range),
             &Usage::Narrowing(None),
         );
@@ -3072,6 +3396,7 @@ impl<'a> BindingsBuilder<'a> {
             self.scopes.current_mut().flow = fork.base.clone();
             self.bind_narrow_ops(
                 negated_prev_ops,
+                None,
                 // Generate a range that is distinct from other use_ranges of the same narrow.
                 NarrowUseLocation::End(fork.range),
                 &Usage::Narrowing(None),

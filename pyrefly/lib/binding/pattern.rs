@@ -33,6 +33,7 @@ use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::narrow::NarrowingSubject;
+use crate::binding::narrow::capture_subjects_for_expr;
 use crate::binding::narrow::expr_to_subjects;
 use crate::binding::scope::FlowStyle;
 use crate::config::error_kind::ErrorKind;
@@ -379,6 +380,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             self.bind_narrow_ops(
                 &negated_prev_ops,
+                None,
                 NarrowUseLocation::Start(case_range),
                 &Usage::Narrowing(None),
             );
@@ -386,14 +388,17 @@ impl<'a> BindingsBuilder<'a> {
                 self.bind_pattern(match_narrowing_subject.clone(), pattern, subject_idx);
             self.bind_narrow_ops(
                 &new_narrow_ops,
+                None,
                 NarrowUseLocation::Span(case_range),
                 &Usage::Narrowing(None),
             );
             if let Some(mut guard) = guard {
+                let capture_subjects = capture_subjects_for_expr(Some(guard.as_ref()));
                 self.ensure_expr(&mut guard, &mut Usage::Narrowing(None));
                 let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));
                 self.bind_narrow_ops(
                     &guard_narrow_ops,
+                    Some(&capture_subjects),
                     NarrowUseLocation::Span(guard.range()),
                     &Usage::Narrowing(None),
                 );
