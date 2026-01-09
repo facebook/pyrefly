@@ -885,3 +885,97 @@ type U = (a := 1)  # E: Named expression cannot be used within a type alias # E:
 type V = int | (b := str)  # E: Named expression cannot be used within a type alias
     "#,
 );
+
+testcase!(
+    test_union_type_alias_typevar_order,
+    r#"
+import dataclasses as dc
+from typing import TypeVar, Iterable
+
+@dc.dataclass
+class Ok[T]:
+    value: T
+
+@dc.dataclass
+class Error[T: Exception]:
+    error: T
+
+_T = TypeVar("_T")
+_TE = TypeVar("_TE", bound=Exception)
+Result = Ok[_T] | Error[_TE]
+
+def func[T, TE: Exception](
+    results: Iterable[Result[T, TE]],
+) -> tuple[Iterable[Ok[T]], Iterable[Error[TE]]]: ...
+
+# Verify instantiation works correctly
+def test(r: Result[int, ValueError]) -> None:
+    pass
+
+test(Ok(42))
+test(Error(ValueError("error")))
+    "#,
+);
+
+testcase!(
+    test_union_type_alias_typevar_order_multiple,
+    r#"
+from typing import TypeVar, assert_type
+import dataclasses as dc
+
+@dc.dataclass
+class Zebra[T]:
+    value: T
+
+@dc.dataclass
+class Bee[T]:
+    value: T
+
+@dc.dataclass
+class Aardvark[T]:
+    value: T
+
+_T1 = TypeVar("_T1")
+_T2 = TypeVar("_T2")
+_T3 = TypeVar("_T3")
+
+# Source order: _T1, _T2, _T3 (from Zebra, Bee, Aardvark)
+# Alphabetical order would be: Aardvark[_T3], Bee[_T2], Zebra[_T1] -> _T3, _T2, _T1
+Combined = Zebra[_T1] | Bee[_T2] | Aardvark[_T3]
+
+# This should work: int->_T1, str->_T2, float->_T3
+x: Combined[int, str, float] = Zebra(42)
+assert_type(x, Zebra[int] | Bee[str] | Aardvark[float])
+
+y: Combined[int, str, float] = Bee("hello")
+z: Combined[int, str, float] = Aardvark(3.14)
+    "#,
+);
+
+// Test that duplicate TypeVars are handled correctly (only first occurrence counts)
+testcase!(
+    test_union_type_alias_duplicate_typevar,
+    r#"
+from typing import TypeVar, assert_type
+import dataclasses as dc
+
+_T = TypeVar("_T")
+
+@dc.dataclass
+class First[T]:
+    value: T
+
+@dc.dataclass
+class Second[T]:
+    value: T
+
+# _T appears in both, but should only be one type parameter
+Alias = First[_T] | Second[_T]
+
+x: Alias[int] = First(42)
+assert_type(x, First[int] | Second[int])
+
+y: Alias[str] = Second("hello")
+assert_type(y, First[str] | Second[str])
+    "#,
+);

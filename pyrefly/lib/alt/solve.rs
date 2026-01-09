@@ -967,7 +967,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         seen_type_vars: &mut SmallMap<TypeVar, Quantified>,
         seen_type_var_tuples: &mut SmallMap<TypeVarTuple, Quantified>,
         seen_param_specs: &mut SmallMap<ParamSpec, Quantified>,
-        tparams: &mut Vec<TParam>,
+        tparams: &mut Vec<(TextRange, TParam)>,
     ) {
         match ty {
             Type::Union(box Union { members: ts, .. }) => {
@@ -1049,10 +1049,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ty_var.restriction().clone(),
                         );
                         e.insert(q.clone());
-                        tparams.push(TParam {
-                            quantified: q.clone(),
-                            variance: ty_var.variance(),
-                        });
+                        tparams.push((
+                            ty_var.qname().range(),
+                            TParam {
+                                quantified: q.clone(),
+                                variance: ty_var.variance(),
+                            },
+                        ));
                         q
                     }
                 };
@@ -1068,10 +1071,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ty_var_tuple.default().cloned(),
                         );
                         e.insert(q.clone());
-                        tparams.push(TParam {
-                            quantified: q.clone(),
-                            variance: PreInferenceVariance::Invariant,
-                        });
+                        tparams.push((
+                            ty_var_tuple.qname().range(),
+                            TParam {
+                                quantified: q.clone(),
+                                variance: PreInferenceVariance::Invariant,
+                            },
+                        ));
                         q
                     }
                 };
@@ -1087,10 +1093,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             param_spec.default().cloned(),
                         );
                         e.insert(q.clone());
-                        tparams.push(TParam {
-                            quantified: q.clone(),
-                            variance: PreInferenceVariance::Invariant,
-                        });
+                        tparams.push((
+                            param_spec.qname().range(),
+                            TParam {
+                                quantified: q.clone(),
+                                variance: PreInferenceVariance::Invariant,
+                            },
+                        ));
                         q
                     }
                 };
@@ -1175,13 +1184,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
                 .collect();
         } else {
+            let mut tparams_with_ranges = Vec::new();
             self.tvars_to_tparams_for_type_alias(
                 &mut ty,
                 &mut seen_type_vars,
                 &mut seen_type_var_tuples,
                 &mut seen_param_specs,
-                &mut tparams,
+                &mut tparams_with_ranges,
             );
+            // Sort by source location to restore the user's intended type parameter order.
+            // This is needed because union members get sorted alphabetically during
+            // simplification, which can change the traversal order.
+            tparams_with_ranges.sort_by_key(|(range, _)| range.start());
+            tparams.extend(tparams_with_ranges.into_iter().map(|(_, tp)| tp));
         }
         if let Some(n) = tparams_for_type_alias_type {
             for extra_tparam in tparams.iter().skip(n) {
