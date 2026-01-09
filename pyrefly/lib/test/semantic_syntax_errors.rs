@@ -123,6 +123,8 @@ testcase!(
     test_keyword_assignment_reports_parse_error,
     r#"
 async = 1  # E: Parse error: Expected `def`, `with` or `for` to follow `async`, found `=`
+# From https://github.com/facebook/pyrefly/issues/2047
+async = lambda: None   # E: Parse error: Expected `def`, `with` or `for` to follow `async`, found `=`
 "#,
 );
 
