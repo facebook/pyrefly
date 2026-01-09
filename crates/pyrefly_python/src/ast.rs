@@ -219,6 +219,13 @@ impl Ast {
         x.id.as_str().is_empty()
     }
 
+    pub fn is_synthesized_empty_identifier(x: &Identifier) -> bool {
+        // The parser uses empty identifiers when recovering from syntax errors.
+        // Treat any empty identifier as synthesized, even if we still know the range, so
+        // downstream stages don't try to bind it.
+        x.id.as_str().is_empty()
+    }
+
     /// Calls a function on all of the names bound by this lvalue expression.
     pub fn expr_lvalue<'a>(x: &'a Expr, f: &mut impl FnMut(&'a ExprName)) {
         match x {

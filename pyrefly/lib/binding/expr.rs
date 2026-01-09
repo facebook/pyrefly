@@ -407,13 +407,10 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 self.scopes.push(Scope::comprehension(range, is_generator));
             }
-            let key = Key::Anon(comp.iter.range());
-            let iterable_value_idx = self.existing_binding_idx(&key).unwrap_or_else(|| {
-                self.insert_binding(
-                    key,
-                    Binding::IterableValue(None, comp.iter.clone(), IsAsync::new(comp.is_async)),
-                )
-            });
+            let iterable_value_idx = self
+                .insert_binding_if_missing(Key::Anon(comp.iter.range()), || {
+                    Binding::IterableValue(None, comp.iter.clone(), IsAsync::new(comp.is_async))
+                });
             self.scopes.add_lvalue_to_current_static(&comp.target);
             // A comprehension target cannot be annotated, so it is safe to ignore the
             // annotation (which is None) and just use a `Forward` here.

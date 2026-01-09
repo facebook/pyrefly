@@ -335,10 +335,9 @@ impl<'a> BindingsBuilder<'a> {
                     self.ensure_expr(assigned, &mut usage);
                 }
                 let key = Key::Anon(illegal_target.range());
-                if self.existing_binding_idx(&key).is_none() {
-                    let binding = binding_of(make_assigned_value(assigned.as_deref(), None), None);
-                    self.insert_binding_overwrite(key, binding);
-                }
+                self.insert_binding_if_missing(key, || {
+                    binding_of(make_assigned_value(assigned.as_deref(), None), None)
+                });
             }
         }
     }
@@ -460,7 +459,7 @@ impl<'a> BindingsBuilder<'a> {
         mut value: Box<Expr>,
         direct_ann: Option<(&Expr, Idx<KeyAnnotation>)>,
     ) -> Option<Idx<KeyAnnotation>> {
-        if name.id.as_str().is_empty() {
+        if Ast::is_synthesized_empty_identifier(name) {
             let range = value.range();
             let mut user = self.declare_current_idx(Key::Anon(range));
             self.ensure_expr(&mut value, user.usage());
