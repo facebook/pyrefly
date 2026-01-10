@@ -545,6 +545,7 @@ impl<'a> BindingsBuilder<'a> {
                         | SpecialExport::TypingTuple
                         | SpecialExport::BuiltinsType
                         | SpecialExport::TypingType
+                        | SpecialExport::TypingMapping
                 )
             ),
             Expr::BinOp(ExprBinOp {
