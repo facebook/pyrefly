@@ -69,6 +69,7 @@ pub enum SpecialExport {
     BuiltinsFrozenset,
     BuiltinsFloat,
     Deprecated,
+    SqlAlchemyMappedColumn,
 }
 
 impl SpecialExport {
@@ -129,6 +130,7 @@ impl SpecialExport {
             "frozenset" => Some(Self::BuiltinsFrozenset),
             "float" => Some(Self::BuiltinsFloat),
             "deprecated" => Some(Self::Deprecated),
+            "mapped_column" => Some(Self::SqlAlchemyMappedColumn),
             _ => None,
         }
     }
@@ -194,6 +196,12 @@ impl SpecialExport {
                 "typing" | "typing_extensions" | "collections.abc"
             ),
             Self::Deprecated => matches!(m.as_str(), "warnings" | "typing_extensions"),
+            Self::SqlAlchemyMappedColumn => {
+                matches!(
+                    m.as_str(),
+                    "sqlalchemy.orm" | "sqlalchemy.orm._orm_constructors"
+                )
+            }
         }
     }
 

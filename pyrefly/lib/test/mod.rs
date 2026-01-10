@@ -59,6 +59,7 @@ mod returns;
 mod scope;
 mod semantic_syntax_errors;
 mod simple;
+mod sqlalchemy;
 mod state;
 mod subscript_narrow;
 mod suppression;
