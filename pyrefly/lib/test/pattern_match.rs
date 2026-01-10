@@ -266,3 +266,30 @@ def describe_ok_2(x: X):
             print("default")
 "#,
 );
+
+testcase!(
+    test_match_mapping_after_none,
+    r#"
+from typing import Any, assert_type
+
+def test_dict_or_none(dict_or_none: dict[str, Any] | None):
+    match dict_or_none:
+        case None:
+            pass
+        case {"a": "b"}:
+            # After matching None, dict_or_none is narrowed to dict[str, Any]
+            assert_type(dict_or_none, dict[str, Any])
+        case _:
+            assert_type(dict_or_none, dict[str, Any])
+
+def test_sequence_after_none(seq_or_none: list[int] | None):
+    match seq_or_none:
+        case None:
+            pass
+        case [first, *rest]:
+            # After matching None, seq_or_none is narrowed to list[int]
+            assert_type(seq_or_none, list[int])
+        case _:
+            assert_type(seq_or_none, list[int])
+"#,
+);
