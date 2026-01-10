@@ -2685,7 +2685,7 @@ impl<'a> Transaction<'a> {
             .last()
             .map(|name| name.as_str())
             .unwrap_or("");
-    
+
         if canonical_component.starts_with('_')
             && canonical_component.trim_start_matches('_') == original_component
         {
