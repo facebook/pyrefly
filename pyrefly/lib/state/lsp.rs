@@ -2698,11 +2698,6 @@ impl<'a> Transaction<'a> {
                 .iter()
                 .zip(original_components.iter())
                 .all(|(c, o)| c == o)
-        } else {
-            false
-        }
-        {
-            return true;
         }
         // Some stdlib shims encode dotted modules with underscores (e.g. _collections_abc).
         if canonical_module.as_str().starts_with('_') && original_module.as_str().contains('.') {
