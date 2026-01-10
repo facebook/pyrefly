@@ -418,8 +418,26 @@ impl<'a> BindingsBuilder<'a> {
                 NarrowUseLocation::Start(case_range),
                 &Usage::Narrowing(None),
             );
+            // Create a narrowed subject_idx for this case by applying negated_prev_ops.
+            // This ensures that patterns like MatchMapping use the narrowed type
+            // (e.g., after matching `None`, the type excludes `None`).
+            let case_subject_idx = if let Some(ref narrowing_subject) = match_narrowing_subject
+                && let Some((narrow_op, op_range)) =
+                    negated_prev_ops.0.get(narrowing_subject.name())
+            {
+                self.insert_binding(
+                    Key::PatternNarrow(case_range),
+                    Binding::Narrow(
+                        subject_idx,
+                        Box::new(narrow_op.clone()),
+                        NarrowUseLocation::Start(*op_range),
+                    ),
+                )
+            } else {
+                subject_idx
+            };
             let mut new_narrow_ops =
-                self.bind_pattern(match_narrowing_subject.clone(), pattern, subject_idx);
+                self.bind_pattern(match_narrowing_subject.clone(), pattern, case_subject_idx);
             self.bind_narrow_ops(
                 &new_narrow_ops,
                 NarrowUseLocation::Span(case_range),
