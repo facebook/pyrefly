@@ -100,6 +100,25 @@ fn find_marked_range_with(source: &str, start_marker: &str, end_marker: &str) ->
     )
 }
 
+fn find_nth_range(source: &str, needle: &str, occurrence: usize) -> TextRange {
+    assert!(occurrence > 0, "occurrence is 1-based");
+    let mut start = 0;
+    let mut seen = 0;
+    while let Some(found) = source[start..].find(needle) {
+        let abs = start + found;
+        seen += 1;
+        if seen == occurrence {
+            let end = abs + needle.len();
+            return TextRange::new(
+                TextSize::try_from(abs).unwrap(),
+                TextSize::try_from(end).unwrap(),
+            );
+        }
+        start = abs + needle.len();
+    }
+    panic!("missing selection marker in invert-boolean test");
+}
+
 fn compute_extract_actions(
     code: &str,
 ) -> (
@@ -154,6 +173,43 @@ fn apply_first_extract_variable_action(code: &str) -> Option<String> {
     let (module_info, actions, _) = compute_extract_variable_actions(code);
     let edits = actions.first()?;
     Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn compute_invert_boolean_actions(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .invert_boolean_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_first_invert_boolean_action(code: &str, selection: TextRange) -> Option<String> {
+    let (module_info, actions, _) = compute_invert_boolean_actions(code, selection);
+    let edits = actions.first()?;
+    Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn assert_no_invert_boolean_action(code: &str, selection: TextRange) {
+    let (_, actions, _) = compute_invert_boolean_actions(code, selection);
+    assert!(
+        actions.is_empty(),
+        "expected no invert-boolean actions, found {}",
+        actions.len()
+    );
 }
 
 fn cursor_selection(code: &str) -> TextRange {
@@ -944,6 +1000,57 @@ def process(data):
     return total
 "#;
     assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_basic_refactor() {
+    let code = r#"
+def foo():
+    abc = True
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = False
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_removes_not() {
+    let code = r#"
+def foo():
+    abc = False
+    if not abc:
+        return 1
+    return 0
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = True
+    if abc:
+        return 1
+    return 0
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_rejects_multi_target_assignment() {
+    let code = r#"
+def foo():
+    abc = other = True
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    assert_no_invert_boolean_action(code, selection);
 }
 
 #[test]
