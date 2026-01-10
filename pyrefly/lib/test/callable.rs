@@ -26,6 +26,17 @@ f8: Callable[[int], int] = lambda x: x + "foo" # E: Argument `Literal['foo']` is
 );
 
 testcase!(
+    test_callable_variable_typevar_annotation,
+    r#"
+from typing import Callable, TypeVar, reveal_type
+T = TypeVar("T")
+f: Callable[[T], T] = lambda x: x
+reveal_type(f)  # E: revealed type: [T](T) -> T
+reveal_type(f(1))  # E: revealed type: int
+"#,
+);
+
+testcase!(
     test_callable_ellipsis_upper_bound,
     r#"
 from typing import Callable
