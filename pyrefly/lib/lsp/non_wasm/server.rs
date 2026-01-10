@@ -2843,6 +2843,9 @@ impl Server {
         if let Some(refactors) = transaction.push_members_down_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
+        if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
         if actions.is_empty() {
             None
         } else {
