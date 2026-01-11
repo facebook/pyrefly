@@ -262,6 +262,8 @@ fn collect_load_edits(
                     range: unary.range(),
                     replacement: name.id.to_string(),
                 });
+                // Avoid also visiting the inner `abc` node and producing overlapping edits
+                // (`not abc` -> `abc` and `abc` -> `not abc`) for the same source span.
                 return;
             }
             if let Expr::Name(name) = expr
