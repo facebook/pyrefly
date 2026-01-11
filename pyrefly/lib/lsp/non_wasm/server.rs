@@ -636,6 +636,7 @@ pub fn capabilities(
             code_action_kinds: Some(vec![
                 CodeActionKind::QUICKFIX,
                 CodeActionKind::REFACTOR_EXTRACT,
+                CodeActionKind::REFACTOR_REWRITE,
                 CodeActionKind::new("refactor.move"),
             ]),
             ..Default::default()
@@ -2832,6 +2833,9 @@ impl Server {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.invert_boolean_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
