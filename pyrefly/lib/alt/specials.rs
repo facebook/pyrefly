@@ -477,7 +477,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 ErrorInfo::Kind(ErrorKind::BadSpecialization),
                 format!(
-                    "``Unpack requires exactly one argument but got {}",
+                    "`Unpack` requires exactly one argument but got {}",
                     arguments.len()
                 ),
             ),
@@ -498,6 +498,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 TypeFormContext::TypeArgument,
                 errors,
             )),
+            SpecialForm::Annotated => self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                format!(
+                    "`Annotated` requires at least two arguments but got {}",
+                    arguments.len()
+                ),
+            ),
             // Keep this in sync with `SpecialForm::can_be_subscripted``
             SpecialForm::SelfType
             | SpecialForm::LiteralString
@@ -516,8 +525,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | SpecialForm::Protocol
             | SpecialForm::ReadOnly
             | SpecialForm::NotRequired
-            | SpecialForm::Required
-            | SpecialForm::Annotated => self.error(
+            | SpecialForm::Required => self.error(
                 errors,
                 range,
                 ErrorInfo::Kind(ErrorKind::InvalidAnnotation),

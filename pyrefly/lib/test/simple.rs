@@ -844,6 +844,7 @@ c2: type[C, C] = C  # E: Expected 1 type argument for `type`, got 2
     "#,
 );
 
+// Q: Shall we unify the error messages when `Annotated` is applied in annotations vs expressions?
 testcase!(
     test_annotated,
     r#"
@@ -851,6 +852,10 @@ from typing import Annotated, assert_type
 def f(x: Annotated[int, "test"], y: Annotated[int, "test", "test"]):
     assert_type(x, int)
     assert_type(y, int)
+def g(x: Annotated[int]): # E: `Annotated` needs at least one piece of metadata in addition to the type
+    pass
+X = Annotated[int, "meta"]
+Y = Annotated[int] # E: `Annotated` requires at least two arguments but got 1
     "#,
 );
 
