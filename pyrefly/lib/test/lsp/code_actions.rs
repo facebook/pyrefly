@@ -18,6 +18,7 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
+use crate::test::util::mk_multi_file_state;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn apply_patch(info: &ModuleInfo, range: TextRange, patch: String) -> (String, String) {
@@ -116,7 +117,10 @@ fn find_nth_range(source: &str, needle: &str, occurrence: usize) -> TextRange {
         }
         start = abs + needle.len();
     }
-    panic!("missing selection marker in invert-boolean test");
+    panic!(
+        "could not find occurrence {} of '{}' in source",
+        occurrence, needle
+    );
 }
 
 fn compute_extract_actions(
@@ -205,6 +209,36 @@ fn apply_first_invert_boolean_action(code: &str, selection: TextRange) -> Option
 
 fn assert_no_invert_boolean_action(code: &str, selection: TextRange) {
     let (_, actions, _) = compute_invert_boolean_actions(code, selection);
+    assert!(
+        actions.is_empty(),
+        "expected no invert-boolean actions, found {}",
+        actions.len()
+    );
+}
+
+fn compute_invert_boolean_actions_allow_errors(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Everything, false);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .invert_boolean_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn assert_no_invert_boolean_action_allow_errors(code: &str, selection: TextRange) {
+    let (_, actions, _) = compute_invert_boolean_actions_allow_errors(code, selection);
     assert!(
         actions.is_empty(),
         "expected no invert-boolean actions, found {}",
@@ -1051,6 +1085,94 @@ def foo():
 "#;
     let selection = find_nth_range(code, "abc", 2);
     assert_no_invert_boolean_action(code, selection);
+}
+
+#[test]
+fn invert_boolean_annotated_assignment() {
+    let code = r#"
+def foo():
+    abc: bool = True
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc: bool = False
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_rejects_deleted_variable() {
+    let code = r#"
+def foo():
+    abc = True
+    del abc
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 3);
+    assert_no_invert_boolean_action_allow_errors(code, selection);
+}
+
+#[test]
+fn invert_boolean_multiple_assignments() {
+    let code = r#"
+def foo():
+    abc = True
+    abc = False
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 3);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = True
+    abc = True
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_nested_expression_keeps_outer_not() {
+    let code = r#"
+def foo():
+    abc = True
+    other = True
+    return not (abc and other)
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = False
+    other = True
+    return not ((not abc) and other)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_inverts_unary_not_assignment_value() {
+    let code = r#"
+def foo(other_var):
+    abc = not other_var
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo(other_var):
+    abc = other_var
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
 }
 
 #[test]
