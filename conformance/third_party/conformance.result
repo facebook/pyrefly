@@ -92,10 +92,7 @@
   "dataclasses_match_args.py": [],
   "dataclasses_order.py": [],
   "dataclasses_postinit.py": [],
-  "dataclasses_slots.py": [
-    "Line 25: Expected 1 errors",
-    "Line 38: Expected 1 errors"
-  ],
+  "dataclasses_slots.py": [],
   "dataclasses_transform_class.py": [],
   "dataclasses_transform_converter.py": [],
   "dataclasses_transform_field.py": [],

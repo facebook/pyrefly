@@ -3585,6 +3585,28 @@
     },
     {
       "code": -2,
+      "column": 9,
+      "concise_description": "Cannot assign to attribute `y`: not listed in `__slots__` of class `DC2`",
+      "description": "Cannot assign to attribute `y`: not listed in `__slots__` of class `DC2`",
+      "line": 25,
+      "name": "missing-attribute",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 25
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Cannot assign to attribute `y`: not listed in `__slots__` of class `DC3`",
+      "description": "Cannot assign to attribute `y`: not listed in `__slots__` of class `DC3`",
+      "line": 38,
+      "name": "missing-attribute",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 38
+    },
+    {
+      "code": -2,
       "column": 1,
       "concise_description": "Class `DC6` has no class attribute `__slots__`",
       "description": "Class `DC6` has no class attribute `__slots__`",
