@@ -1803,19 +1803,27 @@ impl<'a> Transaction<'a> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
         let errors = self.get_errors(vec![handle]).collect_errors().shown;
-        let mut code_actions = Vec::new();
+        let mut code_actions: Vec<(String, Module, TextRange, String, bool, bool)> = Vec::new();
         for error in errors {
             match error.error_kind() {
                 ErrorKind::UnknownName => {
                     let error_range = error.range();
                     if error_range.contains_range(range) {
                         let unknown_name = module_info.code_at(error_range);
-                        for handle_to_import_from in self.search_exports_exact(unknown_name) {
+                        for (handle_to_import_from, export) in
+                            self.search_exports_exact(unknown_name)
+                        {
+                            let is_deprecated = export.deprecation.is_some();
+                            let is_private_import = handle_to_import_from
+                                .module()
+                                .components()
+                                .last()
+                                .is_some_and(|component| component.as_str().starts_with('_'));
                             let import_edit = insert_import_edit(
                                 &ast,
                                 self.config_finder(),
                                 handle.dupe(),
-                                handle_to_import_from.dupe(),
+                                handle_to_import_from,
                                 unknown_name,
                                 import_format,
                             );
@@ -1830,6 +1838,8 @@ impl<'a> Transaction<'a> {
                                 module_info.dupe(),
                                 range,
                                 import_edit.insert_text,
+                                is_deprecated,
+                                is_private_import,
                             ));
                         }
 
@@ -2497,7 +2507,7 @@ impl<'a> Transaction<'a> {
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
                 completions.push(CompletionItem {
-                    label,
+                    label: name,
                     detail: detail_text,
                     kind: export
                         .symbol_kind
@@ -2967,11 +2977,12 @@ impl<'a> Transaction<'a> {
                         self.add_local_variable_completions(handle, None, position, &mut result);
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
-                    self.add_literal_completions(handle, position, &mut result);
-                    // Only offer kwargs when the cursor isn't inside a literal value.
-                    if !nodes
+                    let in_string_literal = nodes
                         .iter()
-                        .any(|n| matches!(n, AnyNodeRef::ExprStringLiteral(_)))
+                        .any(|n| matches!(n, AnyNodeRef::ExprStringLiteral(_)));
+                    self.add_literal_completions(handle, position, &mut result, in_string_literal);
+                    // Only offer kwargs when the cursor isn't inside a literal value.
+                    if !in_string_literal
                         && nodes.iter().any(|n| {
                             matches!(n, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
                         })
