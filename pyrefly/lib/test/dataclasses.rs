@@ -1581,3 +1581,99 @@ class C:
 C()
     "#,
 );
+
+// Tests for __slots__ validation
+
+testcase!(
+    test_slots_assignment_error,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class DC:
+    x: int
+
+    def set_y(self):
+        self.x = 3  # OK - x is in slots
+        self.y = 3  # E: Cannot assign to attribute `y`: not listed in `__slots__` of class `DC`
+    "#,
+);
+
+testcase!(
+    test_manual_slots_assignment_error,
+    r#"
+class C:
+    __slots__ = ("x",)
+    x: int
+
+    def set_y(self):
+        self.x = 3  # OK
+        self.y = 3  # E: Cannot assign to attribute `y`: not listed in `__slots__` of class `C`
+    "#,
+);
+
+testcase!(
+    test_slots_with_dict,
+    r#"
+class C:
+    __slots__ = ("x", "__dict__")
+    x: int
+
+    def set_y(self):
+        self.x = 3  # OK
+        self.y = 3  # OK - __dict__ in slots allows dynamic attrs
+    "#,
+);
+
+testcase!(
+    test_slots_inheritance,
+    r#"
+class Parent:
+    __slots__ = ("x",)
+
+class Child(Parent):
+    __slots__ = ("y",)
+
+    def set_attrs(self):
+        self.x = 1  # OK - inherited slot
+        self.y = 2  # OK - own slot
+        self.z = 3  # E: Cannot assign to attribute `z`: not listed in `__slots__` of class `Child`
+    "#,
+);
+
+testcase!(
+    test_slots_inheritance_implicit_dict,
+    r#"
+class Parent:
+    __slots__ = ("x",)
+
+class Child(Parent):
+    pass  # No __slots__, gets implicit __dict__
+
+    def set_attrs(self):
+        self.x = 1  # OK
+        self.z = 3  # OK - child has implicit __dict__
+    "#,
+);
+
+testcase!(
+    test_slots_init_inheritance,
+    r#"
+class Base:
+    __slots__ = ("x",)
+
+    def __init__(self, x: int, flag: bool = False):
+        self.x = x
+
+class Child(Base):
+    __slots__ = ("y",)
+
+    def __init__(self, x: int, y: int):
+        super().__init__(x)
+        self.y = y
+
+# Test instantiation works
+b = Base(1)
+c = Child(1, 2)
+    "#,
+);

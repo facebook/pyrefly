@@ -62,6 +62,7 @@ pub struct ClassMetadata {
     dataclass_transform_metadata: Option<DataclassTransformMetadata>,
     pydantic_model_kind: Option<PydanticModelKind>,
     django_model_metadata: Option<DjangoModelMetadata>,
+    slots_metadata: Option<SlotsMetadata>,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -98,6 +99,7 @@ impl ClassMetadata {
         dataclass_transform_metadata: Option<DataclassTransformMetadata>,
         pydantic_model_kind: Option<PydanticModelKind>,
         django_model_metadata: Option<DjangoModelMetadata>,
+        slots_metadata: Option<SlotsMetadata>,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -119,6 +121,7 @@ impl ClassMetadata {
             dataclass_transform_metadata,
             pydantic_model_kind,
             django_model_metadata,
+            slots_metadata,
         }
     }
 
@@ -143,6 +146,7 @@ impl ClassMetadata {
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
             django_model_metadata: None,
+            slots_metadata: None,
         }
     }
 
@@ -279,6 +283,10 @@ impl ClassMetadata {
 
     pub fn django_model_metadata(&self) -> Option<&DjangoModelMetadata> {
         self.django_model_metadata.as_ref()
+    }
+
+    pub fn slots_metadata(&self) -> Option<&SlotsMetadata> {
+        self.slots_metadata.as_ref()
     }
 }
 
@@ -474,6 +482,16 @@ pub struct ProtocolMetadata {
 pub struct TotalOrderingMetadata {
     /// Location of the decorator for `@total_ordering`.
     pub location: TextRange,
+}
+
+/// Metadata about a class's `__slots__` definition.
+/// When a class defines `__slots__`, only the listed attributes can be assigned to instances.
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
+pub struct SlotsMetadata {
+    /// The set of slot names defined on this class (not including inherited slots).
+    pub slots: SmallSet<Name>,
+    /// Whether `__dict__` is in slots (allows dynamic attributes).
+    pub has_dict_slot: bool,
 }
 
 /// A struct representing a class's ancestors, in method resolution order (MRO)

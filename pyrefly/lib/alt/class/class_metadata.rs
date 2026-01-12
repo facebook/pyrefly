@@ -11,6 +11,7 @@ use dupe::Dupe;
 use itertools::Either;
 use itertools::Itertools;
 use pyrefly_graph::index::Idx;
+use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::annotation::Annotation;
@@ -44,6 +45,7 @@ use crate::alt::types::class_metadata::InitDefaults;
 use crate::alt::types::class_metadata::Metaclass;
 use crate::alt::types::class_metadata::NamedTupleMetadata;
 use crate::alt::types::class_metadata::ProtocolMetadata;
+use crate::alt::types::class_metadata::SlotsMetadata;
 use crate::alt::types::class_metadata::TotalOrderingMetadata;
 use crate::alt::types::class_metadata::TypedDictMetadata;
 use crate::alt::types::decorated_function::Decorator;
@@ -69,6 +71,7 @@ use crate::types::keywords::DataclassKeywords;
 use crate::types::keywords::DataclassTransformMetadata;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
+use crate::types::tuple::Tuple;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
 
@@ -339,6 +342,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .as_ref()
             .map(|m| m.pydantic_model_kind.clone());
 
+        // Compute slots metadata from __slots__ or dataclass(slots=True)
+        let slots_metadata = self.compute_slots_metadata(cls, dataclass_metadata.as_ref());
+
         ClassMetadata::new(
             bases,
             calculated_metaclass,
@@ -359,6 +365,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             dataclass_transform_metadata,
             pydantic_model_kind,
             django_model_metadata,
+            slots_metadata,
         )
     }
 
@@ -1253,5 +1260,84 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return true;
         }
         false
+    }
+
+    /// Compute slots metadata for a class.
+    ///
+    /// Returns `Some(SlotsMetadata)` if:
+    /// - The class has a manual `__slots__` definition, OR
+    /// - The class is a `@dataclass(slots=True)`
+    ///
+    /// Returns `None` if the class has no slots (has implicit `__dict__`).
+    ///
+    /// Note: This function should be called on-demand during slots checks
+    /// to ensure the `__slots__` field is fully solved.
+    pub fn compute_slots_metadata(
+        &self,
+        cls: &Class,
+        dataclass_metadata: Option<&DataclassMetadata>,
+    ) -> Option<SlotsMetadata> {
+        // For dataclass(slots=True), use the dataclass fields as slots.
+        // Note: The synthesized __slots__ field is added by dataclass.rs, but we compute
+        // the SlotsMetadata here based on the dataclass fields.
+        if let Some(dc) = dataclass_metadata
+            && dc.kws.slots
+        {
+            return Some(SlotsMetadata {
+                slots: dc.fields.clone(),
+                has_dict_slot: false,
+            });
+        }
+
+        // Check for manual __slots__ definition on this class.
+        // We only look at the current class, not ancestors (handled during validation).
+        if !cls.contains(&dunder::SLOTS) {
+            return None;
+        }
+
+        let slots_field = self.get_field_from_current_class_only(cls, &dunder::SLOTS)?;
+        let slots_ty = slots_field.ty();
+
+        // Extract string literals from the slots type.
+        let mut slots = SmallSet::new();
+        let mut has_dict_slot = false;
+
+        match &slots_ty {
+            Type::Tuple(Tuple::Concrete(elts)) => {
+                for elt in elts.iter() {
+                    if let Type::Literal(Lit::Str(s)) = elt {
+                        let name = Name::new(s.as_str());
+                        if name.as_str() == "__dict__" {
+                            has_dict_slot = true;
+                        } else {
+                            slots.insert(name);
+                        }
+                    }
+                }
+            }
+            // Empty tuple: __slots__ = ()
+            Type::Tuple(Tuple::Unbounded(_)) => {
+                // No slots defined, but __slots__ exists (restricts to no dynamic attrs)
+            }
+            // Single string literal: __slots__ = "x" (rare but valid)
+            Type::Literal(Lit::Str(s)) => {
+                let name = Name::new(s.as_str());
+                if name.as_str() == "__dict__" {
+                    has_dict_slot = true;
+                } else {
+                    slots.insert(name);
+                }
+            }
+            _ => {
+                // Cannot determine slots statically (e.g., __slots__ = get_slots()).
+                // Treat as having __dict__ to avoid false positives.
+                has_dict_slot = true;
+            }
+        }
+
+        Some(SlotsMetadata {
+            slots,
+            has_dict_slot,
+        })
     }
 }
