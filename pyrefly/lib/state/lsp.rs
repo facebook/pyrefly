@@ -51,6 +51,9 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
+use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -103,6 +106,190 @@ pub(crate) fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
         Expr::Name(name) => CalleeKind::Function(Ast::expr_name_identifier(name.clone())),
         Expr::Attribute(attr) => CalleeKind::Method(attr.value.range(), attr.attr.clone()),
         _ => CalleeKind::Unknown,
+    }
+}
+
+// Tracks local names that refer to pytest so we can resolve @pytest.fixture and fixture aliases.
+#[derive(Default)]
+struct PytestAliases {
+    pytest_module_aliases: Vec<String>,
+    fixture_aliases: Vec<String>,
+}
+
+impl PytestAliases {
+    fn from_module(module: &ModModule) -> Self {
+        let mut aliases = Self::default();
+        for stmt in &module.body {
+            match stmt {
+                Stmt::Import(import_stmt) => {
+                    for alias in &import_stmt.names {
+                        if alias.name.id == "pytest" {
+                            let local_name = alias
+                                .asname
+                                .as_ref()
+                                .map(|asname| asname.id.as_str())
+                                .unwrap_or(alias.name.id.as_str());
+                            aliases.pytest_module_aliases.push(local_name.to_owned());
+                        }
+                    }
+                }
+                Stmt::ImportFrom(StmtImportFrom {
+                    module: Some(module),
+                    names,
+                    ..
+                }) if module.id == "pytest" || module.id.starts_with("pytest.") => {
+                    for alias in names {
+                        if alias.name.id == "fixture" {
+                            let local_name = alias
+                                .asname
+                                .as_ref()
+                                .map(|asname| asname.id.as_str())
+                                .unwrap_or(alias.name.id.as_str());
+                            aliases.fixture_aliases.push(local_name.to_owned());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        aliases
+    }
+
+    fn is_empty(&self) -> bool {
+        self.pytest_module_aliases.is_empty() && self.fixture_aliases.is_empty()
+    }
+
+    fn is_pytest_module_alias(&self, name: &Name) -> bool {
+        self.pytest_module_aliases
+            .iter()
+            .any(|alias| alias == name.as_str())
+    }
+
+    fn is_fixture_alias(&self, name: &Name) -> bool {
+        self.fixture_aliases
+            .iter()
+            .any(|alias| alias == name.as_str())
+    }
+}
+
+#[derive(Clone)]
+struct PytestFixtureDefinition {
+    name: Name,
+    range: TextRange,
+    docstring_range: Option<TextRange>,
+}
+
+fn is_pytest_fixture_decorator(expr: &Expr, aliases: &PytestAliases) -> bool {
+    match expr {
+        Expr::Name(name) => aliases.is_fixture_alias(name.id()),
+        Expr::Attribute(attr) => {
+            attr.attr.id() == "fixture"
+                && matches!(attr.value.as_ref(), Expr::Name(base) if aliases.is_pytest_module_alias(base.id()))
+        }
+        Expr::Call(call) => is_pytest_fixture_decorator(call.func.as_ref(), aliases),
+        _ => false,
+    }
+}
+
+fn is_pytest_fixture_function(function_def: &StmtFunctionDef, aliases: &PytestAliases) -> bool {
+    function_def
+        .decorator_list
+        .iter()
+        .any(|decorator| is_pytest_fixture_decorator(&decorator.expression, aliases))
+}
+
+fn is_pytest_test_function(function_def: &StmtFunctionDef, class_context: Option<bool>) -> bool {
+    let name = function_def.name.id.as_str();
+    if !name.starts_with("test_") {
+        return false;
+    }
+    match class_context {
+        Some(true) | None => true,
+        Some(false) => false,
+    }
+}
+
+fn is_pytest_test_class(class_def: &StmtClassDef) -> bool {
+    class_def.name.id.as_str().starts_with("Test")
+}
+
+// Collects pytest fixture definitions in a module/class body.
+fn collect_pytest_fixture_definitions(
+    stmts: &[Stmt],
+    aliases: &PytestAliases,
+    fixtures: &mut Vec<PytestFixtureDefinition>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::FunctionDef(function_def) => {
+                if is_pytest_fixture_function(function_def, aliases) {
+                    fixtures.push(PytestFixtureDefinition {
+                        name: function_def.name.id.clone(),
+                        range: function_def.name.range,
+                        docstring_range: Docstring::range_from_stmts(&function_def.body),
+                    });
+                }
+            }
+            Stmt::ClassDef(class_def) => {
+                collect_pytest_fixture_definitions(&class_def.body, aliases, fixtures);
+            }
+            _ => {}
+        }
+    }
+}
+
+// Collects parameter ranges in test/fixture functions that reference a fixture by name.
+fn collect_pytest_fixture_parameter_ranges(
+    stmts: &[Stmt],
+    aliases: &PytestAliases,
+    fixture_name: &Name,
+    references: &mut Vec<TextRange>,
+    class_context: Option<bool>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::FunctionDef(function_def) => {
+                let is_fixture = is_pytest_fixture_function(function_def, aliases);
+                let is_test = is_pytest_test_function(function_def, class_context);
+                if is_fixture || is_test {
+                    for param in function_def.parameters.posonlyargs.iter() {
+                        if param.name() != "self"
+                            && param.name() != "cls"
+                            && param.name().id() == fixture_name
+                        {
+                            references.push(param.name().range());
+                        }
+                    }
+                    for param in function_def.parameters.args.iter() {
+                        if param.name() != "self"
+                            && param.name() != "cls"
+                            && param.name().id() == fixture_name
+                        {
+                            references.push(param.name().range());
+                        }
+                    }
+                    for param in function_def.parameters.kwonlyargs.iter() {
+                        if param.name() != "self"
+                            && param.name() != "cls"
+                            && param.name().id() == fixture_name
+                        {
+                            references.push(param.name().range());
+                        }
+                    }
+                }
+            }
+            Stmt::ClassDef(class_def) => {
+                let class_is_test = is_pytest_test_class(class_def);
+                collect_pytest_fixture_parameter_ranges(
+                    &class_def.body,
+                    aliases,
+                    fixture_name,
+                    references,
+                    Some(class_is_test),
+                );
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1553,6 +1740,61 @@ impl<'a> Transaction<'a> {
             .collect()
     }
 
+    fn pytest_fixture_definitions_for_parameter(
+        &self,
+        handle: &Handle,
+        identifier: &Identifier,
+        covering_nodes: &[AnyNodeRef],
+    ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
+        let mod_module = self.get_ast(handle)?;
+        let aliases = PytestAliases::from_module(mod_module.as_ref());
+        if aliases.is_empty() {
+            return None;
+        }
+
+        let function_def = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::StmtFunctionDef(stmt) => Some(stmt),
+            _ => None,
+        })?;
+        let class_context = covering_nodes
+            .iter()
+            .find_map(|node| match node {
+                AnyNodeRef::StmtClassDef(stmt) => Some(stmt),
+                _ => None,
+            })
+            .map(|class_def| is_pytest_test_class(class_def));
+
+        if !is_pytest_fixture_function(function_def, &aliases)
+            && !is_pytest_test_function(function_def, class_context)
+        {
+            return None;
+        }
+
+        let mut fixtures = Vec::new();
+        collect_pytest_fixture_definitions(&mod_module.body, &aliases, &mut fixtures);
+        let matches: Vec<_> = fixtures
+            .into_iter()
+            .filter(|fixture| fixture.name == *identifier.id())
+            .collect();
+        if matches.is_empty() {
+            return None;
+        }
+
+        let module_info = self.get_module_info(handle)?;
+        Some(
+            matches
+                .into_iter()
+                .map(|fixture| FindDefinitionItemWithDocstring {
+                    metadata: DefinitionMetadata::Variable(Some(SymbolKind::Function)),
+                    definition_range: fixture.range,
+                    module: module_info.clone(),
+                    docstring_range: fixture.docstring_range,
+                    display_name: Some(fixture.name.as_str().to_owned()),
+                })
+                .collect(),
+        )
+    }
+
     /// Find the definition, metadata and optionally the docstring for the given position.
     pub fn find_definition(
         &self,
@@ -1667,17 +1909,26 @@ impl<'a> Transaction<'a> {
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::Parameter,
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::Parameter)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range: None,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                if let Some(pytest_definitions) = self.pytest_fixture_definitions_for_parameter(
+                    handle,
+                    &identifier,
+                    &covering_nodes,
+                ) {
+                    pytest_definitions
+                } else {
+                    self.find_definition_for_simple_def(handle, &identifier, SymbolKind::Parameter)
+                        .map_or(vec![], |item| {
+                            vec![FindDefinitionItemWithDocstring {
+                                metadata: item.metadata,
+                                definition_range: item.definition_range,
+                                module: item.module,
+                                docstring_range: None,
+                                display_name: Some(identifier.id.to_string()),
+                            }]
+                        })
+                }
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::TypeParameter,
@@ -2331,6 +2582,13 @@ impl<'a> Transaction<'a> {
             ]
             .concat(),
         };
+        if let Some(pytest_references) = self.local_pytest_fixture_parameter_references(
+            handle,
+            definition_range,
+            definition_name,
+        ) {
+            references.extend(pytest_references);
+        }
         references.push(definition_range);
         Some(references)
     }
@@ -2531,6 +2789,38 @@ impl<'a> Transaction<'a> {
             }
         }
 
+        Some(references)
+    }
+
+    fn local_pytest_fixture_parameter_references(
+        &self,
+        handle: &Handle,
+        definition_range: TextRange,
+        expected_name: &Name,
+    ) -> Option<Vec<TextRange>> {
+        let mod_module = self.get_ast(handle)?;
+        let aliases = PytestAliases::from_module(mod_module.as_ref());
+        if aliases.is_empty() {
+            return None;
+        }
+
+        let mut fixtures = Vec::new();
+        collect_pytest_fixture_definitions(&mod_module.body, &aliases, &mut fixtures);
+        if !fixtures
+            .iter()
+            .any(|fixture| fixture.name == *expected_name && fixture.range == definition_range)
+        {
+            return None;
+        }
+
+        let mut references = Vec::new();
+        collect_pytest_fixture_parameter_ranges(
+            &mod_module.body,
+            &aliases,
+            expected_name,
+            &mut references,
+            None,
+        );
         Some(references)
     }
 

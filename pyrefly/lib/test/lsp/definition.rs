@@ -157,6 +157,34 @@ Definition Result:
 }
 
 #[test]
+fn pytest_fixture_parameter_goes_to_fixture_definition() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def my_fixture():
+    return 1
+
+def test_thing(my_fixture):
+#              ^
+    assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | def test_thing(my_fixture):
+                   ^
+Definition Result:
+5 | def my_fixture():
+        ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn narrow_test() {
     let code = r#"
 def f(x: int | None) -> int:
