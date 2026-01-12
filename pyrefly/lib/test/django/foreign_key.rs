@@ -16,6 +16,7 @@ django_testcase!(
 from typing import assert_type
 
 from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
 
 class Reporter(models.Model):
     full_name = models.CharField(max_length=70)
@@ -27,6 +28,9 @@ article = Article()
 assert_type(article.reporter, Reporter)
 assert_type(article.reporter.full_name, str)
 assert_type(article.reporter_id, int)
+
+reporter = Reporter()
+assert_type(reporter.article_set, RelatedManager[Article])
 
 class B(Article):
     pass
