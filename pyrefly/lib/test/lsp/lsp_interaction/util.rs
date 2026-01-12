@@ -10,9 +10,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use lsp_types::GotoDefinitionResponse;
-use lsp_types::Location;
 use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
+use lsp_types::Location;
 use pyrefly_util::fs_anyhow;
 use tempfile::TempDir;
 
