@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use pyrefly_build::handle::Handle;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::thread_pool::ThreadPool;
@@ -24,7 +25,6 @@ use starlark_map::small_set::SmallSet;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
-use crate::graph::index::Idx;
 use crate::report::pysa::ast_visitor::AstScopedVisitor;
 use crate::report::pysa::ast_visitor::ScopeExportedFunctionFlags;
 use crate::report::pysa::ast_visitor::Scopes;
@@ -254,10 +254,10 @@ impl<'a> CapturedVariableVisitor<'a> {
         let binding = self.module_context.bindings.get(idx);
         match binding {
             Binding::Forward(idx) => self.get_definition_from_idx(*idx, seen, depth),
-            Binding::Phi(_, elements) => {
-                for idx in elements {
+            Binding::Phi(_, branches) => {
+                for branch in branches {
                     if let Some(function_ref) =
-                        self.get_definition_from_idx(*idx, seen.clone(), depth)
+                        self.get_definition_from_idx(branch.value_key, seen.clone(), depth)
                     {
                         return Some(function_ref);
                     }

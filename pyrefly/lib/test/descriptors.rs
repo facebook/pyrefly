@@ -233,6 +233,41 @@ C().d = "42"
 );
 
 testcase!(
+    test_bound_method_preserves_function_attributes_from_descriptor,
+    r#"
+from __future__ import annotations
+
+from typing import Callable
+
+
+class CachedMethod:
+    def __init__(self, fn: Callable[[Constraint], int]) -> None:
+        self._fn = fn
+
+    def __get__(self, obj: Constraint | None, owner: type[Constraint]) -> CachedMethod:
+        return self
+
+    def __call__(self, obj: Constraint) -> int:
+        return self._fn(obj)
+
+    def clear_cache(self, obj: Constraint) -> None: ...
+
+
+def cache_on_self(fn: Callable[[Constraint], int]) -> CachedMethod:
+    return CachedMethod(fn)
+
+
+class Constraint:
+    @cache_on_self
+    def pointwise_read_writes(self) -> int:
+        return 0
+
+    def clear_cache(self) -> None:
+        self.pointwise_read_writes.clear_cache(self)
+    "#,
+);
+
+testcase!(
     test_class_property_descriptor,
     r#"
 from typing import assert_type, Callable, Any

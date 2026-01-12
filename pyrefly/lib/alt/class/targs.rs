@@ -248,7 +248,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let quantified = Quantified::type_var_tuple(Name::new_static("Ts"), self.uniques, None);
         let tparams = TParams::new(vec![TParam {
             quantified: quantified.clone(),
-            variance: PreInferenceVariance::PCovariant,
+            variance: PreInferenceVariance::Covariant,
         }]);
         let tuple_ty = Type::Tuple(Tuple::Unpacked(Box::new((
             Vec::new(),

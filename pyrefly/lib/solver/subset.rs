@@ -15,6 +15,7 @@ use itertools::izip;
 use pyrefly_python::dunder;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::read_only::ReadOnlyReason;
+use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -407,9 +408,57 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
+        // First check exact (Type, Type) recursive assumptions
         let recursive_check = (got.clone(), Type::ClassType(protocol.clone()));
-        if !self.recursive_assumptions.insert(recursive_check) {
+        if !self.recursive_assumptions.insert(recursive_check.clone()) {
             // Assume recursive checks are true
+            return Ok(());
+        }
+
+        // For class-level coinductive reasoning: if the `got` type's type arguments
+        // contain Vars, we're likely in a recursive pattern (e.g., checking method return
+        // types that reference the same classes). Use (Class, Class) matching to detect
+        // cycles that would otherwise be missed due to fresh Var creation.
+        let class_check = if let Type::ClassType(got_class) = &got
+            && got.may_contain_quantified_var()
+        {
+            let key = (
+                got_class.class_object().clone(),
+                protocol.class_object().clone(),
+            );
+            if !self.class_protocol_assumptions.insert(key.clone()) {
+                // Coinductive: assume this recursive class-level check succeeds
+                self.recursive_assumptions.shift_remove(&recursive_check);
+                return Ok(());
+            }
+            Some(key)
+        } else {
+            None
+        };
+
+        let res = self.is_subset_protocol_inner(got, protocol);
+
+        // Clean up assumptions
+        self.recursive_assumptions.shift_remove(&recursive_check);
+        if let Some(key) = class_check {
+            self.class_protocol_assumptions.shift_remove(&key);
+        }
+
+        res
+    }
+
+    fn is_subset_protocol_inner(
+        &mut self,
+        got: Type,
+        protocol: ClassType,
+    ) -> Result<(), SubsetError> {
+        // TODO: Remove this once pandas 2.x is no longer supported.
+        // This is fixed in pandas 3.0 stubs. Until then, we hard-code that list/tuple satisfy
+        // SequenceNotStr. See https://github.com/pandas-dev/pandas/issues/56995
+        if protocol.has_qname("pandas._typing", "SequenceNotStr")
+            && let Type::ClassType(got_cls) = &got
+            && (got_cls.is_builtin("list") || got_cls.is_builtin("tuple"))
+        {
             return Ok(());
         }
         let protocol_members = self
@@ -950,11 +999,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (l, Type::Union(box Union { members: us, .. })) => {
                 // Check var and non-var elements separately, so that if we match a non-var, we
                 // don't pin the vars.
-                let (vars, nonvars): (Vec<_>, Vec<_>) = us.iter().partition(|u| {
-                    let mut contains_var = false;
-                    u.universe(&mut |t| contains_var |= matches!(t, Type::Var(_)));
-                    contains_var
-                });
+                let (vars, nonvars): (Vec<_>, Vec<_>) =
+                    us.iter().partition(|u| u.may_contain_quantified_var());
                 any(nonvars.iter(), |u| self.is_subset_eq(l, u))
                     .or_else(|_| any(vars.iter(), |u| self.is_subset_eq(l, u)))
             }
@@ -1027,6 +1073,18 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_params(&l.params, &u.params)?;
                 self.is_subset_eq(&l.ret, &u.ret)
             }
+
+            // Callable is not allowed as an argument to type.
+            // https://typing.python.org/en/latest/spec/special-types.html#type
+            (Type::Type(box Type::Callable(_)), Type::ClassType(cls)) if cls.is_builtin("type") => {
+                Err(SubsetError::TypeCannotAcceptSpecialForms(
+                    SpecialForm::Callable,
+                ))
+            }
+            (Type::Type(box Type::Callable(_)), Type::Type(_)) => Err(
+                SubsetError::TypeCannotAcceptSpecialForms(SpecialForm::Callable),
+            ),
+
             (Type::TypedDict(got), Type::TypedDict(want)) => self.is_subset_typed_dict(got, want),
             (Type::TypedDict(got), Type::PartialTypedDict(want)) => {
                 self.is_subset_partial_typed_dict(got, want)
@@ -1129,7 +1187,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
             }
             (Type::LiteralString | Type::Literal(Lit::Str(_)), Type::ClassType(want))
-                if want.has_qname("typing", "Container") =>
+                if want.has_qname("typing", "Container")
+                    || want.has_qname("typing", "Collection") =>
             {
                 // The signature of `typing.Container.__contains__` is weird.
                 // `str` matches it by direct inheritance, but we cannot convert `LiteralString` to `str`
@@ -1271,6 +1330,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (Type::LiteralString, _) => {
                 self.is_subset_eq(&self.type_order.stdlib().str().clone().to_type(), want)
+            }
+
+            (Type::Type(box Type::SpecialForm(special_form)), Type::ClassType(cls))
+                if cls.is_builtin("type") =>
+            {
+                Err(SubsetError::TypeCannotAcceptSpecialForms(*special_form))
+            }
+            (Type::Type(box Type::SpecialForm(special_form)), Type::Type(_)) => {
+                Err(SubsetError::TypeCannotAcceptSpecialForms(*special_form))
             }
             (Type::Type(l), Type::Type(u)) => self.is_subset_eq(l, u),
             (Type::Type(_), _) => self.is_subset_eq(

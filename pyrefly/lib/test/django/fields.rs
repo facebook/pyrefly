@@ -46,3 +46,23 @@ assert_type(p.shirt_size, str)
 assert_type(p.get_shirt_size_display(), str) 
 "#,
 );
+
+// We can consider narrowing the type further
+// but it's unclear if it's worth doing so since
+// django stubs give type Any for the aggregate values
+django_testcase!(
+    test_int_field,
+    r#"
+from django.db import models
+from typing import assert_type, Any
+
+class Default(models.Model):
+    int_field = models.IntegerField(default=0)
+
+total_sum_typed = Default.objects.aggregate(
+        total=models.Sum("int_field", output_field=models.IntegerField())
+)
+assert_type(total_sum_typed, dict[str, Any]) 
+
+"#,
+);

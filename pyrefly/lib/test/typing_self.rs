@@ -96,7 +96,6 @@ class A:
 );
 
 testcase!(
-    bug = "The display and solve semantics for `Self` are incorrect",
     test_instance_attr,
     r#"
 from typing import Self, assert_type
@@ -115,7 +114,6 @@ assert_type(B().x, B)
 );
 
 testcase!(
-    bug = "The display and solve semantics for `Self` are incorrect",
     test_class_attr,
     r#"
 from typing import ClassVar, Self, assert_type

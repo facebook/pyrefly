@@ -20,6 +20,7 @@ use pyrefly_types::types::Type;
 use pyrefly_types::types::Union;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -107,7 +108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(e) = initial_value_expr
             && let Some(call_expr) = e.as_call_expr()
             && let Some(to_expr) = call_expr.arguments.args.first()
-            && let Some(model_type) = self.resolve_target(to_expr)
+            && let Some(model_type) = self.resolve_target(to_expr, class)
         {
             if self.is_foreign_key_field(field) {
                 Some(model_type)
@@ -183,14 +184,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(manager_type)
     }
 
-    fn resolve_target(&self, to_expr: &Expr) -> Option<Type> {
+    fn resolve_target(&self, to_expr: &Expr, class: &Class) -> Option<Type> {
         match to_expr {
             // Use expr_infer to resolve the name in the current scope
             Expr::Name(_) => {
                 let model_type = self.expr_infer(to_expr, &self.error_swallower());
                 Some(self.class_def_to_instance_type(&model_type))
             }
-            // TODO: handle self references and forward references (string literals case) for foreign keys specifically
+            Expr::StringLiteral(ExprStringLiteral { value, .. }) => {
+                if value.to_str() == "self" {
+                    Some(self.instantiate(class))
+                } else {
+                    // Handle forward reference - look up the model by name in the current module
+                    // This requires that the model class is imported or defined in the current module
+                    let class_name = Name::new(value.to_str());
+                    let module_name = class.module_name();
+
+                    if self
+                        .exports
+                        .get(module_name)
+                        .finding()?
+                        .exports(self.exports)
+                        .contains_key(&class_name)
+                    {
+                        let model_type =
+                            self.get_from_export(module_name, None, &KeyExport(class_name));
+                        Some(self.class_def_to_instance_type(&model_type))
+                    } else {
+                        None
+                    }
+                }
+            }
             // we may have to extend this function to handle different kinds of fields in the future
             _ => None,
         }

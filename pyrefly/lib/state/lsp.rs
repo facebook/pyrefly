@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Ordering;
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
 use std::fs;
 
 use dupe::Dupe;
@@ -32,7 +32,8 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::facet::FacetKind;
+use pyrefly_types::display::LspDisplayMode;
+use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::SliceExt;
@@ -46,14 +47,9 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ExprName;
-use ruff_python_ast::ExprNumberLiteral;
-use ruff_python_ast::ExprStringLiteral;
-use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Number;
-use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -66,6 +62,7 @@ use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
 
 use crate::ModuleInfo;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
@@ -81,9 +78,34 @@ use crate::state::lsp_attributes::AttributeContext;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
+use crate::state::state::TransactionHandle;
 use crate::types::callable::Param;
 use crate::types::module::ModuleType;
+use crate::types::type_var::Restriction;
 use crate::types::types::Type;
+
+mod dict_completions;
+mod quick_fixes;
+
+pub(crate) use self::quick_fixes::extract_function::LocalRefactorCodeAction;
+
+#[derive(Debug)]
+pub(crate) enum CalleeKind {
+    /// A direct function call: `foo()`
+    Function(Identifier),
+    /// A method call: `obj.method()` - stores base expression range + method name
+    Method(TextRange, Identifier),
+    /// Unknown callee (e.g., callable returned from another call)
+    Unknown,
+}
+
+pub(crate) fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
+    match call.func.as_ref() {
+        Expr::Name(name) => CalleeKind::Function(Ast::expr_name_identifier(name.clone())),
+        Expr::Attribute(attr) => CalleeKind::Method(attr.value.range(), attr.attr.clone()),
+        _ => CalleeKind::Unknown,
+    }
+}
 
 fn default_true() -> bool {
     true
@@ -241,23 +263,6 @@ impl DefinitionMetadata {
             DefinitionMetadata::Variable(symbol_kind) => symbol_kind.as_ref().copied(),
             DefinitionMetadata::VariableOrAttribute(symbol_kind) => symbol_kind.as_ref().copied(),
         }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum CalleeKind {
-    // Function name
-    Function(Identifier),
-    // Range of the base expr + method name
-    Method(TextRange, Identifier),
-    Unknown,
-}
-
-fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
-    match call.func.as_ref() {
-        Expr::Name(name) => CalleeKind::Function(Ast::expr_name_identifier(name.clone())),
-        Expr::Attribute(attr) => CalleeKind::Method(attr.value.range(), attr.attr.clone()),
-        _ => CalleeKind::Unknown,
     }
 }
 
@@ -792,23 +797,23 @@ impl<'a> Transaction<'a> {
                     }
                 };
 
-                if self.get_bindings(handle)?.is_valid_key(&key) {
-                    if let Some(ExprCall {
-                        node_index: _,
-                        range: _,
-                        func,
-                        arguments,
-                    }) = &self.callee_at(handle, position)
-                        && func.range() == id.range
-                        && let Some(ret) = self.get_chosen_overload_trace(handle, arguments.range)
-                    {
-                        Some(ret)
-                    } else {
-                        self.get_type(handle, &key)
-                    }
-                } else {
-                    None
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
                 }
+                let mut ty = self.get_type(handle, &key)?;
+                let call_args_range = self.callee_at(handle, position).and_then(
+                    |ExprCall {
+                         func, arguments, ..
+                     }| (func.range() == id.range).then_some(arguments.range),
+                );
+                if let Some(arguments_range) = call_args_range {
+                    if let Some(ret) = self.get_chosen_overload_trace(handle, arguments_range) {
+                        return Some(ret);
+                    }
+                    ty = self.coerce_type_to_callable(handle, ty);
+                }
+                Some(ty)
             }
             Some(IdentifierWithContext {
                 identifier: _,
@@ -825,10 +830,17 @@ impl<'a> Transaction<'a> {
             }
             Some(IdentifierWithContext {
                 identifier: _,
-                context: IdentifierContext::ImportedName { .. },
+                context:
+                    IdentifierContext::ImportedName {
+                        name_after_import, ..
+                    },
             }) => {
-                // TODO(grievejia): handle definitions of imported names
-                None
+                let key = Key::Definition(ShortIdentifier::new(&name_after_import));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
             }
             Some(IdentifierWithContext {
                 identifier: _,
@@ -908,6 +920,67 @@ impl<'a> Transaction<'a> {
                 }
             }
             None => self.type_from_expression_at(handle, position),
+        }
+    }
+
+    /// If `ty` represents a callable instance (e.g., a class with `__call__`), return the
+    /// bound `__call__` signature. Otherwise, return the type unchanged.
+    ///
+    /// This enables IDE features like hover and signature help to show parameter lists
+    /// when calling instances that implement `__call__`, matching Python's runtime behavior.
+    ///
+    /// Note that we should only use this when we already know the value is being used as a
+    /// callee, since this drops the original type information in favor of a callable type.
+    pub(crate) fn coerce_type_to_callable(&self, handle: &Handle, ty: Type) -> Type {
+        if ty.is_toplevel_callable() {
+            return ty;
+        }
+        let original = ty.clone();
+        self.ad_hoc_solve(handle, |solver| Self::callable_from_type(&solver, ty))
+            .and_then(|callable| callable)
+            .unwrap_or(original)
+    }
+
+    /// Extract a callable type from `ty` by invoking the solver to find its `__call__` method.
+    /// Recursively walks through type wrappers (Union, TypeAlias, Type, Quantified).
+    /// Returns `None` if the type is not callable.
+    fn callable_from_type(solver: &AnswersSolver<TransactionHandle<'_>>, ty: Type) -> Option<Type> {
+        if ty.is_toplevel_callable() {
+            return Some(ty);
+        }
+        match ty {
+            Type::ClassType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
+            Type::SelfType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
+            Type::Union(box Union { members, .. }) => Self::callable_from_types(solver, members),
+            Type::TypeAlias(alias) => Self::callable_from_type(solver, alias.as_type()),
+            Type::Type(box inner) => Self::callable_from_type(solver, inner),
+            Type::Quantified(box quantified) => match quantified.restriction {
+                Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
+                Restriction::Constraints(options) => Self::callable_from_types(solver, options),
+                Restriction::Unrestricted => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Convert a collection of types into a single callable union, returning `None` if the list
+    /// was empty or any member failed to coerce into a callable.
+    fn callable_from_types(
+        solver: &AnswersSolver<TransactionHandle<'_>>,
+        types: Vec<Type>,
+    ) -> Option<Type> {
+        if types.is_empty() {
+            return None;
+        }
+        let mut converted = Vec::with_capacity(types.len());
+        for ty in types {
+            let callable = Self::callable_from_type(solver, ty)?;
+            converted.push(callable);
+        }
+        if converted.len() == 1 {
+            converted.into_iter().next()
+        } else {
+            Some(solver.unions(converted))
         }
     }
 
@@ -992,7 +1065,19 @@ impl<'a> Transaction<'a> {
                     Some((def_handle, export))
                 }
             }
-            IntermediateDefinition::Module(name) => {
+            IntermediateDefinition::Module(import_range, name) => {
+                if matches!(preference.import_behavior, ImportBehavior::StopAtEverything) {
+                    return Some((
+                        handle.dupe(),
+                        Export {
+                            location: import_range,
+                            symbol_kind: Some(SymbolKind::Module),
+                            docstring_range: None,
+                            deprecation: None,
+                            special_export: None,
+                        },
+                    ));
+                }
                 let handle = match preference.prefer_pyi {
                     true => self.import_handle(handle, name, None).finding()?,
                     false => self
@@ -1300,6 +1385,21 @@ impl<'a> Transaction<'a> {
                     }
                     None
                 }
+                AnyNodeRef::ExprSubscript(subscript) => {
+                    let dunder_name = match subscript.ctx {
+                        ExprContext::Load => Some(dunder::GETITEM),
+                        ExprContext::Store => Some(dunder::SETITEM),
+                        ExprContext::Del => Some(dunder::DELITEM),
+                        ExprContext::Invalid => None,
+                    };
+                    if let Some(dunder_name) = dunder_name
+                        && let Some(answers) = self.get_answers(handle)
+                        && let Some(base_type) = answers.get_type_trace(subscript.value.range())
+                    {
+                        return Some((base_type, dunder_name));
+                    }
+                    None
+                }
                 _ => None,
             })
         else {
@@ -1467,14 +1567,34 @@ impl<'a> Transaction<'a> {
                 }
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context:
                     IdentifierContext::ImportedModule {
                         name: module_name, ..
                     },
-            }) => self
-                .find_definition_for_imported_module(handle, module_name, preference)
-                .map_or(vec![], |item| vec![item]),
+            }) => {
+                // Build the module name for lookup based on identifier position.
+                let components = module_name.components();
+
+                let target_module_name =
+                    if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
+                        // Identifier matches a module component.
+                        ModuleName::from_parts(&components[..=idx])
+                    } else if identifier.as_str() == module_name.as_str() {
+                        // Identifier matches full module name; decide which component based on position offset.
+                        let module_str = module_name.as_str();
+                        let offset = (position - identifier.range.start())
+                            .to_usize()
+                            .min(module_str.len());
+                        let idx = module_str[..offset].matches('.').count();
+                        ModuleName::from_parts(&components[..=idx])
+                    } else {
+                        // Fallback: use the whole module name.
+                        module_name
+                    };
+                self.find_definition_for_imported_module(handle, target_module_name, preference)
+                    .map_or(vec![], |item| vec![item])
+            }
             Some(IdentifierWithContext {
                 identifier: _,
                 context:
@@ -1729,7 +1849,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Produce code actions that makes edits local to the file.
-    pub fn local_quickfix_code_actions(
+    pub fn local_quickfix_code_actions_sorted(
         &self,
         handle: &Handle,
         range: TextRange,
@@ -1745,18 +1865,39 @@ impl<'a> Transaction<'a> {
                     let error_range = error.range();
                     if error_range.contains_range(range) {
                         let unknown_name = module_info.code_at(error_range);
-                        for handle_to_import_from in self.search_exports_exact(unknown_name) {
+                        for (handle_to_import_from, export) in
+                            self.search_exports_exact(unknown_name)
+                        {
                             let (position, insert_text, _) = insert_import_edit(
                                 &ast,
                                 self.config_finder(),
                                 handle.dupe(),
-                                handle_to_import_from,
+                                handle_to_import_from.dupe(),
                                 unknown_name,
                                 import_format,
                             );
                             let range = TextRange::at(position, TextSize::new(0));
-                            let title = format!("Insert import: `{}`", insert_text.trim());
-                            code_actions.push((title, module_info.dupe(), range, insert_text));
+                            let is_deprecated = export.deprecation.is_some();
+                            let title = format!(
+                                "Insert import: `{}`{}",
+                                insert_text.trim(),
+                                if is_deprecated { " (deprecated)" } else { "" }
+                            );
+
+                            let is_private_import = handle_to_import_from
+                                .module()
+                                .components()
+                                .last()
+                                .is_some_and(|component| component.as_str().starts_with('_'));
+
+                            code_actions.push((
+                                title,
+                                module_info.dupe(),
+                                range,
+                                insert_text,
+                                is_deprecated,
+                                is_private_import,
+                            ));
                         }
 
                         for module_name in self.search_modules_fuzzy(unknown_name) {
@@ -1770,7 +1911,18 @@ impl<'a> Transaction<'a> {
                                     import_regular_import_edit(&ast, module_handle);
                                 let range = TextRange::at(position, TextSize::new(0));
                                 let title = format!("Insert import: `{}`", insert_text.trim());
-                                code_actions.push((title, module_info.dupe(), range, insert_text));
+                                let is_private_import = module_name
+                                    .components()
+                                    .last()
+                                    .is_some_and(|component| component.as_str().starts_with('_'));
+                                code_actions.push((
+                                    title,
+                                    module_info.dupe(),
+                                    range,
+                                    insert_text,
+                                    false,
+                                    is_private_import,
+                                ));
                             }
                         }
                     }
@@ -1778,8 +1930,76 @@ impl<'a> Transaction<'a> {
                 _ => {}
             }
         }
-        code_actions.sort_by(|(title1, _, _, _), (title2, _, _, _)| title1.cmp(title2));
-        Some(code_actions)
+
+        // Sort code actions: non-private first, then non-deprecated, then alphabetically
+        code_actions.sort_by(
+            |(title1, _, _, _, is_deprecated1, is_private1),
+             (title2, _, _, _, is_deprecated2, is_private2)| {
+                match (is_private1, is_private2) {
+                    (true, false) => Ordering::Greater,
+                    (false, true) => Ordering::Less,
+                    _ => match (is_deprecated1, is_deprecated2) {
+                        (true, false) => Ordering::Greater,
+                        (false, true) => Ordering::Less,
+                        _ => title1.cmp(title2),
+                    },
+                }
+            },
+        );
+
+        // Keep only the first suggestion for each unique import text (after sorting,
+        // this will be the public/non-deprecated version)
+        code_actions.dedup_by(|a, b| a.3 == b.3);
+
+        // Drop the deprecated flag and return
+        Some(
+            code_actions
+                .into_iter()
+                .map(|(title, module, range, insert_text, _, _)| {
+                    (title, module, range, insert_text)
+                })
+                .collect(),
+        )
+    }
+
+    pub fn extract_function_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_function::extract_function_code_actions(self, handle, selection)
+    }
+
+    pub fn extract_field_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_field::extract_field_code_actions(self, handle, selection)
+    }
+
+    pub fn extract_variable_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_variable::extract_variable_code_actions(self, handle, selection)
+    }
+
+    pub fn pull_members_up_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_members::pull_members_up_code_actions(self, handle, selection)
+    }
+
+    pub fn push_members_down_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_members::push_members_down_code_actions(self, handle, selection)
     }
 
     /// Determines whether a module is a third-party package.
@@ -1944,7 +2164,7 @@ impl<'a> Transaction<'a> {
         Some(references)
     }
 
-    fn local_references_from_definition(
+    pub(crate) fn local_references_from_definition(
         &self,
         handle: &Handle,
         definition_metadata: DefinitionMetadata,
@@ -2324,6 +2544,7 @@ impl<'a> Transaction<'a> {
                 {
                     continue;
                 }
+                let depth = handle_to_import_from.module().components().len();
                 let module_description = handle_to_import_from.module().as_str().to_owned();
                 let handle_for_data = handle_to_import_from.dupe();
                 let (insert_text, additional_text_edits, imported_module) = {
@@ -2372,6 +2593,7 @@ impl<'a> Transaction<'a> {
                         None
                     },
                     data: Some(data),
+                    sort_text: Some(format!("4{}", depth)),
                     ..Default::default()
                 });
             }
@@ -2623,6 +2845,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         completions: &mut Vec<CompletionItem>,
+        in_string_literal: bool,
     ) {
         if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
@@ -2632,214 +2855,46 @@ impl<'a> Transaction<'a> {
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
             && let Some(param) = params.get(arg_index)
         {
-            Self::add_literal_completions_from_type(param.as_type(), completions);
+            Self::add_literal_completions_from_type(
+                param.as_type(),
+                completions,
+                in_string_literal,
+            );
         }
     }
 
-    fn add_literal_completions_from_type(param_type: &Type, completions: &mut Vec<CompletionItem>) {
+    fn add_literal_completions_from_type(
+        param_type: &Type,
+        completions: &mut Vec<CompletionItem>,
+        in_string_literal: bool,
+    ) {
         match param_type {
             Type::Literal(lit) => {
+                // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
+                let label = lit.to_string_escaped(true);
+                let insert_text = if in_string_literal {
+                    if let Lit::Str(s) = lit {
+                        s.to_string()
+                    } else {
+                        label.clone()
+                    }
+                } else {
+                    label.clone()
+                };
                 completions.push(CompletionItem {
-                    // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
-                    label: lit.to_string_escaped(true),
+                    label,
                     kind: Some(CompletionItemKind::VALUE),
                     detail: Some(format!("{param_type}")),
+                    insert_text: Some(insert_text),
                     ..Default::default()
                 });
             }
             Type::Union(box Union { members, .. }) => {
                 for member in members {
-                    Self::add_literal_completions_from_type(member, completions);
+                    Self::add_literal_completions_from_type(member, completions, in_string_literal);
                 }
             }
             _ => {}
-        }
-    }
-
-    fn subscript_string_literal_at(
-        module: &ModModule,
-        position: TextSize,
-    ) -> Option<(ExprSubscript, ExprStringLiteral)> {
-        let nodes = Ast::locate_node(module, position);
-        let mut best: Option<(u8, TextSize, ExprSubscript, ExprStringLiteral)> = None;
-        for node in nodes {
-            if let AnyNodeRef::ExprSubscript(sub) = node
-                && let Expr::StringLiteral(lit) = sub.slice.as_ref()
-            {
-                let (priority, dist) = Self::string_literal_priority(position, lit.range());
-                let should_update = match &best {
-                    Some((best_prio, best_dist, _, _)) => {
-                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
-                    }
-                    None => true,
-                };
-                if should_update {
-                    best = Some((priority, dist, sub.clone(), lit.clone()));
-                    if priority == 0 && dist == TextSize::from(0) {
-                        break;
-                    }
-                }
-            }
-        }
-        best.map(|(_, _, sub, lit)| (sub, lit))
-    }
-
-    fn string_literal_priority(position: TextSize, range: TextRange) -> (u8, TextSize) {
-        if range.contains(position) {
-            (0, TextSize::from(0))
-        } else if position < range.start() {
-            (1, range.start() - position)
-        } else {
-            (2, position - range.end())
-        }
-    }
-
-    fn expression_facets(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
-        let mut facets = Vec::new();
-        let mut current = expr;
-        loop {
-            match current {
-                Expr::Subscript(sub) => {
-                    match sub.slice.as_ref() {
-                        Expr::NumberLiteral(ExprNumberLiteral {
-                            value: Number::Int(idx),
-                            ..
-                        }) if idx.as_usize().is_some() => {
-                            facets.push(FacetKind::Index(idx.as_usize().unwrap()))
-                        }
-                        Expr::StringLiteral(lit) => {
-                            facets.push(FacetKind::Key(lit.value.to_string()))
-                        }
-                        _ => return None,
-                    }
-                    current = sub.value.as_ref();
-                }
-                Expr::Attribute(attr) => {
-                    facets.push(FacetKind::Attribute(attr.attr.id.clone()));
-                    current = attr.value.as_ref();
-                }
-                Expr::Name(name) => {
-                    facets.reverse();
-                    return Some((Ast::expr_name_identifier(name.clone()), facets));
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    fn collect_typed_dict_keys(
-        &self,
-        handle: &Handle,
-        base_type: Type,
-    ) -> Option<BTreeMap<String, Type>> {
-        self.ad_hoc_solve(handle, |solver| {
-            let mut map = BTreeMap::new();
-            let mut stack = vec![base_type];
-            while let Some(ty) = stack.pop() {
-                match ty {
-                    Type::TypedDict(td) | Type::PartialTypedDict(td) => {
-                        for (name, field) in solver.type_order().typed_dict_fields(&td) {
-                            map.entry(name.to_string())
-                                .or_insert_with(|| field.ty.clone());
-                        }
-                    }
-                    Type::Union(box Union { members, .. }) => {
-                        stack.extend(members.into_iter());
-                    }
-                    _ => {}
-                }
-            }
-            map
-        })
-    }
-
-    fn add_dict_key_completions(
-        &self,
-        handle: &Handle,
-        module: &ModModule,
-        position: TextSize,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        let Some((subscript, string_lit)) = Self::subscript_string_literal_at(module, position)
-        else {
-            return;
-        };
-        let literal_range = string_lit.range();
-        // Allow the cursor to sit a few characters before the literal (e.g. between nested
-        // subscripts) so completion requests fired just before the quotes still succeed.
-        let allowance = TextSize::from(4);
-        let lower_bound = literal_range
-            .start()
-            .checked_sub(allowance)
-            .unwrap_or_else(|| TextSize::new(0));
-        if position < lower_bound || position > literal_range.end() {
-            return;
-        }
-        let base_expr = subscript.value.as_ref();
-        let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
-
-        if let Some(bindings) = self.get_bindings(handle) {
-            let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
-                Some((identifier, facets))
-            } else if let Expr::Name(name) = base_expr {
-                Some((Ast::expr_name_identifier(name.clone()), Vec::new()))
-            } else {
-                None
-            };
-
-            if let Some((identifier, facets)) = base_info {
-                let short_id = ShortIdentifier::new(&identifier);
-                let idx_opt = {
-                    let bound_key = Key::BoundName(short_id);
-                    if bindings.is_valid_key(&bound_key) {
-                        Some(bindings.key_to_idx(&bound_key))
-                    } else {
-                        let def_key = Key::Definition(short_id);
-                        if bindings.is_valid_key(&def_key) {
-                            Some(bindings.key_to_idx(&def_key))
-                        } else {
-                            None
-                        }
-                    }
-                };
-
-                if let Some(idx) = idx_opt {
-                    let facets_clone = facets.clone();
-                    if let Some(keys) = self.ad_hoc_solve(handle, |solver| {
-                        let info = solver.get_idx(idx);
-                        info.key_facets_at(&facets_clone)
-                    }) {
-                        for (key, ty_opt) in keys {
-                            suggestions.entry(key).or_insert(ty_opt);
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(base_type) = self.get_type_trace(handle, base_expr.range())
-            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
-        {
-            for (key, ty) in typed_keys {
-                let entry = suggestions.entry(key).or_insert(None);
-                if entry.is_none() {
-                    *entry = Some(ty);
-                }
-            }
-        }
-
-        if suggestions.is_empty() {
-            return;
-        }
-
-        for (label, ty_opt) in suggestions {
-            let detail = ty_opt.as_ref().map(|ty| ty.to_string());
-            completions.push(CompletionItem {
-                label,
-                detail,
-                kind: Some(CompletionItemKind::FIELD),
-                ..Default::default()
-            });
         }
     }
 
@@ -2992,7 +3047,8 @@ impl<'a> Transaction<'a> {
                                     _ => Some(CompletionItemKind::FIELD),
                                 };
                                 let ty = &x.ty;
-                                let detail = ty.clone().map(|t| t.as_hover_string());
+                                let detail =
+                                    ty.clone().map(|t| t.as_lsp_string(LspDisplayMode::Hover));
                                 let documentation = self.get_docstring_for_attribute(handle, x);
                                 result.push(CompletionItem {
                                     label: x.name.as_str().to_owned(),
@@ -3039,11 +3095,17 @@ impl<'a> Transaction<'a> {
                         supports_completion_item_details,
                     );
                 }
-                // If autoimport completions were skipped due to character threshold,
-                // mark the results as incomplete so clients keep asking for completions.
-                // This ensures autoimport completions will be checked once the threshold is reached,
-                // even if local completions are currently available.
-                if identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
+                // Mark results as incomplete in the following cases so clients keep asking
+                // for completions as the user types more:
+                // 1. If identifier is below MIN_CHARACTERS_TYPED_AUTOIMPORT threshold,
+                //    autoimport completions are skipped and will be checked once threshold
+                //    is reached.
+                // 2. If local completions exist and blocked autoimport completions,
+                //    the local completions might not match as the user continues typing,
+                //    and autoimport completions should then be shown.
+                if identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT
+                    || has_local_completions
+                {
                     is_incomplete = true;
                 }
                 self.add_builtins_autoimport_completions(handle, Some(&identifier), &mut result);
@@ -3057,7 +3119,10 @@ impl<'a> Transaction<'a> {
                         self.add_local_variable_completions(handle, None, position, &mut result);
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
-                    self.add_literal_completions(handle, position, &mut result);
+                    let in_string_literal = nodes
+                        .iter()
+                        .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)));
+                    self.add_literal_completions(handle, position, &mut result, in_string_literal);
                     self.add_dict_key_completions(
                         handle,
                         mod_module.as_ref(),
@@ -3099,20 +3164,75 @@ impl<'a> Transaction<'a> {
         (result, is_incomplete)
     }
 
-    pub fn search_exports_exact(&self, name: &str) -> Vec<Handle> {
+    fn export_from_location(
+        &self,
+        handle: &Handle,
+        export_name: &Name,
+        location: &ExportLocation,
+    ) -> Option<(Handle, Export)> {
+        match location {
+            ExportLocation::ThisModule(export) => Some((handle.dupe(), export.clone())),
+            ExportLocation::OtherModule(module, original_name) => {
+                let target_name = original_name.clone().unwrap_or_else(|| export_name.clone());
+                self.resolve_named_import(handle, *module, target_name, FindPreference::default())
+            }
+        }
+    }
+
+    /// Used to avoid making use of reexports of private modules for some LSP
+    /// uses like auto-import (where we want to import the public API).
+    /// - Returns true if both modules should be shown in auto-import suggestions.
+    /// - Handles stdlib patterns where a public module (`io`) re-exports from a
+    ///   private implementation module (`_io`).
+    fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
+        let canonical_components = canonical.module().components();
+        let canonical_component = canonical_components
+            .last()
+            .map(|name| name.as_str())
+            .unwrap_or("");
+        let original_components = original.module().components();
+        let original_component = original_components
+            .last()
+            .map(|name| name.as_str())
+            .unwrap_or("");
+
+        if canonical_component.starts_with('_')
+            && canonical_component.trim_start_matches('_') == original_component
+        {
+            return true;
+        }
+
+        // Include re-export if original is a parent package of canonical
+        if canonical_components.len() > original_components.len() {
+            canonical_components
+                .iter()
+                .zip(original_components.iter())
+                .all(|(c, o)| c == o)
+        } else {
+            false
+        }
+    }
+
+    pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
         self.search_exports(|handle, exports| {
-            if let Some(export) = exports.get(&Name::new(name)) {
-                match export {
-                    ExportLocation::ThisModule(_) => vec![handle.dupe()],
-                    // Re-exported modules like `foo` in `from from_module import foo`
-                    // should likely be ignored in autoimport suggestions
-                    // because the original export in from_module will show it.
-                    // The current strategy will prevent intended re-exports from showing up in
-                    // result list, but it's better than showing thousands of likely bad results.
-                    ExportLocation::OtherModule(..) => Vec::new(),
+            let name = Name::new(name);
+            match exports.get(&name) {
+                Some(location) => {
+                    if let Some((canonical_handle, export)) =
+                        self.export_from_location(handle, &name, location)
+                    {
+                        let mut results = vec![(canonical_handle.dupe(), export.clone())];
+                        if canonical_handle != *handle
+                            && Self::should_include_reexport(handle, &canonical_handle)
+                        {
+                            results.push((handle.dupe(), export));
+                        }
+                        results
+                    } else {
+                        Vec::new()
+                    }
                 }
-            } else {
-                Vec::new()
+                None => Vec::new(),
             }
         })
     }
@@ -3122,13 +3242,21 @@ impl<'a> Transaction<'a> {
             let matcher = SkimMatcherV2::default().smart_case();
             let mut results = Vec::new();
             for (name, location) in exports.iter() {
-                let name = name.as_str();
-                if let Some(score) = matcher.fuzzy_match(name, pattern) {
-                    match location {
-                        ExportLocation::OtherModule(..) => {}
-                        ExportLocation::ThisModule(export) => {
-                            results.push((score, handle.dupe(), name.to_owned(), export.clone()));
-                        }
+                let name_str = name.as_str();
+                if let Some(score) = matcher.fuzzy_match(name_str, pattern)
+                    && let Some((canonical_handle, export)) =
+                        self.export_from_location(handle, name, location)
+                {
+                    results.push((
+                        score,
+                        canonical_handle.dupe(),
+                        name_str.to_owned(),
+                        export.clone(),
+                    ));
+                    if canonical_handle != *handle
+                        && Self::should_include_reexport(handle, &canonical_handle)
+                    {
+                        results.push((score, handle.dupe(), name_str.to_owned(), export));
                     }
                 }
             }
@@ -3287,7 +3415,7 @@ impl<'a> CancellableTransaction<'a> {
     ///
     /// This is a common pattern in workspace-wide
     /// references-related features
-    fn process_rdeps_with_definition<T>(
+    pub(crate) fn process_rdeps_with_definition<T>(
         &mut self,
         sys_info: &SysInfo,
         definition: &TextRangeWithModule,
@@ -3427,228 +3555,12 @@ impl<'a> CancellableTransaction<'a> {
 
         Ok(all_implementations)
     }
-
-    /// Finds all incoming calls(functions that call this function) of a function across the entire codebase.
-    ///
-    /// This searches transitive reverse dependencies to find all locations where
-    /// the target function is called. For each call site, it identifies the
-    /// containing function.
-    ///
-    /// Returns a vector of tuples containing:
-    /// - Module where the call occurs
-    /// - Vector of (call_site_range, containing_function_name, containing_function_range)
-    ///
-    /// Returns Err if the request is canceled during execution.
-    pub fn find_global_incoming_calls_from_function_definition(
-        &mut self,
-        sys_info: &SysInfo,
-        definition_kind: DefinitionMetadata,
-        target_definition: &TextRangeWithModule,
-    ) -> Result<Vec<(Module, Vec<(TextRange, String, TextRange)>)>, Cancelled> {
-        // Use process_rdeps_with_definition to find references and filter to call sites in a single pass
-        let results = self.process_rdeps_with_definition(
-            sys_info,
-            target_definition,
-            |transaction, handle, patched_definition| {
-                let module_info = transaction.as_ref().get_module_info(handle)?;
-                let ast = transaction.as_ref().get_ast(handle)?;
-
-                let references = transaction
-                    .as_ref()
-                    .local_references_from_definition(
-                        handle,
-                        definition_kind.clone(),
-                        patched_definition.range,
-                        &patched_definition.module,
-                    )
-                    .unwrap_or_default();
-
-                if references.is_empty() {
-                    return None;
-                }
-
-                let ref_set: std::collections::HashSet<TextRange> =
-                    references.into_iter().collect();
-
-                let mut callers_in_file = Vec::new();
-
-                ast.visit(&mut |expr| {
-                    if let Expr::Call(call) = expr
-                        && ref_set
-                            .iter()
-                            .any(|ref_range| call.func.range().contains(ref_range.start()))
-                        && let Some((containing_func_name, containing_func_range)) =
-                            Self::find_containing_function_for_call(
-                                handle,
-                                &ast,
-                                call.range().start(),
-                            )
-                    {
-                        callers_in_file.push((
-                            call.range(),
-                            containing_func_name,
-                            containing_func_range,
-                        ));
-                    }
-                });
-
-                if callers_in_file.is_empty() {
-                    None
-                } else {
-                    Some((module_info, callers_in_file))
-                }
-            },
-        )?;
-
-        Ok(results)
-    }
-
-    /// Finds outgoing calls(functions called by) of a function, resolving across files.
-    ///
-    /// Given a function definition, this method finds all Call expressions within
-    /// that function's body and resolves each call target to its definition,
-    /// which may be in other files.
-    ///
-    /// Returns a vector of tuples containing:
-    /// - Target module (where the callee is defined)
-    /// - Vector of (call_site_range, callee_definition_range)
-    ///
-    /// Results are grouped by target module for consistency with find_global_callers_from_definition.
-    ///
-    /// Returns Err if the request is canceled during execution.
-    pub fn find_global_outgoing_calls_from_function_definition(
-        &mut self,
-        handle: &Handle,
-        position: TextSize,
-    ) -> Result<Vec<(Module, Vec<(TextRange, TextRange)>)>, Cancelled> {
-        // Resolve cursor position to function definition (handles both definitions and call sites)
-        let definitions =
-            self.as_ref()
-                .find_definition(handle, position, FindPreference::default());
-        let Some(target_def) = definitions.into_iter().next() else {
-            return Ok(Vec::new());
-        };
-
-        // Get handle for module where target function is defined (may differ from original handle)
-        let target_handle = Handle::new(
-            target_def.module.name(),
-            target_def.module.path().dupe(),
-            handle.sys_info().dupe(),
-        );
-
-        let Some(target_ast) = self.as_ref().get_ast(&target_handle) else {
-            return Ok(Vec::new());
-        };
-
-        let Some(func_def) = Self::find_function_at_position_in_ast(
-            &target_ast,
-            target_def.definition_range.start(),
-        ) else {
-            return Ok(Vec::new());
-        };
-
-        let mut callees_by_module: std::collections::HashMap<
-            ModulePath,
-            (Module, Vec<(TextRange, TextRange)>),
-        > = std::collections::HashMap::new();
-
-        for stmt in &func_def.body {
-            stmt.visit(&mut |expr| {
-                if let Expr::Call(call) = expr {
-                    let call_pos = call
-                        .func
-                        .range()
-                        .end()
-                        .checked_sub(TextSize::from(1))
-                        .unwrap_or(call.func.range().start());
-
-                    let definitions = self.as_ref().find_definition(
-                        &target_handle,
-                        call_pos,
-                        FindPreference::default(),
-                    );
-
-                    for def in definitions {
-                        let module_path = def.module.path().dupe();
-                        callees_by_module
-                            .entry(module_path)
-                            .or_insert_with(|| (def.module.clone(), Vec::new()))
-                            .1
-                            .push((call.range(), def.definition_range));
-                    }
-                }
-            });
-        }
-
-        let mut result: Vec<(Module, Vec<(TextRange, TextRange)>)> =
-            callees_by_module.into_values().collect();
-        result.sort_by_key(|(module, _)| module.path().dupe());
-
-        Ok(result)
-    }
-
-    /// Helper: Finds a function definition at a specific position in an AST.
-    ///
-    /// This is used by call hierarchy to identify the function being queried.
-    /// Returns None if no function is found at the position.
-    ///
-    /// Uses `locate_node` for efficient single-pass traversal, consistent with
-    /// other LSP position-based queries. Handles nested functions and methods.
-    pub(crate) fn find_function_at_position_in_ast(
-        ast: &ModModule,
-        position: TextSize,
-    ) -> Option<&StmtFunctionDef> {
-        let covering_nodes = Ast::locate_node(ast, position);
-
-        // Find the first StmtFunctionDef in the covering nodes
-        // This returns the innermost function containing the position
-        for node in covering_nodes.iter() {
-            if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-                return Some(func_def);
-            }
-        }
-        None
-    }
-
-    /// Helper: Creates call hierarchy information for the function containing a call site.
-    ///
-    /// Given a call site position, finds the enclosing function and returns
-    /// information needed to represent it in the call hierarchy.
-    fn find_containing_function_for_call(
-        handle: &Handle,
-        ast: &ModModule,
-        position: TextSize,
-    ) -> Option<(String, TextRange)> {
-        let covering_nodes = Ast::locate_node(ast, position);
-
-        // Look through the node chain for the containing function
-        for (i, node) in covering_nodes.iter().enumerate() {
-            if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-                // Check if this is a method (next node is a ClassDef)
-                if let Some(AnyNodeRef::StmtClassDef(class_def)) = covering_nodes.get(i + 1) {
-                    let name = format!(
-                        "{}.{}.{}",
-                        handle.module(),
-                        class_def.name.id,
-                        func_def.name.id
-                    );
-                    return Some((name, func_def.name.range()));
-                } else {
-                    // Top-level function
-                    let name = format!("{}.{}", handle.module(), func_def.name.id);
-                    return Some((name, func_def.name.range()));
-                }
-            }
-        }
-        None
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use ruff_python_ast::name::Name;
 
-    use super::CancellableTransaction;
     use super::Transaction;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
@@ -3706,88 +3618,5 @@ mod tests {
     fn match_summary(params: &[Param], idx: usize) -> Option<(&str, bool)> {
         Transaction::<'static>::param_name_for_positional_argument(params, idx)
             .map(|match_| (match_.name.as_str(), match_.is_vararg_repeat))
-    }
-
-    #[test]
-    fn test_find_function_at_position_in_ast() {
-        use pyrefly_python::ast::Ast;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = r#"
-def top_level():
-    pass
-
-class MyClass:
-    def method(self):
-        pass
-"#;
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-
-        // Finds top-level function
-        let pos_in_func = TextSize::from(5);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_in_func);
-        assert_eq!(result.unwrap().name.id.as_str(), "top_level");
-
-        // Finds class method
-        let pos_in_method = TextSize::from(50);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_in_method);
-        assert_eq!(result.unwrap().name.id.as_str(), "method");
-    }
-
-    #[test]
-    fn test_find_function_at_position_in_ast_returns_none_outside_functions() {
-        use pyrefly_python::ast::Ast;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = "x = 10\n";
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-
-        let pos_outside = TextSize::from(0);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_outside);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_find_containing_function_for_call() {
-        use std::path::PathBuf;
-
-        use pyrefly_build::handle::Handle;
-        use pyrefly_python::ast::Ast;
-        use pyrefly_python::module_name::ModuleName;
-        use pyrefly_python::module_path::ModulePath;
-        use pyrefly_python::sys_info::SysInfo;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = r#"
-def my_function():
-    x = call()
-
-class MyClass:
-    def method(self):
-        y = call()
-"#;
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-        let handle = Handle::new(
-            ModuleName::from_str("test"),
-            ModulePath::memory(PathBuf::from("test.py")),
-            SysInfo::default(),
-        );
-
-        // Returns qualified name for top-level function
-        let pos_in_func = TextSize::from(30);
-        let (name, _) =
-            CancellableTransaction::find_containing_function_for_call(&handle, &ast, pos_in_func)
-                .unwrap();
-        assert_eq!(name, "test.my_function");
-
-        // Returns qualified name for class method
-        let pos_in_method = TextSize::from(85);
-        let (name, _) =
-            CancellableTransaction::find_containing_function_for_call(&handle, &ast, pos_in_method)
-                .unwrap();
-        assert_eq!(name, "test.MyClass.method");
     }
 }

@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -25,6 +27,7 @@ use crate::binding::binding::FirstUse;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
+use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
@@ -34,7 +37,6 @@ use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 
 impl<'a> BindingsBuilder<'a> {
     /// Bind one level of an unpacked LHS target, for example in `x, (y, [*z]), q = foo`
@@ -159,6 +161,13 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             self.declare_current_idx(Key::Anon(attr.range))
         };
+        let allow_assign_to_final =
+            self.scopes
+                .method_that_sets_attr(&attr)
+                .is_some_and(|method| {
+                    method.recognized_attribute_defining_method
+                        && matches!(method.instance_or_class, MethodSelfKind::Instance)
+                });
         self.ensure_expr(&mut attr.value, user.usage());
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
@@ -166,7 +175,11 @@ impl<'a> BindingsBuilder<'a> {
         let value = make_assigned_value(assigned.as_deref(), None);
         let idx = self.insert_binding_current(
             user,
-            Binding::AssignToAttribute(attr, Box::new(value.clone())),
+            Binding::AssignToAttribute {
+                attr,
+                value: Box::new(value.clone()),
+                allow_assign_to_final,
+            },
         );
         if let Some(identifier) = narrowing_identifier {
             self.narrow_if_name_is_defined(identifier, idx);
@@ -316,7 +329,6 @@ impl<'a> BindingsBuilder<'a> {
                 // We ignore such names for first-usage-tracking purposes, since
                 // we are not going to analyze the code at all.
                 self.ensure_expr(illegal_target, &mut Usage::StaticTypeInformation);
-
                 // Make sure the RHS is properly bound, so that we can report errors there.
                 let mut user = self.declare_current_idx(Key::Anon(illegal_target.range()));
                 if ensure_assigned && let Some(assigned) = &mut assigned {
@@ -404,7 +416,16 @@ impl<'a> BindingsBuilder<'a> {
         make_binding: impl FnOnce(Option<&Expr>, Option<Idx<KeyAnnotation>>) -> Binding,
         ensure_assigned: bool,
     ) {
-        let mut user = self.declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
+        if Ast::is_synthesized_empty_name(name) {
+            // Parser error recovery can synthesize empty identifiers. Skip creating a definition
+            // binding, but still analyze any assigned value so we surface downstream errors.
+            if ensure_assigned && let Some(assigned) = &mut assigned {
+                self.ensure_expr(assigned, &mut Usage::StaticTypeInformation);
+            }
+            return;
+        }
+        let identifier = ShortIdentifier::expr_name(name);
+        let mut user = self.declare_current_idx(Key::Definition(identifier));
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
@@ -435,8 +456,15 @@ impl<'a> BindingsBuilder<'a> {
         mut value: Box<Expr>,
         direct_ann: Option<(&Expr, Idx<KeyAnnotation>)>,
     ) -> Option<Idx<KeyAnnotation>> {
+        if Ast::is_synthesized_empty_identifier(name) {
+            let range = value.range();
+            let mut user = self.declare_current_idx(Key::Anon(range));
+            self.ensure_expr(&mut value, user.usage());
+            self.insert_binding_current(user, Binding::Expr(None, *value));
+            return None;
+        }
         let identifier = ShortIdentifier::new(name);
-        let mut user = self.declare_current_idx(Key::Definition(identifier));
+        let mut current = self.declare_current_idx(Key::Definition(identifier));
         let pinned_idx = self.idx_for_promise(Key::CompletedPartialType(identifier));
         let is_definitely_type_alias = if let Some((e, _)) = direct_ann
             && self.as_special_export(e) == Some(SpecialExport::TypeAlias)
@@ -453,7 +481,7 @@ impl<'a> BindingsBuilder<'a> {
                 tparams = Some(collector.lookup_keys().into_boxed_slice());
             }
         } else {
-            self.ensure_expr(&mut value, user.usage());
+            self.ensure_expr(&mut value, current.usage());
         }
         let style = if self.scopes.in_class_body() {
             FlowStyle::ClassField {
@@ -476,17 +504,17 @@ impl<'a> BindingsBuilder<'a> {
             is_in_function_scope: self.scopes.in_function_scope(),
         };
         // Record the raw assignment
-        let (first_used_by, def_idx) = user.decompose();
+        let (def_idx, first_use_of) = current.decompose();
         let def_idx = self.insert_binding_idx(def_idx, binding);
         // If this is a first use, add a binding that will eliminate any placeholder types coming from upstream.
-        let unpinned_idx = if first_used_by.is_empty() {
+        let unpinned_idx = if first_use_of.is_empty() {
             def_idx
         } else {
             self.insert_binding(
                 Key::PartialTypeWithUpstreamsCompleted(identifier),
                 Binding::PartialTypeWithUpstreamsCompleted(
                     def_idx,
-                    first_used_by.into_iter().collect(),
+                    first_use_of.into_iter().collect(),
                 ),
             )
         };

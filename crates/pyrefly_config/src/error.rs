@@ -100,7 +100,6 @@ pub struct ErrorConfig<'a> {
     pub display_config: &'a ErrorDisplayConfig,
     pub ignore_errors_in_generated_code: bool,
     pub enabled_ignores: SmallSet<Tool>,
-    pub ignore_missing_source: bool,
 }
 
 impl<'a> ErrorConfig<'a> {
@@ -108,13 +107,11 @@ impl<'a> ErrorConfig<'a> {
         display_config: &'a ErrorDisplayConfig,
         ignore_errors_in_generated_code: bool,
         enabled_ignores: SmallSet<Tool>,
-        ignore_missing_source: bool,
     ) -> Self {
         Self {
             display_config,
             ignore_errors_in_generated_code,
             enabled_ignores,
-            ignore_missing_source,
         }
     }
 }

@@ -50,7 +50,6 @@ use crate::literal::Lit;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
-use crate::quantified::QuantifiedKind;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
@@ -177,12 +176,6 @@ impl TParams {
 
     pub fn quantifieds(&self) -> impl ExactSizeIterator<Item = &Quantified> + '_ {
         self.0.iter().map(|x| &x.quantified)
-    }
-
-    pub fn contain_type_var_tuple(&self) -> bool {
-        self.0
-            .iter()
-            .any(|tparam| tparam.quantified.kind() == QuantifiedKind::TypeVarTuple)
     }
 
     pub fn as_vec(&self) -> &[TParam] {
@@ -962,13 +955,81 @@ impl Type {
 
     pub fn is_type_variable(&self) -> bool {
         match self {
-            Type::Var(_)
-            | Type::Quantified(_)
-            | Type::TypeVarTuple(_)
-            | Type::TypeVar(_)
-            | Type::ParamSpec(_) => true,
+            Type::Quantified(_) | Type::TypeVarTuple(_) | Type::TypeVar(_) | Type::ParamSpec(_) => {
+                true
+            }
             _ => false,
         }
+    }
+
+    fn visit_type_variables(&self, f: &mut dyn FnMut(&Type)) {
+        fn visit(ty: &Type, f: &mut dyn FnMut(&Type)) {
+            if ty.is_type_variable() {
+                f(ty);
+                return;
+            }
+            let mut recurse_targs = |targs: &TArgs| {
+                for targ in targs.as_slice().iter() {
+                    visit(targ, f);
+                }
+            };
+            match ty {
+                // In `A[X]`, the only part we need to check for type variables is `X`.
+                Type::ClassType(cls) => recurse_targs(cls.targs()),
+                Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs()),
+                _ => ty.recurse(&mut |ty| visit(ty, f)),
+            }
+        }
+        visit(self, f)
+    }
+
+    pub fn contains_type_variable(&self) -> bool {
+        let mut seen = false;
+        let mut f = |_: &Type| seen = true;
+        self.visit_type_variables(&mut f);
+        seen
+    }
+
+    pub fn collect_type_variables(&self, acc: &mut Vec<Name>) {
+        let mut f = |t: &Type| {
+            let name = match t {
+                Type::TypeVar(t) => t.qname().id(),
+                Type::TypeVarTuple(t) => t.qname().id(),
+                Type::ParamSpec(p) => p.qname().id(),
+                Type::Quantified(q) => q.name(),
+                _ => return,
+            };
+            acc.push(name.clone());
+        };
+        self.visit_type_variables(&mut f)
+    }
+
+    /// Check if the type contains a Var that may have been instantiated from a Quantified.
+    pub fn may_contain_quantified_var(&self) -> bool {
+        fn f(ty: &Type, seen: &mut bool) {
+            if *seen || matches!(ty, Type::Var(_)) {
+                *seen = true;
+                return;
+            }
+            let mut recurse_targs = |targs: &TArgs| {
+                for targ in targs.as_slice().iter() {
+                    f(targ, seen);
+                    if *seen {
+                        break;
+                    }
+                }
+            };
+            match ty {
+                // Vars created by instantiate_fresh_class() would only appear in targs,
+                // so we can skip checking the rest of the type.
+                Type::ClassType(cls) => recurse_targs(cls.targs()),
+                Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs()),
+                _ => ty.recurse(&mut |ty| f(ty, seen)),
+            }
+        }
+        let mut seen = false;
+        f(self, &mut seen);
+        seen
     }
 
     pub fn is_kind_param_spec(&self) -> bool {

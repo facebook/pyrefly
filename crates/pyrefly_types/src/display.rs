@@ -26,6 +26,7 @@ use starlark_map::smallmap;
 use crate::callable::Function;
 use crate::class::Class;
 use crate::literal::Lit;
+use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_output::DisplayOutput;
 use crate::type_output::OutputWithLocations;
@@ -87,13 +88,27 @@ impl QNameInfo {
     }
 }
 
+/// Display mode for type formatting for certain LSP requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LspDisplayMode {
+    /// Standard display mode
+    #[default]
+    Standard,
+    /// Hover mode: Multi-line for readability
+    Hover,
+    /// Signature help mode: Single-line for LSP compatibility
+    SignatureHelp,
+}
+
 #[derive(Debug, Default)]
 pub struct TypeDisplayContext<'a> {
     qnames: SmallMap<&'a Name, QNameInfo>,
-    /// Should we display for IDE Hover? This makes type names more readable but less precise.
-    hover: bool,
+    /// Display mode for formatting
+    lsp_display_mode: LspDisplayMode,
     always_display_module_name: bool,
     always_display_expanded_unions: bool,
+    /// Optional stdlib reference for resolving builtin type locations
+    stdlib: Option<&'a Stdlib>,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -155,9 +170,13 @@ impl<'a> TypeDisplayContext<'a> {
         self.always_display_module_name = true;
     }
 
-    /// Set the context to display for hover. This makes type names more readable but less precise.
-    pub fn set_display_mode_to_hover(&mut self) {
-        self.hover = true;
+    /// Set the context to display in LSP.
+    pub fn set_lsp_display_mode(&mut self, display_mode: LspDisplayMode) {
+        self.lsp_display_mode = display_mode;
+    }
+
+    pub fn set_stdlib(&mut self, stdlib: &'a Stdlib) {
+        self.stdlib = Some(stdlib);
     }
 
     pub fn display(&'a self, t: &'a Type) -> impl Display + 'a {
@@ -244,7 +263,9 @@ impl<'a> TypeDisplayContext<'a> {
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
         if self.always_display_module_name {
-            output.write_str(&format!("{}.{}", module, name))
+            output.write_str(module)?;
+            output.write_str(".")?;
+            output.write_str(name)
         } else {
             output.write_str(name)
         }
@@ -380,7 +401,7 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::LiteralString => self.maybe_fmt_with_module("typing", "LiteralString", output),
             Type::Callable(box c) => {
-                if self.hover && is_toplevel {
+                if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     c.fmt_with_type_with_newlines(output, &|t, o| {
                         self.fmt_helper_generic(t, false, o)
                     })
@@ -391,21 +412,30 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Function(box Function {
                 signature,
                 metadata,
-            }) => {
-                if self.hover && is_toplevel {
+            }) => match self.lsp_display_mode {
+                LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
                     let func_name = metadata.kind.function_name();
                     output.write_str("def ")?;
                     output.write_str(func_name.as_ref().as_str())?;
-                    signature.fmt_with_type_with_newlines(output, &|t, o| {
-                        self.fmt_helper_generic(t, false, o)
-                    })?;
+                    match self.lsp_display_mode {
+                        LspDisplayMode::Hover => {
+                            signature.fmt_with_type_with_newlines(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })?;
+                        }
+                        LspDisplayMode::SignatureHelp => {
+                            signature.fmt_with_type(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })?;
+                        }
+                        _ => unreachable!(),
+                    }
                     output.write_str(": ...")
-                } else {
-                    signature.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
-            }
+                _ => signature.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o)),
+            },
             Type::Overload(overload) => {
-                if self.hover && is_toplevel {
+                if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     output.write_str("\n@overload\n")?;
                     self.fmt_helper_generic(&overload.signatures.first().as_type(), true, output)?;
                     for sig in overload.signatures.iter().skip(1) {
@@ -414,13 +444,25 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     Ok(())
                 } else {
-                    output.write_str("Overload[")?;
+                    if is_toplevel {
+                        output.write_str("Overload[\n  ")?;
+                    } else {
+                        output.write_str("Overload[")?;
+                    }
                     self.fmt_helper_generic(&overload.signatures.first().as_type(), false, output)?;
                     for sig in overload.signatures.iter().skip(1) {
-                        output.write_str(", ")?;
+                        if is_toplevel {
+                            output.write_str("\n  ")?;
+                        } else {
+                            output.write_str(", ")?;
+                        }
                         self.fmt_helper_generic(&sig.as_type(), false, output)?;
                     }
-                    output.write_str("]")
+                    if is_toplevel {
+                        output.write_str("\n]")
+                    } else {
+                        output.write_str("]")
+                    }
                 }
             }
             Type::ParamSpecValue(x) => {
@@ -429,52 +471,78 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("]")
             }
             Type::BoundMethod(box BoundMethod { obj, func }) => {
-                if self.hover && is_toplevel {
-                    match func {
-                        BoundMethodType::Function(Function {
-                            signature,
-                            metadata,
-                        }) => {
-                            let func_name = metadata.kind.function_name();
-                            output.write_str("def ")?;
-                            output.write_str(func_name.as_ref().as_str())?;
-                            signature.fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })?;
-                            output.write_str(": ...")
-                        }
-                        BoundMethodType::Forall(Forall {
-                            tparams,
-                            body:
-                                Function {
-                                    signature,
-                                    metadata,
-                                },
-                        }) => {
-                            let func_name = metadata.kind.function_name();
-                            output.write_str("def ")?;
-                            output.write_str(func_name.as_ref().as_str())?;
-                            output.write_str("[")?;
-                            output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
-                            output.write_str("]")?;
-                            signature.fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })?;
-                            output.write_str(": ...")
-                        }
-                        BoundMethodType::Overload(_) => {
-                            // Use display instead of display_internal to show overloads w/ top-level formatting
-                            self.fmt_helper_generic(&func.clone().as_type(), true, output)
+                match self.lsp_display_mode {
+                    LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
+                        match func {
+                            BoundMethodType::Function(Function {
+                                signature,
+                                metadata,
+                            }) => {
+                                let func_name = metadata.kind.function_name();
+                                output.write_str("def ")?;
+                                output.write_str(func_name.as_ref().as_str())?;
+                                match self.lsp_display_mode {
+                                    LspDisplayMode::Hover => {
+                                        signature
+                                            .fmt_with_type_with_newlines(output, &|t, o| {
+                                                self.fmt_helper_generic(t, false, o)
+                                            })?;
+                                    }
+                                    LspDisplayMode::SignatureHelp => {
+                                        signature.fmt_with_type(output, &|t, o| {
+                                            self.fmt_helper_generic(t, false, o)
+                                        })?;
+                                    }
+                                    LspDisplayMode::Standard => unreachable!(),
+                                }
+                                output.write_str(": ...")
+                            }
+                            BoundMethodType::Forall(Forall {
+                                tparams,
+                                body:
+                                    Function {
+                                        signature,
+                                        metadata,
+                                    },
+                            }) => {
+                                let func_name = metadata.kind.function_name();
+                                output.write_str("def ")?;
+                                output.write_str(func_name.as_ref().as_str())?;
+                                output.write_str("[")?;
+                                write!(output, "{}", commas_iter(|| tparams.iter()))?;
+                                output.write_str("]")?;
+                                match self.lsp_display_mode {
+                                    LspDisplayMode::Hover => {
+                                        signature
+                                            .fmt_with_type_with_newlines(output, &|t, o| {
+                                                self.fmt_helper_generic(t, false, o)
+                                            })?;
+                                    }
+                                    LspDisplayMode::SignatureHelp => {
+                                        signature.fmt_with_type(output, &|t, o| {
+                                            self.fmt_helper_generic(t, false, o)
+                                        })?;
+                                    }
+                                    LspDisplayMode::Standard => unreachable!(),
+                                }
+                                output.write_str(": ...")
+                            }
+                            BoundMethodType::Overload(_) => {
+                                // Use display instead of display_internal to show overloads w/ top-level formatting
+                                self.fmt_helper_generic(&func.clone().as_type(), true, output)
+                            }
                         }
                     }
-                } else if self.hover {
-                    self.fmt_helper_generic(&func.clone().as_type(), false, output)
-                } else {
-                    output.write_str("BoundMethod[")?;
-                    self.fmt_helper_generic(obj, false, output)?;
-                    output.write_str(", ")?;
-                    self.fmt_helper_generic(&func.clone().as_type(), false, output)?;
-                    output.write_str("]")
+                    LspDisplayMode::Hover | LspDisplayMode::SignatureHelp => {
+                        self.fmt_helper_generic(&func.clone().as_type(), false, output)
+                    }
+                    _ => {
+                        output.write_str("BoundMethod[")?;
+                        self.fmt_helper_generic(obj, false, output)?;
+                        output.write_str(", ")?;
+                        self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output)?;
+                        output.write_str("]")
+                    }
                 }
             }
             Type::Never(NeverStyle::NoReturn) => {
@@ -589,22 +657,25 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::Intersect(x) => self.fmt_type_sequence(x.0.iter(), " & ", true, output),
             Type::Tuple(t) => {
-                t.fmt_with_type(output, &|ty, o| self.fmt_helper_generic(ty, false, o))
+                let tuple_qname = self.stdlib.map(|s| s.tuple_object().qname());
+                t.fmt_with_type(output, tuple_qname, &|ty, o| {
+                    self.fmt_helper_generic(ty, false, o)
+                })
             }
             Type::Forall(box Forall {
                 tparams,
                 body: body @ Forallable::Callable(c),
             }) => {
-                if self.hover && is_toplevel {
+                if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     output.write_str("[")?;
-                    output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
                     output.write_str("]")?;
                     c.fmt_with_type_with_newlines(output, &|t, o| {
                         self.fmt_helper_generic(t, false, o)
                     })
                 } else {
                     output.write_str("[")?;
-                    output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
                     output.write_str("]")?;
                     self.fmt_helper_generic(&body.clone().as_type(), false, output)
                 }
@@ -617,25 +688,36 @@ impl<'a> TypeDisplayContext<'a> {
                         metadata,
                         ..
                     }),
-            }) => {
-                if self.hover && is_toplevel {
+            }) => match self.lsp_display_mode {
+                LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
                     let func_name = metadata.kind.function_name();
                     output.write_str("def ")?;
                     output.write_str(func_name.as_ref().as_str())?;
                     output.write_str("[")?;
-                    output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
                     output.write_str("]")?;
-                    signature.fmt_with_type_with_newlines(output, &|t, o| {
-                        self.fmt_helper_generic(t, false, o)
-                    })?;
+                    match self.lsp_display_mode {
+                        LspDisplayMode::Hover => {
+                            signature.fmt_with_type_with_newlines(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })?;
+                        }
+                        LspDisplayMode::SignatureHelp => {
+                            signature.fmt_with_type(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })?;
+                        }
+                        _ => unreachable!(),
+                    }
                     output.write_str(": ...")
-                } else {
+                }
+                _ => {
                     output.write_str("[")?;
-                    output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
                     output.write_str("]")?;
                     self.fmt_helper_generic(&body.clone().as_type(), false, output)
                 }
-            }
+            },
             Type::Forall(box Forall {
                 tparams,
                 body: Forallable::TypeAlias(ta),
@@ -650,6 +732,7 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str(ta.name.as_str())
                 }
             }
+            Type::Type(box Type::Any(_)) => output.write_str("type[Any]"),
             Type::Type(ty) => {
                 output.write_str("type[")?;
                 self.fmt_helper_generic(ty, false, output)?;
@@ -680,42 +763,43 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Concatenate(args, pspec) => {
                 self.maybe_fmt_with_module("typing", "Concatenate", output)?;
                 output.write_str("[")?;
-                output.write_str(&format!(
+                write!(
+                    output,
                     "{}",
                     commas_iter(|| append(args.iter().map(|x| x.0.clone()), [pspec]))
-                ))?;
+                )?;
                 output.write_str("]")
             }
             Type::Module(m) => {
                 output.write_str("Module[")?;
-                output.write_str(&format!("{m}"))?;
+                write!(output, "{m}")?;
                 output.write_str("]")
             }
-            Type::Var(var) => output.write_str(&format!("{var}")),
-            Type::Quantified(var) => output.write_str(&format!("{var}")),
-            Type::QuantifiedValue(var) => output.write_str(&format!("{var}")),
-            Type::ElementOfTypeVarTuple(var) => output.write_str(&format!("ElementOf[{var}]")),
+            Type::Var(var) => write!(output, "{var}"),
+            Type::Quantified(var) => write!(output, "{var}"),
+            Type::QuantifiedValue(var) => write!(output, "{var}"),
+            Type::ElementOfTypeVarTuple(var) => write!(output, "ElementOf[{var}]"),
             Type::Args(q) => {
                 output.write_str("Args[")?;
-                output.write_str(&format!("{q}"))?;
+                write!(output, "{q}")?;
                 output.write_str("]")
             }
             Type::Kwargs(q) => {
                 output.write_str("Kwargs[")?;
-                output.write_str(&format!("{q}"))?;
+                write!(output, "{q}")?;
                 output.write_str("]")
             }
             Type::ArgsValue(q) => {
                 output.write_str("ArgsValue[")?;
-                output.write_str(&format!("{q}"))?;
+                write!(output, "{q}")?;
                 output.write_str("]")
             }
             Type::KwargsValue(q) => {
                 output.write_str("KwargsValue[")?;
-                output.write_str(&format!("{q}"))?;
+                write!(output, "{q}")?;
                 output.write_str("]")
             }
-            Type::SpecialForm(x) => output.write_str(&format!("{x}")),
+            Type::SpecialForm(x) => write!(output, "{x}"),
             Type::Ellipsis => output.write_str("Ellipsis"),
             Type::Any(style) => match style {
                 AnyStyle::Explicit => self.maybe_fmt_with_module("typing", "Any", output),
@@ -795,13 +879,17 @@ impl Display for Type {
 }
 
 impl Type {
-    pub fn as_hover_string(&self) -> String {
-        self.as_hover_string_with_fallback_name(None)
+    pub fn as_lsp_string(&self, mode: LspDisplayMode) -> String {
+        self.as_lsp_string_with_fallback_name(None, mode)
     }
 
-    pub fn as_hover_string_with_fallback_name(&self, fallback_name: Option<&str>) -> String {
+    pub fn as_lsp_string_with_fallback_name(
+        &self,
+        fallback_name: Option<&str>,
+        mode: LspDisplayMode,
+    ) -> String {
         let mut c = TypeDisplayContext::new(&[self]);
-        c.set_display_mode_to_hover();
+        c.set_lsp_display_mode(mode);
         let rendered = c.display(self).to_string();
         if let Some(name) = fallback_name
             && self.is_toplevel_callable()
@@ -814,8 +902,14 @@ impl Type {
         rendered
     }
 
-    pub fn get_types_with_locations(&self) -> Vec<(String, Option<TextRangeWithModule>)> {
-        let ctx = TypeDisplayContext::new(&[self]);
+    pub fn get_types_with_locations(
+        &self,
+        stdlib: Option<&Stdlib>,
+    ) -> Vec<(String, Option<TextRangeWithModule>)> {
+        let mut ctx = TypeDisplayContext::new(&[self]);
+        if let Some(s) = stdlib {
+            ctx.set_stdlib(s);
+        }
         let mut output = OutputWithLocations::new(&ctx);
         ctx.fmt_helper_generic(self, false, &mut output).unwrap();
         output.parts().to_vec()
@@ -911,7 +1005,7 @@ pub mod tests {
                 None,
                 Restriction::Unrestricted,
             ),
-            variance: PreInferenceVariance::PInvariant,
+            variance: PreInferenceVariance::Invariant,
         }
     }
 
@@ -926,7 +1020,7 @@ pub mod tests {
             mi,
             Restriction::Unrestricted,
             None,
-            PreInferenceVariance::PInvariant,
+            PreInferenceVariance::Invariant,
         )
     }
 
@@ -1205,6 +1299,13 @@ pub mod tests {
             Type::Literal(Lit::Bool(false)).to_string(),
             "Literal[False]"
         );
+        assert_eq!(
+            Type::Literal(Lit::Bytes(
+                vec![b' ', b'\t', b'\n', b'\r', 0x0b, 0x0c].into_boxed_slice()
+            ))
+            .to_string(),
+            r"Literal[b' \t\n\r\x0b\x0c']"
+        );
 
         // Enum literals (not all of these types make sense, we're only providing what's relevant)
         let my_enum = ClassType::new(fake_class("MyEnum", "mod.ule", 5), TArgs::default());
@@ -1259,7 +1360,7 @@ pub mod tests {
             ctx.display(&callable_type).to_string(),
             "(hello: None) -> None"
         );
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&callable_type).to_string(),
             "(hello: None) -> None"
@@ -1277,7 +1378,7 @@ pub mod tests {
             ctx.display(&callable_type).to_string(),
             "(hello: None, *, world: None) -> None"
         );
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&callable_type).to_string(),
             r#"(
@@ -1303,7 +1404,7 @@ pub mod tests {
             ctx.display(&generic_callable_type).to_string(),
             "[T](hello: None, *, world: None) -> None"
         );
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&generic_callable_type).to_string(),
             r#"[T](
@@ -1325,7 +1426,7 @@ pub mod tests {
             ctx.display(&callable_type).to_string(),
             "(*my_args: Unknown, **my_kwargs: Unknown) -> None"
         );
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&callable_type).to_string(),
             r#"(
@@ -1347,7 +1448,7 @@ pub mod tests {
             ctx.display(&tuple).to_string(),
             "tuple[(hello: None, *, world: None) -> None]"
         );
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&tuple).to_string(),
             "tuple[(hello: None, *, world: None) -> None]"
@@ -1370,7 +1471,7 @@ pub mod tests {
         assert_eq!(ctx.display(&wrapped).to_string(), "tuple[MyAlias]");
         assert_eq!(ctx.display(&type_of).to_string(), "type[MyAlias]");
         // hover display
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(ctx.display(&alias).to_string(), "None");
         assert_eq!(ctx.display(&wrapped).to_string(), "tuple[MyAlias]");
         assert_eq!(ctx.display(&type_of).to_string(), "type[MyAlias]");
@@ -1400,7 +1501,7 @@ pub mod tests {
             ctx.display(&callable_type).to_string(),
             "(x: Any = ..., /, y: Any = True, z: Any = None) -> None"
         );
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&callable_type).to_string(),
             r#"(
@@ -1426,7 +1527,7 @@ pub mod tests {
             ctx.display(&callable_type).to_string(),
             "(x: Any, /) -> None"
         );
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&callable_type).to_string(),
             "(x: Any, /) -> None"
@@ -1444,7 +1545,7 @@ pub mod tests {
             ctx.display(&callable_type).to_string(),
             "(Any, _: Any = ...) -> None"
         );
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&callable_type).to_string(),
             r#"(
@@ -1489,7 +1590,7 @@ pub mod tests {
             ctx.display(&bound_method).to_string(),
             "BoundMethod[type[MyClass], (self: Any, x: Any, y: Any) -> None]"
         );
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&bound_method).to_string(),
             r#"def foo(
@@ -1514,7 +1615,7 @@ pub mod tests {
             ctx.display(&bound_method).to_string(),
             "BoundMethod[type[MyClass], [T](self: Any, x: Any, y: Any) -> None]"
         );
-        ctx.set_display_mode_to_hover();
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&bound_method).to_string(),
             r#"def foo[T](
@@ -1583,16 +1684,24 @@ pub mod tests {
             metadata: Box::new(sig1.metadata.clone()),
         });
 
-        // Test compact display mode (non-hover)
+        // Test compact display mode as toplevel type (non-hover)
         let ctx = TypeDisplayContext::new(&[&overload]);
         assert_eq!(
             ctx.display(&overload).to_string(),
-            "Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]"
+            "Overload[\n  (x: Any) -> None\n  [T](x: Any, y: Any) -> None\n]"
+        );
+
+        // Test compact display mode as non-toplevel type (non-hover)
+        let type_form_of_overload = Type::type_form(overload.clone());
+        let ctx = TypeDisplayContext::new(&[&type_form_of_overload]);
+        assert_eq!(
+            ctx.display(&type_form_of_overload).to_string(),
+            "type[Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]"
         );
 
         // Test hover display mode (with @overload decorators)
         let mut hover_ctx = TypeDisplayContext::new(&[&overload]);
-        hover_ctx.set_display_mode_to_hover();
+        hover_ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             hover_ctx.display(&overload).to_string(),
             r#"
@@ -1622,16 +1731,24 @@ def overloaded_func[T](
             }),
         }));
 
-        // Test compact display mode (non-hover)
+        // Test compact display mode as toplevel type (non-hover)
         let ctx = TypeDisplayContext::new(&[&bound_method_overload]);
         assert_eq!(
             ctx.display(&bound_method_overload).to_string(),
-            "BoundMethod[Any, Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]"
+            "BoundMethod[Any, Overload[\n  (x: Any) -> None\n  [T](x: Any, y: Any) -> None\n]]"
+        );
+
+        // Test compact display mode as non-toplevel type (non-hover)
+        let type_form_of_bound_method_overload = Type::type_form(bound_method_overload.clone());
+        let ctx = TypeDisplayContext::new(&[&type_form_of_bound_method_overload]);
+        assert_eq!(
+            ctx.display(&type_form_of_bound_method_overload).to_string(),
+            "type[BoundMethod[Any, Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]]"
         );
 
         // Test hover display mode (with @overload decorators)
         let mut hover_ctx = TypeDisplayContext::new(&[&bound_method_overload]);
-        hover_ctx.set_display_mode_to_hover();
+        hover_ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             hover_ctx.display(&bound_method_overload).to_string(),
             r#"

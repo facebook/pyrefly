@@ -13,6 +13,7 @@ use std::hash::Hash;
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModuleStyle;
@@ -61,9 +62,9 @@ use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::Bindings;
 use crate::binding::narrow::NarrowOp;
+use crate::binding::narrow::NarrowingSubject;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::types::annotation::Annotation;
 use crate::types::class::Class;
@@ -99,7 +100,7 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 11);
-assert_words!(BindingExpect, 11);
+assert_words!(BindingExpect, 16);
 assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 23);
 assert_words!(BindingTParams, 10);
@@ -167,6 +168,9 @@ impl DisplayWith<Bindings> for AnyIdx {
     }
 }
 
+/// Any key that sets `EXPORTED` to `true` should not include positions
+/// Incremental updates depend on knowing when a file's exports changed, which uses equality between exported keys
+/// Moving code around should not cause all dependencies to be re-checked
 pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + Ranged + 'static {
     const EXPORTED: bool = false;
     type Value: Debug + DisplayWith<Bindings>;
@@ -241,7 +245,7 @@ impl Keyed for KeyClassSynthesizedFields {
         AnyIdx::KeyClassSynthesizedFields(idx)
     }
 }
-impl Exported for KeyVariance {}
+impl Exported for KeyClassSynthesizedFields {}
 impl Keyed for KeyVariance {
     const EXPORTED: bool = true;
     type Value = BindingVariance;
@@ -250,8 +254,7 @@ impl Keyed for KeyVariance {
         AnyIdx::KeyVariance(idx)
     }
 }
-
-impl Exported for KeyClassSynthesizedFields {}
+impl Exported for KeyVariance {}
 impl Keyed for KeyExport {
     const EXPORTED: bool = true;
     type Value = BindingExport;
@@ -552,6 +555,13 @@ pub enum ExprOrBinding {
     Binding(Binding),
 }
 
+#[derive(Clone, Debug)]
+pub struct PrivateAttributeAccessCheck {
+    pub value: Expr,
+    pub attr: Identifier,
+    pub class_idx: Option<Idx<KeyClass>>,
+}
+
 impl DisplayWith<Bindings> for ExprOrBinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
@@ -580,6 +590,19 @@ pub enum BindingExpect {
     },
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
     Bool(Expr),
+    /// A match statement that may be non-exhaustive at runtime.
+    /// Due to gaps in our type algebra, we only check exhaustiveness for enums & unions
+    /// of enum literals.
+    /// Since this makes use of narrowing, not every match subject will be
+    /// checked for exhaustiveness, only variables and chained subscripts/attributes of variables
+    MatchExhaustiveness {
+        subject_idx: Idx<Key>,
+        narrowing_subject: NarrowingSubject,
+        narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
+        subject_range: TextRange,
+    },
+    /// Track private attribute accesses that need semantic validation.
+    PrivateAttributeAccess(PrivateAttributeAccessCheck),
 }
 
 impl DisplayWith<Bindings> for BindingExpect {
@@ -630,6 +653,29 @@ impl DisplayWith<Bindings> for BindingExpect {
                 ctx.display(*existing),
                 name
             ),
+            Self::PrivateAttributeAccess(expectation) => write!(
+                f,
+                "PrivateAttributeAccess({}, {}, {})",
+                m.display(&expectation.value),
+                expectation.attr.id,
+                if let Some(class_idx) = expectation.class_idx {
+                    format!("{}", ctx.display(class_idx))
+                } else {
+                    "None".to_owned()
+                }
+            ),
+            Self::MatchExhaustiveness {
+                subject_idx,
+                subject_range: range,
+                ..
+            } => {
+                write!(
+                    f,
+                    "MatchExhaustiveness({}, {})",
+                    ctx.display(*subject_idx),
+                    ctx.module().display(range)
+                )
+            }
         }
     }
 }
@@ -1133,6 +1179,7 @@ pub struct ReturnExplicit {
     pub is_generator: bool,
     pub is_async: bool,
     pub range: TextRange,
+    pub is_unreachable: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1266,6 +1313,16 @@ pub enum FirstUse {
     UsedBy(Idx<Key>),
 }
 
+/// Information about a branch in a Phi node.
+#[derive(Clone, Debug)]
+pub struct BranchInfo {
+    /// The type key from this branch.
+    pub value_key: Idx<Key>,
+    /// The last `Binding::StmtExpr` in this branch, if any.
+    /// Used to check for type-based termination (NoReturn/Never) at solve time.
+    pub termination_key: Option<Idx<Key>>,
+}
+
 #[derive(Clone, Debug)]
 pub enum Binding {
     /// An expression, optionally with a Key saying what the type must be.
@@ -1334,12 +1391,16 @@ pub enum Binding {
     /// The option range tracks the original name's location for renamed import.
     /// e.g. in `from foo import bar as baz`, we should track the range of `bar`.
     Import(ModuleName, Name, Option<TextRange>),
+    /// An import via module-level __getattr__ for incomplete stubs.
+    /// See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
+    ImportViaGetattr(ModuleName, Name),
     /// A class definition, points to a BindingClass and any decorators.
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
     /// A phi node, representing the union of several alternative keys.
-    Phi(JoinStyle<Idx<Key>>, SmallSet<Idx<Key>>),
+    /// Each BranchInfo contains the value key and optional termination key from one branch.
+    Phi(JoinStyle<Idx<Key>>, Vec<BranchInfo>),
     /// A phi node for a name that was defined above a loop. This can involve recursion
     /// due to reassingment in the loop, so we provide a prior idx of the type from above
     /// the loop, which can be used if the resulting Var is forced.
@@ -1384,7 +1445,12 @@ pub enum Binding {
     SuperInstance(SuperStyle, TextRange),
     /// The result of assigning to an attribute. This operation cannot change the *type* of the
     /// name to which we are assigning, but it *can* change the live attribute narrows.
-    AssignToAttribute(ExprAttribute, Box<ExprOrBinding>),
+    AssignToAttribute {
+        attr: ExprAttribute,
+        value: Box<ExprOrBinding>,
+        /// `Final` fields may be assigned inside `__init__`
+        allow_assign_to_final: bool,
+    },
     /// The result of assigning to a subscript, used for narrowing.
     AssignToSubscript(ExprSubscript, Box<ExprOrBinding>),
     /// A placeholder binding, used to force the solving of some other `K::Value` (for
@@ -1523,6 +1589,7 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::Function(x, _pred, _class) => write!(f, "Function({})", ctx.display(*x)),
             Self::Import(m, n, original_name) => write!(f, "Import({m}, {n}, {original_name:?})"),
+            Self::ImportViaGetattr(m, n) => write!(f, "ImportViaGetattr({m}, {n})"),
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
             Self::AugAssign(a, s) => write!(f, "AugAssign({}, {})", ann(a), m.display(s)),
@@ -1553,11 +1620,13 @@ impl DisplayWith<Bindings> for Binding {
                     }
                 )
             }
-            Self::Phi(style, xs) => {
+            Self::Phi(style, branches) => {
                 write!(
                     f,
                     "Phi({style:?}, {})",
-                    intersperse_iter("; ", || xs.iter().map(|x| ctx.display(*x))),
+                    intersperse_iter("; ", || branches
+                        .iter()
+                        .map(|branch| ctx.display(branch.value_key))),
                 )
             }
             Self::LoopPhi(k, xs) => {
@@ -1657,13 +1726,18 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, "SuperInstance::Implicit({}, {v})", ctx.display(*k))
             }
             Self::SuperInstance(SuperStyle::Any, _range) => write!(f, "SuperInstance::Any"),
-            Self::AssignToAttribute(attr, x) => {
+            Self::AssignToAttribute {
+                attr,
+                value,
+                allow_assign_to_final,
+            } => {
                 write!(
                     f,
-                    "AssignToAttribute({}, {}, {})",
+                    "AssignToAttribute({}, {}, {}, allow_assign_to_final={})",
                     m.display(&attr.value),
                     attr.attr,
-                    x.display_with(ctx)
+                    value.display_with(ctx),
+                    allow_assign_to_final
                 )
             }
             Self::AssignToSubscript(subscript, x) => {
@@ -1744,7 +1818,7 @@ impl Binding {
                     Some(SymbolKind::Function)
                 }
             }
-            Binding::Import(_, _, _) => {
+            Binding::Import(_, _, _) | Binding::ImportViaGetattr(_, _) => {
                 // TODO: maybe we can resolve it to see its symbol kind
                 Some(SymbolKind::Variable)
             }
@@ -1787,7 +1861,7 @@ impl Binding {
             | Binding::PatternMatchClassKeyword(_, _, _)
             | Binding::ExceptionHandler(_, _)
             | Binding::SuperInstance(_, _)
-            | Binding::AssignToAttribute(_, _)
+            | Binding::AssignToAttribute { .. }
             | Binding::UsageLink(_)
             | Binding::SelfTypeLiteral(..)
             | Binding::AssignToSubscript(_, _)
@@ -1881,12 +1955,12 @@ pub enum AnnotationTarget {
 impl Display for AnnotationTarget {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Param(name) => write!(f, "param {name}"),
-            Self::ArgsParam(name) => write!(f, "args {name}"),
-            Self::KwargsParam(name) => write!(f, "kwargs {name}"),
-            Self::Return(name) => write!(f, "{name} return"),
-            Self::Assign(name, _initialized) => write!(f, "var {name}"),
-            Self::ClassMember(name) => write!(f, "attr {name}"),
+            Self::Param(name) => write!(f, "parameter `{name}`"),
+            Self::ArgsParam(name) => write!(f, "args `{name}`"),
+            Self::KwargsParam(name) => write!(f, "kwargs `{name}`"),
+            Self::Return(name) => write!(f, "`{name}` return"),
+            Self::Assign(name, _initialized) => write!(f, "variable `{name}`"),
+            Self::ClassMember(name) => write!(f, "attribute `{name}`"),
         }
     }
 }
@@ -2245,6 +2319,7 @@ impl BindingLegacyTypeParam {
 pub enum BindingYield {
     Yield(Option<Idx<KeyAnnotation>>, ExprYield),
     Invalid(ExprYield),
+    Unreachable(ExprYield),
 }
 
 impl BindingYield {
@@ -2252,6 +2327,7 @@ impl BindingYield {
         match self {
             Self::Yield(_, x) => x,
             Self::Invalid(x) => x,
+            Self::Unreachable(x) => x,
         }
     }
 }
@@ -2267,6 +2343,7 @@ impl DisplayWith<Bindings> for BindingYield {
 pub enum BindingYieldFrom {
     YieldFrom(Option<Idx<KeyAnnotation>>, IsAsync, ExprYieldFrom),
     Invalid(ExprYieldFrom),
+    Unreachable(ExprYieldFrom),
 }
 
 impl BindingYieldFrom {
@@ -2274,6 +2351,7 @@ impl BindingYieldFrom {
         match self {
             Self::YieldFrom(_, _, x) => x,
             Self::Invalid(x) => x,
+            Self::Unreachable(x) => x,
         }
     }
 }

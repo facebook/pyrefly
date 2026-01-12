@@ -10,6 +10,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
@@ -57,7 +58,6 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::graph::index::Idx;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncFlags;
 use crate::types::callable::FuncMetadata;
@@ -459,7 +459,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &mut parent_param_hints,
             errors,
         );
-        let mut tparams = self.scoped_type_params(def.type_params.as_deref());
+        let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
         let legacy_tparams = legacy_tparams
             .iter()
             .filter_map(|key| self.get_idx(*key).deref().parameter().cloned());
@@ -531,25 +531,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
-        if matches!(&ret, Type::TypeGuard(_) | Type::TypeIs(_)) {
-            self.validate_type_guard_positional_argument_count(
-                &def.params,
-                def.id_range(),
-                &def.defining_cls,
-                def.metadata.flags.is_staticmethod,
-                errors,
-            );
-        };
+        // Only validate TypeGuard/TypeIs functions when they have an explicit return annotation.
+        // Functions that return a TypeGuard value without an explicit annotation should not be
+        // treated as TypeGuard functions.
+        if has_return_annotation {
+            if matches!(&ret, Type::TypeGuard(_) | Type::TypeIs(_)) {
+                self.validate_type_guard_positional_argument_count(
+                    &def.params,
+                    def.id_range(),
+                    &def.defining_cls,
+                    def.metadata.flags.is_staticmethod,
+                    errors,
+                );
+            }
 
-        if let Type::TypeIs(ty_narrow) = &ret {
-            self.validate_type_is_type_narrowing(
-                &def.params,
-                stmt,
-                &def.defining_cls,
-                def.metadata.flags.is_staticmethod,
-                ty_narrow,
-                errors,
-            );
+            if let Type::TypeIs(ty_narrow) = &ret {
+                self.validate_type_is_type_narrowing(
+                    &def.params,
+                    stmt,
+                    &def.defining_cls,
+                    def.metadata.flags.is_staticmethod,
+                    ty_narrow,
+                    errors,
+                );
+            }
         }
 
         let callable = if let Some(q) = &def.paramspec {

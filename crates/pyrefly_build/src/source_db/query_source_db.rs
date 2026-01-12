@@ -18,6 +18,7 @@ use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -274,7 +275,7 @@ impl SourceDatabase for QuerySourceDatabase {
             //    case we can return immediately. The build system will complain if
             //    multiple reachable targets have files that write to the same output
             //    location, so we don't need to check for/handle that.
-            // 3. a result that's a package file, which might refer to mulitple directories.
+            // 3. a result that's a package file, which might refer to multiple directories.
             //    In this case, we collect all possible results, and deterministically
             //    return one of them.
             for target in package_targets {
@@ -329,18 +330,28 @@ impl SourceDatabase for QuerySourceDatabase {
         ))
     }
 
-    fn query_source_db(&self, files: SmallSet<ModulePathBuf>, force: bool) -> anyhow::Result<bool> {
-        let new_includes = files.into_iter().map(Include::path).collect();
-        let mut includes = self.includes.lock();
-        if *includes == new_includes && !force {
-            debug!("Not querying Buck source DB, since no inputs have changed");
-            return Ok(false);
-        }
-        *includes = new_includes;
-        info!("Querying Buck for source DB");
-        let raw_db = self.querier.query_source_db(&includes, &self.cwd)?;
-        info!("Finished querying Buck for source DB");
-        Ok(self.update_with_target_manifest(raw_db))
+    fn query_source_db(
+        &self,
+        files: SmallSet<ModulePathBuf>,
+        force: bool,
+    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
+        let mut stats = TelemetrySourceDbRebuildInstanceStats::default();
+        let run = || {
+            let new_includes = files.into_iter().map(Include::path).collect();
+            let mut includes = self.includes.lock();
+            if *includes == new_includes && !force {
+                debug!("Not querying Buck source DB, since no inputs have changed");
+                return Ok(false);
+            }
+            *includes = new_includes;
+            info!("Querying Buck for source DB");
+            let (raw_db, build_id) = self.querier.query_source_db(&includes, &self.cwd);
+            stats.build_id = build_id;
+            let raw_db = raw_db?;
+            info!("Finished querying Buck for source DB");
+            Ok(self.update_with_target_manifest(raw_db))
+        };
+        (run(), stats)
     }
 
     fn get_paths_to_watch<'a>(&'a self) -> SmallSet<WatchPattern<'a>> {
@@ -441,11 +452,11 @@ mod tests {
             &self,
             _: &SmallSet<Include>,
             _: &Path,
-        ) -> anyhow::Result<TargetManifestDatabase> {
-            Ok(TargetManifestDatabase::get_test_database())
+        ) -> (anyhow::Result<TargetManifestDatabase>, Option<String>) {
+            (Ok(TargetManifestDatabase::get_test_database()), None)
         }
 
-        fn construct_command(&self) -> std::process::Command {
+        fn construct_command(&self, _: Option<&Path>) -> std::process::Command {
             panic!("We shouldn't be calling this...");
         }
     }
@@ -547,6 +558,13 @@ mod tests {
             ModulePathBuf::new(root.join("pyre/client/log/__init__.py")) => smallset! {
                 Target::from_string("//pyre/client/log:log".to_owned()),
                 Target::from_string("//pyre/client/log:log2".to_owned()),
+            },
+            // Synthesized parent packages from pyre.client.log.log and pyre.client.log.format
+            ModulePathBuf::new(root.join("pyre/client")) => smallset! {
+                Target::from_string("//pyre/client/log:log".to_owned()),
+            },
+            ModulePathBuf::new(root.join("pyre")) => smallset! {
+                Target::from_string("//pyre/client/log:log".to_owned()),
             },
             ModulePathBuf::new(root.join("implicit_package/test")) => smallset! {
                 Target::from_string("//implicit_package/test:main".to_owned()),
@@ -891,6 +909,13 @@ mod tests {
             ModulePathBuf::new(root.join("pyre/client/log/__init__.py")) => smallset! {
                 Target::from_string("//pyre/client/log:log".to_owned()),
             },
+            // Synthesized parent packages from pyre.client.log.log
+            ModulePathBuf::new(root.join("pyre/client")) => smallset! {
+                Target::from_string("//pyre/client/log:log".to_owned()),
+            },
+            ModulePathBuf::new(root.join("pyre")) => smallset! {
+                Target::from_string("//pyre/client/log:log".to_owned()),
+            },
         };
         assert_eq!(inner.package_lookup, expected_package_lookup);
     }
@@ -908,5 +933,121 @@ mod tests {
             WatchPattern::owned_root(PathBuf::from("/path/to/another/repository/package"), "**/*.py".to_owned()),
         };
         assert_eq!(db.get_paths_to_watch(), expected);
+    }
+
+    #[test]
+    fn test_cross_target_package_lookup() {
+        // Setup:
+        // - //dir:target1 has __init__.py
+        // - //dir:target2 has a.py and b.py, depends on target1
+        let raw_db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//dir:target1".to_owned()) => TargetManifest::lib(
+                    &[("dir", &["dir/__init__.py"])],
+                    &[],
+                    "dir/BUCK",
+                    &[],
+                    None
+                ),
+                Target::from_string("//dir:target2".to_owned()) => TargetManifest::lib(
+                    &[
+                        ("dir.a", &["dir/a.py"]),
+                        ("dir.b", &["dir/b.py"]),
+                    ],
+                    &["//dir:target1"],
+                    "dir/BUCK",
+                    &[],
+                    None
+                ),
+            },
+            PathBuf::from("/repo"),
+        );
+        let root = raw_db.root.to_path_buf();
+        let files = smallset! {
+            root.join("dir/a.py"),
+            root.join("dir/b.py"),
+        };
+
+        let db = QuerySourceDatabase::from_target_manifest_db(raw_db, root.clone(), &files);
+
+        // When looking up 'dir' from a.py (which is in target2), we should find
+        // the __init__.py from target1 because target2 depends on target1
+        let result = db.lookup(
+            ModuleName::from_str("dir"),
+            Some(&root.join("dir/a.py")),
+            None,
+        );
+        assert!(
+            result.is_some(),
+            "Should be able to lookup 'dir' package from a.py"
+        );
+        let result_path = result.unwrap();
+        assert!(
+            result_path
+                .as_path()
+                .to_string_lossy()
+                .contains("__init__.py"),
+            "Lookup of 'dir' from a.py should resolve to __init__.py, got: {:?}",
+            result_path
+        );
+    }
+
+    #[test]
+    fn test_cross_target_package_lookup_no_dep() {
+        // Setup:
+        // - //dir:target1 has __init__.py and depends on target2
+        // - //dir:target2 has a.py and b.py, but does NOT depend on target1
+        let raw_db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//dir:target1".to_owned()) => TargetManifest::lib(
+                    &[("dir", &["dir/__init__.py"])],
+                    &["//dir:target2"],  // target1 depends on target2
+                    "dir/BUCK",
+                    &[],
+                    None
+                ),
+                Target::from_string("//dir:target2".to_owned()) => TargetManifest::lib(
+                    &[
+                        ("dir.a", &["dir/a.py"]),
+                        ("dir.b", &["dir/b.py"]),
+                    ],
+                    &[],  // target2 does NOT depend on target1
+                    "dir/BUCK",
+                    &[],
+                    None
+                ),
+            },
+            PathBuf::from("/repo"),
+        );
+        let root = raw_db.root.to_path_buf();
+        let files = smallset! {
+            root.join("dir/a.py"),
+            root.join("dir/b.py"),
+        };
+
+        let db = QuerySourceDatabase::from_target_manifest_db(raw_db, root.clone(), &files);
+
+        // When looking up 'dir' from a.py (which is in target2), we should NOT find
+        // the __init__.py because target2 doesn't depend on target1.
+        // Instead, we get the synthesized directory package.
+        let result = db.lookup(
+            ModuleName::from_str("dir"),
+            Some(&root.join("dir/a.py")),
+            None,
+        );
+        assert!(
+            result.is_some(),
+            "Should be able to lookup 'dir' package from a.py (synthesized)"
+        );
+        let result_path = result.unwrap();
+        // The result should be the synthesized directory, not __init__.py
+        assert!(
+            !result_path
+                .as_path()
+                .to_string_lossy()
+                .contains("__init__.py"),
+            "Lookup of 'dir' from a.py should NOT resolve to __init__.py (no dep), got: {:?}",
+            result_path
+        );
     }
 }

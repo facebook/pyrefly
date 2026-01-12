@@ -19,6 +19,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::fs_anyhow;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -175,8 +176,12 @@ impl SourceDatabase for BuckCheckSourceDatabase {
         Some(Handle::new(name, module_path.dupe(), self.sys_info.dupe()))
     }
 
-    fn query_source_db(&self, _: SmallSet<ModulePathBuf>, _: bool) -> anyhow::Result<bool> {
-        Ok(false)
+    fn query_source_db(
+        &self,
+        _: SmallSet<ModulePathBuf>,
+        _: bool,
+    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
+        (Ok(false), TelemetrySourceDbRebuildInstanceStats::default())
     }
 
     fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>> {

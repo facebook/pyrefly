@@ -8,6 +8,7 @@
 use std::mem;
 
 use dupe::Dupe as _;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
@@ -64,7 +65,6 @@ use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::types::types::Type;
 
 struct Decorators {
@@ -379,7 +379,7 @@ impl<'a> BindingsBuilder<'a> {
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
             .returns
-            .into_map(|(idx, x)| {
+            .into_map(|(idx, x, is_unreachable)| {
                 self.insert_binding_idx(
                     idx,
                     Binding::ReturnExplicit(ReturnExplicit {
@@ -388,6 +388,7 @@ impl<'a> BindingsBuilder<'a> {
                         is_generator,
                         is_async,
                         range: x.range,
+                        is_unreachable,
                     }),
                 )
             })
@@ -396,14 +397,27 @@ impl<'a> BindingsBuilder<'a> {
         // Collect the keys of yield expressions.
         let yield_keys = yields_and_returns
             .yields
-            .into_map(|(idx, x)| self.insert_binding_idx(idx, BindingYield::Yield(return_ann, x)))
+            .into_map(|(idx, x, is_unreachable)| {
+                self.insert_binding_idx(
+                    idx,
+                    if is_unreachable {
+                        BindingYield::Unreachable(x)
+                    } else {
+                        BindingYield::Yield(return_ann, x)
+                    },
+                )
+            })
             .into_boxed_slice();
         let yield_from_keys = yields_and_returns
             .yield_froms
-            .into_map(|(idx, x)| {
+            .into_map(|(idx, x, is_unreachable)| {
                 self.insert_binding_idx(
                     idx,
-                    BindingYieldFrom::YieldFrom(return_ann, IsAsync::new(is_async), x),
+                    if is_unreachable {
+                        BindingYieldFrom::Unreachable(x)
+                    } else {
+                        BindingYieldFrom::YieldFrom(return_ann, IsAsync::new(is_async), x)
+                    },
                 )
             })
             .into_boxed_slice();

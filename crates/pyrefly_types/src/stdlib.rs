@@ -91,6 +91,7 @@ pub struct Stdlib {
     none_type: StdlibResult<ClassType>,
     function_type: StdlibResult<ClassType>,
     method_type: StdlibResult<ClassType>,
+    module_type: StdlibResult<ClassType>,
     enum_meta: StdlibResult<ClassType>,
     enum_flag: StdlibResult<ClassType>,
     enum_class: StdlibResult<ClassType>,
@@ -214,6 +215,7 @@ impl Stdlib {
             traceback_type: lookup_concrete(types, "TracebackType"),
             function_type: lookup_concrete(types, "FunctionType"),
             method_type: lookup_concrete(types, "MethodType"),
+            module_type: lookup_concrete(types, "ModuleType"),
             mapping: lookup_generic(typing, "Mapping", 2),
             enum_meta: lookup_concrete(enum_, "EnumMeta"),
             enum_flag: lookup_concrete(enum_, "Flag"),
@@ -527,6 +529,10 @@ impl Stdlib {
 
     pub fn method_type(&self) -> &ClassType {
         Self::primitive(&self.method_type)
+    }
+
+    pub fn module_type(&self) -> &ClassType {
+        Self::primitive(&self.module_type)
     }
 
     pub fn property(&self) -> &ClassType {

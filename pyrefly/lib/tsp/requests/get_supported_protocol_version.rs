@@ -8,13 +8,14 @@
 //! Implementation of the getSupportedProtocolVersion TSP request
 
 use tsp_types::TSP_PROTOCOL_VERSION;
+use tsp_types::protocol::TypeServerVersion;
 
-use crate::state::state::Transaction;
+use crate::lsp::non_wasm::server::TspInterface;
 use crate::tsp::server::TspServer;
 
-impl TspServer {
-    pub fn get_supported_protocol_version(&self, _transaction: &Transaction<'_>) -> String {
-        // Return the hardcoded protocol version (compat shim)
-        TSP_PROTOCOL_VERSION.to_owned()
+impl<T: TspInterface> TspServer<T> {
+    pub fn get_supported_protocol_version(&self) -> TypeServerVersion {
+        // Return the current protocol version from the generated enum
+        TSP_PROTOCOL_VERSION
     }
 }

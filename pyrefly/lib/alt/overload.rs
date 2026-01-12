@@ -166,7 +166,7 @@ impl<'a> ArgsExpander<'a> {
                 ts.into_map(Type::type_form)
             }
             Type::Tuple(Tuple::Concrete(elements)) => {
-                let mut count = 1;
+                let mut count: usize = 1;
                 let mut changed = false;
                 let mut element_expansions = Vec::new();
                 for e in elements {
@@ -174,7 +174,11 @@ impl<'a> ArgsExpander<'a> {
                     if element_expansion.is_empty() {
                         element_expansions.push(vec![e].into_iter());
                     } else {
-                        count *= element_expansion.len();
+                        let len = element_expansion.len();
+                        count = count.saturating_mul(len);
+                        if count > Self::GAS {
+                            return Vec::new();
+                        }
                         changed = true;
                         element_expansions.push(element_expansion.into_iter());
                     }

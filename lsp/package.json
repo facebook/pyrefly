@@ -66,6 +66,23 @@
                 "command": "pyrefly.unfoldAllDocstrings"
             }
         ],
+        "semanticTokenScopes": [
+            {
+                "language": "python",
+                "scopes": {
+                    "variable.readonly": [
+                        "variable.other.constant.python"
+                    ]
+                }
+            }
+        ],
+        "configurationDefaults": {
+            "editor.semanticTokenColorCustomizations": {
+                "rules": {
+                    "variable.readonly:python": "#4EC9B0"
+                }
+            }
+        },
         "configuration": {
             "properties": {
                 "pyrefly.lspPath": {

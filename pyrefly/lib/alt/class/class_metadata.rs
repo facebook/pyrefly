@@ -10,6 +10,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use itertools::Either;
 use itertools::Itertools;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::annotation::Annotation;
@@ -59,7 +60,6 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::style::ErrorStyle;
-use crate::graph::index::Idx;
 use crate::types::callable::FunctionKind;
 use crate::types::class::Class;
 use crate::types::class::ClassKind;
@@ -213,6 +213,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None
             };
 
+        // Check if this class inherits from marshmallow.Schema
+        let is_marshmallow_schema =
+            bases_with_metadata
+                .iter()
+                .any(|(base_class_object, metadata)| {
+                    base_class_object
+                        .has_toplevel_qname(ModuleName::marshmallow_schema().as_str(), "Schema")
+                        || metadata.is_marshmallow_schema()
+                });
+
         // Compute various pieces of special metadata.
         let has_base_any = contains_base_class_any
             || bases_with_metadata
@@ -359,6 +369,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             dataclass_transform_metadata,
             pydantic_model_kind,
             django_model_metadata,
+            is_marshmallow_schema,
         )
     }
 
@@ -1209,10 +1220,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .cloned(),
             );
         }
+
         let mut abstract_members = SmallSet::new();
         for field_name in fields_to_check {
-            if let Some(field) = self.get_non_synthesized_class_member(cls, &field_name)
-                && field.is_abstract()
+            if let Some(field) =
+                self.get_non_synthesized_class_member_and_defining_class(cls, &field_name)
+                && (field.value.is_abstract() ||
+                // Uninitialized class vars in protocols are considered absract, unless it is in a stub file
+                (!cls.module().path().is_interface() && field.value.is_uninit_class_var() &&
+                self.get_metadata_for_class(&field.defining_class).is_protocol()))
             {
                 abstract_members.insert(field_name.clone());
             }

@@ -14,14 +14,17 @@ use pyrefly_python::docstring::Docstring;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::visit::Visit;
 use regex::Regex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -69,6 +72,7 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
+use crate::export::special::SpecialExport;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
 use crate::types::types::Type;
@@ -126,9 +130,11 @@ impl<'a> BindingsBuilder<'a> {
 
         self.scopes.push(Scope::annotation(x.range));
 
-        x.type_params.iter_mut().for_each(|x| {
-            self.type_params(x);
-        });
+        let scoped_type_param_names = x
+            .type_params
+            .as_mut()
+            .map(|x| self.type_params(x))
+            .unwrap_or_default();
 
         let mut legacy = Some(LegacyTParamCollector::new(x.type_params.is_some()));
         let bases = x.bases().map(|base| {
@@ -148,13 +154,26 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 _ => {}
             }
-            // If it's really obvious this can't be a legacy type var (since they can't be raw names under bases)
-            // then don't even record it.
+            // If it's really obvious this can't be a legacy type var then don't even record it.
             let mut none = None;
-            let legacy = if matches!(base, Expr::Name(_) | Expr::Attribute(_)) {
-                &mut none
-            } else {
-                &mut legacy
+            let legacy = match &base {
+                Expr::Subscript(ExprSubscript { value, slice, .. }) => {
+                    // Syntactically, this may be a legacy type var.
+                    if matches!(&**slice, Expr::Name(x) if scoped_type_param_names.contains(&x.id))
+                        && !matches!(
+                            self.as_special_export(value),
+                            Some(SpecialExport::Generic | SpecialExport::Protocol)
+                        )
+                    {
+                        // This definitely isn't a legacy type var: it's a reference to a scoped
+                        // type var. Note that even if there exists a legacy type var with the same
+                        // name, the scoped type var shadows it.
+                        &mut none
+                    } else {
+                        &mut legacy
+                    }
+                }
+                _ => &mut none,
             };
             self.ensure_type(&mut base, legacy);
 
@@ -385,13 +404,39 @@ impl<'a> BindingsBuilder<'a> {
                 && let Stmt::Expr(expr_stmt) = next_stmt
                 && matches!(&*expr_stmt.value, Expr::StringLiteral(_))
             {
-                field_docstrings.insert(stmt.range(), next_stmt.range());
+                let docstring_range = next_stmt.range();
+                let mut target_ranges = Vec::new();
+                Self::collect_field_docstring_target_ranges(stmt, &mut target_ranges);
+                for range in target_ranges {
+                    field_docstrings.insert(range, docstring_range);
+                }
             }
 
             i += 1;
         }
 
         field_docstrings
+    }
+
+    fn collect_field_docstring_target_ranges(stmt: &Stmt, ranges: &mut Vec<TextRange>) {
+        match stmt {
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    Self::collect_ranges_from_expr(target, ranges);
+                }
+            }
+            Stmt::AnnAssign(ann_assign) => {
+                Self::collect_ranges_from_expr(&ann_assign.target, ranges);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_ranges_from_expr(expr: &Expr, ranges: &mut Vec<TextRange>) {
+        if let Expr::Name(name) = expr {
+            ranges.push(name.range);
+        }
+        expr.recurse(&mut |e| Self::collect_ranges_from_expr(e, ranges));
     }
 
     fn extract_string_literals(

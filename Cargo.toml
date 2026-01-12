@@ -16,6 +16,7 @@ members = [
   "crates/pyrefly_bundled",
   "crates/pyrefly_config",
   "crates/pyrefly_derive",
+  "crates/pyrefly_graph",
   "crates/pyrefly_python",
   "crates/pyrefly_types",
   "crates/pyrefly_util",

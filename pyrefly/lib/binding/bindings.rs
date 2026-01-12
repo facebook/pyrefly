@@ -12,6 +12,9 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_graph::index::Idx;
+use pyrefly_graph::index::Index;
+use pyrefly_graph::index_map::IndexMap;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
@@ -49,6 +52,7 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
+use crate::binding::binding::BranchInfo;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::Key;
@@ -81,9 +85,6 @@ use crate::export::definitions::MutableCaptureKind;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
-use crate::graph::index::Index;
-use crate::graph::index_map::IndexMap;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::Solver;
 use crate::state::loader::FindError;
@@ -427,7 +428,7 @@ impl Bindings {
         for (range, name) in exports.invalid_dunder_all_entries(lookup, &module_info) {
             builder.error(
                 range,
-                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                ErrorInfo::Kind(ErrorKind::BadDunderAll),
                 format!("Name `{name}` is listed in `__all__` but is not defined in the module"),
             );
         }
@@ -479,38 +480,41 @@ impl Bindings {
     }
 
     fn should_emit_semantic_syntax_error(error: &SemanticSyntaxError) -> bool {
-        // TODO: enable and add tests for the other semantic syntax errors
         match error.kind {
             SemanticSyntaxErrorKind::BreakOutsideLoop
             | SemanticSyntaxErrorKind::ContinueOutsideLoop
             | SemanticSyntaxErrorKind::SingleStarredAssignment
             | SemanticSyntaxErrorKind::DifferentMatchPatternBindings
-            | SemanticSyntaxErrorKind::IrrefutableCasePattern(_) => true,
-            SemanticSyntaxErrorKind::LateFutureImport
-            | SemanticSyntaxErrorKind::InvalidStarExpression
+            | SemanticSyntaxErrorKind::IrrefutableCasePattern(_)
+            | SemanticSyntaxErrorKind::LateFutureImport
             | SemanticSyntaxErrorKind::ReboundComprehensionVariable
-            | SemanticSyntaxErrorKind::DuplicateTypeParameter
-            | SemanticSyntaxErrorKind::MultipleCaseAssignment(_)
-            | SemanticSyntaxErrorKind::WriteToDebug(_)
-            | SemanticSyntaxErrorKind::InvalidExpression(_, _)
-            | SemanticSyntaxErrorKind::DuplicateMatchKey(_)
-            | SemanticSyntaxErrorKind::DuplicateMatchClassAttribute(_)
-            | SemanticSyntaxErrorKind::LoadBeforeGlobalDeclaration { .. }
-            | SemanticSyntaxErrorKind::LoadBeforeNonlocalDeclaration { .. }
-            | SemanticSyntaxErrorKind::AsyncComprehensionInSyncComprehension(_)
-            | SemanticSyntaxErrorKind::YieldOutsideFunction(_)
-            | SemanticSyntaxErrorKind::ReturnOutsideFunction
-            | SemanticSyntaxErrorKind::AwaitOutsideAsyncFunction(_)
             | SemanticSyntaxErrorKind::DuplicateParameter(_)
             | SemanticSyntaxErrorKind::NonlocalDeclarationAtModuleLevel
+            | SemanticSyntaxErrorKind::MultipleCaseAssignment(_)
+            | SemanticSyntaxErrorKind::DuplicateMatchKey(_)
+            | SemanticSyntaxErrorKind::DuplicateMatchClassAttribute(_)
+            | SemanticSyntaxErrorKind::DuplicateTypeParameter
+            | SemanticSyntaxErrorKind::NonModuleImportStar(_) => true,
+            // TODO: the following errors aren't being emitted even when enabled
+            // we should investigate that
+            SemanticSyntaxErrorKind::WriteToDebug(_)
+            | SemanticSyntaxErrorKind::MultipleStarredExpressions
+            // pyrefly already handles these errors - we should weigh the pros and cons of enabling them
+            | SemanticSyntaxErrorKind::InvalidExpression(_, _)
+            | SemanticSyntaxErrorKind::FutureFeatureNotDefined(_)
+            | SemanticSyntaxErrorKind::AsyncComprehensionInSyncComprehension(_)
+            | SemanticSyntaxErrorKind::InvalidStarExpression
+            | SemanticSyntaxErrorKind::AwaitOutsideAsyncFunction(_)
+            | SemanticSyntaxErrorKind::ReturnOutsideFunction
+            | SemanticSyntaxErrorKind::YieldFromInAsyncFunction
+            | SemanticSyntaxErrorKind::YieldOutsideFunction(_)
+            // The following errors involve modifying our scope implementation
+            | SemanticSyntaxErrorKind::LoadBeforeGlobalDeclaration { .. }
+            | SemanticSyntaxErrorKind::GlobalParameter(_)
+            | SemanticSyntaxErrorKind::LoadBeforeNonlocalDeclaration { .. }
             | SemanticSyntaxErrorKind::NonlocalAndGlobal(_)
             | SemanticSyntaxErrorKind::AnnotatedGlobal(_)
             | SemanticSyntaxErrorKind::AnnotatedNonlocal(_)
-            | SemanticSyntaxErrorKind::YieldFromInAsyncFunction
-            | SemanticSyntaxErrorKind::NonModuleImportStar(_)
-            | SemanticSyntaxErrorKind::MultipleStarredExpressions
-            | SemanticSyntaxErrorKind::FutureFeatureNotDefined(_)
-            | SemanticSyntaxErrorKind::GlobalParameter(_)
             | SemanticSyntaxErrorKind::NonlocalWithoutBinding(_) => false,
         }
     }
@@ -554,11 +558,16 @@ impl BindingTable {
     /// insert the Anywhere.
     fn record_bind_in_anywhere(&mut self, name: Name, range: TextRange, idx: Idx<Key>) {
         let phi_idx = self.types.0.insert(Key::Anywhere(name, range));
-        match self.types.1.insert_if_missing(phi_idx, || {
-            Binding::Phi(JoinStyle::SimpleMerge, SmallSet::new())
-        }) {
-            Binding::Phi(_, phi) => {
-                phi.insert(idx);
+        match self
+            .types
+            .1
+            .insert_if_missing(phi_idx, || Binding::Phi(JoinStyle::SimpleMerge, vec![]))
+        {
+            Binding::Phi(_, branches) => {
+                branches.push(BranchInfo {
+                    value_key: idx,
+                    termination_key: None,
+                });
             }
             _ => unreachable!(),
         }
@@ -607,9 +616,9 @@ impl CurrentIdx {
         self.idx()
     }
 
-    pub fn decompose(self) -> (SmallSet<Idx<Key>>, Idx<Key>) {
+    pub fn decompose(self) -> (Idx<Key>, SmallSet<Idx<Key>>) {
         match self.0 {
-            Usage::CurrentIdx(idx, first_used_by) => (first_used_by, idx),
+            Usage::CurrentIdx(idx, first_use_of) => (idx, first_use_of),
             _ => unreachable!(),
         }
     }
@@ -907,11 +916,16 @@ impl<'a> BindingsBuilder<'a> {
         {
             Ok(key) => Binding::Forward(self.table.types.0.insert(key)),
             Err(error) => {
-                self.error(
-                    name.range,
-                    ErrorInfo::Kind(ErrorKind::UnknownName),
-                    error.message(name),
-                );
+                let should_suppress = matches!(kind, MutableCaptureKind::Nonlocal)
+                    && self.scopes.in_module_or_class_top_level()
+                    && !self.scopes.in_class_body();
+                if !should_suppress {
+                    self.error(
+                        name.range,
+                        ErrorInfo::Kind(ErrorKind::UnknownName),
+                        error.message(name),
+                    );
+                }
                 Binding::Type(Type::any_error())
             }
         };
@@ -1095,9 +1109,11 @@ impl<'a> BindingsBuilder<'a> {
         write_info.annotation
     }
 
-    pub fn type_params(&mut self, x: &mut TypeParams) {
+    pub fn type_params(&mut self, x: &mut TypeParams) -> SmallSet<Name> {
+        let mut names = SmallSet::new();
         for x in x.type_params.iter_mut() {
             let name = x.name().clone();
+            names.insert(name.id.clone());
 
             // Check for shadowing of type parameters in enclosing Annotation scopes
             if self
@@ -1167,6 +1183,7 @@ impl<'a> BindingsBuilder<'a> {
                 FlowStyle::Other,
             );
         }
+        names
     }
 
     pub fn bind_narrow_ops(
@@ -1354,7 +1371,7 @@ impl LegacyTParamCollector {
     }
 }
 
-/// The legacy-tparams-specifc logic is in a second impl because that lets us define it
+/// The legacy-tparams-specific logic is in a second impl because that lets us define it
 /// just under where the key data structures live.
 impl<'a> BindingsBuilder<'a> {
     /// Perform a lookup of a name used in either base classes of a class or
@@ -1471,7 +1488,7 @@ impl<'a> BindingsBuilder<'a> {
     ///
     /// To break down "when we cannot rule out":
     /// - We know for certain that a bare name whose binding is a legacy type
-    ///   variable *is* a legacy type varaible
+    ///   variable *is* a legacy type variable
     /// - We cannot be sure in a few cases:
     ///   - a bare name that is an imported name
     ///   - a `module.attr` name, where the base is an imported module
@@ -1490,7 +1507,8 @@ impl<'a> BindingsBuilder<'a> {
                     Binding::TypeVar(..)
                     | Binding::ParamSpec(..)
                     | Binding::TypeVarTuple(..)
-                    | Binding::Import(..),
+                    | Binding::Import(..)
+                    | Binding::ImportViaGetattr(..),
                 )
                 | None => Some((
                     KeyLegacyTypeParam(ShortIdentifier::new(name)),

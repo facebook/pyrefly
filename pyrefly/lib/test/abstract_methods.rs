@@ -417,3 +417,16 @@ class D(C):  # E: Class `D` has unimplemented abstract members: `bar`
         yield 1
     "#,
 );
+
+testcase!(
+    test_uninit_classvar_abc,
+    r#"
+# To align with mypy and pyright, we do not consider uninitialized class vars on abstract classes to be abstract
+from abc import ABC
+from typing import ClassVar, final
+@final
+class A(ABC):
+    x: ClassVar[int]
+a = A()
+"#,
+);
