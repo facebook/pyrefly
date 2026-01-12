@@ -2248,31 +2248,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         exports
                             .exports(self.exports)
                             .iter()
-                            .map(|(x, export_location)| AttrInfo {
-                                name: x.clone(),
-                                ty: None,
-                                is_deprecated: matches!(
-                                    export_location,
-                                    ExportLocation::ThisModule(Export {
-                                        deprecation: Some(_),
-                                        ..
-                                    })
-                                ),
-                                definition: Some(
-                                    AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                        module_name,
+                            .map(|(x, export_location)| {
+                                let ty = if exports.is_submodule_imported_implicitly(x) {
+                                    Some(module.push_part(x.clone()).to_type())
+                                } else {
+                                    None
+                                };
+                                AttrInfo {
+                                    name: x.clone(),
+                                    ty,
+                                    is_deprecated: matches!(
+                                        export_location,
+                                        ExportLocation::ThisModule(Export {
+                                            deprecation: Some(_),
+                                            ..
+                                        })
+                                    ),
+                                    definition: Some(
+                                        AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                                            module_name,
+                                        },
+                                    ),
+                                    docstring_range: match export_location {
+                                        ExportLocation::ThisModule(Export {
+                                            docstring_range,
+                                            ..
+                                        }) => *docstring_range,
+                                        _ => None,
                                     },
-                                ),
-                                docstring_range: match export_location {
-                                    ExportLocation::ThisModule(Export {
-                                        docstring_range, ..
-                                    }) => *docstring_range,
-                                    _ => None,
-                                },
-                                is_reexport: matches!(
-                                    export_location,
-                                    ExportLocation::OtherModule(..)
-                                ),
+                                    is_reexport: matches!(
+                                        export_location,
+                                        ExportLocation::OtherModule(..)
+                                    ),
+                                }
                             }),
                     );
                 }
@@ -2302,6 +2310,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 _ => None,
                             },
                             is_reexport: matches!(export_location, ExportLocation::OtherModule(..)),
+                        });
+                    } else if let Some(submodule_exports) =
+                        self.get_module_exports(module_name.append(expected_attribute_name))
+                    {
+                        let submodule = module.push_part(expected_attribute_name.clone());
+                        res.push(AttrInfo {
+                            name: expected_attribute_name.clone(),
+                            ty: Some(submodule.to_type()),
+                            is_deprecated: false,
+                            definition: Some(
+                                AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                                    module_name,
+                                },
+                            ),
+                            docstring_range: submodule_exports.docstring_range(),
+                            is_reexport: false,
                         });
                     }
                 }

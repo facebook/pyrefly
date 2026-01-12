@@ -1073,13 +1073,30 @@ impl<'a> Transaction<'a> {
                 Some((text_range_with_module_info, docstring_range))
             }
             AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
-                let (handle, export) =
-                    self.resolve_named_import(handle, module_name, attr_name.clone(), preference)?;
-                let module_info = self.get_module_info(&handle)?;
-                Some((
-                    TextRangeWithModule::new(module_info, export.location),
-                    export.docstring_range,
-                ))
+                if let Some((handle, export)) =
+                    self.resolve_named_import(handle, module_name, attr_name.clone(), preference)
+                {
+                    let module_info = self.get_module_info(&handle)?;
+                    Some((
+                        TextRangeWithModule::new(module_info, export.location),
+                        export.docstring_range,
+                    ))
+                } else {
+                    self.find_definition_for_imported_module(
+                        handle,
+                        module_name.append(attr_name),
+                        preference,
+                    )
+                    .map(|definition| {
+                        (
+                            TextRangeWithModule::new(
+                                definition.module,
+                                definition.definition_range,
+                            ),
+                            definition.docstring_range,
+                        )
+                    })
+                }
             }
         }
     }
@@ -2894,6 +2911,7 @@ impl<'a> Transaction<'a> {
                                 let kind = match x.ty {
                                     Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
                                     Some(Type::Function(_)) => Some(CompletionItemKind::FUNCTION),
+                                    Some(Type::Module(_)) => Some(CompletionItemKind::MODULE),
                                     _ => Some(CompletionItemKind::FIELD),
                                 };
                                 let ty = &x.ty;
