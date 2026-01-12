@@ -1495,7 +1495,24 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Err(e) => Err(e),
                         }
                     }
-                    Variable::PartialContained | Variable::Unwrap | Variable::Recursive => {
+                    Variable::PartialContained => {
+                        // When pinning a partial type variable from above (upper bound),
+                        // only promote LiteralString to str. Unlike the symmetric case
+                        // (line 1575) where we promote all literals for lower bounds,
+                        // here we preserve specific literals like Literal[4] because
+                        // they represent concrete values the user may intentionally want.
+                        // LiteralString is different - it's a compile-time marker that
+                        // shouldn't constrain container element types.
+                        // See: https://github.com/facebook/pyrefly/issues/2068
+                        let t2_p = match t2 {
+                            Type::LiteralString => self.type_order.stdlib().str().clone().to_type(),
+                            _ => t2.clone(),
+                        };
+                        drop(v1_ref);
+                        variables.update(*v1, Variable::Answer(t2_p));
+                        Ok(())
+                    }
+                    Variable::Unwrap | Variable::Recursive => {
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         Ok(())

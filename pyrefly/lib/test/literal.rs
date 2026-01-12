@@ -335,3 +335,18 @@ b: Collection[str] = ""
 c: Sequence[str] = ""
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2068
+// When using an empty list in a loop with str.join, the list element type
+// should be inferred correctly (not as LiteralString).
+testcase!(
+    test_literal_string_join_loop_inference,
+    r#"
+def test():
+    items = ["a", "b"]
+    lines = []
+    for k in items:
+        lines.append(f"*{k}")
+    return "\n".join(lines)
+"#,
+);
