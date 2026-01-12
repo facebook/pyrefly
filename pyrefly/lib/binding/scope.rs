@@ -2573,12 +2573,6 @@ impl<'a> BindingsBuilder<'a> {
             MergeStyle::Loop => n_branch_flow_infos == n_branches.saturating_sub(1),
             _ => n_branch_flow_infos == n_branches,
         };
-        let has_uninitialized_style = styles.iter().any(|style| {
-            matches!(
-                style,
-                FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized
-            )
-        });
         // For LoopDefinitelyRuns, a name is always defined if:
         // - It was defined before the loop (base_has_binding), OR
         // - It's defined in all loop body branches (since the loop definitely runs at least once).
@@ -2588,7 +2582,6 @@ impl<'a> BindingsBuilder<'a> {
         let this_name_always_defined = match merge_style {
             MergeStyle::Loop => base_has_binding && is_name_exists_in_all_branch_flow,
             MergeStyle::LoopDefinitelyRuns => base_has_binding || is_name_exists_in_all_branch_flow,
-            MergeStyle::BoolOp if has_uninitialized_style => false,
             MergeStyle::BoolOp => false,
             _ => is_name_exists_in_all_branch_flow,
         };
