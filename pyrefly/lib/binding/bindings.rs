@@ -857,7 +857,7 @@ impl<'a> BindingsBuilder<'a> {
             FlowStyle::MergeableImport(_)
             | FlowStyle::Import(..)
             | FlowStyle::ImportAs(_)
-            | FlowStyle::FunctionDef(..)
+            | FlowStyle::FunctionDef { .. }
             | FlowStyle::ClassDef
             | FlowStyle::LoopRecursion => None,
         }

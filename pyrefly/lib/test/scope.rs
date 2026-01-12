@@ -786,6 +786,16 @@ class C:
 "#,
 );
 
+testcase!(
+    test_class_scope_annotation_shadows_function,
+    r#"
+class D:
+    def int(self) -> None:
+        ...
+    y: int = 0  # E: Expected a type form
+"#,
+);
+
 // Nested scopes - except for parameter scopes - cannot see a containing class
 // body. This applies not only to methods but also other scopes like lambda, inner
 // class bodies, and comprehensions. See https://github.com/facebook/pyrefly/issues/264

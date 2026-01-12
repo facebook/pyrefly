@@ -748,7 +748,11 @@ impl<'a> BindingsBuilder<'a> {
             &func_name,
             def_idx,
             Binding::Function(function_idx, pred_idx, metadata_key),
-            FlowStyle::FunctionDef(function_idx, return_ann_with_range.is_some()),
+            FlowStyle::FunctionDef {
+                function_idx,
+                has_return_annotation: return_ann_with_range.is_some(),
+                is_overload: decorators.is_overload,
+            },
         );
     }
 }
