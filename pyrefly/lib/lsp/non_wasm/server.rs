@@ -1013,11 +1013,10 @@ impl Server {
                 const ONLY_ONCE: &[&str] = &[
                     Completion::METHOD,
                     SignatureHelpRequest::METHOD,
-                    ResolveCompletionItem::METHOD,];
-                    SignatureHelpRequest::METHOD];
-                    SignatureHelpRequest::METHOD,
+                    ResolveCompletionItem::METHOD,
                     GotoDefinition::METHOD,
-                    ProvideType::METHOD,];
+                    ProvideType::METHOD,
+                ];
 
                 let in_cancelled_requests = canceled_requests.remove(&x.id);
                 if in_cancelled_requests
