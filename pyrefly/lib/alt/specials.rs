@@ -56,7 +56,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Check if type args can be used to construct a valid tuple type
     // If successful, returns the constructed tuple along with whether any arguments were unpacked
     // Otherwise, records an error and return None
-    fn check_args_and_construct_tuple(
+    pub(super) fn check_args_and_construct_tuple(
         &self,
         arguments: &[Expr],
         errors: &ErrorCollector,

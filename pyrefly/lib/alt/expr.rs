@@ -8,6 +8,7 @@
 use std::cell::LazyCell;
 use std::fmt;
 use std::fmt::Display;
+use std::slice;
 
 use dupe::Dupe;
 use itertools::Either;
@@ -1923,7 +1924,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        let xs = Ast::unpack_slice(slice);
+        // Check if slice is a parenthesized tuple - if so, treat as single type argument
+        // representing a tuple type (Issue #2063)
+        let is_parenthesized_tuple = matches!(slice, Expr::Tuple(t) if t.parenthesized);
+        let xs = if is_parenthesized_tuple {
+            // Don't unpack - treat parenthesized tuple as single element
+            slice::from_ref(slice)
+        } else {
+            Ast::unpack_slice(slice)
+        };
+
+        // Helper to convert an expression to a type, handling parenthesized tuples specially
+        let expr_to_type_arg = |solver: &Self, x: &Expr, errors: &ErrorCollector| -> Type {
+            if is_parenthesized_tuple {
+                if let Expr::Tuple(t) = x {
+                    // Convert parenthesized tuple to tuple type using check_args_and_construct_tuple
+                    return solver
+                        .check_args_and_construct_tuple(&t.elts, errors)
+                        .map(|(tuple, _)| Type::Tuple(tuple))
+                        .unwrap_or_else(|| Type::Tuple(Tuple::Concrete(vec![])));
+                }
+            }
+            solver.expr_untype(x, TypeFormContext::TypeArgument, errors)
+        };
+
         self.distribute_over_union(base, |base| {
             let mut base = base.clone();
             if let Type::Var(v) = base {
@@ -1938,8 +1962,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             match base {
                 Type::Forall(forall) => {
-                    let tys =
-                        xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
+                    let tys = xs.map(|x| expr_to_type_arg(self, x, errors));
                     self.specialize_forall(*forall, tys, range, errors)
                 }
                 // Note that we have to check for `builtins.type` by name here because this code runs
@@ -2045,7 +2068,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         Type::type_form(self.specialize(
                             &cls,
-                            xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
+                            xs.map(|x| expr_to_type_arg(self, x, errors)),
                             range,
                             errors,
                         ))

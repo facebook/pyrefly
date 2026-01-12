@@ -533,3 +533,74 @@ def _to_list[T](
 def to_type[T](value: Any, kind: TypeForm[T]) -> T: ...
     "#,
 );
+
+// When a parenthesized tuple is used as a type argument (e.g., list[(int,)]),
+// it should be interpreted as list[tuple[int]], not list[int]
+
+testcase!(
+    test_parenthesized_tuple_type_arg_list,
+    r#"
+from typing import assert_type
+# list[(int,)] should be list[tuple[int]], not list[int]
+v1: list[(int,)] = []
+assert_type(v1, list[tuple[int]])
+v1 = [(0,), (1,), (2,)]  # OK - list of single-element int tuples
+v1 = [0, 1, 2]  # E: not assignable
+v1 = ["A", "B"]  # E: not assignable
+"#,
+);
+
+testcase!(
+    test_parenthesized_tuple_type_arg_dict,
+    r#"
+# dict[(int, str)] counts as 1 type arg (the tuple), but dict needs 2
+d: dict[(int, str)] = {}  # E: Expected 2 type arguments
+"#,
+);
+
+testcase!(
+    test_non_parenthesized_tuple_still_works,
+    r#"
+# dict[int, str] should still work (non-parenthesized tuple unpacks)
+d: dict[int, str] = {}
+d = {1: "a", 2: "b"}  # OK - no warning, no error
+"#,
+);
+
+testcase!(
+    test_parenthesized_tuple_in_tuple_type,
+    r#"
+from typing import reveal_type, assert_type
+# tuple[(int, ...)] - routes through apply_special_form
+# This is equivalent to tuple[int, ...] (unbounded homogeneous tuple)
+v: tuple[(int, ...)] = ()
+assert_type(v, tuple[int, ...])
+v = (1, 2, 3)  # OK
+v = ("a", "b")  # E: not assignable
+"#,
+);
+
+testcase!(
+    test_parenthesized_tuple_single_elem_in_tuple,
+    r#"
+from typing import assert_type
+# tuple[(int,)] - routes through apply_special_form
+# This is equivalent to tuple[int] (single-element tuple)
+v: tuple[(int,)] = (0,)
+assert_type(v, tuple[int])
+v = (1,)  # OK - single int tuple
+"#,
+);
+
+testcase!(
+    test_parenthesized_two_elem_tuple_in_list,
+    r#"
+from typing import assert_type
+# list[(int, str)] should be list[tuple[int, str]]
+v: list[(int, str)] = []
+assert_type(v, list[tuple[int, str]])
+v = [(1, "a"), (2, "b")]  # OK - list of 2-tuples
+v = [(1, 2)]  # E: not assignable
+v = [1, 2]  # E: not assignable
+"#,
+);
