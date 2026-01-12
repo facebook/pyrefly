@@ -806,3 +806,176 @@ x1: Spam1[int, str] = int
 x2: Spam2[int, str] = int
     "#,
 );
+
+testcase!(
+    test_variable_in_function_is_not_type_alias,
+    r#"
+from typing import TypeVar, Generic
+class C:
+    @classmethod
+    def make(cls) -> C:
+        raise NotImplementedError()
+T = TypeVar("T", bound=C)
+class UseC(Generic[T]):
+    _class: type[T] | None
+    def use(self) -> None:
+        current = self._class # this is not a type alias
+        if current is not None:
+            current.make()
+    "#,
+);
+
+fn env_with_alias() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+type TA = int | str
+
+def f(x: TA) -> TA:
+  return x
+"#,
+    )
+}
+
+testcase!(
+    test_alias_union_name,
+    env_with_alias(),
+    r#"
+from foo import TA, f
+from typing import Callable
+
+val1: int | str = 1
+val2: TA = 1
+
+# Union names are only shown when nested in another type
+
+f(object())  # E: Argument `object` is not assignable to parameter `x` with type `int | str` in function `foo.f`
+f(val1)
+f(val2)
+x1: TA = object()  # E: `object` is not assignable to `int | str`
+x2: TA = val1
+x3: TA = val2
+c1: Callable[[int], int] = f  # E: `(x: TA) -> TA` is not assignable to `(int) -> int`
+
+# Union names are lost when flattened into another union
+
+class C: pass
+def f2(x: TA | C) -> TA | C:
+  return x
+
+f2(object())  # E: Argument `object` is not assignable to parameter `x` with type `C | int | str` in function `f2`
+f2(val1)
+f2(val2)
+f2(C())
+x4: TA | C = object()  # E: `object` is not assignable to `C | int | str`
+x5: TA | C = val1
+x6: TA | C = val2
+x7: TA | C = C()
+c2: Callable[[int], int] = f2  # E: `(x: C | int | str) -> C | int | str` is not assignable to `(int) -> int`
+    "#,
+);
+
+testcase!(
+    test_named_expression_in_type_alias,
+    r#"
+# Named expressions (walrus operator) are not allowed inside type aliases (PEP 695).
+# This matches Python's behavior which raises a SyntaxError.
+type T = (a := 1)  # E: Named expression cannot be used within a type alias # E: Expected `T` to be a type alias
+type U = (a := 1)  # E: Named expression cannot be used within a type alias # E: Expected `U` to be a type alias
+type V = int | (b := str)  # E: Named expression cannot be used within a type alias
+    "#,
+);
+
+testcase!(
+    test_union_type_alias_typevar_order,
+    r#"
+import dataclasses as dc
+from typing import TypeVar, Iterable
+
+@dc.dataclass
+class Ok[T]:
+    value: T
+
+@dc.dataclass
+class Error[T: Exception]:
+    error: T
+
+_T = TypeVar("_T")
+_TE = TypeVar("_TE", bound=Exception)
+Result = Ok[_T] | Error[_TE]
+
+def func[T, TE: Exception](
+    results: Iterable[Result[T, TE]],
+) -> tuple[Iterable[Ok[T]], Iterable[Error[TE]]]: ...
+
+# Verify instantiation works correctly
+def test(r: Result[int, ValueError]) -> None:
+    pass
+
+test(Ok(42))
+test(Error(ValueError("error")))
+    "#,
+);
+
+testcase!(
+    test_union_type_alias_typevar_order_multiple,
+    r#"
+from typing import TypeVar, assert_type
+import dataclasses as dc
+
+@dc.dataclass
+class Zebra[T]:
+    value: T
+
+@dc.dataclass
+class Bee[T]:
+    value: T
+
+@dc.dataclass
+class Aardvark[T]:
+    value: T
+
+_T1 = TypeVar("_T1")
+_T2 = TypeVar("_T2")
+_T3 = TypeVar("_T3")
+
+# Source order: _T1, _T2, _T3 (from Zebra, Bee, Aardvark)
+# Alphabetical order would be: Aardvark[_T3], Bee[_T2], Zebra[_T1] -> _T3, _T2, _T1
+Combined = Zebra[_T1] | Bee[_T2] | Aardvark[_T3]
+
+# This should work: int->_T1, str->_T2, float->_T3
+x: Combined[int, str, float] = Zebra(42)
+assert_type(x, Zebra[int] | Bee[str] | Aardvark[float])
+
+y: Combined[int, str, float] = Bee("hello")
+z: Combined[int, str, float] = Aardvark(3.14)
+    "#,
+);
+
+// Test that duplicate TypeVars are handled correctly (only first occurrence counts)
+testcase!(
+    test_union_type_alias_duplicate_typevar,
+    r#"
+from typing import TypeVar, assert_type
+import dataclasses as dc
+
+_T = TypeVar("_T")
+
+@dc.dataclass
+class First[T]:
+    value: T
+
+@dc.dataclass
+class Second[T]:
+    value: T
+
+# _T appears in both, but should only be one type parameter
+Alias = First[_T] | Second[_T]
+
+x: Alias[int] = First(42)
+assert_type(x, First[int] | Second[int])
+
+y: Alias[str] = Second("hello")
+assert_type(y, First[str] | Second[str])
+    "#,
+);

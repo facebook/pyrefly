@@ -19,6 +19,7 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
@@ -37,6 +38,7 @@ use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingDecoratedFunction;
+use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
@@ -57,6 +59,7 @@ use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyConsistentOverrideCheck;
 use crate::binding::binding::KeyDecoratedFunction;
+use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
@@ -100,10 +103,11 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     fn record_recursive(
         _answers: &AnswersSolver<Ans>,
         _range: TextRange,
-        _answer: &Arc<Self::Answer>,
+        answer: Arc<Self::Answer>,
         _recursive: Var,
         _errors: &ErrorCollector,
-    ) {
+    ) -> Arc<Self::Answer> {
+        answer
     }
 }
 
@@ -127,11 +131,14 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
     fn record_recursive(
         answers: &AnswersSolver<Ans>,
         range: TextRange,
-        answer: &Arc<TypeInfo>,
+        answer: Arc<TypeInfo>,
         recursive: Var,
         errors: &ErrorCollector,
-    ) {
-        answers.record_recursive(range, answer.ty().clone(), recursive, errors);
+    ) -> Arc<TypeInfo> {
+        let ty_info = answer
+            .arc_clone()
+            .map_ty(|ty| answers.record_recursive(range, ty, recursive, errors));
+        Arc::new(ty_info)
     }
 }
 
@@ -183,11 +190,28 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
     fn record_recursive(
         answers: &AnswersSolver<Ans>,
         range: TextRange,
-        answer: &Arc<Type>,
+        answer: Arc<Type>,
         recursive: Var,
         errors: &ErrorCollector,
-    ) {
-        answers.record_recursive(range, answer.as_ref().clone(), recursive, errors);
+    ) -> Arc<Type> {
+        Arc::new(answers.record_recursive(range, answer.as_ref().clone(), recursive, errors))
+    }
+}
+
+impl<Ans: LookupAnswer> Solve<Ans> for KeyDecorator {
+    fn solve(
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingDecorator,
+        errors: &ErrorCollector,
+    ) -> Arc<Decorator> {
+        answers.solve_decorator(binding, errors)
+    }
+
+    fn promote_recursive(_: Var) -> Self::Answer {
+        Decorator {
+            ty: Type::any_implicit(),
+            deprecation: None,
+        }
     }
 }
 

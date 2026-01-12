@@ -6,8 +6,15 @@
  */
 
 use num_traits::ToPrimitive;
+use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_types::class::Class;
+use pyrefly_types::display::TypeDisplayContext;
+use pyrefly_types::facet::FacetChain;
+use pyrefly_types::facet::FacetKind;
+use pyrefly_types::facet::UnresolvedFacetChain;
+use pyrefly_types::facet::UnresolvedFacetKind;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::prelude::SliceExt;
@@ -22,22 +29,24 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
+use crate::binding::binding::Key;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::FacetOrigin;
 use crate::binding::narrow::FacetSubject;
 use crate::binding::narrow::NarrowOp;
+use crate::binding::narrow::NarrowingSubject;
 use crate::error::collector::ErrorCollector;
+use crate::error::context::ErrorInfo;
 use crate::error::style::ErrorStyle;
 use crate::types::callable::FunctionKind;
 use crate::types::class::ClassType;
-use crate::types::facet::FacetChain;
-use crate::types::facet::FacetKind;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
@@ -79,7 +88,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    fn disjoint_base<'b>(&'b self, t: &'b Type) -> &'b Class {
+    pub fn disjoint_base<'b>(&'b self, t: &'b Type) -> &'b Class {
         // TODO: Implement the full disjoint base spec: https://peps.python.org/pep-0800/#specification.
         match t {
             Type::ClassType(cls)
@@ -97,7 +106,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_literal =
             |t: &Type| matches!(t, Type::Literal(_) | Type::LiteralString | Type::None);
         if self.is_subset_eq(right, left) {
-            right.clone()
+            if left.is_toplevel_callable()
+                && right.is_toplevel_callable()
+                && self.is_subset_eq(left, right)
+            {
+                // If is_subset_eq checks succeed in both directions, we typically want to
+                // return `right`, which corresponds to more recently encountered type info.
+                // The exception is that, for callables, it's common to intersect a callable
+                // with `(...) -> object` via `builtins.callable`, so we return the original
+                // callable type.
+                left.clone()
+            } else {
+                right.clone()
+            }
         } else if self.is_subset_eq(left, right) {
             left.clone()
         } else if is_literal(left) || is_literal(right) {
@@ -219,6 +240,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.intersects(&res)
     }
 
+    fn issubclass_result(&self, instance_result: Type, original: &Type) -> Type {
+        // If a ClassDef is not narrowed by an `issubclass` call,
+        // preserve the information that this is a bare class reference.
+        if matches!(original, Type::ClassDef(cls) if instance_result == self.promote_silently(cls))
+        {
+            original.clone()
+        } else {
+            Type::type_form(instance_result)
+        }
+    }
+
     fn narrow_issubclass(
         &self,
         left: &Type,
@@ -227,13 +259,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let mut res = Vec::new();
+
+        let narrow = |left: &Type, right| {
+            if let Some(left_untyped) = self.untype_opt(left.clone(), range, errors) {
+                self.issubclass_result(
+                    self.intersect_with_fallback(&left_untyped, &right, &|| right.clone()),
+                    left,
+                )
+            } else {
+                left.clone()
+            }
+        };
+
         for right in self.as_class_info(right.clone()) {
-            if matches!(left, Type::ClassDef(_)) && matches!(right, Type::ClassDef(_)) {
-                res.push(self.intersect(left, &right))
-            } else if let Some(left) = self.untype_opt(left.clone(), range, errors)
-                && let Some(right) = self.unwrap_class_object_silently(&right)
-            {
-                res.push(Type::type_form(self.intersect(&left, &right)))
+            if let Some(right_unwrapped) = self.unwrap_class_object_silently(&right) {
+                // Handle type vars specially: we need to enforce restrictions and avoid
+                // simplifying them away.
+                let mut quantifieds = Vec::new();
+                let mut nonquantifieds = Vec::new();
+                self.map_over_union(left, |left| {
+                    if let Type::Quantified(q) = left {
+                        quantifieds.push((**q).clone());
+                    } else {
+                        nonquantifieds.push(left.clone());
+                    }
+                });
+                for q in quantifieds {
+                    // The only time it's safe to simplify a quantified away is when the entire intersection is Never.
+                    let intersection = narrow(
+                        &q.restriction().as_type(self.stdlib),
+                        right_unwrapped.clone(),
+                    );
+                    res.push(if matches!(&intersection, Type::Type(t) if t.is_never()) {
+                        intersection
+                    } else {
+                        intersect(vec![q.to_type(), right.clone()], right.clone())
+                    })
+                }
+                if !nonquantifieds.is_empty() {
+                    res.push(narrow(&self.unions(nonquantifieds), right_unwrapped))
+                }
             } else {
                 res.push(left.clone())
             }
@@ -250,12 +315,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
-            if matches!(left, Type::ClassDef(_)) && matches!(right, Type::ClassDef(_)) {
-                res.push(self.subtract(left, &right))
-            } else if let Some(left) = self.untype_opt(left.clone(), range, errors)
+            if let Some(left_untyped) = self.untype_opt(left.clone(), range, errors)
                 && let Some(right) = self.unwrap_class_object_silently(&right)
             {
-                res.push(Type::type_form(self.subtract(&left, &right)))
+                res.push(self.issubclass_result(self.subtract(&left_untyped, &right), left))
             } else {
                 res.push(left.clone())
             }
@@ -266,6 +329,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn narrow_length_greater(&self, ty: &Type, len: usize) -> Type {
         self.distribute_over_union(ty, |ty| match ty {
             Type::Tuple(Tuple::Concrete(elts)) if elts.len() <= len => Type::never(),
+            Type::Literal(Lit::Str(x)) if x.len() <= len => Type::never(),
             Type::ClassType(class)
                 if let Some(Tuple::Concrete(elts)) = self.as_tuple(class)
                     && elts.len() <= len =>
@@ -423,7 +487,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Tuple(Tuple::Unpacked(box (prefix, _, suffix)))
                         if prefix.len() + suffix.len() == len =>
                     {
-                        Type::tuple(prefix.iter().cloned().chain(suffix.clone()).collect())
+                        Type::concrete_tuple(prefix.iter().cloned().chain(suffix.clone()).collect())
                     }
                     Type::Tuple(Tuple::Unpacked(box (
                         prefix,
@@ -432,7 +496,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))) if prefix.len() + suffix.len() < len => {
                         let middle_elements =
                             vec![(**middle).clone(); len - prefix.len() - suffix.len()];
-                        Type::tuple(
+                        Type::concrete_tuple(
                             prefix
                                 .iter()
                                 .cloned()
@@ -442,7 +506,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     }
                     Type::Tuple(Tuple::Unbounded(elements)) => {
-                        Type::tuple(vec![(**elements).clone(); len])
+                        Type::concrete_tuple(vec![(**elements).clone(); len])
                     }
                     Type::ClassType(class)
                         if let Some(Tuple::Concrete(elts)) = self.as_tuple(class)
@@ -637,6 +701,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // `hasattr` and `getattr` are handled in `narrow`
             AtomicNarrowOp::HasAttr(_) => ty.clone(),
             AtomicNarrowOp::NotHasAttr(_) => ty.clone(),
+            AtomicNarrowOp::HasKey(_) => ty.clone(),
+            AtomicNarrowOp::NotHasKey(_) => ty.clone(),
             AtomicNarrowOp::GetAttr(_, _) => ty.clone(),
             AtomicNarrowOp::NotGetAttr(_, _) => ty.clone(),
             AtomicNarrowOp::TypeGuard(t, arguments) => {
@@ -644,7 +710,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
                     let ret =
-                        self.call_infer(call_target, &args, &kws, range, errors, None, None, None);
+                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
                     if let Type::TypeGuard(t) = ret {
                         return *t;
                     }
@@ -657,9 +723,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
                     let ret =
-                        self.call_infer(call_target, &args, &kws, range, errors, None, None, None);
+                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
                     if let Type::TypeIs(t) = ret {
-                        return self.intersect(ty, &t);
+                        return self.distribute_over_union(&t, |right| {
+                            self.intersect_with_fallback(ty, right, &|| {
+                                // TODO: falling back to Never when the lhs is a union is a hack to get
+                                // reasonable behavior in cases like this:
+                                //     def f(x: int | Callable[[], int]):
+                                //         if callable(x):
+                                //             reveal_type(x)
+                                // Both mypy and pyright say that the type of `x` on the last line is
+                                // `() -> int`, whereas if we didn't fall back to Never, pyrefly would
+                                // say `(int & (...) -> object) | () -> int`. A naive implementation of
+                                // calling an intersection type would then lead to the type of `x()`
+                                // being `object | int`. This is a surprising and unhelpful type, so we
+                                // use Never as the fallback for now.
+                                if ty.is_union() {
+                                    Type::never()
+                                } else {
+                                    (*t).clone()
+                                }
+                            })
+                        });
                     }
                 }
                 ty.clone()
@@ -669,7 +754,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
                     let ret =
-                        self.call_infer(call_target, &args, &kws, range, errors, None, None, None);
+                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
                     if let Type::TypeIs(t) = ret {
                         return self.subtract(ty, &t);
                     }
@@ -780,7 +865,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match first_facet {
             FacetKind::Attribute(first_attr_name) => match remaining_facets.split_first() {
                 None => match base.type_at_facet(first_facet) {
-                    Some(ty) => self.force_for_narrowing(ty),
+                    Some(ty) => self.force_for_narrowing(ty, range, errors),
                     None => self.narrowable_for_attr(base.ty(), first_attr_name, range, errors),
                 },
                 Some((next_name, remaining_facets)) => {
@@ -798,13 +883,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // We synthesize a slice expression for the subscript here
                 // Use a synthesized fake range to avoid overwriting typing traces
                 let synthesized_slice = Expr::NumberLiteral(ExprNumberLiteral {
-                    node_index: AtomicNodeIndex::dummy(),
+                    node_index: AtomicNodeIndex::default(),
                     range: TextRange::empty(TextSize::from(0)),
                     value: Number::Int(Int::from(*idx as u64)),
                 });
                 match remaining_facets.split_first() {
                     None => match base.type_at_facet(first_facet) {
-                        Some(ty) => self.force_for_narrowing(ty),
+                        Some(ty) => self.force_for_narrowing(ty, range, errors),
                         None => self.subscript_infer_for_type(
                             base.ty(),
                             &synthesized_slice,
@@ -830,7 +915,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let synthesized_slice = Ast::str_expr(key, TextRange::empty(TextSize::from(0)));
                 match remaining_facets.split_first() {
                     None => match base.type_at_facet(first_facet) {
-                        Some(ty) => self.force_for_narrowing(ty),
+                        Some(ty) => self.force_for_narrowing(ty, range, errors),
                         None => self.subscript_infer_for_type(
                             base.ty(),
                             &synthesized_slice,
@@ -861,19 +946,76 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> TypeInfo {
         match op {
+            NarrowOp::Atomic(subject, AtomicNarrowOp::HasKey(key)) => {
+                let resolved_chain = subject
+                    .as_ref()
+                    .and_then(|s| self.resolve_facet_chain(s.chain.clone()));
+                let base_ty = match (&subject, &resolved_chain) {
+                    (Some(_), Some(chain)) => self.get_facet_chain_type(type_info, chain, range),
+                    (Some(_), None) => return type_info.clone(),
+                    (None, _) => self.force_for_narrowing(type_info.ty(), range, errors),
+                };
+                if matches!(base_ty, Type::TypedDict(_)) {
+                    let key_facet = FacetKind::Key(key.to_string());
+                    let facets = match resolved_chain {
+                        Some(chain) => {
+                            let mut new_facets = chain.facets().clone();
+                            new_facets.push(key_facet);
+                            new_facets
+                        }
+                        None => Vec1::new(key_facet),
+                    };
+                    let chain = FacetChain::new(facets);
+                    // Apply a facet narrow w/ that key's type, so that the usual subscript inference
+                    // code path which raises a warning for NotRequired keys does not execute later
+                    let value_ty = self.get_facet_chain_type(type_info, &chain, range);
+                    type_info.with_narrow(chain.facets(), value_ty)
+                } else {
+                    type_info.clone()
+                }
+            }
+            NarrowOp::Atomic(subject, AtomicNarrowOp::NotHasKey(key)) => {
+                let resolved_chain = subject
+                    .as_ref()
+                    .and_then(|s| self.resolve_facet_chain(s.chain.clone()));
+                let base_ty = match (&subject, &resolved_chain) {
+                    (Some(_), Some(chain)) => self.get_facet_chain_type(type_info, chain, range),
+                    (Some(_), None) => return type_info.clone(),
+                    (None, _) => self.force_for_narrowing(type_info.ty(), range, errors),
+                };
+                if matches!(base_ty, Type::TypedDict(_)) {
+                    let key_facet = FacetKind::Key(key.to_string());
+                    let facets = match resolved_chain {
+                        Some(chain) => {
+                            let mut new_facets = chain.facets().clone();
+                            new_facets.push(key_facet);
+                            new_facets
+                        }
+                        None => Vec1::new(key_facet),
+                    };
+                    // Invalidate existing facet narrows
+                    let mut type_info = type_info.clone();
+                    type_info.update_for_assignment(&facets, None);
+                    type_info
+                } else {
+                    type_info.clone()
+                }
+            }
             NarrowOp::Atomic(subject, AtomicNarrowOp::HasAttr(attr)) => {
-                let base_ty = match subject {
-                    Some(facet_subject) => {
-                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
-                    }
-                    None => self.force_for_narrowing(type_info.ty()),
+                let resolved_chain = subject
+                    .as_ref()
+                    .and_then(|s| self.resolve_facet_chain(s.chain.clone()));
+                let base_ty = match (&subject, &resolved_chain) {
+                    (Some(_), Some(chain)) => self.get_facet_chain_type(type_info, chain, range),
+                    (Some(_), None) => return type_info.clone(),
+                    (None, _) => self.force_for_narrowing(type_info.ty(), range, errors),
                 };
                 // We only narrow the attribute to `Any` if the attribute does not exist
                 if !self.has_attr(&base_ty, attr) {
                     let attr_facet = FacetKind::Attribute(attr.clone());
-                    let facets = match subject {
-                        Some(facet_subject) => {
-                            let mut new_facets = facet_subject.chain.facets().clone();
+                    let facets = match resolved_chain {
+                        Some(chain) => {
+                            let mut new_facets = chain.facets().clone();
                             new_facets.push(attr_facet);
                             new_facets
                         }
@@ -894,18 +1036,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if self.as_bool(&default_ty, range, &suppress_errors) != Some(false) {
                     return type_info.clone();
                 }
-                let base_ty = match subject {
-                    Some(facet_subject) => {
-                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
-                    }
-                    None => self.force_for_narrowing(type_info.ty()),
+                let resolved_chain = subject
+                    .as_ref()
+                    .and_then(|s| self.resolve_facet_chain(s.chain.clone()));
+                let base_ty = match (&subject, &resolved_chain) {
+                    (Some(_), Some(chain)) => self.get_facet_chain_type(type_info, chain, range),
+                    (Some(_), None) => return type_info.clone(),
+                    (None, _) => self.force_for_narrowing(type_info.ty(), range, errors),
                 };
                 let attr_ty =
                     self.attr_infer_for_type(&base_ty, attr, range, &suppress_errors, None);
                 let attr_facet = FacetKind::Attribute(attr.clone());
-                let facets = match subject {
-                    Some(facet_subject) => {
-                        let mut new_facets = facet_subject.chain.facets().clone();
+                let facets = match resolved_chain {
+                    Some(chain) => {
+                        let mut new_facets = chain.facets().clone();
                         new_facets.push(attr_facet);
                         new_facets
                     }
@@ -928,7 +1072,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             NarrowOp::Atomic(None, op) => {
                 let ty = self.atomic_narrow(
-                    &self.force_for_narrowing(type_info.ty()),
+                    &self.force_for_narrowing(type_info.ty(), range, errors),
                     op,
                     range,
                     errors,
@@ -936,26 +1080,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 type_info.clone().with_ty(ty)
             }
             NarrowOp::Atomic(Some(facet_subject), op) => {
+                let Some(resolved_chain) = self.resolve_facet_chain(facet_subject.chain.clone())
+                else {
+                    return type_info.clone();
+                };
                 if facet_subject.origin == FacetOrigin::GetMethod
                     && !self.supports_dict_get_subject(type_info, facet_subject, range)
                 {
                     return type_info.clone();
                 }
                 let ty = self.atomic_narrow(
-                    &self.get_facet_chain_type(type_info, &facet_subject.chain, range),
+                    &self.get_facet_chain_type(type_info, &resolved_chain, range),
                     op,
                     range,
                     errors,
                 );
-                let mut narrowed = type_info.with_narrow(facet_subject.chain.facets(), ty);
+                let mut narrowed = type_info.with_narrow(resolved_chain.facets(), ty);
                 // For certain types of narrows, we can also narrow the parent of the current subject
-                if let Some((last, prefix)) = facet_subject.chain.facets().split_last() {
+                // If `.get()` on a dict or TypedDict is falsy, the key may not be present at all
+                // We should invalidate any existing narrows
+                if let Some((last, prefix)) = resolved_chain.facets().split_last() {
                     match Vec1::try_from(prefix) {
                         Ok(prefix_facets) => {
                             let prefix_chain = FacetChain::new(prefix_facets);
                             let base_ty =
                                 self.get_facet_chain_type(type_info, &prefix_chain, range);
-                            if let Some(narrowed_ty) =
+                            let dict_get_key_falsy = matches!(op, AtomicNarrowOp::IsFalsy)
+                                && matches!(last, FacetKind::Key(_));
+                            if dict_get_key_falsy {
+                                narrowed.update_for_assignment(resolved_chain.facets(), None);
+                            } else if let Some(narrowed_ty) =
                                 self.atomic_narrow_for_facet(&base_ty, last, op, range, errors)
                                 && narrowed_ty != base_ty
                             {
@@ -964,7 +1118,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         _ => {
                             let base_ty = type_info.ty();
-                            if let Some(narrowed_ty) =
+                            let dict_get_key_falsy = matches!(op, AtomicNarrowOp::IsFalsy)
+                                && matches!(last, FacetKind::Key(_));
+                            if dict_get_key_falsy {
+                                narrowed.update_for_assignment(resolved_chain.facets(), None);
+                            } else if let Some(narrowed_ty) =
                                 self.atomic_narrow_for_facet(base_ty, last, op, range, errors)
                                 && narrowed_ty != *base_ty
                             {
@@ -1003,14 +1161,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         subject: &FacetSubject,
         range: TextRange,
     ) -> bool {
-        let base_ty = if subject.chain.facets().len() == 1 {
+        let Some(resolved_chain) = self.resolve_facet_chain(subject.chain.clone()) else {
+            return false;
+        };
+        let base_ty = if resolved_chain.facets().len() == 1 {
             type_info.ty().clone()
         } else {
-            let prefix: Vec<_> = subject
-                .chain
+            let prefix: Vec<_> = resolved_chain
                 .facets()
                 .iter()
-                .take(subject.chain.facets().len() - 1)
+                .take(resolved_chain.facets().len() - 1)
                 .cloned()
                 .collect();
             match Vec1::try_from_vec(prefix) {
@@ -1022,5 +1182,144 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         self.is_dict_like(&base_ty)
+    }
+
+    fn is_non_flag_enum(&self, cls: &ClassType) -> bool {
+        self.get_metadata_for_class(cls.class_object())
+            .enum_metadata()
+            .is_some_and(|meta| !meta.is_flag)
+    }
+
+    fn is_enum_class_or_literal_union(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => self.is_non_flag_enum(cls),
+            Type::Union(union) => {
+                let union = union.as_ref();
+                !union.members.is_empty()
+                    && union
+                        .members
+                        .iter()
+                        .all(|member| matches!(member, Type::Literal(_)))
+            }
+            _ => false,
+        }
+    }
+
+    fn format_missing_literal_cases(&self, ty: &Type) -> Option<String> {
+        fn collect_cases(ty: &Type, acc: &mut Vec<String>) -> bool {
+            match ty {
+                Type::Literal(lit) => {
+                    acc.push(format!("{}", lit));
+                    true
+                }
+                Type::Union(union) => {
+                    let union = union.as_ref();
+                    union
+                        .members
+                        .iter()
+                        .all(|member| collect_cases(member, acc))
+                }
+                _ => false,
+            }
+        }
+
+        let mut cases = Vec::new();
+        if collect_cases(ty, &mut cases) {
+            Some(cases.join(", "))
+        } else {
+            None
+        }
+    }
+
+    pub fn check_match_exhaustiveness(
+        &self,
+        subject_idx: &Idx<Key>,
+        narrowing_subject: &NarrowingSubject,
+        narrow_ops_for_fall_through: &(Box<NarrowOp>, TextRange),
+        subject_range: &TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let (op, narrow_range) = narrow_ops_for_fall_through;
+        let subject_info = self.get_idx(*subject_idx);
+        let mut subject_ty = subject_info.ty().clone();
+        self.expand_vars_mut(&mut subject_ty);
+        // We only check match exhaustiveness if the subject is an enum or a union of enum literals
+        if !self.is_enum_class_or_literal_union(&subject_ty) {
+            return;
+        }
+        let ignore_errors = self.error_swallower();
+        // Get the narrowed type of the match subject when none of the cases match
+        let mut remaining_ty = match narrowing_subject {
+            NarrowingSubject::Name(_) => self
+                .narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors)
+                .ty()
+                .clone(),
+            NarrowingSubject::Facets(_, facets) => {
+                let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone()) else {
+                    return;
+                };
+                // If the narrowing subject is the facet of some variable like `x.foo`,
+                // We need to make a `TypeInfo` rooted at `x` using the type of `x.foo`
+                let type_info = TypeInfo::of_ty(Type::any_implicit());
+                let narrowing_subject_info =
+                    type_info.with_narrow(resolved_chain.facets(), subject_ty.clone());
+                let narrowed = self.narrow(
+                    &narrowing_subject_info,
+                    op.as_ref(),
+                    *narrow_range,
+                    &ignore_errors,
+                );
+                self.get_facet_chain_type(&narrowed, &resolved_chain, *subject_range)
+            }
+        };
+        self.expand_vars_mut(&mut remaining_ty);
+        // If the result is `Never` then the cases were exhaustive
+        if remaining_ty.is_never() || remaining_ty.is_any() {
+            return;
+        }
+        let subject_display = self.for_display(subject_ty);
+        let remaining_display = self.for_display(remaining_ty.clone());
+        let ctx = TypeDisplayContext::new(&[&subject_display, &remaining_display]);
+        let mut msg = vec1![format!(
+            "Match on `{}` is not exhaustive",
+            ctx.display(&subject_display)
+        )];
+        if let Some(missing_cases) = self.format_missing_literal_cases(&remaining_ty) {
+            msg.push(format!("Missing cases: {}", missing_cases));
+        }
+        errors.add(
+            *subject_range,
+            ErrorInfo::Kind(ErrorKind::NonExhaustiveMatch),
+            msg,
+        );
+    }
+
+    pub fn resolve_facet_chain(&self, unresolved: UnresolvedFacetChain) -> Option<FacetChain> {
+        let resolved: Option<Vec<FacetKind>> = unresolved
+            .facets()
+            .iter()
+            .map(|kind| self.resolve_facet_kind(kind.clone()))
+            .collect();
+        resolved.map(|facets| FacetChain::new(Vec1::try_from_vec(facets).unwrap()))
+    }
+
+    pub fn resolve_facet_kind(&self, unresolved: UnresolvedFacetKind) -> Option<FacetKind> {
+        match unresolved {
+            UnresolvedFacetKind::Attribute(name) => Some(FacetKind::Attribute(name)),
+            UnresolvedFacetKind::Index(idx) => Some(FacetKind::Index(idx)),
+            UnresolvedFacetKind::Key(key) => Some(FacetKind::Key(key)),
+            UnresolvedFacetKind::VariableSubscript(expr_name) => {
+                let suppress_errors = self.error_swallower();
+                let ty = self.expr_infer(&Expr::Name(expr_name), &suppress_errors);
+                match ty {
+                    Type::Literal(Lit::Int(lit_int)) => lit_int
+                        .as_i64()
+                        .and_then(|i| i.to_usize())
+                        .map(FacetKind::Index),
+                    Type::Literal(Lit::Str(s)) => Some(FacetKind::Key(s.to_string())),
+                    _ => None,
+                }
+            }
+        }
     }
 }

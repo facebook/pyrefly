@@ -408,6 +408,44 @@ b.x += 1  # E: Cannot set field `x`
 );
 
 testcase!(
+    test_assign_final_attr_in_constructor,
+    r#"
+from typing import Final, Self
+
+class A:
+    x: Final[int]
+
+    def __init__(self) -> None:
+        self.x = 1
+
+    def mutate(self) -> None:
+        self.x = 2  # E: Cannot set field `x`
+
+    def __new__(cls) -> Self:
+        instance = super().__new__(cls)
+        instance.x = 1 # E: Cannot set field `x`
+        return instance
+
+a = A()
+a.x = 3  # E: Cannot set field `x`
+    "#,
+);
+
+testcase!(
+    test_assign_final_attr_in_nested_function_in_constructor,
+    r#"
+# We allow assigning to final attributes in nested functions in constructors
+# This is allowed by mypy but not by pyright
+from typing import Final
+class C:
+    x: Final[int]
+    def __init__(self):
+        def inner():
+            self.x = 1
+    "#,
+);
+
+testcase!(
     test_aug_assign_integer,
     r#"
 def f(x: int):
@@ -439,7 +477,7 @@ testcase!(
     r#"
 from typing import Final
 x: Final = [""]
-x += [""]  # E: Cannot assign to var x because it is marked final
+x += [""]  # E: Cannot assign to variable `x` because it is marked final
 x[0] += ""
 "#,
 );
@@ -730,7 +768,7 @@ xs[2]: str = "test" # E: Subscripts should not be annotated # E: Cannot set item
 testcase!(
     test_assign_annotated_starred,
     r#"
-*e: int = (42,)  # E: Parse error: Invalid annotated assignment target
+*e: int = (42,)  # E: Parse error: Invalid annotated assignment target # E: starred assignment target must be in a list or tuple
 "#,
 );
 
@@ -782,7 +820,7 @@ testcase!(
     test_ann_assign_invalid,
     r#"
 class A:
-    _x: bool 
+    _x: bool
     def __init__(self, x:int):
         self._x: int = x # E: `int` is not assignable to attribute `_x` with type `bool`
     "#,
@@ -795,7 +833,7 @@ int2 = int
 class A:
     _x: int2
     def __init__(self, x:int):
-        self._x: int = x 
+        self._x: int = x
     "#,
 );
 
@@ -803,7 +841,7 @@ testcase!(
     test_ann_assign_twice,
     r#"
 class A:
-    _x: bool 
+    _x: bool
     def __init__(self, x:int):
         self._x: int = x # E: `int` is not assignable to attribute `_x` with type `bool`
         self._x: bool = x # E: `int` is not assignable to attribute `_x` with type `bool`

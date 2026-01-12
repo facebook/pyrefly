@@ -119,6 +119,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn behaves_like_any(&self, ty: &Type) -> bool {
+        ty.is_any() || (!ty.is_never() && self.is_subset_eq(ty, &Type::never()))
+    }
+
+    /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_mapping(&self, ty: &Type) -> Option<(Type, Type)> {
         let key = self.fresh_var();
         let value = self.fresh_var();
@@ -133,6 +138,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_awaitable(&self, ty: &Type) -> Option<Type> {
         let var = self.fresh_var();
         let awaitable_ty = self.stdlib.awaitable(var.to_type()).to_type();
@@ -143,6 +149,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Warning: this returns `true` if the type is `Any` or a class that extends `Any`
     pub fn is_coroutine(&self, ty: &Type) -> bool {
         let var1 = self.fresh_var();
         let var2 = self.fresh_var();
@@ -154,6 +161,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.is_subset_eq(ty, &coroutine_ty)
     }
 
+    /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_coroutine(&self, ty: &Type) -> Option<(Type, Type, Type)> {
         let yield_ty = self.fresh_var();
         let send_ty = self.fresh_var();
@@ -172,6 +180,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_generator(&self, ty: &Type) -> Option<(Type, Type, Type)> {
         let yield_ty = self.fresh_var();
         let send_ty = self.fresh_var();
@@ -190,6 +199,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_iterable(&self, ty: &Type) -> Option<Type> {
         let iter_ty = self.fresh_var();
         let iterable_ty = self.stdlib.iterable(iter_ty.to_type()).to_type();
@@ -200,6 +210,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_async_iterable(&self, ty: &Type) -> Option<Type> {
         let iter_ty = self.fresh_var();
         let iterable_ty = self.stdlib.async_iterable(iter_ty.to_type()).to_type();
@@ -210,6 +221,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_async_iterator(&self, ty: &Type) -> Option<Type> {
         let var = self.fresh_var();
         let iterator_ty = self.stdlib.async_iterator(var.to_type()).to_type();
@@ -352,11 +364,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Tuple::Unpacked(box (prefix, middle, suffix)) => {
                 let mut elements = prefix;
-                if let Type::Tuple(Tuple::Unbounded(unbounded_middle)) = middle {
-                    elements.push(*unbounded_middle);
-                } else {
-                    // We can't figure out the middle, fall back to `object`
-                    elements.push(self.stdlib.object().clone().to_type())
+                match middle {
+                    Type::Tuple(Tuple::Unbounded(unbounded_middle)) => {
+                        elements.push(*unbounded_middle);
+                    }
+                    Type::Quantified(q) if q.is_type_var_tuple() => {
+                        elements.push(Type::ElementOfTypeVarTuple(q))
+                    }
+                    _ => {
+                        // We can't figure out the middle, fall back to `object`
+                        elements.push(self.stdlib.object().clone().to_type())
+                    }
                 }
                 elements.extend(suffix);
                 self.stdlib.tuple(self.unions(elements))

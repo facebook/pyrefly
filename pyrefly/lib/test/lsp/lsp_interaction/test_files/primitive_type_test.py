@@ -8,3 +8,4 @@ y: int = 123
 z: bool = True
 a: bytes = b"123"
 b = [1, 2, 3]
+c = None

@@ -9,6 +9,9 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::nesting_context::NestingContext;
+use pyrefly_types::callable::Callable;
+use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::types::Union;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
@@ -49,7 +52,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::SelfType(ty_cls) | Type::ClassType(ty_cls) => {
                 self.has_superclass(ty_cls.class_object(), class)
             }
-            Type::Union(xs) => xs
+            Type::Union(box Union { members: xs, .. }) => xs
                 .iter()
                 .all(|x| self.is_compatible_constructor_return(x, class)),
             _ => false,
@@ -148,6 +151,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Type(box Type::Tuple(_)) => Some(self.instantiate_fresh_tuple()),
             Type::Type(box Type::Any(a)) => Some(a.propagate()),
+            Type::Type(box Type::SpecialForm(SpecialForm::Callable)) => Some(Type::Callable(
+                Box::new(Callable::ellipsis(Type::any_implicit())),
+            )),
             Type::None | Type::Type(box Type::None) => Some(Type::None),
             Type::ClassType(cls) if cls.is_builtin("type") => Some(Type::any_implicit()),
             Type::Any(_) => Some(ty.clone()),

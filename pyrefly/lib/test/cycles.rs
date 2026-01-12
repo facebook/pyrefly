@@ -381,3 +381,14 @@ class A:
 reveal_type(A.__init__)  # E: revealed type: (self: A) -> None
     "#,
 );
+
+// Regression test for issue #1791, which was a stack overflow due to recursion
+// with an infinite loop of Type::Vars.
+testcase!(
+    force_for_narrowing_cycle_detection,
+    r#"
+def f(  # E: Expected `)`, found newline
+    if n:  # E: Type narrowing encountered a cycle in Type::Var # E: Expected an indented block after `if` statement
+)n = min(n, size)  # E: Expected a statement # E: `n` is uninitialized # E: Could not find name `size`
+"#,
+);

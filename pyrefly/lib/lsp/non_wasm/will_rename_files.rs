@@ -130,9 +130,9 @@ impl<'a> RenameUsageVisitor<'a> {
 /// If the client supports `workspace.workspaceEdit.documentChanges`, the response will use
 /// `document_changes` instead of `changes` for better ordering guarantees and version checking.
 pub fn will_rename_files(
-    state: &Arc<State>,
+    state: &State,
     transaction: &Transaction<'_>,
-    _open_files: &Arc<RwLock<HashMap<std::path::PathBuf, Arc<LspFile>>>>,
+    _open_files: &RwLock<HashMap<std::path::PathBuf, Arc<LspFile>>>,
     params: RenameFilesParams,
     supports_document_changes: bool,
 ) -> Option<WorkspaceEdit> {
@@ -200,7 +200,7 @@ pub fn will_rename_files(
 
         let config = state
             .config_finder()
-            .python_file(old_module_name, &module_path);
+            .python_file(old_handle.module_kind(), &module_path);
         let new_module_name = ModuleName::from_path(
             &new_path,
             config.search_path().chain(

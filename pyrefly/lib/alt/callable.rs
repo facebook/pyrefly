@@ -45,7 +45,6 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
-use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -260,7 +259,7 @@ impl<'a> CallArg<'a> {
                 for x in iterables.iter() {
                     match x {
                         Iterable::FixedLen(xs) => fixed_lens.push(xs.len()),
-                        Iterable::OfType(_) => {}
+                        Iterable::OfType(_) | Iterable::OfTypeVarTuple(_) => {}
                     }
                 }
                 if !fixed_lens.is_empty()
@@ -429,7 +428,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             CallArg::Star(x, _) => {
                 let mut ty = x.infer(self, errors);
                 self.expand_vars_mut(&mut ty);
-                matches!(ty, Type::Args(q2) if &*q2 == q)
+                // This can either be `P.args` or `tuple[Any, ...]`
+                matches!(&ty, Type::Args(q2) if &**q2 == q)
+                    || self.is_subset_eq(&ty, &Type::unbounded_tuple(Type::never()))
             }
             _ => false,
         }
@@ -443,7 +444,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> bool {
         let mut ty = x.value.infer(self, errors);
         self.expand_vars_mut(&mut ty);
-        matches!(ty, Type::Kwargs(q2) if &*q2 == q)
+        // This can either be `P.kwargs` or `dict[str, Any]`
+        matches!(&ty, Type::Kwargs(q2) if &**q2 == q)
+            || self.is_subset_eq(
+                &ty,
+                &self
+                    .stdlib
+                    .dict(self.stdlib.str().clone().to_type(), Type::never())
+                    .to_type(),
+            )
     }
 
     // See comment on `callable_infer` about `arg_errors` and `call_errors`.
@@ -630,17 +639,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             let unpacked_args_ty = match middle.len() {
-                0 => Type::tuple(prefix),
-                1 => Type::Tuple(Tuple::unpacked(
+                0 => Type::concrete_tuple(prefix),
+                1 => Type::unpacked_tuple(
                     prefix,
-                    Type::Tuple(Tuple::unbounded(middle.pop().unwrap())),
+                    Type::unbounded_tuple(middle.pop().unwrap()),
                     suffix,
-                )),
-                _ => Type::Tuple(Tuple::unpacked(
-                    prefix,
-                    Type::Tuple(Tuple::unbounded(self.unions(middle))),
-                    suffix,
-                )),
+                ),
+                _ => {
+                    let unpacked_variadic_args_count = middle
+                        .iter()
+                        .filter(|x| matches!(x, Type::ElementOfTypeVarTuple(_)))
+                        .count();
+                    if unpacked_variadic_args_count > 1 {
+                        error(
+                            arg_errors,
+                            range,
+                            ErrorKind::BadArgumentType,
+                            "Expected at most one unpacked variadic argument".to_owned(),
+                        );
+                    }
+                    Type::unpacked_tuple(prefix, Type::unbounded_tuple(self.unions(middle)), suffix)
+                }
             };
             self.check_type(
                 &unpacked_args_ty,
@@ -688,6 +707,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 }
+                Param::VarArg(_, Type::Unpack(box unpacked)) => {
+                    // If we have a TypeVarTuple *args with no matched arguments, resolve it to empty tuple
+                    self.is_subset_eq(unpacked, &Type::concrete_tuple(Vec::new()));
+                }
                 Param::VarArg(..) => {}
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {
                     kwparams.insert(name, (ty, required == &Required::Required));
@@ -701,9 +724,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 (type_owner.push(field.ty), field.required),
                             );
                         });
-                    if let ExtraItems::Extra(extra) =
-                        self.typed_dict_extra_items(typed_dict.class_object())
-                    {
+                    if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict) {
                         kwargs = Some((name.as_ref(), type_owner.push(extra.ty)))
                     }
                     kwargs_is_unpack = true;
@@ -747,16 +768,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     format!("Multiple values for argument `{name}`"),
                                 );
                                 hint = Some(*ty);
-                            } else if let Some((ty, required)) = kwparams.get(name) {
+                            } else if let Some((ty, _)) = kwparams.get(name) {
                                 seen_names.insert(name, *ty);
-                                if *required && !field.required {
-                                    error(
-                                        call_errors,
-                                        kw.range,
-                                        ErrorKind::MissingArgument,
-                                        format!("Expected key `{name}` to be required"),
-                                    );
-                                }
                                 hint = Some(*ty)
                             } else if kwargs.is_none() && !kwargs_is_unpack {
                                 unexpected_keyword_error(name, kw.range);
@@ -1125,7 +1138,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     call_errors,
                     range,
                     ErrorInfo::new(kind.as_error_kind(), context),
-                    kind.format_error(&e.got, &e.want, self.module().name()),
+                    kind.format_error(
+                        &self.for_display(e.got),
+                        &self.for_display(e.want),
+                        self.module().name(),
+                    ),
                 );
             }
         }

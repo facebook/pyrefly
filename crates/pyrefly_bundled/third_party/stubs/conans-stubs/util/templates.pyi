@@ -1,0 +1,3 @@
+from _typeshed import Incomplete
+
+def render_layout_file(content, ref: Incomplete | None = ..., settings: Incomplete | None = ..., options: Incomplete | None = ...): ...

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -31,7 +32,6 @@ s: object = ""
 "#,
 );
 
-// T is bivariant in A since it's not used nor in a covariant nor contravariant position.
 testcase!(
     test_simple_generic_subtyping,
     r#"
@@ -42,8 +42,9 @@ class D[T]: pass
 
 b: A[int] = B[int]()
 c: A[int] = C()
-oops: A[int] = D[int]()  # E: `D[int]` is not assignable to `A[int]`
-ok: A[int] = A[str]()
+oops1: A[int] = D[int]()  # E: `D[int]` is not assignable to `A[int]`
+# Although T is bivariant in A, we follow mypy and pyright's lead in treating it as invariant.
+oops2: A[int] = A[str]()  # E: `A[str]` is not assignable to `A[int]`
 "#,
 );
 
@@ -367,6 +368,35 @@ class Bar:
 # For read-write fields, the inherited type from each parent should be assignable to the intersection
 class Both(Foo, Bar):  # E: Field `x` is declared `float`
     ...
+"#,
+);
+
+fn env_conditional_import() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+class Foo1: pass
+class Foo2: pass
+"#,
+    )
+}
+
+testcase!(
+    test_conditional_import_base_class,
+    env_conditional_import(),
+    r#"
+if int("1"):
+    from foo import Foo1 as Foo
+else:
+    from foo import Foo2 as Foo
+
+class Document(Foo): pass  # E: Invalid base class: `Foo1 | Foo2`
+
+from abc import ABC, abstractmethod
+class CustomModel[T: Document](ABC):
+    @abstractmethod
+    async def to_db(self) -> T:
+        pass
 "#,
 );
 

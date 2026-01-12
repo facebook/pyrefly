@@ -1,0 +1,3 @@
+from conans.client.command import main as main
+
+def run() -> None: ...

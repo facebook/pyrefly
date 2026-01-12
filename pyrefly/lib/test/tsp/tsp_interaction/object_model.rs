@@ -29,6 +29,7 @@ use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
+use pyrefly_util::telemetry::NoTelemetry;
 use serde_json::Value;
 
 use crate::commands::lsp::IndexingMode;
@@ -334,7 +335,6 @@ impl TspInteraction {
             receiver: language_server_receiver,
         };
 
-        let connection = Arc::new(connection);
         let args = args.clone();
 
         let request_idx = Arc::new(Mutex::new(0));
@@ -343,7 +343,7 @@ impl TspInteraction {
 
         // Spawn the server thread and store its handle
         let thread_handle = thread::spawn(move || {
-            run_tsp(connection, args)
+            run_tsp(connection, args, &NoTelemetry)
                 .map(|_| ())
                 .map_err(|e| std::io::Error::other(e.to_string()))
         });

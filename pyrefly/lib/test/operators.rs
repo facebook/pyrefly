@@ -492,7 +492,7 @@ assert_type(Truthy() or int(), Truthy)
 assert_type(int() if Truthy() else str(), int)
 assert_type(int() if Falsey() else str(), str)
 
-# Test the use of a non-boolean-convertable type in boolean operators.
+# Test the use of a non-boolean-convertible type in boolean operators.
 #
 # The runtime only uses truthiness in short-circuiting here, so it is actually
 # legal to use a non-boolable value as the rightmost entry of a bool op.
@@ -518,7 +518,7 @@ def f(x: Tensor, i: int):
 testcase!(
     test_tensor_type_method,
     r#"
-from typing import reveal_type
+from typing import assert_type
 
 def power(x: "Tensor", i: int) -> "Tensor":
     return x
@@ -527,7 +527,7 @@ class Tensor:
     __pow__ = power
 
 def f(x: Tensor, i: int):
-    reveal_type(x ** i) # E:  revealed type: Tensor
+    assert_type(x ** i, Tensor)
 
     "#,
 );
@@ -612,7 +612,7 @@ assert_type(A() + B(), A)  # E: `A.__add__` is deprecated
 testcase!(
     test_bind_dunder_callable_simple,
     r#"
-from typing import Callable, reveal_type
+from typing import Callable
 
 def foo_pow(base: "Foo", arg: "int | Foo") -> "Foo": return Foo()
 
@@ -679,5 +679,37 @@ testcase!(
     r#"
 def f[S, T](x: type[S], y: type[T]):
     return x == y
+    "#,
+);
+
+testcase!(
+    test_chained_in,
+    r#"
+class Foo:
+    def __contains__(self, x: int) -> bool:
+        ...
+
+class Bar:
+    def __contains__(self, x: Foo) -> bool:
+        ...
+
+def test(x: int, foo: Foo, bar: Bar) -> None:
+    x in foo in bar  # Should be OK
+    x in bar # E: `in` is not supported between `int` and `Bar`
+    "#,
+);
+
+testcase!(
+    test_chained_lt,
+    r#"
+class A:
+    def __lt__(self, other: "B") -> bool: ...
+class B:
+    def __lt__(self, other: "C") -> bool: ...
+class C: pass
+
+def test(a: A, b: B, c: C) -> None:
+    a < b < c  # Should be OK: (a < b) and (b < c)
+    a < c      # E: `<` is not supported between `A` and `C`
     "#,
 );

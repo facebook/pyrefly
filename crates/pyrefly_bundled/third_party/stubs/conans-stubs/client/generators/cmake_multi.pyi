@@ -1,0 +1,16 @@
+from conans.client.generators.cmake import DepsCppCmake as DepsCppCmake
+from conans.client.generators.cmake_common import CMakeCommonMacros as CMakeCommonMacros, cmake_dependencies as cmake_dependencies, cmake_dependency_vars as cmake_dependency_vars, cmake_global_vars as cmake_global_vars, cmake_macros_multi as cmake_macros_multi, cmake_package_info as cmake_package_info, cmake_user_info_vars as cmake_user_info_vars, generate_targets_section as generate_targets_section
+from conans.model import Generator as Generator
+from conans.model.build_info import CppInfo as CppInfo, merge_dicts as merge_dicts
+
+def extend(cpp_info, config): ...
+
+class CMakeMultiGenerator(Generator):
+    name: str
+    @property
+    def content(self): ...
+    @property
+    def filename(self) -> None: ...
+    def _content_type(self, build_type): ...
+    @property
+    def _content_multi(self): ...

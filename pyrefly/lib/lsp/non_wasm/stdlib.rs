@@ -8,11 +8,18 @@
 use std::path::Path;
 
 use pyrefly_config::config::ConfigFile;
+use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_util::arc_id::ArcId;
 
+use crate::error::error::Error;
 use crate::lsp::non_wasm::server::TypeErrorDisplayStatus;
+use crate::state::lsp::DisplayTypeErrors;
 
-#[allow(dead_code)]
+/// Determines whether a file path belongs to the Python standard library.
+///
+/// This function checks if the given path is located within any of the configured
+/// Python interpreter's standard library directories. It canonicalizes both the input
+/// path and the stdlib paths for comparison to handle symlinks correctly.
 pub fn is_python_stdlib_file(path: &Path) -> bool {
     let stdlib_paths =
         pyrefly_config::environment::environment::PythonEnvironment::get_interpreter_stdlib_path()
@@ -43,6 +50,26 @@ pub fn should_show_stdlib_error(
         type_error_status,
         TypeErrorDisplayStatus::EnabledInIdeConfig
     ) || (config.project_includes.covers(path) && !config.project_excludes.covers(path))
+}
+
+/// Determines whether an error should be shown based on the display type errors mode.
+///
+/// When the display mode is set to `ErrorMissingImports`, only import-related errors
+/// (MissingImport, MissingSource, MissingSourceForStubs) are shown. For all other
+/// display modes, all errors are shown.
+pub fn should_show_error_for_display_mode(
+    error: &Error,
+    display_mode: Option<DisplayTypeErrors>,
+) -> bool {
+    if let Some(DisplayTypeErrors::ErrorMissingImports) = display_mode {
+        let error_kind = error.error_kind();
+        matches!(
+            error_kind,
+            ErrorKind::MissingImport | ErrorKind::MissingSource | ErrorKind::MissingSourceForStubs
+        )
+    } else {
+        true
+    }
 }
 
 #[cfg(test)]

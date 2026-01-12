@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use anyhow::anyhow;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::GENERATED_TOKEN;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::fs_anyhow;
@@ -328,7 +329,7 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
 
     let mut suppressed_errors: SmallMap<&PathBuf, SmallSet<LineNumber>> = SmallMap::new();
     for e in &errors.suppressed {
-        if e.is_ignored(false)
+        if e.is_ignored(&Tool::default_enabled())
             && let ModulePathDetails::FileSystem(path) = e.path().details()
         {
             // Insert all lines in the error's range, not just the start line.
@@ -371,8 +372,9 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
                         let new_string = regex.replace_all(line, "");
                         if !new_string.trim().is_empty() {
                             buf.push_str(new_string.trim_end());
+                            buf.push('\n');
                         }
-                        buf.push('\n');
+                        // Skip writing newline if the line becomes empty after removing the ignore
                         continue;
                     }
                     buf.push_str(line);
@@ -612,7 +614,6 @@ def f() -> int:
 "#;
         let want = r#"
 def f() -> int:
-
     return 1
 "#;
         assert_remove_ignores(input, want, false, 1);
@@ -627,7 +628,6 @@ def g() -> str:
 "#;
         let want = r#"
 def g() -> str:
-
     return "hello"
 "#;
         assert_remove_ignores(input, want, false, 1);
@@ -659,7 +659,6 @@ def f() -> int:
 def g() -> str:
     return "hello"
 def f() -> int:
-
     return 1
 "##;
         assert_remove_ignores(input, output, false, 2);
@@ -698,9 +697,15 @@ def bar(x: int) -> int:
 
 
 foo(
+    bar( # pyrefly: ignore [bad-argument-type]
+        12323423423
+    )
+)
+foo(
+    # pyrefly: ignore [bad-argument-type]
     bar(
         12323423423
-    ) # pyrefly: ignore [bad-argument-type]
+    )
 )
 "#;
         assert_remove_ignores(input, input, false, 0);

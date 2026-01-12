@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::test::util::TestEnv;
 use crate::test::util::testcase_for_macro;
 use crate::testcase;
@@ -360,9 +362,55 @@ y = "bar"  # E: `y` is marked final
 );
 
 testcase!(
+    test_final_field,
+    r#"
+from typing import Final
+class C:
+    x: Final[int] = 1
+    uninitialized: Final[str]
+    def __init__(self):
+        self.x = 42  # E: Cannot set field `x`
+        self.uninitialized = "ok"
+"#,
+);
+
+testcase!(
+    test_final_reassign,
+    r#"
+from typing import Final, TextIO
+x: Final[int] = 0
+x = 1  # E: `x` is marked final
+x += 1  # E: Cannot assign to variable `x` because it is marked final
+y = x = 3 # E: Cannot assign to variable `x` because it is marked final
+y = (x := 3) # E: Cannot assign to variable `x` because it is marked final
+x, y = 4, 5 # E: Cannot assign to variable `x` because it is marked final
+[x, y] = [6, 7] # E: Cannot assign to variable `x` because it is marked final
+for x in [1, 2, 3]:  # E: Cannot assign to variable `x` because it is marked final
+    ...
+
+xs: Final[list[int]] = []
+[_, *xs] = [1, 2, 3]  # E: Cannot assign to variable `xs` because it is marked final
+
+f: Final[TextIO]
+with open("file.txt") as f: # E: Cannot assign to variable `f` because it is marked final
+    ...
+"#,
+);
+
+testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type
+reveal_type()  # E: reveal_type needs 1 positional argument, got 0
+reveal_type(1)  # E: revealed type: Literal[1]
+    "#,
+);
+
+testcase!(
+    test_typing_extensions_reveal_type,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+from typing_extensions import reveal_type
 reveal_type()  # E: reveal_type needs 1 positional argument, got 0
 reveal_type(1)  # E: revealed type: Literal[1]
     "#,
@@ -803,6 +851,10 @@ from typing import Annotated, assert_type
 def f(x: Annotated[int, "test"], y: Annotated[int, "test", "test"]):
     assert_type(x, int)
     assert_type(y, int)
+def g(x: Annotated[int]): # E: `Annotated` needs at least one piece of metadata in addition to the type
+    pass
+X = Annotated[int, "meta"]
+Y = Annotated[int] # E: `Annotated` needs at least one piece of metadata in addition to the type
     "#,
 );
 
@@ -1321,26 +1373,26 @@ def f2(x: bool) -> Literal[False, True, 42]:
 testcase!(
     test_bool_nested,
     r#"
-from typing import Literal, reveal_type
+from typing import Literal, assert_type
 
 def f(b: bool, x: int | Literal[True], y: int | Literal[False]):
-    reveal_type(x if b else y) # E: revealed type: bool | int
+    assert_type(x if b else y, bool | int)
 "#,
 );
 
 testcase!(
     test_literal_union,
     r#"
-from typing import Literal, LiteralString, reveal_type
+from typing import Literal, LiteralString, assert_type
 
-reveal_type(Literal[True, False])  # E: revealed type: type[bool]
-reveal_type(Literal[4] | int)  # E: revealed type: type[int]
-reveal_type(LiteralString | Literal["test"]) # E: revealed type: type[LiteralString]
-reveal_type(LiteralString | str) # E: revealed type: type[str]
-reveal_type(Literal[True] | bool) # E: revealed type: type[bool]
+assert_type(Literal[True, False], type[bool])
+assert_type(Literal[4] | int, type[int])
+assert_type(LiteralString | Literal["test"], type[LiteralString])
+assert_type(LiteralString | str, type[str])
+assert_type(Literal[True] | bool, type[bool])
 
 def f(cond: bool, x: LiteralString, y: str):
-    reveal_type(x if cond else y)  # E: revealed type: str
+    assert_type(x if cond else y, str)
 "#,
 );
 
@@ -1352,14 +1404,24 @@ def f(x: Type) -> None: ...
 def g(x: type) -> None: ...
 
 f(int)
-f(Type)
+f(Type)  # E: not assignable to parameter `x` with type `type[Any]`
 f(type)
-f(42)  # E: not assignable to parameter `x` with type `type[Unknown]`
+f(42)  # E: not assignable to parameter `x` with type `type[Any]`
 
 g(int)
-g(Type)
+g(Type)  # E: not assignable to parameter `x` with type `type`
 g(type)
 g(42)  # E: not assignable to parameter `x` with type `type`
+"#,
+);
+
+testcase!(
+    test_typing_type_properties,
+    r#"
+from typing import Type, assert_type, reveal_type
+def f(x: Type) -> None:
+    assert_type(x.__mro__, tuple[type, ...])
+    assert_type(x.__base__, type | None)
 "#,
 );
 
@@ -1547,6 +1609,22 @@ if"":=  # E: Assignment expression target must be an identifier # E: Expected an
 );
 
 testcase!(
+    test_crash_on_invalid_attribute_walrus,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/1903
+(:=).:  # E: Type cannot be declared in assignment to non-self attribute `:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Parse error: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_augassign_walrus_rhs,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/1991
+1 += (c := 1)  # E: Parse error: Invalid augmented assignment target
+"#,
+);
+
+testcase!(
     test_check_invalid_rhs,
     r#"
 def f(x): pass
@@ -1699,7 +1777,7 @@ testcase!(
     test_self_field_gets_lost,
     r#"
 # From https://github.com/facebook/pyrefly/issues/621
-from typing import reveal_type
+from typing import assert_type
 
 class NameTable:
     def __init__(self):
@@ -1708,7 +1786,7 @@ class NameTable:
     def getName(self):
         last = ""
         for name in self.names:
-            reveal_type(name) # E: revealed type: str
+            assert_type(name, str)
             last = name
         return last
 "#,
@@ -1821,7 +1899,7 @@ reveal_type(f1) # E: revealed type: (x: Unknown, *args: Unknown, **kwargs: Unkno
 testcase!(
     test_missing_name_in_dunder_all,
     r#"
-__all__ = ["x", "y"]
+__all__ = ["x", "y"]  # E: Name `y` is listed in `__all__` but is not defined in the module
 x = 5
     "#,
 );
@@ -1879,13 +1957,6 @@ takes_alias("bad")  # E: Argument `Literal['bad']` is not assignable to paramete
 );
 
 testcase!(
-    test_starred_empty_tuple_no_panic,
-    r#"
-(),*()
-    "#,
-);
-
-testcase!(
     test_asyncio_gather,
     r#"
 import asyncio
@@ -1918,4 +1989,54 @@ testcase!(
 def f(x: int, y: int):
     x >> y
     "#,
+);
+
+testcase!(
+    test_assign_expression_in_annotation,
+    r#"
+x: (y := 1)  # E: Expected a type form
+z: int = y
+    "#,
+);
+
+testcase!(
+    test_yield_in_annotation,
+    r#"
+def test():
+    x: (yield 1)  # E:
+    "#,
+);
+
+testcase!(
+    test_parse_error_range_exceeds_buffer_no_panic,
+    r#"
+class a("""  # E: # E: # E: # E:
+    "#,
+);
+
+testcase!(
+    test_yield_from_in_annotation,
+    r#"
+def test():
+    x: (yield from [1])  # E:
+    "#,
+);
+
+testcase!(
+    test_passing_callable_as_type_not_allowed,
+    r#"
+from typing import Callable, Type, Any
+def takes_type(x: type): ...
+def takes_Type(x: Type): ...
+def takes_type_any(x: type[Any]): ...
+def takes_Type_any(x: Type[Any]): ...
+takes_type(Callable) # E: is not assignable to parameter `x` with type `type` in function
+takes_type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type` in function
+takes_Type(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+"#,
 );

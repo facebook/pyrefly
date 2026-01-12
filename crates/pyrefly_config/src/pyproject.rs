@@ -59,10 +59,14 @@ impl PyProject {
             if let Some(tool_table) = config_doc.get("tool")
                 && let Some(pyrefly_table) = tool_table.get("pyrefly")
             {
+                let is_new_tool_table = !doc.contains_key("tool");
                 let tool_entry = doc
                     .entry("tool")
                     .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
                 if let Some(tool_table_mut) = tool_entry.as_table_mut() {
+                    if is_new_tool_table {
+                        tool_table_mut.set_implicit(true);
+                    }
                     tool_table_mut.remove("pyrefly");
                     let max_tool_pos = tool_table_mut
                         .iter()
@@ -70,7 +74,8 @@ impl PyProject {
                         .max()
                         .unwrap_or(0);
                     tool_table_mut.insert("pyrefly", pyrefly_table.clone());
-                    if let Some(pyrefly_item) = tool_table_mut.get_mut("pyrefly")
+                    if !original_content.is_empty()
+                        && let Some(pyrefly_item) = tool_table_mut.get_mut("pyrefly")
                         && let Some(pyrefly_table_mut) = pyrefly_item.as_table_mut()
                     {
                         pyrefly_table_mut.decor_mut().set_prefix("\n");
@@ -129,10 +134,39 @@ line-length = 88
         assert!(updated_content.contains("[tool.poetry]"));
         assert!(updated_content.contains("[tool.black]"));
 
-        assert!(updated_content.contains("[tool.pyrefly]"));
+        // Make sure we add a blank line between the pyrefly section and the previous one
+        assert!(updated_content.contains("\n\n[tool.pyrefly]"));
         assert!(updated_content.contains("project-includes = [\"new/path/**/*.py\"]"));
         assert!(!updated_content.contains("project_includes = [\"old/path/**/*.py\"]"));
         assert!(!updated_content.contains("project_excludes"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_add_pyrefly_config_to_existing_pyproject() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let pyproject_path = tmp.path().join("pyproject.toml");
+
+        let existing_content = "";
+        fs_anyhow::write(&pyproject_path, existing_content)?;
+
+        let config = ConfigFile {
+            project_includes: Globs::new(vec!["new/path/**/*.py".to_owned()]).unwrap(),
+            ..Default::default()
+        };
+        PyProject::update(&pyproject_path, config)?;
+
+        let updated_content = fs_anyhow::read_to_string(&pyproject_path)?;
+
+        assert!(updated_content.contains("[tool.pyrefly]"));
+        assert!(updated_content.contains("project-includes = [\"new/path/**/*.py\"]"));
+
+        // Regression test for bug where we would insert an unnecessary [tool] section
+        assert!(!updated_content.contains("[tool]"));
+
+        // Make sure we don't add an extra blank line
+        assert!(!updated_content.starts_with("\n"));
 
         Ok(())
     }

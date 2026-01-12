@@ -71,3 +71,25 @@ class PersonFieldsetListAdmin(admin.ModelAdmin[Person]):
 
 "#,
 );
+
+django_testcase!(
+    test_meta_override_without_inheritance,
+    r#"
+from django.db import models
+
+
+class DateTimeMixin(models.Model):
+
+    created_at = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+
+
+class Invoice(DateTimeMixin):
+    class Meta:
+        verbose_name = "Invoice"
+        verbose_name_plural = "Invoices"
+"#,
+);

@@ -1,0 +1,237 @@
+---
+title: Pyrefly Beta is here!
+description: Pyrefly v0.42.0 marks the first beta release of Pyrefly.
+slug: pyrefly-beta
+authors: [pyreflyteam]
+tags: [news, typechecking, IDE]
+image: https://pyrefly.org/assets/images/release-news-d289bbc4c41029b55f21ed9165321bf5.png
+hide_table_of_contents: false
+toc_max_heading_level: 4
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+![](./blog_imgs/release-news.png)
+
+Today we’re thrilled to announce that we have reached Beta status for Pyrefly, our open-source, high-performance tool for Python code navigation and type checking\! We first announced Pyrefly back in April 2025, and thanks to incredible community feedback and a ton of work from our team, we’ve hit a significant milestone.
+
+<!-- truncate -->
+
+But what does "Beta" mean for Pyrefly? This label can mean different things for different projects, for us it means we’ve made significant steps towards [our goals](https://github.com/facebook/pyrefly/milestones) for stability and production readiness. We’ll cover more of the specifics in this blog, but at a high level what this means is that when using a version of Pyrefly with Beta status (v0.42.0 or later) you can feel confident that:
+
+* The IDE extension is ready for production use right now,
+* The core type-checking features are robust, with some edge cases that will be addressed as we make progress towards a later stable v1 release.
+
+---
+
+## 🚀 The IDE Experience: Battle-Tested at Meta Scale
+
+A major priority for Pyrefly development since the beginning has been to deliver a lightning-fast and scalable IDE experience. Pyrefly was born out of a real-world production problem: Meta's Instagram developers were struggling with painfully slow code navigation, autocomplete, and type checking on their massive codebase.
+
+Over the past year we’ve been rapidly adding new features and addressing bugs found by our passionate community of alpha testers (both internal and external). We're now proud to say **Pyrefly is the default language server and type checker for all developers working on Instagram at Meta**. By testing Pyrefly’s IDE extension on a codebase the size of Instagram we’ve been able to deliver hotly requested features with confidence that they will be reliable for large production codebases.
+
+A few examples of Pyrefly’s latest language server features include:
+
+#### **Automatic import refactoring**
+
+Pyrefly will now automatically update your imports when you rename or move a file.
+
+<video
+    src="/videos/IDE-file-rename.mp4"
+    width="720"
+    muted
+    loop
+    autoPlay
+    playsInline
+    preload="auto"
+  ></video>
+
+#### **Jupyter Notebook support**
+
+You can now use Pyrefly with Jupyter notebooks for diagnostics (red squiggles), inlay hints, go-to-definition, hover, semantic tokens, signature help, and completions.
+
+<video
+    src="/videos/jupyter-notebook.mp4"
+    width="720"
+    muted
+    loop
+    autoPlay
+    playsInline
+    preload="auto"
+  ></video>
+
+#### **Third-party stubs shipped with the extension**
+
+Language server features like hover and autocomplete are now available for third party libraries with Typeshed stubs. This support is available by default, without the need for a config file (`pyproject.toml` / `pyrefly.toml`), to provide a better out-of-the-box experience.
+
+<video
+    src="/videos/typeshed.mp4"
+    width="720"
+    muted
+    loop
+    autoPlay
+    playsInline
+    preload="auto"
+  ></video>
+
+For a full list of supported IDE features check out the [Pyrefly IDE documentation](https://pyrefly.org/en/docs/IDE-features/).
+
+
+---
+
+## Better Type checking? Check ✅
+
+We've also made steady progress in improving Pyrefly's core type-checking engine since the Alpha release. Our focus has been on achieving higher conformance with the Python Typing Specification while also reducing false positives and improving support for modern Python patterns and popular libraries. In this section we'll highlight a few examples of the key fixes, new features, and design decisions that have paved the way for a more reliable type-checking experience in this Beta release.
+
+#### **Type Inference**
+
+We understand writing type annotations can be tedious, so from the start Pyrefly has had some capabilities for automatically inferring types for returns and local variables and displaying them in the IDE. Since the first alpha release we’ve been steadily expanding inference capabilities, for example by improving our ability to infer the types of empty containers on first use:
+
+```py
+from typing import reveal_type
+
+def f[T](x: T | None) -> list[T]:
+    return [x] if x else []
+
+x = f(None)
+x.append(1)
+
+# Pyrefly is now able to infer that `x` has type `list[int]`.
+reveal_type(x)
+
+```
+
+#### **Type Narrowing**
+
+We’ve added several new ways to narrow types and reworked type narrowing logic to prevent unwanted "pollution" of types after checks like `isinstance`:
+
+```py
+from typing import Any, reveal_type
+
+def f(x: Any):
+    if isinstance(x, int):
+        print(x)
+    # Reworked type narrowing means the revealed type is now correctly `Any`,
+    # not `int | Any` as it was previously.
+    reveal_type(x)
+```
+
+### Preliminary Support for Pydantic and Django
+
+We’ve added preliminary support for two of the most popular Python web/data libraries: Pydantic and Django. Pyrefly can now recognize key objects from these libraries and perform static analysis to catch potential errors before you ever run your code. This support works out-of-the-box with no configuration or plugins required, and includes IDE support.
+
+#### **Django Support**
+
+As shown in this example, by default, Django automatically adds an `id` field to serve as the primary key (unless you define a custom primary key). Pyrefly is able to infer that the id exists and is of type `int`
+
+```py
+from django.db import models
+
+class Reporter(models.Model):
+    full_name = models.CharField(max_length=70)
+    # Django auto-adds: id = models.AutoField(primary_key=True)
+
+reporter = Reporter()
+reveal_type(reporter.id)  # Pyrefly infers: int
+```
+
+See more examples in the [Pyrefly Django docs](https://pyrefly.org/en/docs/django/).
+
+#### **Pydantic Support**
+
+In this example Pyrefly can read your Pydantic model’s configuration directly from your code to determine there is a type error where `age` should be an `int` not a `string`:
+
+```py
+from pydantic import BaseModel, Field
+
+class User(BaseModel):
+    name: str
+    age: int = Field(strict=True) # strict mode
+
+# Pyrefly will report an error here.
+y = User(name="Alice", age="30")
+```
+
+See more examples in the [Pyrefly Pydantic docs](https://pyrefly.org/en/docs/pydantic/)
+
+#### **Dataclass Transforms Support**
+
+An important addition that laid the foundation for supporting libraries like `attrs` and Pydantic, was allowing Pyrefly to recognize custom dataclass-like class transformations:
+
+```py
+from attrs import define  # third-party `attrs` package
+
+@define
+class C:
+    x: int
+
+# `attrs` uses a dataclass transform, and Pyrefly now recognizes the
+# auto-generated constructor based on the class attributes.
+C(x=0)
+```
+
+---
+
+## 🙌 An improved user experience
+
+We understand writing type annotations, dealing with strict checks, and configuring tools can be a barrier to adopting typed Python for many people, so we are always looking for ways to make using Pyrefly as painless as possible, dare we say even delightful? This section highlights some of the incremental improvements we've been working on to improve the overall user experience:
+
+#### **Type Error Message Improvements**
+
+We’ve also cleaned up our error messages, making them clearer and providing embedded code snippets to pinpoint the exact location of the issue:
+
+Before:
+
+```
+foo.py:1:5-15: `+` is not supported between `Literal[1]` and `Literal['oops']`
+```
+
+After (with snippet and detailed explanation):
+
+```
+ERROR `+` is not supported between `Literal[1]` and `Literal['oops']` [unsupported-operation]
+ --> foo.py:1:5
+  |
+1 | x = 1 + "oops"
+  |     ^^^^^^^^^^
+  |
+  Argument `Literal['oops']` is not assignable to parameter `value` with type `int` in function `int.__add__`
+```
+
+#### **Smoother migration from MyPy or Pyright**
+
+Different typecheckers display different behaviour, which can make it a challenge to switch from one to another. While it's not always possible to cleanly translate one config option to another, the `pyrefly init` command now does a better job of searching for an existing MyPy or Pyright configuration and transforming it into a `pyrefly.toml` (or `[tool.pyrefly]` section). You can find more details in the [migration guides section](https://pyrefly.org/en/docs/migrating-to-pyrefly/) of the Pyrefly docs.
+
+#### **A more configurable IDE experience**
+
+Do you want type error diagnostics (i.e. the red squiggles) in your IDE or not? Do you want to use Pyrefly’s type errors but not other LSP features? Do you want to pick and choose specific language server features to enable? We know that how you set up your code editor is a personal choice, so we’ve added [more configuration options](https://pyrefly.org/en/docs/IDE/#customization) to enable you to “choose your own adventure” with your Pyrefly IDE experience.
+
+---
+
+## 🔬 Enhancing Performance, Squashing Bugs and Aligning with the Spec
+
+We started developing Pyrefly with a clear goal in mind: make a tool that can statically analyze your code, catch type-related bugs, and do it *much* faster than existing tools like Mypy. While performance was good even in the early releases of Pyrefly, on the journey to Beta we’ve been focused on improvements for increasingly complex codebases, reducing type checking time and addressing edge cases for projects of varying size with many dependencies.
+
+In some cases we’ve been able to reduce the time it takes to type check large projects with virtual envs, node-modules and other large dependencies by over 95% compared to earlier alpha versions of pyrefly. We've also closed **over 350 bug issues** opened by users and have been using the [Python typing conformance test suite](https://htmlpreview.github.io/?https://github.com/python/typing/blob/main/conformance/results/results.html) to benchmark our progress towards fully implementing the typing specification. So far we’ve gone from **39% conformant at alpha launch to over 70% conformant today.**
+
+---
+
+There’s a lot more that’s been happening than we can possibly be squeezed into one blog post, so if you’d like to take a look back in more detail you can check out the completed [beta milestone](https://github.com/facebook/pyrefly/milestone/4) or our previous [release notes](https://github.com/facebook/pyrefly/releases).
+
+---
+
+## What’s Next?
+
+This Beta release marks a significant milestone, but the journey isn't over\! We’re now focusing on the further work that is needed to bring you a stable v1.0 release next year, including:
+
+* Adding further support for popular third-party libraries (especially Django and Pydantic integration).
+* Implementing the remaining missing features from the Python type system to reach 100% conformance.
+* Making Pyrefly work even faster and consume even less memory
+* Fixing more bugs\!
+
+We’d also like to say a huge thank-you to everyone who has helped get Pyrefly to this release. Whether you’ve contributed to the codebase, opened GitHub issues or just commented with your questions and feedback, your contributions have helped shape the direction of this project thus far. If you want to stay in the loop and continue being part of the conversation as we work towards Pyrefly v1.0 you can check out the [GitHub repo](https://github.com/facebook/pyrefly) or join our [Discord](https://discord.gg/Cf7mFQtW7W) community.

@@ -1,0 +1,39 @@
+from conans.util.files import rmdir as rmdir
+from conans.util.windows import conan_expand_user as conan_expand_user, rm_conandir as rm_conandir
+
+rm_conandir = rmdir
+
+def get_conan_user_home(): ...
+
+CONANFILE: str
+CONANFILE_TXT: str
+CONAN_MANIFEST: str
+BUILD_INFO: str
+BUILD_INFO_GCC: str
+BUILD_INFO_COMPILER_ARGS: str
+BUILD_INFO_CMAKE: str
+BUILD_INFO_QBS: str
+BUILD_INFO_VISUAL_STUDIO: str
+BUILD_INFO_XCODE: str
+BUILD_INFO_PREMAKE: str
+BUILD_INFO_DEPLOY: str
+CONANINFO: str
+CONANENV: str
+SYSTEM_REQS: str
+ARTIFACTS_PROPERTIES_FILE: str
+ARTIFACTS_PROPERTIES_PUT_PREFIX: str
+PACKAGE_TGZ_NAME: str
+EXPORT_TGZ_NAME: str
+EXPORT_SOURCES_TGZ_NAME: str
+RUN_LOG_NAME: str
+DEFAULT_PROFILE_NAME: str
+PACKAGE_METADATA: str
+CACERT_FILE: str
+DATA_YML: str
+EXPORT_FOLDER: str
+EXPORT_SRC_FOLDER: str
+SRC_FOLDER: str
+BUILD_FOLDER: str
+PACKAGES_FOLDER: str
+SYSTEM_REQS_FOLDER: str
+SCM_SRC_FOLDER: str

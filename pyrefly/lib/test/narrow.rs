@@ -186,7 +186,7 @@ testcase!(
     r#"
 from typing import assert_type, Literal, Never
 def f(x: bool | None):
-    if x is True and x is None:
+    if x is True and x is None:  # E: Identity comparison `True is None` is always False
         assert_type(x, Never)
     else:
         assert_type(x, bool | None)
@@ -305,7 +305,7 @@ testcase!(
     r#"
 from typing import assert_type, Literal
 def f(x: bool | None):
-    if not (x is True and x is None):
+    if not (x is True and x is None):  # E: Identity comparison `True is None` is always False
         assert_type(x, Literal[False] | bool | None)
     "#,
 );
@@ -423,7 +423,7 @@ from typing import assert_type, Never
 def f(x: bool | None, y: bool | None):
     if x is None is None:
         assert_type(x, None)
-    if y is None is True:
+    if y is None is True:  # E: Identity comparison `None is True` is always False
         assert_type(y, Never)
     "#,
 );
@@ -950,14 +950,62 @@ if "foo" in foo and foo["foo"] is not "as":
 testcase!(
     test_issubclass,
     r#"
-from typing import assert_type
+from typing import assert_type, reveal_type
 class A: ...
 class B(A): ...
 def f(x: type[B] | type[int]):
     if issubclass(x, A):
-        assert_type(x, type[B])
+        reveal_type(x)  # E: type[(A & int) | B]
     else:
         assert_type(x, type[int])
+    "#,
+);
+
+testcase!(
+    test_issubclass_nondisjoint_classes,
+    r#"
+from typing import reveal_type
+
+class A: ...
+class B: ...
+
+def f(x: type[A]):
+    if issubclass(x, B):
+        reveal_type(x)  # E: type[A & B]
+    "#,
+);
+
+testcase!(
+    test_issubclass_disjoint_classes,
+    r#"
+from typing import assert_type, Never
+def f(x: type[int]):
+    if issubclass(x, str):
+        assert_type(x, type[Never])
+    "#,
+);
+
+testcase!(
+    test_call_after_issubclass,
+    r#"
+class A: ...
+class B: ...
+def f(x: type[A]):
+    if issubclass(x, B):
+        return x()
+    "#,
+);
+
+testcase!(
+    test_attribute_access_after_issubclass,
+    r#"
+from typing import assert_type
+class A: ...
+class B:
+    b: int
+def f(x: type[A]):
+    if issubclass(x, B):
+        assert_type(x.b, int)
     "#,
 );
 
@@ -967,6 +1015,83 @@ testcase!(
 def f(x: int):
     if issubclass(x, int):  # E: Argument `int` is not assignable to parameter `cls` with type `type`
         return True
+    "#,
+);
+
+testcase!(
+    test_issubclass_typevar_object,
+    r#"
+from typing import TypeVar
+
+class Foo:
+    @classmethod
+    def check(cls) -> None:
+        ...
+
+T = TypeVar("T", bound=type[object])
+
+def needs_foo(cls: type[Foo]) -> None:
+    cls.check()
+
+def check(t: T) -> T:
+    if issubclass(t, Foo):
+        needs_foo(t)
+        t.check()
+        return t
+    return t
+    "#,
+);
+
+testcase!(
+    test_isinstance_typevar_intersection,
+    r#"
+def test[T: int | str](value: T) -> T:
+    if isinstance(value, int):
+        return value
+    else:
+        return value
+    "#,
+);
+
+testcase!(
+    test_issubclass_typevar_nondisjoint_classes,
+    r#"
+from typing import reveal_type
+
+class A: ...
+class B: ...
+
+def f[T: type[A]](x: T) -> T:
+    if issubclass(x, B):
+        reveal_type(x)  # E: type[B] & T
+    return x
+    "#,
+);
+
+testcase!(
+    test_issubclass_typevar_disjoint_classes,
+    r#"
+from typing import assert_type, Never
+def f[T: type[int]](x: T) -> T:
+    if issubclass(x, str):
+        assert_type(x, type[Never])
+    return x
+    "#,
+);
+
+testcase!(
+    test_issubclass_typevar_union,
+    r#"
+from typing import assert_type, Never
+def f1[T: type[str]](x: T | type[bytes]) -> T | type[bytes]:
+    if issubclass(x, int):
+        assert_type(x, type[Never])
+    return x
+
+def f2[T: type[str] | type[bytes]](x: T) -> T:
+    if issubclass(x, int):
+        assert_type(x, type[Never])
+    return x
     "#,
 );
 
@@ -1592,6 +1717,10 @@ class C:
     @staticmethod
     def guard_kw_arg_static(*, x) -> TypeGuard[int]: # E: Type guard functions must accept at least one positional argument
         return True
+
+class D:
+    def guard_missing_self() -> TypeGuard[int]: # E: Type guard functions must accept at least one positional argument
+        return True
 "#,
 );
 
@@ -1655,6 +1784,10 @@ class C:
 
     @staticmethod
     def guard_kw_arg_static(*, x) -> TypeIs[int]: # E: Type guard functions must accept at least one positional argument
+        return True
+
+class D:
+    def guard_missing_self() -> TypeIs[int]: # E: Type guard functions must accept at least one positional argument
         return True
 "#,
 );
@@ -2064,5 +2197,143 @@ class C: ...
 def f(x: A):
     if isinstance(x, B) and isinstance(x, C):
         reveal_type(x) # E: A & B & C
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1642
+testcase!(
+    test_typed_dict_truthiness_narrowing,
+    r#"
+from typing import TypedDict, assert_type, NotRequired
+class RequiredDict(TypedDict):
+    val: int
+class EmptyDict(TypedDict):
+    val: NotRequired[int]
+def test_narrowing(x: RequiredDict | None, y: EmptyDict | None):
+    xval = x and x['val']
+    assert_type(xval, int | None)
+    yval = y and y.get('val')
+    assert_type(yval, int | None | EmptyDict)
+"#,
+);
+
+testcase!(
+    test_typevar_intersection,
+    r#"
+from collections.abc import Mapping, Sequence
+
+def identity_on_mapping[M: Mapping](m: M) -> M: return m
+
+def test_isinstance[T: Mapping[str, int] | Sequence[int]](arg: T) -> T:
+    if isinstance(arg, Mapping):
+        return identity_on_mapping(arg)
+    return arg
+    "#,
+);
+
+testcase!(
+    test_match_intersection_against_constrained_typevar,
+    r#"
+class A: ...
+class B: ...
+class C: ...
+
+def f[T: (A, B)](x: T) -> T:
+    return x
+
+def g(x: C):
+    if isinstance(x, A):
+        f(x)
+    "#,
+);
+
+testcase!(
+    test_len_gt_empty_string,
+    r#"
+def test(unknown):
+    s = ""
+    if unknown:
+        s = unknown.foo
+    if len(s) > 0:
+      s[0]
+    "#,
+);
+
+testcase!(
+    test_typeis_narrow_to_intersection_not_never,
+    r#"
+from typing import TypeIs, reveal_type
+
+class A: ...
+
+def f(x: object) -> TypeIs[A]:
+    return True
+
+class B: ...
+
+def g(b: B):
+    if f(b):
+        reveal_type(b)  # E: A & B
+    "#,
+);
+
+testcase!(
+    test_typeguard_return_without_annotation,
+    r#"
+from typing import TypeGuard
+
+def is_int(x: int | str) -> TypeGuard[int]:
+    return isinstance(x, int)
+
+class X:
+    def __init__(self, param: int | str) -> None:
+        self.param = param
+
+    # This function returns a TypeGuard value but does not have a TypeGuard annotation,
+    # so it should not be validated as a TypeGuard function.
+    # No "Type guard functions must accept at least one positional argument" error expected.
+    def has_int(self):
+        return is_int(self.param)
+    "#,
+);
+
+testcase!(
+    test_typeis_return_without_annotation,
+    r#"
+from typing import TypeIs
+
+def is_int(x: int | str) -> TypeIs[int]:
+    return isinstance(x, int)
+
+class X:
+    def __init__(self, param: int | str) -> None:
+        self.param = param
+
+    # This function returns a TypeIs value but does not have a TypeIs annotation,
+    # so it should not be validated as a TypeIs function.
+    # No "Type guard functions must accept at least one positional argument" error expected.
+    def has_int(self):
+        return is_int(self.param)
+    "#,
+);
+
+testcase!(
+    test_isinstance_invalid_special_form,
+    r#"
+from typing import Final
+
+def f(x: object):
+    isinstance(x, Final)  # E: Expected class object, got special form `Final`
+    "#,
+);
+
+testcase!(
+    test_isinstance_valid_special_form,
+    r#"
+from typing import Protocol
+
+def f(x: object):
+    if isinstance(x, Protocol):
+        pass  # No error - Protocol is valid for isinstance
     "#,
 );

@@ -14,6 +14,9 @@ import {
     createPyreflyState,
     findError,
 } from './__test_utils__/PyreflyWasmTestUtils';
+import { TextEncoder, TextDecoder } from 'util';
+
+Object.assign(global, { TextDecoder, TextEncoder });
 
 describe('pyrefly_wasm', () => {
     let pyreService: PyreflyState;
@@ -165,7 +168,9 @@ tes
             expect(hoverInfo.contents).toHaveLength(1);
 
             const hoverInfoContent = hoverInfo.contents[0];
-            expect(hoverInfoContent.value).toEqual('```python\n(function) test: def test(x: int) -> str: ...\n```');
+            expect(hoverInfoContent.value).toEqual(
+                '```python\n(function) test: def test(x: int) -> str: ...\n```'
+            );
         });
     });
 

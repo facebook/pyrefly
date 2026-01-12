@@ -106,6 +106,18 @@ impl SpecialForm {
             _ => None,
         }
     }
+
+    pub fn isinstance_safe(self) -> bool {
+        match self {
+            Self::Callable
+            | Self::Generic
+            | Self::Protocol
+            | Self::Tuple
+            | Self::Type
+            | Self::Union => true,
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -15,7 +15,9 @@ use std::mem;
 
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
+use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::types::TArgs;
+use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
@@ -42,6 +44,7 @@ use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;
 use crate::types::callable::Params;
+use crate::types::class::Class;
 use crate::types::module::ModuleType;
 use crate::types::simplify::simplify_tuples;
 use crate::types::simplify::unions;
@@ -61,17 +64,20 @@ const INITIAL_GAS: Gas = Gas::new(1000);
 
 #[derive(Debug)]
 enum Variable {
-    /// A placeholder representing an unknown type parameter in a "partial
-    /// type". Used for empty containers.
+    /// A "partial type" (terminology borrowed from mypy) for an empty container.
     ///
-    /// Pyrefly only creates these for assignments, and will attempt to
+    /// Pyrefly only creates partial types for assignments, and will attempt to
     /// determine the type ("pin" it) using the first use of the name assigned.
-    Partial,
-    /// A placeholder representing a type parameter in a function call that is
-    /// not solved by the call. Pins on first use like Partial above but falls
-    /// back to the type parameter's default when forced and stores the type
-    /// parameter so we can check its restrictions.
-    Unsolved(Box<Quantified>),
+    ///
+    /// It will attempt to infer the type from the first downstream use; if the
+    /// type cannot be determined it becomes `Any`.
+    PartialContained,
+    /// A "partial type" (see above) representing a type variable that was not
+    /// solved as part of a generic function or constructor call.
+    ///
+    /// Behaves similar to `PartialContained`, but it has the ability to use
+    /// the default type if the first use does not pin.
+    PartialQuantified(Box<Quantified>),
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
     Quantified(Box<Quantified>),
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
@@ -92,11 +98,11 @@ enum Variable {
 }
 
 impl Variable {
-    fn unsolved(q: &Quantified) -> Self {
+    fn finished(q: &Quantified) -> Self {
         if let Some(d) = q.default() {
             Variable::Answer(d.clone())
         } else {
-            Variable::Unsolved(Box::new(q.clone()))
+            Variable::PartialQuantified(Box::new(q.clone()))
         }
     }
 }
@@ -122,10 +128,10 @@ enum LoopBound {
 impl Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Variable::Partial => write!(f, "Partial"),
-            Variable::Unsolved(q) | Variable::Quantified(q) => {
-                let label = if matches!(self, Variable::Unsolved(_)) {
-                    "Unsolved"
+            Variable::PartialContained => write!(f, "PartialContained"),
+            Variable::PartialQuantified(q) | Variable::Quantified(q) => {
+                let label = if matches!(self, Variable::PartialQuantified(_)) {
+                    "PartialQuantified"
                 } else {
                     "Quantified"
                 };
@@ -339,10 +345,10 @@ impl Solver {
             Variable::Quantified(q) => {
                 *variable = Variable::Answer(q.as_gradual_type());
             }
-            Variable::Unsolved(q) => {
+            Variable::PartialQuantified(q) => {
                 *variable = Variable::Answer(default(q));
             }
-            Variable::Partial | Variable::Unwrap => {
+            Variable::PartialContained | Variable::Unwrap => {
                 *variable = Variable::Answer(Type::any_implicit());
             }
             Variable::Parameter => {
@@ -420,7 +426,7 @@ impl Solver {
             _ => {
                 let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
-                    Variable::Unsolved(q) => default(q),
+                    Variable::PartialQuantified(q) => default(q),
                     _ => Type::any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
@@ -456,8 +462,17 @@ impl Solver {
     /// Simplify a type as much as we can.
     fn simplify_mut(&self, t: &mut Type) {
         t.transform_mut(&mut |x| {
-            if let Type::Union(xs) = x {
-                *x = unions(mem::take(xs));
+            if let Type::Union(box Union {
+                members: xs,
+                display_name: original_name,
+            }) = x
+            {
+                let mut merged = unions(mem::take(xs));
+                // Preserve union display names during simplification
+                if let Type::Union(box Union { display_name, .. }) = &mut merged {
+                    *display_name = original_name.clone();
+                }
+                *x = merged;
             }
             if let Type::Intersect(y) = x {
                 *x = intersect(mem::take(&mut y.0), y.1.clone());
@@ -525,13 +540,13 @@ impl Solver {
     /// See test::generic_basic::test_typevar_or_none for why we need to do this.
     fn erase_unsolved_variables(&self, t: &mut Type) {
         t.transform_mut(&mut |x| match x {
-            Type::Union(xs) => {
+            Type::Union(box Union { members: xs, .. }) => {
                 let erase_type = |x: &Type| match x {
                     Type::Var(v) => {
                         let lock = self.variables.lock();
                         let variable = lock.get(*v);
                         match &*variable {
-                            Variable::Unsolved(q) => {
+                            Variable::PartialQuantified(q) => {
                                 let erase = q.default.is_none();
                                 drop(variable);
                                 drop(lock);
@@ -580,9 +595,11 @@ impl Solver {
 
     /// Generate a fresh variable based on code that is unspecified inside a container,
     /// e.g. `[]` with an unknown type of element.
-    pub fn fresh_contained(&self, uniques: &UniqueFactory) -> Var {
+    pub fn fresh_partial_contained(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
-        self.variables.lock().insert_fresh(v, Variable::Partial);
+        self.variables
+            .lock()
+            .insert_fresh(v, Variable::PartialContained);
         v
     }
 
@@ -730,7 +747,7 @@ impl Solver {
                 }
                 Variable::Quantified(q) => {
                     if self.infer_with_first_use {
-                        *e = Variable::unsolved(q);
+                        *e = Variable::finished(q);
                     } else {
                         *e = Variable::Answer(default(q))
                     }
@@ -772,8 +789,7 @@ impl Solver {
         let lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Var(v) = t
-                && let Variable::Quantified(q) = &*lock.get(*v)
-                && **q == param.quantified
+                && !matches!(&*lock.get(*v), Variable::Answer(_))
             {
                 *t = param.quantified.clone().to_type();
             }
@@ -820,7 +836,7 @@ impl Solver {
                     Some(t)
                 } else if self.infer_with_first_use {
                     let v = Var::new(uniques);
-                    self.variables.lock().insert_fresh(v, Variable::unsolved(q));
+                    self.variables.lock().insert_fresh(v, Variable::finished(q));
                     Some(v.to_type())
                 } else {
                     Some(default(q))
@@ -943,7 +959,7 @@ impl Solver {
         type_order: TypeOrder<Ans>,
         errors: &ErrorCollector,
         range: TextRange,
-    ) {
+    ) -> Type {
         fn expand(t: Type, variables: &Variables, recurser: &VarRecurser, res: &mut Vec<Type>) {
             match t {
                 Type::Var(v) if let Some(_guard) = variables.recurse(v, recurser) => {
@@ -957,7 +973,7 @@ impl Solver {
                         _ => res.push(v.to_type()),
                     }
                 }
-                Type::Union(ts) => {
+                Type::Union(box Union { members: ts, .. }) => {
                     for t in ts {
                         expand(t, variables, recurser, res);
                     }
@@ -987,6 +1003,17 @@ impl Solver {
                         SubsetError::Other,
                     );
                 }
+                // In order to minimize the blast radius of poor cycle-handling, we currently produce
+                // inconsistent results - any other binding that saved an answer which depended on
+                // this one sees the forced type, but anything downstream of this sees the computed
+                // type.
+                //
+                // This is both highly unpredictable in terms of end user experience, and nondeterministic
+                // because we can definitely get non-idempotent errors in some cases.
+                //
+                // TODO(stroxler): Probably remove this - it regresses a CRTP example, so we should
+                // remove it in a dedicated diff.
+                ty
             }
             _ => {
                 // If we just recorded a LoopRecursive answer, we may now need to check the result
@@ -1025,9 +1052,10 @@ impl Solver {
                         });
                     }
                     None => {
-                        lock.update(var, Variable::Answer(ty));
+                        lock.update(var, Variable::Answer(ty.clone()));
                     }
                 }
+                ty
             }
         }
     }
@@ -1069,6 +1097,7 @@ impl Solver {
             type_order,
             gas: INITIAL_GAS,
             recursive_assumptions: SmallSet::new(),
+            class_protocol_assumptions: SmallSet::new(),
         }
     }
 }
@@ -1221,6 +1250,10 @@ pub enum SubsetError {
     /// An invariant was violated - used for cases that should be unreachabile when - if there is ever a bug - we
     /// would prefer to not panic and get a text location for reproducing rather than just a crash report.
     InternalError(String),
+    /// Protocol class names cannot be assigned to `type[P]` when `P` is a protocol
+    TypeOfProtocolNeedsConcreteClass(Name),
+    /// A `type` cannot accept special forms like `Callable`
+    TypeCannotAcceptSpecialForms(SpecialForm),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -1248,6 +1281,13 @@ impl SubsetError {
             SubsetError::TypedDict(err) => Some(err.to_error_msg()),
             SubsetError::OpenTypedDict(err) => Some(err.to_error_msg()),
             SubsetError::InternalError(msg) => Some(format!("Pyrefly internal error: {msg}")),
+            SubsetError::TypeOfProtocolNeedsConcreteClass(want) => Some(format!(
+                "Only concrete classes may be assigned to `type[{want}]` because `{want}` is a protocol"
+            )),
+            SubsetError::TypeCannotAcceptSpecialForms(form) => Some(format!(
+                "`type` cannot accept special form `{}` as an argument",
+                form
+            )),
             SubsetError::Other => None,
         }
     }
@@ -1262,6 +1302,12 @@ pub struct Subset<'a, Ans: LookupAnswer> {
     /// Recursive assumptions of pairs of types that is_subset_eq returns true for.
     /// Used for structural typechecking of protocols.
     pub recursive_assumptions: SmallSet<(Type, Type)>,
+    /// Class-level recursive assumptions for protocol checks.
+    /// When checking `got <: protocol` where got's type arguments contain Vars
+    /// (indicating we're in a recursive pattern), we track (got_class, protocol_class)
+    /// pairs to detect cycles. This enables coinductive reasoning for recursive protocols
+    /// like Functor/Maybe without falsely assuming success for unrelated protocol checks.
+    pub class_protocol_assumptions: SmallSet<(Class, Class)>,
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
@@ -1298,9 +1344,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let variable1 = variables.get(*v1);
                 let variable2 = variables.get(*v2);
                 match (&*variable1, &*variable2) {
-                    (_, Variable::LoopRecursive(..)) => Err(SubsetError::internal_error(
-                        "Did not expect `Variable::LoopRecursive` to appear as `want` in is_subset_eq",
-                    )),
+                    (_, Variable::LoopRecursive(t2, _)) => {
+                        // When a LoopRecursive variable appears as `want`, use its prior type instead.
+                        // This handles nested loops where an inner loop variable's prior depends on
+                        // an outer loop variable that is still being analyzed.
+                        // See: https://github.com/facebook/pyrefly/issues/1565
+                        let t2 = t2.clone();
+                        drop(variable1);
+                        drop(variable2);
+                        drop(variables);
+                        self.is_subset_eq(got, &t2)
+                    }
                     (Variable::Parameter, _) | (_, Variable::Parameter) => {
                         Err(SubsetError::internal_error(
                             "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
@@ -1383,7 +1437,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(&t1, t2)
                     }
-                    Variable::Quantified(q) | Variable::Unsolved(q) => {
+                    Variable::Quantified(q) | Variable::PartialQuantified(q) => {
                         let name = q.name.clone();
                         let bound = q.restriction().as_type(self.type_order.stdlib());
                         drop(v1_ref);
@@ -1441,7 +1495,19 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Err(e) => Err(e),
                         }
                     }
-                    Variable::Partial | Variable::Unwrap | Variable::Recursive => {
+                    Variable::PartialContained => {
+                        // Promote LiteralStr to str when pinning a partial type.
+                        // TODO(stroxler): should we be promoting other literal types here?
+                        // See: https://github.com/facebook/pyrefly/issues/2068
+                        let t2_p = match t2 {
+                            Type::LiteralString => self.type_order.stdlib().str().clone().to_type(),
+                            _ => t2.clone(),
+                        };
+                        drop(v1_ref);
+                        variables.update(*v1, Variable::Answer(t2_p));
+                        Ok(())
+                    }
+                    Variable::Unwrap | Variable::Recursive => {
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         Ok(())
@@ -1452,9 +1518,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let variables = self.solver.variables.lock();
                 let v2_ref = variables.get(*v2);
                 match &*v2_ref {
-                    Variable::LoopRecursive(..) => Err(SubsetError::internal_error(
-                        "Did not expect `Variable::LoopRecursive` to appear as `want` in is_subset_eq",
-                    )),
+                    Variable::LoopRecursive(t2, _) => {
+                        // When a LoopRecursive variable appears as `want`, use its prior type instead.
+                        // This handles nested loops where an inner loop variable's prior depends on
+                        // an outer loop variable that is still being analyzed.
+                        // See: https://github.com/facebook/pyrefly/issues/1565
+                        let t2 = t2.clone();
+                        drop(v2_ref);
+                        drop(variables);
+                        self.is_subset_eq(t1, &t2)
+                    }
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
                     )),
@@ -1464,7 +1537,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(t1, &t2)
                     }
-                    Variable::Quantified(q) | Variable::Unsolved(q) => {
+                    Variable::Quantified(q) | Variable::PartialQuantified(q) => {
                         let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
                         let name = q.name.clone();
                         let bound = q.restriction().as_type(self.type_order.stdlib());
@@ -1497,7 +1570,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                         Ok(())
                     }
-                    Variable::Partial => {
+                    Variable::PartialContained => {
                         let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
                         drop(v2_ref);
                         variables.update(*v2, Variable::Answer(t1_p));

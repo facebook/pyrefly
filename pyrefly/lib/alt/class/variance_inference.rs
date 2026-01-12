@@ -12,8 +12,9 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
-use pyrefly_util::visit::VisitMut;
+use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
@@ -49,14 +50,8 @@ use crate::types::types::Type;
 // We need to visit the types that we know are required to be visited for variance inference, and appear in the context of a class with type variables.
 // For example, SelfType is intentionally skipped and should not be visited because it should not be included in the variance calculation.
 
-#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default, VisitMut)]
 pub struct VarianceMap(SmallMap<Name, Variance>);
-
-impl VisitMut<Type> for VarianceMap {
-    fn recurse_mut(&mut self, _visitor: &mut dyn FnMut(&mut Type)) {
-        // No-op: VarianceMap does not contain any Type
-    }
-}
 
 impl Display for VarianceMap {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
@@ -172,8 +167,8 @@ fn on_class(
             Type::Quantified(q) => {
                 on_var(q.name(), variance, inj);
             }
-            Type::Union(t) => {
-                for ty in t {
+            Type::Union(box Union { members: tys, .. }) => {
+                for ty in tys {
                     on_type(variance, inj, ty, on_edge, on_var);
                 }
             }
@@ -199,7 +194,7 @@ fn on_class(
                         // Unknown params
                     }
                     Params::ParamSpec(prefix, param_spec) => {
-                        for ty in prefix.iter() {
+                        for (ty, _) in prefix.iter() {
                             on_type(variance.inv(), inj, ty, on_edge, on_var);
                         }
                         on_type(variance.inv(), inj, param_spec, on_edge, on_var);
@@ -236,13 +231,15 @@ fn on_class(
         if let Some((ty, _, read_only)) = field.for_variance_inference() {
             // TODO: We need a much better way to distinguish between fields and methods than this
             // currently, class field representation isn't good enough but we need to fix that soon
-            let variance =
-                if ty.is_function_type() || is_private_field(name) || read_only || field.is_final()
-                {
-                    Variance::Covariant
-                } else {
-                    Variance::Invariant
-                };
+            let variance = if ty.is_toplevel_callable()
+                || is_private_field(name)
+                || read_only
+                || field.is_final()
+            {
+                Variance::Covariant
+            } else {
+                Variance::Invariant
+            };
             on_type(variance, true, ty, on_edge, on_var);
         }
     }
@@ -270,10 +267,10 @@ fn initial_inference_map(tparams: &[TParam]) -> InferenceMap {
 
 fn pre_to_post_variance(pre_variance: PreInferenceVariance) -> Variance {
     match pre_variance {
-        PreInferenceVariance::PCovariant => Variance::Covariant,
-        PreInferenceVariance::PContravariant => Variance::Contravariant,
-        PreInferenceVariance::PInvariant => Variance::Invariant,
-        PreInferenceVariance::PUndefined => Variance::Bivariant,
+        PreInferenceVariance::Covariant => Variance::Covariant,
+        PreInferenceVariance::Contravariant => Variance::Contravariant,
+        PreInferenceVariance::Invariant => Variance::Invariant,
+        PreInferenceVariance::Undefined => Variance::Bivariant,
     }
 }
 

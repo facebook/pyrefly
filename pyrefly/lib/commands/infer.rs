@@ -11,6 +11,7 @@ use clap::Parser;
 use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::finder::ConfigFinder;
+use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
@@ -24,9 +25,9 @@ use crate::commands::files::FilesArgs;
 use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::ErrorKind;
+use crate::lsp::wasm::inlay_hints::ParameterAnnotation;
 use crate::state::ide::insert_import_edit_with_forced_import_format;
 use crate::state::lsp::AnnotationKind;
-use crate::state::lsp::ParameterAnnotation;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::types::class::Class;
@@ -197,7 +198,9 @@ fn hint_to_string(
     let hint = hint.promote_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
     let hint = match hint {
-        Type::Union(types) => unions_with_literals(types, stdlib, enum_members),
+        Type::Union(box Union { members: types, .. }) => {
+            unions_with_literals(types, stdlib, enum_members)
+        }
         _ => hint,
     };
     hint.to_string()
@@ -282,7 +285,9 @@ impl InferArgs {
                             let module_info = error.module();
                             let module_path = module_info.path().clone();
                             let config = state.config_finder().python_file(
-                                pyrefly_python::module_name::ModuleName::unknown(),
+                                pyrefly_python::module_name::ModuleNameWithKind::guaranteed(
+                                    pyrefly_python::module_name::ModuleName::unknown(),
+                                ),
                                 &module_path,
                             );
                             let handle = config.handle_from_module_path(module_path);
@@ -292,7 +297,7 @@ impl InferArgs {
                                 let imports: Vec<(TextSize, String, String)> = transaction
                                     .search_exports_exact(unknown_name)
                                     .into_iter()
-                                    .map(|handle_to_import_from| {
+                                    .map(|(handle_to_import_from, _)| {
                                         insert_import_edit_with_forced_import_format(
                                             &ast,
                                             handle.dupe(),

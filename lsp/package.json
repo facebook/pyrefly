@@ -66,6 +66,23 @@
                 "command": "pyrefly.unfoldAllDocstrings"
             }
         ],
+        "semanticTokenScopes": [
+            {
+                "language": "python",
+                "scopes": {
+                    "variable.readonly": [
+                        "variable.other.constant.python"
+                    ]
+                }
+            }
+        ],
+        "configurationDefaults": {
+            "editor.semanticTokenColorCustomizations": {
+                "rules": {
+                    "variable.readonly:python": "#4EC9B0"
+                }
+            }
+        },
         "configuration": {
             "properties": {
                 "pyrefly.lspPath": {
@@ -90,12 +107,13 @@
                 },
                 "python.pyrefly.displayTypeErrors": {
                     "type": "string",
-                    "description": "If 'default', Pyrefly will only provide type check squiggles in the IDE if your file is covered by a Pyrefly configuration. If 'force-off', Pyrefly will never provide type check squiggles in the IDE. If 'force-on', Pyrefly will always provide type check squiggles in the IDE.",
+                    "description": "If 'default', Pyrefly will only provide type check squiggles in the IDE if your file is covered by a Pyrefly configuration. If 'force-off', Pyrefly will never provide type check squiggles in the IDE. If 'force-on', Pyrefly will always provide type check squiggles in the IDE. If 'error-missing-imports', Pyrefly will only show errors for missing imports and missing sources (missing-import, missing-source, and missing-source-for-stubs).",
                     "default": "default",
                     "enum": [
                         "default",
                         "force-on",
-                        "force-off"
+                        "force-off",
+                        "error-missing-imports"
                     ]
                 },
                 "pyrefly.trace.server": {
@@ -175,8 +193,19 @@
                         "implementation": {
                             "type": "boolean",
                             "default": false
+                        },
+                        "callHierarchy": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Disable call hierarchy feature (Show Incoming/Outgoing Calls)"
                         }
                     }
+                },
+                "python.analysis.showHoverGoToLinks": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Controls whether hover tooltips include 'Go to definition' and 'Go to type definition' navigation links.",
+                    "scope": "resource"
                 }
             }
         }

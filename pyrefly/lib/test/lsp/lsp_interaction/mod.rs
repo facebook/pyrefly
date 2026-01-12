@@ -8,16 +8,19 @@
 #![cfg(test)]
 
 mod basic;
+mod call_hierarchy;
 mod completion;
 mod configuration;
 mod definition;
 mod diagnostic;
 mod did_change;
+mod document_symbols;
 mod file_watcher;
 mod hover;
 mod implementation;
 mod inlay_hint;
 mod io;
+mod notebook_code_action;
 mod notebook_completion;
 mod notebook_definition;
 mod notebook_hover;
@@ -30,6 +33,7 @@ mod object_model;
 mod provide_type;
 mod references;
 mod rename;
+mod semantic_tokens;
 mod type_definition;
 mod unsaved_file;
 mod util;

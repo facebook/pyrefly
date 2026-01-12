@@ -134,6 +134,32 @@ def f(c: C):
 );
 
 testcase!(
+    test_property_with_setter_and_deleter,
+    r#"
+from typing import assert_type, reveal_type
+
+class C:
+    @property
+    def foo(self) -> int:
+        return 42
+
+    @foo.setter
+    def foo(self, value: int) -> None:
+        pass
+
+    @foo.deleter
+    def foo(self) -> None:
+        pass
+
+def f(c: C) -> None:
+    assert_type(c.foo, int)
+    c.foo = 1
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: int)
+    del c.foo
+    "#,
+);
+
+testcase!(
     test_cached_property_assignment_allowed,
     r#"
 from functools import cached_property
@@ -203,6 +229,41 @@ assert_type(C.d, int)
 assert_type(C().d, int)
 C.d = "42"  # E: Attribute `d` of class `C` is a descriptor, which may not be overwritten
 C().d = "42"
+    "#,
+);
+
+testcase!(
+    test_bound_method_preserves_function_attributes_from_descriptor,
+    r#"
+from __future__ import annotations
+
+from typing import Callable
+
+
+class CachedMethod:
+    def __init__(self, fn: Callable[[Constraint], int]) -> None:
+        self._fn = fn
+
+    def __get__(self, obj: Constraint | None, owner: type[Constraint]) -> CachedMethod:
+        return self
+
+    def __call__(self, obj: Constraint) -> int:
+        return self._fn(obj)
+
+    def clear_cache(self, obj: Constraint) -> None: ...
+
+
+def cache_on_self(fn: Callable[[Constraint], int]) -> CachedMethod:
+    return CachedMethod(fn)
+
+
+class Constraint:
+    @cache_on_self
+    def pointwise_read_writes(self) -> int:
+        return 0
+
+    def clear_cache(self) -> None:
+        self.pointwise_read_writes.clear_cache(self)
     "#,
 );
 

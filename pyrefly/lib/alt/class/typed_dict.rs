@@ -10,7 +10,10 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::simplify::unions_with_literals;
+use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
+use pyrefly_types::typed_dict::TypedDictInner;
+use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -23,15 +26,19 @@ use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::class::class_field::ClassField;
+use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::unwrap::HintRef;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::solver::SubsetError;
+use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -41,7 +48,7 @@ use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
-use crate::types::tuple::Tuple;
+use crate::types::read_only::ReadOnlyReason;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
@@ -49,7 +56,6 @@ use crate::types::typed_dict::TypedDictField;
 use crate::types::types::Forall;
 use crate::types::types::Overload;
 use crate::types::types::OverloadType;
-use crate::types::types::Substitution;
 use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -77,7 +83,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         item_errors: &ErrorCollector,
     ) {
         let fields = self.typed_dict_fields(typed_dict);
-        let extra_items = self.typed_dict_extra_items(typed_dict.class_object());
+        let extra_items = self.typed_dict_extra_items(typed_dict);
         let mut has_expansion = false;
         let mut keys: SmallSet<Name> = SmallSet::new();
         dict_items.iter().for_each(|x| match &x.key {
@@ -115,15 +121,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         None => {
-                            self.error(
-                                check_errors,
+                            let mut msg = vec1![format!(
+                                "Key `{}` is not defined in TypedDict `{}`",
+                                key_name,
+                                typed_dict.name()
+                            )];
+                            if let Some(suggestion) = best_suggestion(
+                                &key_name,
+                                fields.keys().map(|candidate| (candidate, 0usize)),
+                            ) {
+                                msg.push(format!("Did you mean `{suggestion}`?"));
+                            }
+                            check_errors.add(
                                 key.range(),
                                 ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
-                                format!(
-                                    "Key `{}` is not defined in TypedDict `{}`",
-                                    key_name,
-                                    typed_dict.name()
-                                ),
+                                msg,
                             );
                         }
                     }
@@ -183,7 +195,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         format!(
                             "Missing required key `{}` for TypedDict `{}`",
                             key,
-                            typed_dict.name()
+                            typed_dict.name(),
                         ),
                     );
                 }
@@ -191,59 +203,83 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn typed_dict_extra_items(&self, cls: &Class) -> ExtraItems {
+    fn typed_dict_extra_items_for_cls(&self, cls: &Class) -> ExtraItems {
         self.get_metadata_for_class(cls)
             .typed_dict_metadata()
             .map_or(ExtraItems::Default, |m| m.extra_items.clone())
     }
 
-    fn class_field_to_typed_dict_field(
+    pub fn typed_dict_extra_items(&self, typed_dict: &TypedDict) -> ExtraItems {
+        match typed_dict {
+            TypedDict::TypedDict(inner) => {
+                self.typed_dict_extra_items_for_cls(inner.class_object())
+            }
+            TypedDict::Anonymous(_) => ExtraItems::Extra(ExtraItem {
+                ty: self.get_typed_dict_value_type(typed_dict),
+                read_only: false,
+            }),
+        }
+    }
+
+    fn instantiate_typed_dict_field(
         &self,
-        class: &Class,
-        substitution: &Substitution,
+        typed_dict: &TypedDictInner,
         name: &Name,
         is_total: bool,
     ) -> Option<TypedDictField> {
-        self.get_class_member(class, name).and_then(|member| {
-            Arc::unwrap_or_clone(member.value)
-                .as_typed_dict_field_info(is_total)
-                .map(|field| field.substitute_with(substitution))
-        })
+        let member = self.get_class_member(typed_dict.class_object(), name)?;
+        let field = Arc::unwrap_or_clone(member);
+        let instantiated_ty = self.get_instantiated_typed_dict_field_type(typed_dict, name)?;
+        let mut typed_dict_field = field.as_typed_dict_field_info(is_total)?;
+        typed_dict_field.ty = instantiated_ty;
+        Some(typed_dict_field)
     }
 
     pub fn typed_dict_fields(&self, typed_dict: &TypedDict) -> SmallMap<Name, TypedDictField> {
-        let class = typed_dict.class_object();
-        let metadata = self.get_metadata_for_class(class);
-        let substitution = typed_dict.targs().substitution();
-
-        match metadata.typed_dict_metadata() {
-            None => {
-                // This may happen during incremental update where `class` is stale/outdated
-                SmallMap::new()
+        match typed_dict {
+            TypedDict::TypedDict(inner) => {
+                let class = inner.class_object();
+                let metadata = self.get_metadata_for_class(class);
+                match metadata.typed_dict_metadata() {
+                    None => {
+                        // This may happen during incremental update where `class` is stale/outdated
+                        SmallMap::new()
+                    }
+                    Some(typed_dict_metadata) => typed_dict_metadata
+                        .fields
+                        .iter()
+                        .filter_map(|(name, is_total)| {
+                            self.instantiate_typed_dict_field(inner, name, *is_total)
+                                .map(|field| (name.clone(), field))
+                        })
+                        .collect(),
+                }
             }
-            Some(typed_dict_metadata) => typed_dict_metadata
-                .fields
-                .iter()
-                .filter_map(|(name, is_total)| {
-                    self.class_field_to_typed_dict_field(class, &substitution, name, *is_total)
-                        .map(|field| (name.clone(), field))
-                })
-                .collect(),
+            TypedDict::Anonymous(inner) => inner.fields.iter().cloned().collect(),
         }
     }
 
     pub fn typed_dict_field(&self, typed_dict: &TypedDict, name: &Name) -> Option<TypedDictField> {
-        let class = typed_dict.class_object();
-        let metadata = self.get_metadata_for_class(class);
-        let substitution = typed_dict.targs().substitution();
-
-        metadata
-            .typed_dict_metadata()
-            .and_then(|typed_dict_metadata| {
-                typed_dict_metadata.fields.get(name).and_then(|is_total| {
-                    self.class_field_to_typed_dict_field(class, &substitution, name, *is_total)
-                })
-            })
+        match typed_dict {
+            TypedDict::TypedDict(inner) => {
+                let class = inner.class_object();
+                let metadata = self.get_metadata_for_class(class);
+                metadata
+                    .typed_dict_metadata()
+                    .and_then(|typed_dict_metadata| {
+                        typed_dict_metadata.fields.get(name).and_then(|is_total| {
+                            self.instantiate_typed_dict_field(inner, name, *is_total)
+                        })
+                    })
+            }
+            TypedDict::Anonymous(inner) => inner.fields.iter().find_map(|field| {
+                if *field.0 == *name {
+                    Some(field.1.clone())
+                } else {
+                    None
+                }
+            }),
+        }
     }
 
     fn names_to_fields<'b>(
@@ -269,25 +305,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
-        let mut params = vec![self.class_self_param(cls, true)];
+        // This overload requires that all the fields are passed by name
+        let mut kw_params = vec![self.class_self_param(cls, true)];
+        // This overload lets you pass a TypedDict or dict as the first positional argument
+        // and optionally pass in additional fields by name
+        let mut map_params = vec![
+            self.class_self_param(cls, true),
+            Param::PosOnly(
+                Some(Name::new_static("__map")),
+                self.instantiate(cls),
+                Required::Required,
+            ),
+        ];
         for (name, field) in self.names_to_fields(cls, fields) {
-            params.push(Param::KwOnly(
+            kw_params.push(Param::KwOnly(
                 name.clone(),
-                field.ty,
+                field.ty.clone(),
                 if field.required {
                     Required::Required
                 } else {
                     Required::Optional(None)
                 },
             ));
+            map_params.push(Param::KwOnly(
+                name.clone(),
+                field.ty,
+                Required::Optional(None),
+            ));
         }
-        if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(cls) {
-            params.push(Param::Kwargs(None, extra.ty));
+        if let ExtraItems::Extra(extra) = self.typed_dict_extra_items_for_cls(cls) {
+            kw_params.push(Param::Kwargs(None, extra.ty.clone()));
+            map_params.push(Param::Kwargs(None, extra.ty));
         }
-        let ty = Type::Function(Box::new(Function {
-            signature: Callable::list(ParamList::new(params), Type::None),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
-        }));
+
+        let ty = Type::Overload(Overload {
+            signatures: vec1![
+                OverloadType::Function(Function {
+                    signature: Callable::list(ParamList::new(kw_params), Type::None),
+                    metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+                }),
+                OverloadType::Function(Function {
+                    signature: Callable::list(ParamList::new(map_params), Type::None),
+                    metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+                })
+            ],
+            metadata: Box::new(FuncMetadata::def(
+                self.module().dupe(),
+                cls.dupe(),
+                dunder::INIT,
+            )),
+        });
         ClassSynthesizedField::new(ty)
     }
 
@@ -298,7 +365,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> ClassSynthesizedField {
         let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), UPDATE_METHOD);
         let self_param = self.class_self_param(cls, true);
-        let extra = if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(cls) {
+        let extra = if let ExtraItems::Extra(extra) = self.typed_dict_extra_items_for_cls(cls) {
             Some(extra.ty)
         } else {
             None
@@ -324,7 +391,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
 
         // ---- Overload: update(m: Iterable[tuple[Literal["key"], value]], /)
-        let get_tuple = |name, ty| Type::Tuple(Tuple::Concrete(vec![self.name_or_str(name), ty]));
+        let get_tuple = |name, ty| Type::concrete_tuple(vec![self.name_or_str(name), ty]);
         let mut tuple_types: Vec<Type> = self
             .names_to_fields(cls, fields)
             .filter(|(_, field)| !field.is_read_only()) // filter read-only fields
@@ -395,7 +462,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         let tparams = vec![TParam {
             quantified: q.clone(),
-            variance: PreInferenceVariance::PInvariant,
+            variance: PreInferenceVariance::Invariant,
         }];
         OverloadType::Forall(Forall {
             tparams: Arc::new(TParams::new(tparams)),
@@ -557,7 +624,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &mut literal_signatures,
             );
         }
-        if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(cls) {
+        if let ExtraItems::Extra(extra) = self.typed_dict_extra_items_for_cls(cls) {
             self.gen_pop_overloads_for_field(
                 &metadata,
                 &self_param,
@@ -608,7 +675,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut overloads = fields_iter
             .filter_map(|(name, field)| make_overload(Some(name), field.is_read_only(), field.ty))
             .collect::<Vec<_>>();
-        if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(cls)
+        if let ExtraItems::Extra(extra) = self.typed_dict_extra_items_for_cls(cls)
             && let Some(overload) = make_overload(
                 None,
                 extra.read_only,
@@ -624,11 +691,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn get_typed_dict_value_type(&self, typed_dict: &TypedDict) -> Type {
-        let cls = typed_dict.class_object();
-        if let Some(metadata) = self.get_metadata_for_class(cls).typed_dict_metadata() {
-            self.get_typed_dict_value_type_from_fields(cls, &metadata.fields)
-        } else {
-            self.stdlib.object().clone().to_type()
+        match typed_dict {
+            TypedDict::TypedDict(inner) => {
+                let cls = inner.class_object();
+                if let Some(metadata) = self.get_metadata_for_class(cls).typed_dict_metadata() {
+                    self.get_typed_dict_value_type_from_fields(cls, &metadata.fields)
+                } else {
+                    self.stdlib.object().clone().to_type()
+                }
+            }
+            TypedDict::Anonymous(inner) => inner.value_type.clone(),
         }
     }
 
@@ -637,7 +709,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         typed_dict: &TypedDict,
     ) -> Option<Type> {
-        if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict.class_object())
+        if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict)
             && !extra.read_only
             && self.typed_dict_fields(typed_dict).values().all(|field| {
                 !field.is_read_only() && !field.required && self.is_equal(&field.ty, &extra.ty)
@@ -655,7 +727,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> Type {
-        let extra_items = self.typed_dict_extra_items(cls);
+        let extra_items = self.typed_dict_extra_items_for_cls(cls);
         if matches!(extra_items, ExtraItems::Default) {
             // extra_items defaults to `ReadOnly[object]`, and `object | ...` simplifies to `object`.
             return self.stdlib.object().clone().to_type();
@@ -718,7 +790,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn all_items_are_removable(&self, cls: &Class, fields: &SmallMap<Name, bool>) -> bool {
         !self
-            .typed_dict_extra_items(cls)
+            .typed_dict_extra_items_for_cls(cls)
             .extra_item(self.stdlib)
             .read_only
             && self
@@ -757,10 +829,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Function {
                 signature: Callable::list(
                     ParamList::new(vec![self.class_self_param(cls, true)]),
-                    Type::Tuple(Tuple::Concrete(vec![
+                    Type::concrete_tuple(vec![
                         self.stdlib.str().clone().to_type(),
                         self.get_typed_dict_value_type_from_fields(cls, fields),
-                    ])),
+                    ]),
                 ),
                 metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), POPITEM_METHOD),
             },
@@ -807,6 +879,132 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
             })
             .collect()
+    }
+
+    pub fn calculate_typed_dict_field(
+        &self,
+        metadata: &ClassMetadata,
+        name: &Name,
+        range: TextRange,
+        field_definition: &ClassFieldDefinition,
+        errors: &ErrorCollector,
+    ) -> ClassField {
+        let (annotation, is_legal_field_declaration) = match field_definition {
+            ClassFieldDefinition::DeclaredByAnnotation { annotation } => (Some(annotation), true),
+            ClassFieldDefinition::AssignedInBody {
+                value: _,
+                annotation,
+            } => (annotation.as_ref(), false),
+            _ => (None, false),
+        };
+        if !is_legal_field_declaration {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                "TypedDict members must be declared in the form `field: Annotation` with no assignment".to_owned(),
+            );
+        }
+
+        let annotation = match annotation {
+            None => {
+                return ClassField::invalid_typed_dict_field();
+            }
+            Some(idx) => self.get_idx(*idx).annotation.clone(),
+        };
+
+        for q in &[Qualifier::Final, Qualifier::ClassVar] {
+            if annotation.has_qualifier(q) {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    format!("`{q}` may not be used for TypedDict members",),
+                );
+            }
+        }
+        if let Some(td) = metadata.typed_dict_metadata()
+            && let Some(is_total) = td.fields.get(name)
+        {
+            // If this is a TypedDict field, make sure it is compatible with any inherited metadata
+            // restricting extra items.
+            let inherited_extra = metadata.base_class_objects().iter().find_map(|base| {
+                self.get_metadata_for_class(base)
+                    .typed_dict_metadata()
+                    .map(|m| (base, m.extra_items.clone()))
+            });
+            match inherited_extra {
+                Some((base, ExtraItems::Closed)) => {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        format!(
+                            "Cannot extend closed TypedDict `{}` with extra item `{}`",
+                            base.name(),
+                            name
+                        ),
+                    );
+                }
+                Some((base, ExtraItems::Extra(ExtraItem { ty, read_only }))) => {
+                    let field_ty = annotation.get_type();
+                    if read_only {
+                        // The field type needs to be assignable to the extra_items type.
+                        if !self.is_subset_eq(field_ty, &ty) {
+                            self.error(
+                                errors, range, ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                            format!(
+                                "`{}` is not assignable to `extra_items` type `{}` of TypedDict `{}`",
+                                self.for_display(field_ty.clone()), self.for_display(ty), base.name()));
+                        }
+                    } else {
+                        // The field needs to be non-required and its type consistent with the extra_items type.
+                        let required = annotation.has_qualifier(&Qualifier::Required)
+                            || (*is_total && !annotation.has_qualifier(&Qualifier::NotRequired));
+                        if required {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                format!("TypedDict `{}` with non-read-only `extra_items` cannot be extended with required extra item `{}`", base.name(), name),
+                            );
+                        } else if !self.is_equal(field_ty, &ty) {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                format!(
+                                    "`{}` is not consistent with `extra_items` type `{}` of TypedDict `{}`",
+                                    self.for_display(field_ty.clone()), self.for_display(ty), base.name()),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let read_only_reason = if annotation.has_qualifier(&Qualifier::ReadOnly) {
+            Some(ReadOnlyReason::ReadOnlyQualifier)
+        } else {
+            None
+        };
+
+        // Types provided in annotations shadow inferred types
+        //
+        // TODO(stroxler): Should this be an error? An qualifier-only annotation on a typed dict field
+        // is an implicit Any; I think in most cases it's probably illegal anyway so there's already
+        // a type error, but we probably should check.
+        let ty = match &annotation.ty {
+            Some(ty) => ty.clone(),
+            None => Type::any_implicit(),
+        };
+
+        // Pin any vars in the type: leaking a var in a class field is particularly
+        // likely to lead to data races where downstream uses can pin inconsistently.
+        let ty = self.solver().deep_force(ty);
+
+        ClassField::typed_dict_field(ty, annotation, read_only_reason)
     }
 }
 
