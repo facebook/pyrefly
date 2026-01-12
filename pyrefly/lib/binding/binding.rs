@@ -1398,6 +1398,16 @@ pub enum Binding {
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
+    /// A forward reference with a solve-time initialization check.
+    /// The termination keys are from branches that don't have a value for this variable.
+    /// At solve time, if all termination keys resolve to Never, no error is emitted.
+    /// Otherwise, an "uninitialized" error is emitted.
+    InitCheck {
+        forward_key: Idx<Key>,
+        name: Name,
+        range: TextRange,
+        termination_keys: Vec<Option<Idx<Key>>>,
+    },
     /// A phi node, representing the union of several alternative keys.
     /// Each BranchInfo contains the value key and optional termination key from one branch.
     Phi(JoinStyle<Idx<Key>>, Vec<BranchInfo>),
@@ -1796,6 +1806,20 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, ")")
             }
+            Self::InitCheck {
+                forward_key,
+                name,
+                range,
+                termination_keys,
+            } => {
+                write!(
+                    f,
+                    "InitCheck({}, {name}, {}, {:?})",
+                    ctx.display(*forward_key),
+                    m.display(range),
+                    termination_keys
+                )
+            }
         }
     }
 }
@@ -1868,7 +1892,8 @@ impl Binding {
             | Binding::CompletedPartialType(..)
             | Binding::PartialTypeWithUpstreamsCompleted(..)
             | Binding::Delete(_)
-            | Binding::ClassBodyUnknownName(_, _, _) => None,
+            | Binding::ClassBodyUnknownName(_, _, _)
+            | Binding::InitCheck { .. } => None,
         }
     }
 }

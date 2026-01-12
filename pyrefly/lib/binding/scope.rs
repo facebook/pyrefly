@@ -573,12 +573,15 @@ impl FlowInfo {
 
     fn initialized(&self) -> InitializedInFlow {
         self.value()
-            .map_or(InitializedInFlow::Yes, |v| match v.style {
+            .map_or(InitializedInFlow::Yes, |v| match &v.style {
                 FlowStyle::Uninitialized
                 | FlowStyle::ClassField {
                     initial_value: None,
                 } => InitializedInFlow::No,
                 FlowStyle::PossiblyUninitialized => InitializedInFlow::Conditionally,
+                FlowStyle::PossiblyUninitializedWithTermKeys(keys) => {
+                    InitializedInFlow::ConditionallyWithTermKeys(keys.clone())
+                }
                 _ => InitializedInFlow::Yes,
             })
     }
@@ -613,6 +616,10 @@ pub enum FlowStyle {
     ClassDef,
     /// The name is possibly uninitialized (perhaps due to merging branches)
     PossiblyUninitialized,
+    /// The name is possibly uninitialized but some missing branches have termination
+    /// keys that need to be checked at solve time. If all termination keys resolve
+    /// to Never, the variable is actually always initialized.
+    PossiblyUninitializedWithTermKeys(Vec<Option<Idx<Key>>>),
     /// The name was in an annotated declaration like `x: int` but not initialized
     Uninitialized,
     /// I'm a speculative binding for a name that was narrowed but not assigned above
@@ -627,18 +634,35 @@ impl FlowStyle {
         always_defined: bool,
         mut styles: impl Iterator<Item = FlowStyle>,
         merge_style: MergeStyle,
+        missing_term_keys: Vec<Option<Idx<Key>>>,
     ) -> FlowStyle {
         let mut merged = styles.next().unwrap_or(FlowStyle::Other);
         for x in styles {
-            match (&merged, x) {
+            match (&merged, &x) {
                 // If they're identical, keep it
-                (l, r) if l == &r => {}
-                // Uninitialized and initialized branches merge into PossiblyUninitialized
+                (l, r) if l == r => {}
+                // Uninitialized or PossiblyUninitialized wins - no term keys to check
                 (FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized, _)
                 | (_, FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized) => {
                     return FlowStyle::PossiblyUninitialized;
                 }
-                // Unclear how to merge, default to None
+                // Both have term keys: combine them
+                (
+                    FlowStyle::PossiblyUninitializedWithTermKeys(k1),
+                    FlowStyle::PossiblyUninitializedWithTermKeys(k2),
+                ) => {
+                    let mut combined = k1.clone();
+                    combined.extend(k2.iter().copied());
+                    merged = FlowStyle::PossiblyUninitializedWithTermKeys(combined);
+                }
+                // One has term keys: preserve them (the other branch is fully initialized)
+                (FlowStyle::PossiblyUninitializedWithTermKeys(_), _) => {
+                    // merged already has the term keys, keep it
+                }
+                (_, FlowStyle::PossiblyUninitializedWithTermKeys(keys)) => {
+                    merged = FlowStyle::PossiblyUninitializedWithTermKeys(keys.clone());
+                }
+                // Unclear how to merge, default to Other
                 _ => {
                     merged = FlowStyle::Other;
                 }
@@ -651,6 +675,11 @@ impl FlowStyle {
             // least some of them.
             match merged {
                 FlowStyle::Uninitialized => FlowStyle::Uninitialized,
+                FlowStyle::PossiblyUninitializedWithTermKeys(mut inner_keys) => {
+                    // Preserve termination keys from nested merges and combine with new ones
+                    inner_keys.extend(missing_term_keys);
+                    FlowStyle::PossiblyUninitializedWithTermKeys(inner_keys)
+                }
                 _ => {
                     // A boolean expression like `(x := condition()) and (y := condition)`
                     // actually defines three downstream flows:
@@ -666,7 +695,15 @@ impl FlowStyle {
                         MergeStyle::Loop
                         | MergeStyle::LoopDefinitelyRuns
                         | MergeStyle::Exclusive
-                        | MergeStyle::Inclusive => FlowStyle::PossiblyUninitialized,
+                        | MergeStyle::Inclusive => {
+                            // If we have termination keys to check at solve time, use the
+                            // special variant that defers the check
+                            if missing_term_keys.is_empty() {
+                                FlowStyle::PossiblyUninitialized
+                            } else {
+                                FlowStyle::PossiblyUninitializedWithTermKeys(missing_term_keys)
+                            }
+                        }
                     }
                 }
             }
@@ -2504,6 +2541,8 @@ impl MergeStyle {
 /// Information about a single branch being merged, including both the flow info
 /// for a specific name and the termination key from the flow this branch came from.
 struct MergeBranch {
+    /// Which branch index this came from (0-indexed into the flows being merged).
+    branch_index: usize,
     flow_info: FlowInfo,
     /// The last StmtExpr in the flow this branch came from, if any.
     /// Used for type-based termination checking at solve time.
@@ -2537,9 +2576,11 @@ impl MergeItems {
         name: Hashed<Name>,
         flow_info: FlowInfo,
         termination_key: Option<Idx<Key>>,
+        branch_index: usize,
         n_branches: usize,
     ) {
         let branch = MergeBranch {
+            branch_index,
             flow_info,
             termination_key,
         };
@@ -2602,7 +2643,7 @@ impl<'a> BindingsBuilder<'a> {
         phi_idx: Idx<Key>,
         merge_style: MergeStyle,
         n_branches: usize,
-        n_branches_with_termination_key: usize,
+        all_termination_keys: &[Option<Idx<Key>>],
     ) -> FlowInfo {
         let base_idx = merge_item.base.as_ref().map(|base| base.idx());
         let mut merge_branches = merge_item.branches;
@@ -2610,18 +2651,18 @@ impl<'a> BindingsBuilder<'a> {
         let base_has_value = merge_item.base.as_ref().is_some_and(|b| b.value.is_some());
         // If this is a loop, we want to use the current default in any phis we produce,
         // and the base flow is part of the merge for type inference purposes.
-        // Track whether we added base so we can correctly count total branches later.
-        let (loop_prior, added_base_to_merge) = if merge_style.is_loop()
+        let loop_prior = if merge_style.is_loop()
             && let Some(base) = merge_item.base
         {
             let loop_prior = base.loop_prior;
             merge_branches.push(MergeBranch {
+                branch_index: merge_branches.len(),
                 flow_info: base,
                 termination_key: None,
             });
-            (Some(loop_prior), true)
+            Some(loop_prior)
         } else {
-            (None, false)
+            None
         };
         let merged_loop_prior = {
             let contained_in_loop = self.scopes.loop_depth() > 0;
@@ -2654,6 +2695,8 @@ impl<'a> BindingsBuilder<'a> {
         let mut branch_infos = Vec::with_capacity(merge_branches.len());
         let mut styles = Vec::with_capacity(merge_branches.len());
         let mut n_values = 0;
+        // Track which branch indices have a value for this variable
+        let mut present_branch_indices = SmallSet::with_capacity(merge_branches.len());
         for merge_branch in merge_branches.into_iter() {
             let flow_info = merge_branch.flow_info;
             let branch_idx = flow_info.idx();
@@ -2671,6 +2714,7 @@ impl<'a> BindingsBuilder<'a> {
 
             if let Some(v) = flow_info.value {
                 n_values += 1;
+                present_branch_indices.insert(merge_branch.branch_index);
                 if v.idx == phi_idx {
                     continue;
                 }
@@ -2682,35 +2726,24 @@ impl<'a> BindingsBuilder<'a> {
             }
             branch_idxs.insert(branch_idx);
         }
+        // Compute termination keys for missing branches. These are branches that
+        // don't have a value for this variable but might have a NoReturn/Never call
+        // at the end. We'll check at solve time if they're actually Never.
+        let missing_branch_term_keys: Vec<Option<Idx<Key>>> = (0..all_termination_keys.len())
+            .filter(|idx| !present_branch_indices.contains(idx))
+            .map(|idx| all_termination_keys[idx])
+            .collect();
+
         // For LoopDefinitelyRuns, a name is always defined if:
         // - It was defined before the loop (base_has_value), OR
         // - It's defined in all loop body branches (since the loop definitely runs at least once)
         //
-        // For regular loops and other merges, a name is always defined if it's in all
-        // non-terminating branches; in the presence of branches with last statements
-        // (termination keys), we prefer false negatives to false positives by treating
-        // the branch as terminating for the purpose of uninitialized local checks only.
-        //
-        // TODO(stroxler): to allow both `Never` / `NoReturn` last statement handing and
-        // uninitialized local checks without false negatives, we have to rewrite uninitialized
-        // local logic completely - it has to be a solve-time only concept, because it is not
-        // possible for binding time to know whether a branch terminates in general.
-        //
-        // n_total_branches is the actual number of branches we iterated over, which includes
-        // the base flow for loops (since base is added to merge_branches for type inference).
-        let n_total_branches = if added_base_to_merge {
-            n_branches + 1
-        } else {
-            n_branches
-        };
-        let n_missing_branches = n_total_branches - n_values;
+        // For other merges, a name is always defined if it's defined in all branches.
+        // If some branches are missing but have termination keys, we defer to solve time
+        // to check if those termination keys are Never.
         let this_name_always_defined = match merge_style {
-            MergeStyle::LoopDefinitelyRuns => {
-                base_has_value
-                    || n_values == n_branches
-                    || n_missing_branches <= n_branches_with_termination_key
-            }
-            _ => n_values == n_branches || n_missing_branches <= n_branches_with_termination_key,
+            MergeStyle::LoopDefinitelyRuns => base_has_value || n_values == n_branches,
+            _ => n_values == n_branches,
         };
         match value_idxs.len() {
             // If there are no values, then this name isn't assigned at all
@@ -2749,6 +2782,7 @@ impl<'a> BindingsBuilder<'a> {
                             this_name_always_defined,
                             styles.into_iter(),
                             merge_style,
+                            missing_branch_term_keys,
                         ),
                     }),
                     narrow: Some(FlowNarrow { idx: merged_idx }),
@@ -2774,6 +2808,7 @@ impl<'a> BindingsBuilder<'a> {
                             this_name_always_defined,
                             styles.into_iter(),
                             merge_style,
+                            missing_branch_term_keys,
                         ),
                     }),
                     narrow: None,
@@ -2840,19 +2875,25 @@ impl<'a> BindingsBuilder<'a> {
                 0
             };
 
-        // Count how many branches have a last_stmt_expr (potential type-based termination)
-        let n_branches_with_termination_key =
-            flows.iter().filter(|f| f.last_stmt_expr.is_some()).count();
+        // Collect all termination keys indexed by branch for solve-time init checking
+        let all_termination_keys: Vec<Option<Idx<Key>>> =
+            flows.iter().map(|f| f.last_stmt_expr).collect();
 
         // Collect all the branches into a `MergeItem` per name we need to merge
         let mut merge_items = MergeItems::new(flows.first().unwrap_or(&base).info.len());
         for (name, info) in base.info.into_iter_hashed() {
             merge_items.add_base_flow_info(name, info, n_branches)
         }
-        for flow in flows {
+        for (branch_index, flow) in flows.into_iter().enumerate() {
             let termination_key = flow.last_stmt_expr;
             for (name, info) in flow.info.into_iter_hashed() {
-                merge_items.add_branch_flow_info(name, info, termination_key, n_branches)
+                merge_items.add_branch_flow_info(
+                    name,
+                    info,
+                    termination_key,
+                    branch_index,
+                    n_branches,
+                )
             }
         }
 
@@ -2867,7 +2908,7 @@ impl<'a> BindingsBuilder<'a> {
                     phi_idx,
                     merge_style,
                     n_branches,
-                    n_branches_with_termination_key,
+                    &all_termination_keys,
                 ),
             );
         }
