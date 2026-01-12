@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+// @lint-ignore-every SPELL deliberately testing bad spelling
+
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -941,6 +943,87 @@ del foo.y  # E: No attribute `y` in module `foo`
 );
 
 testcase!(
+    test_module_getattr_from_import,
+    TestEnv::one("foo", "def __getattr__(name: str) -> int: ..."),
+    r#"
+from typing import assert_type
+from foo import x, y
+assert_type(x, int)
+assert_type(y, int)
+    "#,
+);
+
+fn test_env_with_incomplete_module() -> TestEnv {
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+from _typeshed import Incomplete
+def __getattr__(name: str) -> Incomplete: ...
+"#,
+    )
+}
+
+testcase!(
+    test_module_getattr_stub_incomplete,
+    test_env_with_incomplete_module(),
+    r#"
+from typing import assert_type, Any
+from foo import x, y
+# Incomplete is essentially Any, so x and y should be Any
+assert_type(x, Any)
+assert_type(y, Any)
+    "#,
+);
+
+fn test_env_with_getattr_and_other_attribute() -> TestEnv {
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+x: str
+def __getattr__(name: str) -> int: ...
+"#,
+    )
+}
+
+testcase!(
+    test_module_getattr_explicit_export_priority,
+    test_env_with_getattr_and_other_attribute(),
+    r#"
+from typing import assert_type
+from foo import x, y
+# x is explicitly defined as str, should not use __getattr__
+assert_type(x, str)
+# y is not defined, should use __getattr__ and be int
+assert_type(y, int)
+    "#,
+);
+
+fn test_env_with_getattr_and_submodule() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "foo",
+        "foo/__init__.pyi",
+        "def __getattr__(name: str) -> int: ...",
+    );
+    env.add_with_path("foo.bar", "foo/bar.pyi", "");
+    env
+}
+
+testcase!(
+    test_submodule_takes_precedence_over_module_getattr,
+    test_env_with_getattr_and_submodule(),
+    r#"
+from foo import bar  # submodule
+from foo import baz  # non-existent attribute, should fall back to __getattr__
+from typing import assert_type, reveal_type
+reveal_type(bar)  # E: Module[foo.bar]
+assert_type(baz, int)
+    "#,
+);
+
+testcase!(
     test_any_subclass,
     r#"
 from typing import Any, assert_type
@@ -1249,6 +1332,122 @@ def test(x: LiteralString):
 );
 
 testcase!(
+    test_private_attribute_outside_class,
+    r#"
+class A:
+    __secret: int = 0
+
+exposed = A.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+
+class B:
+    leaked = A.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+
+class C:
+    __secret: int = 0
+    def reveal(self, a: A):
+        return a.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+"#,
+);
+
+testcase!(
+    test_private_attribute_inside_class,
+    r#"
+class A:
+    __secret: int = 0
+
+    def reveal(self) -> int:
+        return self.__secret
+
+    @classmethod
+    def reveal_cls(cls) -> int:
+        return cls.__secret
+
+    @staticmethod
+    def reveal_static() -> int:
+        return A.__secret
+"#,
+);
+
+testcase!(
+    test_private_attribute_on_peer_instance,
+    r#"
+class F1:
+    __v: int
+
+    def equals(self, other: "F1") -> bool:
+        return self.__v == other.__v
+"#,
+);
+
+testcase!(
+    test_private_attribute_in_subclass_method,
+    r#"
+class A:
+    __secret: int = 0
+
+class B(A):
+    def leak(self) -> int:
+        return self.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+"#,
+);
+
+testcase!(
+    test_unknown_access_of_private_attribute,
+    r#"
+class A:
+    __secret: int = 0
+    def get_secret(self, other):
+        # OK: `other` may be an instance of `A`, which has a `__secret` attribute
+        return other.__secret
+    "#,
+);
+
+testcase!(
+    test_private_attribute_in_function_in_method,
+    r#"
+class A:
+    __secret: int = 0
+    def get_secret(self):
+        def get():
+            return self.__secret
+        return get()
+    "#,
+);
+
+testcase!(
+    test_nonexistent_private_attribute,
+    r#"
+class A:
+    pass
+class B:
+    def oops1(self):
+        return self.__secret  # E: Object of class `B` has no attribute `__secret`
+    def oops2(self, other: A):
+        return other.__secret  # E: Object of class `A` has no attribute `__secret`
+    "#,
+);
+
+// We allow __attr access on modules, since name mangling only occurs on attributes of classes.
+testcase!(
+    test_module_attr_is_not_private,
+    TestEnv::one("foo", "__x: int = 0"),
+    r#"
+import foo
+import types
+print(foo.__x)
+
+def f(mod1, mod2: types.ModuleType):
+    print(mod1.__x)
+    print(mod2.__x)
+
+class A:
+    def f(self, mod: types.ModuleType):
+        print(foo.__x)
+        print(mod.__x)
+    "#,
+);
+
+testcase!(
     test_attribute_access_on_type_callable,
     r#"
 from typing import Callable
@@ -1411,7 +1610,7 @@ class A[T]:
     @overload
     def f(self, x: T | None) -> T: ...
     def f(self, x=None) -> Any: ...
-reveal_type(A.f) # E: revealed type: Overload[[T](self: A[T]) -> T, [T](self: A[T], x: T | None) -> T]
+reveal_type(A.f) # E: revealed type: Overload[\n  [T](self: A[T]) -> T\n  [T](self: A[T], x: T | None) -> T\n]
 assert_type(A.f(A[int]()), int)
     "#,
 );
@@ -1429,7 +1628,7 @@ class A[T]:
     def f(x: T) -> T: ...
     @staticmethod
     def f(x = None) -> Any: ...
-reveal_type(A.f) # E: revealed type: Overload[(x: None = ...) -> None, [T](x: T) -> T]
+reveal_type(A.f) # E: revealed type: Overload[\n  (x: None = ...) -> None\n  [T](x: T) -> T\n]
 assert_type(A.f(), None)
 assert_type(A.f(0), int)
     "#,
@@ -1738,7 +1937,7 @@ def get_type_t[T]() -> type[T]:
     return cast(type[T], 0)
 def foo[T](x: type[T]):
     # mypy reveals the same thing we do (the type of `type.__new__`), while pyright reveals `Unknown`.
-    reveal_type(get_type_t().__new__)  # E: Overload[[Self@type](cls: type[Self@type], o: object, /) -> type, [Self](cls: type[Self], name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwds: Any) -> Self]
+    reveal_type(get_type_t().__new__)  # E: Overload[\n  [Self@type](cls: type[Self@type], o: object, /) -> type\n  [Self](cls: type[Self], name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwds: Any) -> Self\n]
     "#,
 );
 

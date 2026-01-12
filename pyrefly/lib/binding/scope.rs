@@ -41,6 +41,7 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::BranchInfo;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
@@ -148,7 +149,7 @@ impl MutableCaptureError {
     }
 }
 
-/// A name defined in a module, which needs to be convertable to an export.
+/// A name defined in a module, which needs to be convertible to an export.
 #[derive(Debug)]
 pub enum Exportable {
     /// The typical case: this name has key `Key` in the flow at the end of
@@ -346,8 +347,8 @@ impl Static {
                     //
                     // We try to handle parameters that are also bound by the body in the same way that `Definitions`
                     // would have handled an assignment that preceded all other definitions:
-                    // - A parameter that only gets deleted is similar to a single-assingment name.
-                    // - A mutable capture that is also a prameter is illegal, but for consistency
+                    // - A parameter that only gets deleted is similar to a single-assignment name.
+                    // - A mutable capture that is also a parameter is illegal, but for consistency
                     //   we treat it like a mutable capture.
                     match &style {
                         StaticStyle::Delete => {}
@@ -441,6 +442,9 @@ pub struct Flow {
     // - Static tests based on stuff like sys.version_info don't exclude branches at runtime, since the program may execute in different environments
     // - With-blocks may swallow exceptions, so we cannot guarantee that future blocks are definitely unreachable
     is_definitely_unreachable: bool,
+    /// The key for the last `Binding::StmtExpr` in this flow, if any.
+    /// Used to check for type-based termination (NoReturn/Never) at solve time.
+    last_stmt_expr: Option<Idx<Key>>,
 }
 
 impl Flow {
@@ -1958,6 +1962,16 @@ impl Scopes {
         self.current().flow.is_definitely_unreachable
     }
 
+    /// Set or clear the last statement expression key for the current flow.
+    ///
+    /// This is used for type-based termination (accounting for flows that
+    /// ended in a `Never` or `NoReturn` value) in Phi-nodes when merging flows.
+    ///
+    /// Should be set to Some(key) for StmtExpr, and None for other statements.
+    pub fn set_last_stmt_expr(&mut self, key: Option<Idx<Key>>) {
+        self.current_mut().flow.last_stmt_expr = key;
+    }
+
     /// Whenever we enter the scope of a method *and* we see a matching
     /// parameter, we record the name of it so that we can detect `self` assignments
     /// that might define class fields.
@@ -2159,6 +2173,22 @@ impl Scopes {
             (Some(method_name), Some(class_key)) => Some((method_name, class_key)),
             _ => None,
         }
+    }
+
+    pub fn current_method_context(&self) -> Option<Idx<KeyClass>> {
+        let mut in_method_scope = false;
+        for scope in self.iter_rev() {
+            match &scope.kind {
+                ScopeKind::Method(_) => {
+                    in_method_scope = true;
+                }
+                ScopeKind::Class(class_scope) if in_method_scope => {
+                    return Some(class_scope.indices.class_idx);
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Get the name of the (innermost) enclosing class, if any.
@@ -2471,9 +2501,18 @@ impl MergeStyle {
     }
 }
 
+/// Information about a single branch being merged, including both the flow info
+/// for a specific name and the termination key from the flow this branch came from.
+struct MergeBranch {
+    flow_info: FlowInfo,
+    /// The last StmtExpr in the flow this branch came from, if any.
+    /// Used for type-based termination checking at solve time.
+    termination_key: Option<Idx<Key>>,
+}
+
 struct MergeItem {
     base: Option<FlowInfo>,
-    branches: Vec<FlowInfo>,
+    branches: Vec<MergeBranch>,
 }
 
 struct MergeItems(SmallMap<Name, MergeItem>);
@@ -2496,9 +2535,14 @@ impl MergeItems {
     pub fn add_branch_flow_info(
         &mut self,
         name: Hashed<Name>,
-        branch: FlowInfo,
+        flow_info: FlowInfo,
+        termination_key: Option<Idx<Key>>,
         n_branches: usize,
     ) {
+        let branch = MergeBranch {
+            flow_info,
+            termination_key,
+        };
         match self.0.entry_hashed(name) {
             Entry::Vacant(e) => {
                 let mut branches = Vec::with_capacity(n_branches);
@@ -2521,6 +2565,7 @@ impl<'a> BindingsBuilder<'a> {
         phi_idx: Idx<Key>,
         loop_prior: Option<Idx<Key>>,
         join_style: JoinStyle<Idx<Key>>,
+        branch_infos: Vec<BranchInfo>,
     ) -> Idx<Key> {
         if branch_idxs.len() == 1 {
             // We hit this case if any of these are true:
@@ -2535,7 +2580,7 @@ impl<'a> BindingsBuilder<'a> {
             self.insert_binding_idx(phi_idx, Binding::LoopPhi(loop_prior, branch_idxs));
             phi_idx
         } else {
-            self.insert_binding_idx(phi_idx, Binding::Phi(join_style, branch_idxs));
+            self.insert_binding_idx(phi_idx, Binding::Phi(join_style, branch_infos));
             phi_idx
         }
     }
@@ -2557,23 +2602,26 @@ impl<'a> BindingsBuilder<'a> {
         phi_idx: Idx<Key>,
         merge_style: MergeStyle,
         n_branches: usize,
+        n_branches_with_termination_key: usize,
     ) -> FlowInfo {
         let base_idx = merge_item.base.as_ref().map(|base| base.idx());
-        let mut flow_infos = merge_item.branches;
-        // Track the number of branch values before adding base (for LoopDefinitelyRuns)
-        let n_branch_flow_infos = flow_infos.len();
+        let mut merge_branches = merge_item.branches;
         // Track if base has a value for this name (for LoopDefinitelyRuns init check)
         let base_has_value = merge_item.base.as_ref().is_some_and(|b| b.value.is_some());
         // If this is a loop, we want to use the current default in any phis we produce,
         // and the base flow is part of the merge for type inference purposes.
-        let loop_prior = if merge_style.is_loop()
+        // Track whether we added base so we can correctly count total branches later.
+        let (loop_prior, added_base_to_merge) = if merge_style.is_loop()
             && let Some(base) = merge_item.base
         {
             let loop_prior = base.loop_prior;
-            flow_infos.push(base);
-            Some(loop_prior)
+            merge_branches.push(MergeBranch {
+                flow_info: base,
+                termination_key: None,
+            });
+            (Some(loop_prior), true)
         } else {
-            None
+            (None, false)
         };
         let merged_loop_prior = {
             let contained_in_loop = self.scopes.loop_depth() > 0;
@@ -2601,12 +2649,26 @@ impl<'a> BindingsBuilder<'a> {
         // We keep track separately of `value_idxs` and `branch_idxs` so that
         // we know whether to treat the Phi binding as a value or a narrow - it's
         // a narrow only when all the value idxs are the same.
-        let mut value_idxs = SmallSet::with_capacity(flow_infos.len());
-        let mut branch_idxs = SmallSet::with_capacity(flow_infos.len());
-        let mut styles = Vec::with_capacity(flow_infos.len());
+        let mut value_idxs = SmallSet::with_capacity(merge_branches.len());
+        let mut branch_idxs = SmallSet::with_capacity(merge_branches.len());
+        let mut branch_infos = Vec::with_capacity(merge_branches.len());
+        let mut styles = Vec::with_capacity(merge_branches.len());
         let mut n_values = 0;
-        for flow_info in flow_infos.into_iter() {
+        for merge_branch in merge_branches.into_iter() {
+            let flow_info = merge_branch.flow_info;
             let branch_idx = flow_info.idx();
+
+            // The BranchInfo always sees the branch_idx, which will will be
+            // a narrow if one exists, otherwise the value. Each branch may have a
+            // terminiation key, which potentially causes us to ignore it in the Phi based
+            // on Never/NoReturn type information.
+            if branch_idx != phi_idx {
+                branch_infos.push(BranchInfo {
+                    value_key: branch_idx,
+                    termination_key: merge_branch.termination_key,
+                });
+            }
+
             if let Some(v) = flow_info.value {
                 n_values += 1;
                 if v.idx == phi_idx {
@@ -2623,10 +2685,32 @@ impl<'a> BindingsBuilder<'a> {
         // For LoopDefinitelyRuns, a name is always defined if:
         // - It was defined before the loop (base_has_value), OR
         // - It's defined in all loop body branches (since the loop definitely runs at least once)
-        // For regular loops and other merges, a name is always defined if it's in all branches.
+        //
+        // For regular loops and other merges, a name is always defined if it's in all
+        // non-terminating branches; in the presence of branches with last statements
+        // (termination keys), we prefer false negatives to false positives by treating
+        // the branch as terminating for the purpose of uninitialized local checks only.
+        //
+        // TODO(stroxler): to allow both `Never` / `NoReturn` last statement handing and
+        // uninitialized local checks without false negatives, we have to rewrite uninitialized
+        // local logic completely - it has to be a solve-time only concept, because it is not
+        // possible for binding time to know whether a branch terminates in general.
+        //
+        // n_total_branches is the actual number of branches we iterated over, which includes
+        // the base flow for loops (since base is added to merge_branches for type inference).
+        let n_total_branches = if added_base_to_merge {
+            n_branches + 1
+        } else {
+            n_branches
+        };
+        let n_missing_branches = n_total_branches - n_values;
         let this_name_always_defined = match merge_style {
-            MergeStyle::LoopDefinitelyRuns => base_has_value || n_branch_flow_infos == n_branches,
-            _ => n_values == n_branches,
+            MergeStyle::LoopDefinitelyRuns => {
+                base_has_value
+                    || n_values == n_branches
+                    || n_missing_branches <= n_branches_with_termination_key
+            }
+            _ => n_values == n_branches || n_missing_branches <= n_branches_with_termination_key,
         };
         match value_idxs.len() {
             // If there are no values, then this name isn't assigned at all
@@ -2638,6 +2722,7 @@ impl<'a> BindingsBuilder<'a> {
                     phi_idx,
                     loop_prior,
                     base_idx.map_or(JoinStyle::SimpleMerge, JoinStyle::NarrowOf),
+                    branch_infos.clone(),
                 );
                 FlowInfo {
                     value: None,
@@ -2655,6 +2740,7 @@ impl<'a> BindingsBuilder<'a> {
                     phi_idx,
                     loop_prior,
                     base_idx.map_or(JoinStyle::SimpleMerge, JoinStyle::NarrowOf),
+                    branch_infos.clone(),
                 );
                 FlowInfo {
                     value: Some(FlowValue {
@@ -2679,6 +2765,7 @@ impl<'a> BindingsBuilder<'a> {
                     phi_idx,
                     loop_prior,
                     base_idx.map_or(JoinStyle::SimpleMerge, JoinStyle::ReassignmentOf),
+                    branch_infos,
                 );
                 FlowInfo {
                     value: Some(FlowValue {
@@ -2729,7 +2816,19 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             live_branches
         };
-        let all_are_unreachable = flows.iter().all(|f| f.is_definitely_unreachable);
+        // Determine reachability of the merged flow.
+        // For Loop style with empty flows (all branches terminated), the loop body might
+        // never execute (empty iterable), so we use the base flow's reachability.
+        // For LoopDefinitelyRuns, the loop definitely runs, so if all branches terminated,
+        // the flow is unreachable.
+        let all_are_unreachable = if flows.is_empty() {
+            match merge_style {
+                MergeStyle::Loop => base.is_definitely_unreachable,
+                _ => true,
+            }
+        } else {
+            flows.iter().all(|f| f.is_definitely_unreachable)
+        };
 
         // For a regular loop, we merge the base so there's one extra branch being merged.
         // For LoopDefinitelyRuns, we don't count the base as an extra branch because we
@@ -2741,14 +2840,19 @@ impl<'a> BindingsBuilder<'a> {
                 0
             };
 
+        // Count how many branches have a last_stmt_expr (potential type-based termination)
+        let n_branches_with_termination_key =
+            flows.iter().filter(|f| f.last_stmt_expr.is_some()).count();
+
         // Collect all the branches into a `MergeItem` per name we need to merge
         let mut merge_items = MergeItems::new(flows.first().unwrap_or(&base).info.len());
         for (name, info) in base.info.into_iter_hashed() {
             merge_items.add_base_flow_info(name, info, n_branches)
         }
         for flow in flows {
+            let termination_key = flow.last_stmt_expr;
             for (name, info) in flow.info.into_iter_hashed() {
-                merge_items.add_branch_flow_info(name, info, n_branches)
+                merge_items.add_branch_flow_info(name, info, termination_key, n_branches)
             }
         }
 
@@ -2758,7 +2862,13 @@ impl<'a> BindingsBuilder<'a> {
             let phi_idx = self.idx_for_promise(Key::Phi(name.key().clone(), range));
             merged_flow_infos.insert_hashed(
                 name,
-                self.merged_flow_info(merge_item, phi_idx, merge_style, n_branches),
+                self.merged_flow_info(
+                    merge_item,
+                    phi_idx,
+                    merge_style,
+                    n_branches,
+                    n_branches_with_termination_key,
+                ),
             );
         }
 
@@ -2767,6 +2877,7 @@ impl<'a> BindingsBuilder<'a> {
             info: merged_flow_infos,
             has_terminated,
             is_definitely_unreachable: all_are_unreachable,
+            last_stmt_expr: None,
         };
         self.scopes.current_mut().flow = flow
     }
@@ -2782,7 +2893,7 @@ impl<'a> BindingsBuilder<'a> {
             if exclude_names.contains(name) {
                 continue;
             }
-            // We are promising to insert a bidning for this key when we merge the flow
+            // We are promising to insert a binding for this key when we merge the flow
             let phi_idx = self.idx_for_promise(Key::Phi(name.clone(), range));
             match &mut info.value {
                 Some(value) => {
@@ -2908,6 +3019,8 @@ impl<'a> BindingsBuilder<'a> {
         let fork = scope.forks.last_mut().unwrap();
         fork.branch_started = true;
         scope.flow = fork.base.clone();
+        // Clear last_stmt_expr so this branch tracks only its own terminal statement
+        scope.flow.last_stmt_expr = None;
     }
 
     /// Abandon a branch we began without including it in the merge. Used for a few cases

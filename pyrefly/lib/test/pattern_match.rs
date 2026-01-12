@@ -100,6 +100,24 @@ def f0(x: int | str):
 );
 
 testcase!(
+    test_match_alias_narrows_subject,
+    r#"
+from typing import assert_never, assert_type
+
+def my_method(str_or_int: str | int) -> str:
+    match str_or_int:
+        case str() as str_data:
+            assert_type(str_or_int, str)
+            return str_data
+        case int() as int_data:
+            assert_type(str_or_int, int)
+            return str(int_data)
+        case _:
+            assert_never(str_or_int)
+"#,
+);
+
+testcase!(
     test_class_match_with_args_not_exhaustive,
     r#"
 from typing import assert_type

@@ -434,6 +434,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ErrorInfo::Kind(ErrorKind::InvalidArgument),
                     format!("Expected class object, got `{}`", self.for_display(ty)),
                 );
+            } else if let Type::Type(box Type::SpecialForm(SpecialForm::Callable)) = &ty {
+                // Callable is a special form that is not a `type` but can be used in `isinstance` checks
             } else {
                 self.check_type(
                     &ty,

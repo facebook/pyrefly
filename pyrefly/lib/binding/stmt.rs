@@ -7,6 +7,7 @@
 
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -363,6 +364,9 @@ impl<'a> BindingsBuilder<'a> {
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
         self.with_semantic_checker(|semantic, context| semantic.visit_stmt(&x, context));
 
+        // Clear last_stmt_expr at the start - will be set again if this is a StmtExpr
+        self.scopes.set_last_stmt_expr(None);
+
         match x {
             Stmt::FunctionDef(x) => {
                 self.function_def(x, parent);
@@ -669,6 +673,9 @@ impl<'a> BindingsBuilder<'a> {
                         // We don't track first-usage in this context, since we won't analyze the usage anyway.
                         let mut e = illegal_target.clone();
                         self.ensure_expr(&mut e, &mut Usage::StaticTypeInformation);
+                        // Even though the assignment target is invalid, we still need to analyze the RHS so errors
+                        // (like invalid walrus targets) are reported.
+                        self.ensure_expr(&mut x.value, &mut Usage::StaticTypeInformation);
                     }
                 }
             }
@@ -1084,10 +1091,10 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     None
                 };
-                self.insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
-                if special_export == Some(SpecialExport::PytestNoReturn) {
-                    self.scopes.mark_flow_termination(false);
-                }
+                let key = self
+                    .insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
+                // Track this StmtExpr as the trailing statement for type-based termination
+                self.scopes.set_last_stmt_expr(Some(key));
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {
@@ -1191,22 +1198,25 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     Binding::Import(m, x.name.id.clone(), original_name_range)
                 } else {
+                    // Try submodule lookup first, then fall back to __getattr__
                     let x_as_module_name = m.append(&x.name.id);
                     let (finding, error) = match self.lookup.get(x_as_module_name) {
                         FindingOrError::Finding(finding) => (true, finding.error),
                         FindingOrError::Error(error) => (false, Some(error)),
                     };
-                    let error = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
-                    if error {
+                    let is_not_found = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
+                    if finding {
+                        Binding::Module(x_as_module_name, x_as_module_name.components(), None)
+                    } else if exported.contains_key(&dunder::GETATTR) {
+                        // Module has __getattr__, which means any attribute can be accessed.
+                        // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
+                        Binding::ImportViaGetattr(m, x.name.id.clone())
+                    } else if is_not_found {
                         self.error(
                             x.range,
                             ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
                             format!("Could not import `{}` from `{m}`", x.name.id),
                         );
-                    }
-                    if finding {
-                        Binding::Module(x_as_module_name, x_as_module_name.components(), None)
-                    } else if error {
                         Binding::Type(Type::any_error())
                     } else {
                         Binding::Type(Type::any_explicit())

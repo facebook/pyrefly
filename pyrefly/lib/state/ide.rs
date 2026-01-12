@@ -78,7 +78,9 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             | Binding::LoopPhi(k, ..) => {
                 current_idx = *k;
             }
-            Binding::Phi(_, ks) if !ks.is_empty() => current_idx = *ks.iter().next().unwrap(),
+            Binding::Phi(_, branches) if !branches.is_empty() => {
+                current_idx = branches[0].value_key
+            }
             Binding::PossibleLegacyTParam(k, _) => {
                 let binding = bindings.get(*k);
                 current_idx = binding.idx();
@@ -125,6 +127,16 @@ fn create_intermediate_definition_from(
                     *m,
                     name.clone(),
                     *original_name_range,
+                ));
+            }
+            Binding::ImportViaGetattr(m, _name) => {
+                // For __getattr__ imports, the name doesn't exist directly in the module,
+                // so we point to __getattr__ instead.
+                return Some(IntermediateDefinition::NamedImport(
+                    def_key.range(),
+                    *m,
+                    pyrefly_python::dunder::GETATTR.clone(),
+                    None,
                 ));
             }
             Binding::Module(name, path, ..) => {
@@ -279,7 +291,7 @@ fn handle_require_absolute_import(config_finder: &ConfigFinder, handle: &Handle)
     ) {
         return true;
     }
-    let config = config_finder.python_file(handle.module(), handle.path());
+    let config = config_finder.python_file(handle.module_kind(), handle.path());
     config
         .search_path()
         .any(|search_path| handle.path().as_path().starts_with(search_path))

@@ -42,7 +42,7 @@ use crate::types::types::Type;
 /// (in particular, the targs of generic bases) of the bases of a class. If only the class objects are
 /// needed, query `ClassMetadata` instead since that one doesn't require calculating the full types.
 ///
-/// The reason this is tracked separately from `ClassMetadata` is to avoid the possiblity of
+/// The reason this is tracked separately from `ClassMetadata` is to avoid the possibility of
 /// cycles when type arguments of the base classes may depend on the class itself.
 #[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut, Default)]
 pub struct ClassBases {

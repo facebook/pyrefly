@@ -531,25 +531,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
-        if matches!(&ret, Type::TypeGuard(_) | Type::TypeIs(_)) {
-            self.validate_type_guard_positional_argument_count(
-                &def.params,
-                def.id_range(),
-                &def.defining_cls,
-                def.metadata.flags.is_staticmethod,
-                errors,
-            );
-        };
+        // Only validate TypeGuard/TypeIs functions when they have an explicit return annotation.
+        // Functions that return a TypeGuard value without an explicit annotation should not be
+        // treated as TypeGuard functions.
+        if has_return_annotation {
+            if matches!(&ret, Type::TypeGuard(_) | Type::TypeIs(_)) {
+                self.validate_type_guard_positional_argument_count(
+                    &def.params,
+                    def.id_range(),
+                    &def.defining_cls,
+                    def.metadata.flags.is_staticmethod,
+                    errors,
+                );
+            }
 
-        if let Type::TypeIs(ty_narrow) = &ret {
-            self.validate_type_is_type_narrowing(
-                &def.params,
-                stmt,
-                &def.defining_cls,
-                def.metadata.flags.is_staticmethod,
-                ty_narrow,
-                errors,
-            );
+            if let Type::TypeIs(ty_narrow) = &ret {
+                self.validate_type_is_type_narrowing(
+                    &def.params,
+                    stmt,
+                    &def.defining_cls,
+                    def.metadata.flags.is_staticmethod,
+                    ty_narrow,
+                    errors,
+                );
+            }
         }
 
         let callable = if let Some(q) = &def.paramspec {

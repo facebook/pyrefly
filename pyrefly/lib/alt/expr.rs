@@ -1245,21 +1245,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        match slice {
-            Expr::NumberLiteral(ExprNumberLiteral {
-                value: Number::Int(idx),
-                ..
-            }) if let Some(idx) = idx.as_usize() => {
-                TypeInfo::at_facet(base, &FacetKind::Index(idx), || {
-                    self.subscript_infer_for_type(base.ty(), slice, range, errors)
-                })
+        if let Expr::NumberLiteral(ExprNumberLiteral {
+            value: Number::Int(idx),
+            ..
+        }) = slice
+            && let Some(idx) = idx.as_usize()
+        {
+            TypeInfo::at_facet(base, &FacetKind::Index(idx), || {
+                self.subscript_infer_for_type(base.ty(), slice, range, errors)
+            })
+        } else if let Expr::StringLiteral(ExprStringLiteral { value, .. }) = slice {
+            TypeInfo::at_facet(base, &FacetKind::Key(value.to_string()), || {
+                self.subscript_infer_for_type(base.ty(), slice, range, errors)
+            })
+        } else {
+            let swallower = self.error_swallower();
+            match self.expr_infer(slice, &swallower) {
+                Type::Literal(Lit::Str(value)) => {
+                    TypeInfo::at_facet(base, &FacetKind::Key(value.to_string()), || {
+                        self.subscript_infer_for_type(base.ty(), slice, range, errors)
+                    })
+                }
+                _ => {
+                    TypeInfo::of_ty(self.subscript_infer_for_type(base.ty(), slice, range, errors))
+                }
             }
-            Expr::StringLiteral(ExprStringLiteral { value: key, .. }) => {
-                TypeInfo::at_facet(base, &FacetKind::Key(key.to_string()), || {
-                    self.subscript_infer_for_type(base.ty(), slice, range, errors)
-                })
-            }
-            _ => TypeInfo::of_ty(self.subscript_infer_for_type(base.ty(), slice, range, errors)),
         }
     }
 

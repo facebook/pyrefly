@@ -278,7 +278,7 @@ where
 #[serde(rename_all = "camelCase")]
 struct LspConfig {
     /// Settings we share with the Pylance extension for backwards compatibility
-    /// See LspAnalysisConfig's docstring for mroe details
+    /// See LspAnalysisConfig's docstring for more details
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
     python_path: Option<String>,

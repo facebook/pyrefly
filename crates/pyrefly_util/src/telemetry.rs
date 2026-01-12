@@ -29,6 +29,7 @@ pub enum TelemetryEventKind {
     PopulateProjectFiles,
     PopulateWorkspaceFiles,
     SourceDbRebuild,
+    SourceDbRebuildInstance,
     FindFromDefinition,
 }
 
@@ -44,6 +45,7 @@ pub struct TelemetryEvent {
     pub file_stats: Option<TelemetryFileStats>,
     pub task_id: Option<TelemetryTaskId>,
     pub sourcedb_rebuild_stats: Option<TelemetrySourceDbRebuildStats>,
+    pub sourcedb_rebuild_instance_stats: Option<TelemetrySourceDbRebuildInstanceStats>,
 }
 
 pub struct TelemetryFileStats {
@@ -79,11 +81,22 @@ impl TelemetryTaskId {
 }
 
 #[derive(Default)]
-pub struct TelemetrySourceDbRebuildStats {
-    pub count: usize,
+pub struct TelemetryCommonSourceDbStats {
     pub files: usize,
     pub changed: bool,
+}
+
+#[derive(Default)]
+pub struct TelemetrySourceDbRebuildStats {
+    pub count: usize,
     pub had_error: bool,
+    pub common: TelemetryCommonSourceDbStats,
+}
+
+#[derive(Default)]
+pub struct TelemetrySourceDbRebuildInstanceStats {
+    pub common: TelemetryCommonSourceDbStats,
+    pub build_id: Option<String>,
 }
 
 impl TelemetryEvent {
@@ -107,9 +120,32 @@ impl TelemetryEvent {
                 file_stats: None,
                 task_id: None,
                 sourcedb_rebuild_stats: None,
+                sourcedb_rebuild_instance_stats: None,
             },
             queue,
         )
+    }
+
+    pub fn new_task(
+        kind: TelemetryEventKind,
+        server_state: TelemetryServerState,
+        task_id: Option<TelemetryTaskId>,
+        start: Instant,
+    ) -> Self {
+        Self {
+            kind,
+            queue: None,
+            start,
+            error: None,
+            invalidate: None,
+            validate: None,
+            transaction_stats: None,
+            server_state,
+            file_stats: None,
+            task_id,
+            sourcedb_rebuild_stats: None,
+            sourcedb_rebuild_instance_stats: None,
+        }
     }
 
     pub fn set_invalidate_duration(&mut self, duration: Duration) {
@@ -136,7 +172,14 @@ impl TelemetryEvent {
         self.sourcedb_rebuild_stats = Some(stats);
     }
 
-    pub fn finish_and_record(self, telemetry: &impl Telemetry, error: Option<&Error>) -> Duration {
+    pub fn set_sourcedb_rebuild_instance_stats(
+        &mut self,
+        stats: TelemetrySourceDbRebuildInstanceStats,
+    ) {
+        self.sourcedb_rebuild_instance_stats = Some(stats);
+    }
+
+    pub fn finish_and_record(self, telemetry: &dyn Telemetry, error: Option<&Error>) -> Duration {
         let process = self.start.elapsed();
         telemetry.record_event(self, process, error);
         process

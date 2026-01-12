@@ -925,3 +925,82 @@ token-type: function
 "#,
     );
 }
+
+#[test]
+fn submodule_attribute_namespace() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+mymod.submod.Foo
+"#;
+    assert_full_semantic_tokens(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+        ],
+        r#"
+# main.py
+line: 1, column: 7, length: 12, text: mymod.submod
+token-type: namespace
+
+line: 2, column: 0, length: 5, text: mymod
+token-type: namespace
+
+line: 2, column: 6, length: 6, text: submod
+token-type: namespace
+
+line: 2, column: 13, length: 3, text: Foo
+token-type: class
+
+
+# mymod.py
+line: 1, column: 4, length: 7, text: version
+token-type: function
+
+line: 1, column: 17, length: 3, text: str
+token-type: class, token-modifiers: [defaultLibrary]
+
+
+# mymod.submod.py
+line: 1, column: 6, length: 3, text: Foo
+token-type: class
+"#,
+    );
+}
+
+#[test]
+fn submodule_attribute_namespace_when_intermediate_module_missing() {
+    // Only mymod.submod exists, not mymod itself
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+mymod.submod.Foo
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code), ("mymod.submod", mymod_submod_init)],
+        r#"
+# main.py
+line: 1, column: 7, length: 12, text: mymod.submod
+token-type: namespace
+
+line: 2, column: 6, length: 6, text: submod
+token-type: namespace
+
+line: 2, column: 13, length: 3, text: Foo
+token-type: class
+
+
+# mymod.submod.py
+line: 1, column: 6, length: 3, text: Foo
+token-type: class
+"#,
+    );
+}

@@ -350,6 +350,32 @@ def use(mapping: TD, cond: bool) -> None:
 );
 
 testcase!(
+    test_typeddict_literal_variable_key_narrow,
+    r#"
+from typing import TypedDict, Literal, assert_type
+
+class Payload(TypedDict):
+    my_key: list[str] | None
+
+def local_case() -> None:
+    data: Payload = {"my_key": None}
+    key: Literal["my_key"] = "my_key"
+    if data[key] is None:
+        data[key] = []
+    else:
+        assert_type(data[key], list[str])
+        assert_type(data["my_key"], list[str])
+        data[key].append("a")
+        data["my_key"].append("b")
+
+def param_case(data: Payload, key: Literal["my_key"]) -> None:
+    if data[key] is not None:
+        assert_type(data[key], list[str])
+        data[key].append("c")
+"#,
+);
+
+testcase!(
     test_non_dict_get_does_not_narrow,
     r#"
 from typing import assert_type

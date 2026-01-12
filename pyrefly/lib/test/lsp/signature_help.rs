@@ -878,3 +878,28 @@ lib.func(
         "module docstring should not be used for attribute call"
     );
 }
+
+#[test]
+fn typing_cast_shows_all_overloads_test() {
+    let code = r#"
+from typing import cast
+
+cast()
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    // typing.cast has 3 overloads - all should appear as separate signature entries
+    assert_eq!(
+        r#"
+# main.py
+4 | cast()
+         ^
+Signature Help Result: active=0
+- def cast[_T](typ: type[_T], val: Any) -> _T: ...
+- def cast(typ: str, val: Any) -> Any: ..., parameters=[typ: str, val: Any], active parameter = 0
+- def cast(typ: object, val: Any) -> Any: ..., parameters=[typ: object, val: Any], active parameter = 0
+"#
+        .trim(),
+        report.trim(),
+    );
+}

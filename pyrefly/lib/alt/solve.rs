@@ -87,6 +87,7 @@ use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NoneIfRecursive;
+use crate::binding::binding::PrivateAttributeAccessCheck;
 use crate::binding::binding::RaisedException;
 use crate::binding::binding::ReturnTypeKind;
 use crate::binding::binding::SizeExpectation;
@@ -966,7 +967,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         seen_type_vars: &mut SmallMap<TypeVar, Quantified>,
         seen_type_var_tuples: &mut SmallMap<TypeVarTuple, Quantified>,
         seen_param_specs: &mut SmallMap<ParamSpec, Quantified>,
-        tparams: &mut Vec<TParam>,
+        tparams: &mut Vec<(TextRange, TParam)>,
     ) {
         match ty {
             Type::Union(box Union { members: ts, .. }) => {
@@ -1048,10 +1049,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ty_var.restriction().clone(),
                         );
                         e.insert(q.clone());
-                        tparams.push(TParam {
-                            quantified: q.clone(),
-                            variance: ty_var.variance(),
-                        });
+                        tparams.push((
+                            ty_var.qname().range(),
+                            TParam {
+                                quantified: q.clone(),
+                                variance: ty_var.variance(),
+                            },
+                        ));
                         q
                     }
                 };
@@ -1067,10 +1071,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ty_var_tuple.default().cloned(),
                         );
                         e.insert(q.clone());
-                        tparams.push(TParam {
-                            quantified: q.clone(),
-                            variance: PreInferenceVariance::Invariant,
-                        });
+                        tparams.push((
+                            ty_var_tuple.qname().range(),
+                            TParam {
+                                quantified: q.clone(),
+                                variance: PreInferenceVariance::Invariant,
+                            },
+                        ));
                         q
                     }
                 };
@@ -1086,10 +1093,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             param_spec.default().cloned(),
                         );
                         e.insert(q.clone());
-                        tparams.push(TParam {
-                            quantified: q.clone(),
-                            variance: PreInferenceVariance::Invariant,
-                        });
+                        tparams.push((
+                            param_spec.qname().range(),
+                            TParam {
+                                quantified: q.clone(),
+                                variance: PreInferenceVariance::Invariant,
+                            },
+                        ));
                         q
                     }
                 };
@@ -1174,13 +1184,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
                 .collect();
         } else {
+            let mut tparams_with_ranges = Vec::new();
             self.tvars_to_tparams_for_type_alias(
                 &mut ty,
                 &mut seen_type_vars,
                 &mut seen_type_var_tuples,
                 &mut seen_param_specs,
-                &mut tparams,
+                &mut tparams_with_ranges,
             );
+            // Sort by source location to restore the user's intended type parameter order.
+            // This is needed because union members get sorted alphabetically during
+            // simplification, which can change the traversal order.
+            tparams_with_ranges.sort_by_key(|(range, _)| range.start());
+            tparams.extend(tparams_with_ranges.into_iter().map(|(_, tp)| tp));
         }
         if let Some(n) = tparams_for_type_alias_type {
             for extra_tparam in tparams.iter().skip(n) {
@@ -1795,8 +1811,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 errors,
             ),
+            BindingExpect::PrivateAttributeAccess(expectation) => {
+                self.check_private_attribute_access(expectation, errors);
+            }
         }
         Arc::new(EmptyAnswer)
+    }
+
+    fn check_private_attribute_access(
+        &self,
+        expect: &PrivateAttributeAccessCheck,
+        errors: &ErrorCollector,
+    ) {
+        let value_type = self.expr_infer(&expect.value, errors);
+        // Name mangling only occurs on attributes of classes.
+        if self.is_subset_eq(&value_type, &self.stdlib.module_type().clone().to_type()) {
+            return;
+        }
+        if let Some(class_idx) = expect.class_idx {
+            let class_binding = self.get_idx(class_idx);
+            let Some(owner) = class_binding.0.as_ref() else {
+                return;
+            };
+            if owner.contains(&expect.attr.id)
+                && self.is_subset_eq(
+                    &value_type,
+                    &self.union(Type::ClassDef(owner.dupe()), self.instantiate(owner)),
+                )
+            {
+                return; // Valid private attribute access
+            }
+        }
+        if !self.has_attr(&value_type, &expect.attr.id) {
+            return; // Don't report this error if the attribute doesn't exist
+        }
+        self.error(
+            errors,
+            expect.attr.range(),
+            ErrorInfo::Kind(ErrorKind::NoAccess),
+            format!(
+                "Private attribute `{}` cannot be accessed outside of its defining class",
+                expect.attr.id
+            ),
+        );
     }
 
     /// Check if a module path should be skipped for indexing purposes.
@@ -2261,11 +2318,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::Narrow(k, op, range) => {
                 self.narrow(self.get_idx(*k).as_ref(), op, range.range(), errors)
             }
-            Binding::Phi(join_style, ks) => {
-                if ks.len() == 1 {
-                    self.get_idx(*ks.first().unwrap()).arc_clone()
+            Binding::Phi(join_style, branches) => {
+                if branches.len() == 1 {
+                    self.get_idx(branches[0].value_key).arc_clone()
                 } else {
-                    let type_infos = ks
+                    // Filter branches based on type-based termination (Never/NoReturn)
+                    let live_value_keys: Vec<Idx<Key>> = branches
+                        .iter()
+                        .filter_map(|branch| {
+                            match branch.termination_key {
+                                None => {
+                                    // No terminal statement, branch is live
+                                    Some(branch.value_key)
+                                }
+                                Some(term_key) => {
+                                    let term_type = self.get_idx(term_key);
+                                    if term_type.ty().is_never() {
+                                        // Branch terminated with Never/NoReturn
+                                        None
+                                    } else {
+                                        // Terminal statement doesn't return Never, branch is live
+                                        Some(branch.value_key)
+                                    }
+                                }
+                            }
+                        })
+                        .collect();
+
+                    // If all branches terminated, use all value keys (consistent with binding-time)
+                    let keys_to_use = if live_value_keys.is_empty() {
+                        branches.iter().map(|b| b.value_key).collect()
+                    } else {
+                        live_value_keys
+                    };
+
+                    let type_infos = keys_to_use
                         .iter()
                         .filter_map(|k| {
                             let t: Arc<TypeInfo> = self.get_idx(*k);
@@ -2278,6 +2365,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         })
                         .collect::<Vec<_>>();
+
                     TypeInfo::join(
                         type_infos,
                         &|ts| self.unions(ts),
@@ -2347,8 +2435,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     attr.range,
                     errors,
                 );
-                if let Some((identifier, chain)) =
+                if let Some((identifier, unresolved_chain)) =
                     identifier_and_chain_for_expr(&Expr::Attribute(attr.clone()))
+                    && let Some(chain) = self.resolve_facet_chain(unresolved_chain)
                 {
                     // Note that the value we are doing `self.get` on is the same one we did in infer_expr, which is a bit sad.
                     // But avoiding the duplicate get/clone would require us to duplicate some of infer_expr here, which might
@@ -2358,11 +2447,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .arc_clone();
                     type_info.update_for_assignment(chain.facets(), narrowed);
                     type_info
-                } else if let Some((identifier, facets)) =
+                } else if let Some((identifier, unresolved_facets)) =
                     identifier_and_chain_prefix_for_expr(&Expr::Attribute(attr.clone()))
                 {
                     // If the chain contains an unknown subscript index, we clear narrowing for
-                    // all indexes of its parent.
+                    // all indexes of its parent. If any facet in the prefix can't be resolved,
+                    // we give up on narrowing.
+                    let mut facets = Vec::new();
+                    for unresolved in unresolved_facets {
+                        if let Some(resolved) = self.resolve_facet_kind(unresolved) {
+                            facets.push(resolved)
+                        } else {
+                            break;
+                        }
+                    }
                     let mut type_info = self
                         .get(&Key::BoundName(ShortIdentifier::new(&identifier)))
                         .arc_clone();
@@ -2382,19 +2480,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     Some(assigned_ty)
                 };
-                if let Some((identifier, chain)) =
+                if let Some((identifier, unresolved_chain)) =
                     identifier_and_chain_for_expr(&Expr::Subscript(subscript.clone()))
+                    && let Some(chain) = self.resolve_facet_chain(unresolved_chain)
                 {
                     let mut type_info = self
                         .get(&Key::BoundName(ShortIdentifier::new(&identifier)))
                         .arc_clone();
                     type_info.update_for_assignment(chain.facets(), narrowed);
                     type_info
-                } else if let Some((identifier, facets)) =
+                } else if let Some((identifier, unresolved_facets)) =
                     identifier_and_chain_prefix_for_expr(&Expr::Subscript(subscript.clone()))
                 {
                     // If the chain contains an unknown subscript index, we clear narrowing for
-                    // all indexes of its parent.
+                    // all indexes of its parent. If any facet in the prefix can't be resolved,
+                    // we give up on narrowing.
+                    let mut facets = Vec::new();
+                    for unresolved in unresolved_facets {
+                        if let Some(resolved) = self.resolve_facet_kind(unresolved) {
+                            facets.push(resolved)
+                        } else {
+                            break;
+                        }
+                    }
                     let mut type_info = self
                         .get(&Key::BoundName(ShortIdentifier::new(&identifier)))
                         .arc_clone();
@@ -3573,6 +3681,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::Import(m, name, _aliased) => self
                 .get_from_export(*m, None, &KeyExport(name.clone()))
                 .arc_clone(),
+            Binding::ImportViaGetattr(m, _name) => {
+                // Import via module-level __getattr__ for incomplete stubs.
+                // Get the return type of __getattr__.
+                let getattr_ty = self
+                    .get_from_export(*m, None, &KeyExport(dunder::GETATTR.clone()))
+                    .arc_clone();
+                getattr_ty
+                    .callable_return_type()
+                    .unwrap_or(Type::any_implicit())
+            }
             Binding::ClassDef(x, _decorators) => match &self.get_idx(*x).0 {
                 None => Type::any_implicit(),
                 Some(cls) => {

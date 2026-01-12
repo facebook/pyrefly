@@ -22,6 +22,7 @@ use crate::types::Type;
 /// and also allow us to collect the same types along with their location into a vector.
 pub trait TypeOutput {
     fn write_str(&mut self, s: &str) -> fmt::Result;
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result;
     fn write_qname(&mut self, qname: &QName) -> fmt::Result;
     fn write_lit(&mut self, lit: &Lit) -> fmt::Result;
     fn write_targs(&mut self, targs: &TArgs) -> fmt::Result;
@@ -46,6 +47,10 @@ impl<'a, 'b, 'f> DisplayOutput<'a, 'b, 'f> {
 impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.formatter.write_str(s)
+    }
+
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
+        self.formatter.write_fmt(args)
     }
 
     fn write_qname(&mut self, q: &QName) -> fmt::Result {
@@ -92,6 +97,14 @@ impl<'a> OutputWithLocations<'a> {
 impl TypeOutput for OutputWithLocations<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.parts.push((s.to_owned(), None));
+        Ok(())
+    }
+
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
+        use std::fmt::Write;
+        let mut s = String::new();
+        s.write_fmt(args)?;
+        self.parts.push((s, None));
         Ok(())
     }
 

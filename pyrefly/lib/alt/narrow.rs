@@ -11,6 +11,10 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_types::class::Class;
 use pyrefly_types::display::TypeDisplayContext;
+use pyrefly_types::facet::FacetChain;
+use pyrefly_types::facet::FacetKind;
+use pyrefly_types::facet::UnresolvedFacetChain;
+use pyrefly_types::facet::UnresolvedFacetKind;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::prelude::SliceExt;
@@ -43,8 +47,6 @@ use crate::error::context::ErrorInfo;
 use crate::error::style::ErrorStyle;
 use crate::types::callable::FunctionKind;
 use crate::types::class::ClassType;
-use crate::types::facet::FacetChain;
-use crate::types::facet::FacetKind;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
@@ -945,17 +947,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> TypeInfo {
         match op {
             NarrowOp::Atomic(subject, AtomicNarrowOp::HasKey(key)) => {
-                let base_ty = match subject {
-                    Some(facet_subject) => {
-                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
-                    }
-                    None => self.force_for_narrowing(type_info.ty(), range, errors),
+                let resolved_chain = subject
+                    .as_ref()
+                    .and_then(|s| self.resolve_facet_chain(s.chain.clone()));
+                let base_ty = match (&subject, &resolved_chain) {
+                    (Some(_), Some(chain)) => self.get_facet_chain_type(type_info, chain, range),
+                    (Some(_), None) => return type_info.clone(),
+                    (None, _) => self.force_for_narrowing(type_info.ty(), range, errors),
                 };
                 if matches!(base_ty, Type::TypedDict(_)) {
                     let key_facet = FacetKind::Key(key.to_string());
-                    let facets = match subject {
-                        Some(facet_subject) => {
-                            let mut new_facets = facet_subject.chain.facets().clone();
+                    let facets = match resolved_chain {
+                        Some(chain) => {
+                            let mut new_facets = chain.facets().clone();
                             new_facets.push(key_facet);
                             new_facets
                         }
@@ -971,17 +975,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             NarrowOp::Atomic(subject, AtomicNarrowOp::NotHasKey(key)) => {
-                let base_ty = match subject {
-                    Some(facet_subject) => {
-                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
-                    }
-                    None => self.force_for_narrowing(type_info.ty(), range, errors),
+                let resolved_chain = subject
+                    .as_ref()
+                    .and_then(|s| self.resolve_facet_chain(s.chain.clone()));
+                let base_ty = match (&subject, &resolved_chain) {
+                    (Some(_), Some(chain)) => self.get_facet_chain_type(type_info, chain, range),
+                    (Some(_), None) => return type_info.clone(),
+                    (None, _) => self.force_for_narrowing(type_info.ty(), range, errors),
                 };
                 if matches!(base_ty, Type::TypedDict(_)) {
                     let key_facet = FacetKind::Key(key.to_string());
-                    let facets = match subject {
-                        Some(facet_subject) => {
-                            let mut new_facets = facet_subject.chain.facets().clone();
+                    let facets = match resolved_chain {
+                        Some(chain) => {
+                            let mut new_facets = chain.facets().clone();
                             new_facets.push(key_facet);
                             new_facets
                         }
@@ -996,18 +1002,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             NarrowOp::Atomic(subject, AtomicNarrowOp::HasAttr(attr)) => {
-                let base_ty = match subject {
-                    Some(facet_subject) => {
-                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
-                    }
-                    None => self.force_for_narrowing(type_info.ty(), range, errors),
+                let resolved_chain = subject
+                    .as_ref()
+                    .and_then(|s| self.resolve_facet_chain(s.chain.clone()));
+                let base_ty = match (&subject, &resolved_chain) {
+                    (Some(_), Some(chain)) => self.get_facet_chain_type(type_info, chain, range),
+                    (Some(_), None) => return type_info.clone(),
+                    (None, _) => self.force_for_narrowing(type_info.ty(), range, errors),
                 };
                 // We only narrow the attribute to `Any` if the attribute does not exist
                 if !self.has_attr(&base_ty, attr) {
                     let attr_facet = FacetKind::Attribute(attr.clone());
-                    let facets = match subject {
-                        Some(facet_subject) => {
-                            let mut new_facets = facet_subject.chain.facets().clone();
+                    let facets = match resolved_chain {
+                        Some(chain) => {
+                            let mut new_facets = chain.facets().clone();
                             new_facets.push(attr_facet);
                             new_facets
                         }
@@ -1028,18 +1036,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if self.as_bool(&default_ty, range, &suppress_errors) != Some(false) {
                     return type_info.clone();
                 }
-                let base_ty = match subject {
-                    Some(facet_subject) => {
-                        self.get_facet_chain_type(type_info, &facet_subject.chain, range)
-                    }
-                    None => self.force_for_narrowing(type_info.ty(), range, errors),
+                let resolved_chain = subject
+                    .as_ref()
+                    .and_then(|s| self.resolve_facet_chain(s.chain.clone()));
+                let base_ty = match (&subject, &resolved_chain) {
+                    (Some(_), Some(chain)) => self.get_facet_chain_type(type_info, chain, range),
+                    (Some(_), None) => return type_info.clone(),
+                    (None, _) => self.force_for_narrowing(type_info.ty(), range, errors),
                 };
                 let attr_ty =
                     self.attr_infer_for_type(&base_ty, attr, range, &suppress_errors, None);
                 let attr_facet = FacetKind::Attribute(attr.clone());
-                let facets = match subject {
-                    Some(facet_subject) => {
-                        let mut new_facets = facet_subject.chain.facets().clone();
+                let facets = match resolved_chain {
+                    Some(chain) => {
+                        let mut new_facets = chain.facets().clone();
                         new_facets.push(attr_facet);
                         new_facets
                     }
@@ -1070,22 +1080,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 type_info.clone().with_ty(ty)
             }
             NarrowOp::Atomic(Some(facet_subject), op) => {
+                let Some(resolved_chain) = self.resolve_facet_chain(facet_subject.chain.clone())
+                else {
+                    return type_info.clone();
+                };
                 if facet_subject.origin == FacetOrigin::GetMethod
                     && !self.supports_dict_get_subject(type_info, facet_subject, range)
                 {
                     return type_info.clone();
                 }
                 let ty = self.atomic_narrow(
-                    &self.get_facet_chain_type(type_info, &facet_subject.chain, range),
+                    &self.get_facet_chain_type(type_info, &resolved_chain, range),
                     op,
                     range,
                     errors,
                 );
-                let mut narrowed = type_info.with_narrow(facet_subject.chain.facets(), ty);
+                let mut narrowed = type_info.with_narrow(resolved_chain.facets(), ty);
                 // For certain types of narrows, we can also narrow the parent of the current subject
                 // If `.get()` on a dict or TypedDict is falsy, the key may not be present at all
                 // We should invalidate any existing narrows
-                if let Some((last, prefix)) = facet_subject.chain.facets().split_last() {
+                if let Some((last, prefix)) = resolved_chain.facets().split_last() {
                     match Vec1::try_from(prefix) {
                         Ok(prefix_facets) => {
                             let prefix_chain = FacetChain::new(prefix_facets);
@@ -1094,7 +1108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let dict_get_key_falsy = matches!(op, AtomicNarrowOp::IsFalsy)
                                 && matches!(last, FacetKind::Key(_));
                             if dict_get_key_falsy {
-                                narrowed.update_for_assignment(facet_subject.chain.facets(), None);
+                                narrowed.update_for_assignment(resolved_chain.facets(), None);
                             } else if let Some(narrowed_ty) =
                                 self.atomic_narrow_for_facet(&base_ty, last, op, range, errors)
                                 && narrowed_ty != base_ty
@@ -1107,7 +1121,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let dict_get_key_falsy = matches!(op, AtomicNarrowOp::IsFalsy)
                                 && matches!(last, FacetKind::Key(_));
                             if dict_get_key_falsy {
-                                narrowed.update_for_assignment(facet_subject.chain.facets(), None);
+                                narrowed.update_for_assignment(resolved_chain.facets(), None);
                             } else if let Some(narrowed_ty) =
                                 self.atomic_narrow_for_facet(base_ty, last, op, range, errors)
                                 && narrowed_ty != *base_ty
@@ -1147,14 +1161,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         subject: &FacetSubject,
         range: TextRange,
     ) -> bool {
-        let base_ty = if subject.chain.facets().len() == 1 {
+        let Some(resolved_chain) = self.resolve_facet_chain(subject.chain.clone()) else {
+            return false;
+        };
+        let base_ty = if resolved_chain.facets().len() == 1 {
             type_info.ty().clone()
         } else {
-            let prefix: Vec<_> = subject
-                .chain
+            let prefix: Vec<_> = resolved_chain
                 .facets()
                 .iter()
-                .take(subject.chain.facets().len() - 1)
+                .take(resolved_chain.facets().len() - 1)
                 .cloned()
                 .collect();
             match Vec1::try_from_vec(prefix) {
@@ -1232,26 +1248,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
         let ignore_errors = self.error_swallower();
-        let narrowing_subject_info = match narrowing_subject {
-            NarrowingSubject::Name(_) => &subject_info,
+        // Get the narrowed type of the match subject when none of the cases match
+        let mut remaining_ty = match narrowing_subject {
+            NarrowingSubject::Name(_) => self
+                .narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors)
+                .ty()
+                .clone(),
             NarrowingSubject::Facets(_, facets) => {
+                let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone()) else {
+                    return;
+                };
                 // If the narrowing subject is the facet of some variable like `x.foo`,
                 // We need to make a `TypeInfo` rooted at `x` using the type of `x.foo`
                 let type_info = TypeInfo::of_ty(Type::any_implicit());
-                &type_info.with_narrow(facets.chain.facets(), subject_ty.clone())
-            }
-        };
-        // Get the narrowed type of the match subject when none of the cases match
-        let narrowed = self.narrow(
-            narrowing_subject_info,
-            op.as_ref(),
-            *narrow_range,
-            &ignore_errors,
-        );
-        let mut remaining_ty = match narrowing_subject {
-            NarrowingSubject::Name(_) => narrowed.ty().clone(),
-            NarrowingSubject::Facets(_, facets) => {
-                self.get_facet_chain_type(&narrowed, &facets.chain, *subject_range)
+                let narrowing_subject_info =
+                    type_info.with_narrow(resolved_chain.facets(), subject_ty.clone());
+                let narrowed = self.narrow(
+                    &narrowing_subject_info,
+                    op.as_ref(),
+                    *narrow_range,
+                    &ignore_errors,
+                );
+                self.get_facet_chain_type(&narrowed, &resolved_chain, *subject_range)
             }
         };
         self.expand_vars_mut(&mut remaining_ty);
@@ -1274,5 +1292,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ErrorInfo::Kind(ErrorKind::NonExhaustiveMatch),
             msg,
         );
+    }
+
+    pub fn resolve_facet_chain(&self, unresolved: UnresolvedFacetChain) -> Option<FacetChain> {
+        let resolved: Option<Vec<FacetKind>> = unresolved
+            .facets()
+            .iter()
+            .map(|kind| self.resolve_facet_kind(kind.clone()))
+            .collect();
+        resolved.map(|facets| FacetChain::new(Vec1::try_from_vec(facets).unwrap()))
+    }
+
+    pub fn resolve_facet_kind(&self, unresolved: UnresolvedFacetKind) -> Option<FacetKind> {
+        match unresolved {
+            UnresolvedFacetKind::Attribute(name) => Some(FacetKind::Attribute(name)),
+            UnresolvedFacetKind::Index(idx) => Some(FacetKind::Index(idx)),
+            UnresolvedFacetKind::Key(key) => Some(FacetKind::Key(key)),
+            UnresolvedFacetKind::VariableSubscript(expr_name) => {
+                let suppress_errors = self.error_swallower();
+                let ty = self.expr_infer(&Expr::Name(expr_name), &suppress_errors);
+                match ty {
+                    Type::Literal(Lit::Int(lit_int)) => lit_int
+                        .as_i64()
+                        .and_then(|i| i.to_usize())
+                        .map(FacetKind::Index),
+                    Type::Literal(Lit::Str(s)) => Some(FacetKind::Key(s.to_string())),
+                    _ => None,
+                }
+            }
+        }
     }
 }

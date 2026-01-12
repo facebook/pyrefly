@@ -11,6 +11,7 @@ mod abstract_methods;
 mod assign;
 mod attribute_narrow;
 mod attributes;
+mod attrs;
 mod callable;
 mod calls;
 mod class_keywords;

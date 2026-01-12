@@ -29,6 +29,7 @@ use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::PythonPlatform;
@@ -831,13 +832,13 @@ impl ConfigFile {
     }
 
     pub fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
-        self.handle_from_module_path_with_fallback(module_path, std::iter::empty())
+        self.handle_from_module_path_with_fallback(module_path, &FallbackSearchPath::Empty)
     }
 
-    pub fn handle_from_module_path_with_fallback<'a>(
-        &'a self,
+    pub fn handle_from_module_path_with_fallback(
+        &self,
         module_path: ModulePath,
-        fallback_search_paths: impl Iterator<Item = &'a PathBuf>,
+        fallback_search_path: &FallbackSearchPath,
     ) -> Handle {
         match &self
             .source_db
@@ -846,12 +847,21 @@ impl ConfigFile {
         {
             Some(handle) => handle.dupe(),
             None => {
-                let name = ModuleName::from_path(
-                    module_path.as_path(),
-                    self.search_path().chain(fallback_search_paths),
-                )
-                .unwrap_or_else(ModuleName::unknown);
-                Handle::new(name, module_path, self.get_sys_info())
+                let module_kind = if fallback_search_path.is_empty() {
+                    let name = ModuleName::from_path(module_path.as_path(), self.search_path())
+                        .unwrap_or_else(ModuleName::unknown);
+                    ModuleNameWithKind::guaranteed(name)
+                } else {
+                    let fallback_paths =
+                        fallback_search_path.for_directory(Some(module_path.as_path()));
+                    ModuleName::from_path_with_fallback(
+                        module_path.as_path(),
+                        self.search_path(),
+                        fallback_paths.iter(),
+                    )
+                    .unwrap_or(ModuleNameWithKind::guaranteed(ModuleName::unknown()))
+                };
+                Handle::from_with_module_name_kind(module_kind, module_path, self.get_sys_info())
             }
         }
     }
@@ -906,7 +916,7 @@ impl ConfigFile {
                 .push((config, files));
             // Files can be uniquely tied to a config, so we will be counting each file at most
             // once here.
-            stats.files += files.len();
+            stats.common.files += files.len();
         }
 
         stats.count = sourcedb_configs.len();
@@ -916,7 +926,8 @@ impl ConfigFile {
                 .flat_map(|x| x.1.iter())
                 .map(|p| p.module_path_buf())
                 .collect::<SmallSet<_>>();
-            let changed = match source_db.query_source_db(all_files, force) {
+            let (sourcedb_rebuild, _stats) = source_db.query_source_db(all_files, force);
+            let changed = match sourcedb_rebuild {
                 Err(error) => {
                     error!("Error reloading source database for config: {error:?}");
                     stats.had_error = true;
@@ -934,7 +945,7 @@ impl ConfigFile {
                 }
             }
             if changed {
-                stats.changed = true;
+                stats.common.changed = true;
                 debug!(
                     "Performed grouped source db query for configs at {:?}",
                     configs_and_files

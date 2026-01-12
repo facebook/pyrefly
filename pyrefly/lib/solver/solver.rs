@@ -15,6 +15,7 @@ use std::mem;
 
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
+use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -68,7 +69,7 @@ enum Variable {
     /// Pyrefly only creates partial types for assignments, and will attempt to
     /// determine the type ("pin" it) using the first use of the name assigned.
     ///
-    /// It will attempt to infer the type from the first downsteam use; if the
+    /// It will attempt to infer the type from the first downstream use; if the
     /// type cannot be determined it becomes `Any`.
     PartialContained,
     /// A "partial type" (see above) representing a type variable that was not
@@ -1251,6 +1252,8 @@ pub enum SubsetError {
     InternalError(String),
     /// Protocol class names cannot be assigned to `type[P]` when `P` is a protocol
     TypeOfProtocolNeedsConcreteClass(Name),
+    /// A `type` cannot accept special forms like `Callable`
+    TypeCannotAcceptSpecialForms(SpecialForm),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -1280,6 +1283,10 @@ impl SubsetError {
             SubsetError::InternalError(msg) => Some(format!("Pyrefly internal error: {msg}")),
             SubsetError::TypeOfProtocolNeedsConcreteClass(want) => Some(format!(
                 "Only concrete classes may be assigned to `type[{want}]` because `{want}` is a protocol"
+            )),
+            SubsetError::TypeCannotAcceptSpecialForms(form) => Some(format!(
+                "`type` cannot accept special form `{}` as an argument",
+                form
             )),
             SubsetError::Other => None,
         }

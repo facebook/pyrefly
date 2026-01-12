@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::absolutize::Absolutize as _;
@@ -99,7 +100,8 @@ type BeforeCallback =
 type LoadCallback = Box<dyn Fn(&Path) -> (ArcId<ConfigFile>, Vec<ConfigError>) + Send + Sync>;
 
 /// Fallback function when no config file exists or loading fails.
-type FallbackCallback = Box<dyn Fn(ModuleName, &ModulePath) -> ArcId<ConfigFile> + Send + Sync>;
+type FallbackCallback =
+    Box<dyn Fn(ModuleNameWithKind, &ModulePath) -> ArcId<ConfigFile> + Send + Sync>;
 
 /// A way to find a config file given a directory or Python file.
 /// Uses a lot of caching.
@@ -226,8 +228,9 @@ impl ConfigFinder {
 
     /// Get the config file given a Python file. If no config exists on disk, one will be
     /// constructed.
-    pub fn python_file(&self, name: ModuleName, path: &ModulePath) -> ArcId<ConfigFile> {
-        match (self.before)(name, path) {
+    pub fn python_file(&self, name: ModuleNameWithKind, path: &ModulePath) -> ArcId<ConfigFile> {
+        let module_name = name.name();
+        match (self.before)(module_name, path) {
             Ok(Some(x)) => return x,
             Ok(None) => {}
             Err(e) => {

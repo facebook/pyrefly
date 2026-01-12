@@ -104,6 +104,8 @@ pub enum OriginKind {
     SubscriptSetItem,
     BinaryOperator,
     AugmentedAssignDunderCall,
+    AugmentedAssignRHS,
+    AugmentedAssignStatement,
     ForIter,
     ForNext,
     ReprCall,
@@ -131,6 +133,8 @@ impl std::fmt::Display for OriginKind {
             Self::SubscriptSetItem => write!(f, "subscript-set-item"),
             Self::BinaryOperator => write!(f, "binary"),
             Self::AugmentedAssignDunderCall => write!(f, "augmented-assign-dunder-call"),
+            Self::AugmentedAssignRHS => write!(f, "augmented-assign-rhs"),
+            Self::AugmentedAssignStatement => write!(f, "augmented-assign-statement"),
             Self::ForIter => write!(f, "for-iter"),
             Self::ForNext => write!(f, "for-next"),
             Self::ReprCall => write!(f, "repr-call"),
@@ -1581,17 +1585,18 @@ impl<'a> CallGraphVisitor<'a> {
         override_implicit_receiver: Option<ImplicitReceiver>,
     ) -> CallTarget<FunctionRef> {
         let base_function = function_target.base_function().unwrap();
-        let function_definiton = self.get_base_definition(base_function);
-        let is_classmethod = function_definiton.is_some_and(|definition| definition.is_classmethod);
+        let function_definition = self.get_base_definition(base_function);
+        let is_classmethod =
+            function_definition.is_some_and(|definition| definition.is_classmethod);
         let is_staticmethod =
-            function_definiton.is_some_and(|definition| definition.is_staticmethod);
+            function_definition.is_some_and(|definition| definition.is_staticmethod);
         let (receiver_class, is_receiver_class_def) = match receiver_type {
             Some(receiver_type) => self.receiver_class_from_type(receiver_type, is_classmethod),
             None => (None, false),
         };
         CallTarget {
             implicit_receiver: override_implicit_receiver.unwrap_or(has_implicit_receiver(
-                function_definiton,
+                function_definition,
                 is_receiver_class_def,
             )),
             receiver_class,
@@ -2131,28 +2136,37 @@ impl<'a> CallGraphVisitor<'a> {
             })
             .map(|(function, context)| function.as_function_ref(&context))
         {
-            let callee_type = self.module_context.answers.get_type_trace(name.range());
-            let callee_expr = Some(AnyNodeRef::from(name));
-            let callee_expr_suffix = Some(name.id.as_str());
+            // Skip this path for constructor methods (__init__ and __new__) because they need
+            // special handling via resolve_constructor_callees to properly populate init_targets
+            // and new_targets. Constructor calls should fall through to the type-based
+            // resolution below.
+            let is_constructor_method = function_ref.function_name == dunder::INIT
+                || function_ref.function_name == dunder::NEW;
 
-            let callees =
-                CallCallees::new(Vec1::new(self.call_target_from_static_or_virtual_call(
-                    function_ref,
-                    callee_expr,
-                    callee_type.as_ref(),
-                    /* precise_receiver_type */ None,
-                    return_type,
-                    callee_expr_suffix,
-                    /* override_implicit_receiver*/ None,
-                    /* override_is_direct_call */ None,
-                    /* unknown_callee_as_direct_call */ true,
-                )));
+            if !is_constructor_method {
+                let callee_type = self.module_context.answers.get_type_trace(name.range());
+                let callee_expr = Some(AnyNodeRef::from(name));
+                let callee_expr_suffix = Some(name.id.as_str());
 
-            return IdentifierCallees {
-                if_called: callees,
-                global_targets: vec![],
-                nonlocal_targets: vec![],
-            };
+                let callees =
+                    CallCallees::new(Vec1::new(self.call_target_from_static_or_virtual_call(
+                        function_ref,
+                        callee_expr,
+                        callee_type.as_ref(),
+                        /* precise_receiver_type */ None,
+                        return_type,
+                        callee_expr_suffix,
+                        /* override_implicit_receiver*/ None,
+                        /* override_is_direct_call */ None,
+                        /* unknown_callee_as_direct_call */ true,
+                    )));
+
+                return IdentifierCallees {
+                    if_called: callees,
+                    global_targets: vec![],
+                    nonlocal_targets: vec![],
+                };
+            }
         }
 
         // Check if this is a global variable.
@@ -2935,7 +2949,10 @@ impl<'a> CallGraphVisitor<'a> {
             Some(Stmt::AugAssign(assign)) if assign.target.range() == subscript_range => (
                 dunder::SETITEM,
                 Origin {
-                    kind: OriginKind::SubscriptSetItem,
+                    kind: OriginKind::Nested {
+                        head: Box::new(OriginKind::SubscriptSetItem),
+                        tail: Box::new(OriginKind::AugmentedAssignStatement),
+                    },
                     location: self.pysa_location(assign.range()),
                 },
             ),
@@ -2955,12 +2972,9 @@ impl<'a> CallGraphVisitor<'a> {
             ),
         };
         let value_range = subscript.value.range();
+        let value_type = self.module_context.answers.get_type_trace(value_range);
         let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
-            /* base */
-            self.module_context
-                .answers
-                .get_type_trace(value_range)
-                .as_ref(),
+            /* base */ value_type.as_ref(),
             /* attribute */ Some(&callee_name),
             value_range,
             /* callee_expr */ None,
@@ -2969,7 +2983,32 @@ impl<'a> CallGraphVisitor<'a> {
             /* exclude_object_methods */ false,
         );
         let identifier = ExpressionIdentifier::ArtificialCall(origin);
-        self.add_callees(identifier, ExpressionCallees::Call(callees))
+        self.add_callees(identifier, ExpressionCallees::Call(callees));
+
+        // For subscripts in augmented assignments, such as d[i] += j, we need to
+        // add another call graph edge for the implicit `__getitem__` call.
+        match current_statement {
+            Some(Stmt::AugAssign(assign)) if assign.target.range() == subscript_range => {
+                let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
+                    /* base */ value_type.as_ref(),
+                    /* attribute */ Some(&dunder::GETITEM),
+                    value_range,
+                    /* callee_expr */ None,
+                    /* unknown_callee_as_direct_call */ true,
+                    "resolve_expression_for_augmented_assign_subscript",
+                    /* exclude_object_methods */ false,
+                );
+                let identifier = ExpressionIdentifier::ArtificialCall(Origin {
+                    kind: OriginKind::Nested {
+                        head: Box::new(OriginKind::SubscriptGetItem),
+                        tail: Box::new(OriginKind::AugmentedAssignRHS),
+                    },
+                    location: self.pysa_location(subscript.range()),
+                });
+                self.add_callees(identifier, ExpressionCallees::Call(callees))
+            }
+            _ => (),
+        }
     }
 
     fn distribute_over_union(

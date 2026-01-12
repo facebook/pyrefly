@@ -52,6 +52,7 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
+use crate::binding::binding::BranchInfo;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::Key;
@@ -557,11 +558,16 @@ impl BindingTable {
     /// insert the Anywhere.
     fn record_bind_in_anywhere(&mut self, name: Name, range: TextRange, idx: Idx<Key>) {
         let phi_idx = self.types.0.insert(Key::Anywhere(name, range));
-        match self.types.1.insert_if_missing(phi_idx, || {
-            Binding::Phi(JoinStyle::SimpleMerge, SmallSet::new())
-        }) {
-            Binding::Phi(_, phi) => {
-                phi.insert(idx);
+        match self
+            .types
+            .1
+            .insert_if_missing(phi_idx, || Binding::Phi(JoinStyle::SimpleMerge, vec![]))
+        {
+            Binding::Phi(_, branches) => {
+                branches.push(BranchInfo {
+                    value_key: idx,
+                    termination_key: None,
+                });
             }
             _ => unreachable!(),
         }
@@ -1365,7 +1371,7 @@ impl LegacyTParamCollector {
     }
 }
 
-/// The legacy-tparams-specifc logic is in a second impl because that lets us define it
+/// The legacy-tparams-specific logic is in a second impl because that lets us define it
 /// just under where the key data structures live.
 impl<'a> BindingsBuilder<'a> {
     /// Perform a lookup of a name used in either base classes of a class or
@@ -1482,7 +1488,7 @@ impl<'a> BindingsBuilder<'a> {
     ///
     /// To break down "when we cannot rule out":
     /// - We know for certain that a bare name whose binding is a legacy type
-    ///   variable *is* a legacy type varaible
+    ///   variable *is* a legacy type variable
     /// - We cannot be sure in a few cases:
     ///   - a bare name that is an imported name
     ///   - a `module.attr` name, where the base is an imported module
@@ -1501,7 +1507,8 @@ impl<'a> BindingsBuilder<'a> {
                     Binding::TypeVar(..)
                     | Binding::ParamSpec(..)
                     | Binding::TypeVarTuple(..)
-                    | Binding::Import(..),
+                    | Binding::Import(..)
+                    | Binding::ImportViaGetattr(..),
                 )
                 | None => Some((
                     KeyLegacyTypeParam(ShortIdentifier::new(name)),

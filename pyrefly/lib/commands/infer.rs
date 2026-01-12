@@ -285,7 +285,9 @@ impl InferArgs {
                             let module_info = error.module();
                             let module_path = module_info.path().clone();
                             let config = state.config_finder().python_file(
-                                pyrefly_python::module_name::ModuleName::unknown(),
+                                pyrefly_python::module_name::ModuleNameWithKind::guaranteed(
+                                    pyrefly_python::module_name::ModuleName::unknown(),
+                                ),
                                 &module_path,
                             );
                             let handle = config.handle_from_module_path(module_path);

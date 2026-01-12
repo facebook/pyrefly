@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+// @lint-ignore-every SPELL
+
 use std::collections::HashMap;
 
 use lsp_types::Hover;

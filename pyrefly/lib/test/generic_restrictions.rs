@@ -879,7 +879,7 @@ class LinearTimeInvariant(Generic[T1, T2]):
 testcase!(
     test_typevar_in_classvar,
     r#"
-from typing import Any, ClassVar, Generic, TypeAlias, TypeVar
+from typing import Any, Callable, ClassVar, Generic, TypeAlias, TypeVar
 
 _NBit1 = TypeVar("_NBit1", default=Any)
 _NBit2 = TypeVar("_NBit2", default=_NBit1)
@@ -892,5 +892,23 @@ ComplexFloatingOrFloat: TypeAlias = complexfloating[Any, Any] | float
 class A:
     x: ClassVar[complexfloating[Any, complexfloating[Any, Any]]]
     y: ClassVar[ComplexFloatingOrFloat]
+    z: ClassVar[Callable[..., complexfloating[Any, Any]]]
+    "#,
+);
+
+testcase!(
+    test_typevar_in_typeddict_in_classvar,
+    r#"
+from typing import Any, ClassVar, Generic, TypedDict, TypeVar
+
+_NBit1 = TypeVar("_NBit1", default=Any)
+_NBit2 = TypeVar("_NBit2", default=_NBit1)
+
+class TD(TypedDict, Generic[_NBit1, _NBit2]):
+    pass
+
+class A:
+    x: ClassVar[TD[Any, Any]]
+    y: ClassVar[TD[_NBit1, Any]]  # E: `ClassVar` arguments may not contain any type variables
     "#,
 );

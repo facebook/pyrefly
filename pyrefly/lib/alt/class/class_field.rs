@@ -250,11 +250,9 @@ pub struct ClassField(ClassFieldInner, IsInherited);
 enum ClassFieldInner {
     /// Properties discovered via @property decorator.
     /// Read-onlyness is handled by presence of and type of setter.
-    #[allow(dead_code)]
     Property { ty: Type, is_abstract: bool },
     /// Descriptors: attributes initialized in the class body whose type has __get__/__set__ methods.
     /// Read-onlyness is handled by descriptor protocol calls.
-    #[allow(dead_code)]
     Descriptor {
         ty: Type,
         annotation: Option<Annotation>,
@@ -265,7 +263,6 @@ enum ClassFieldInner {
     ///
     /// Callable types are only methods if some form of method binding applies; staticmethods
     /// or Callables that we decide not to model as descriptors become ClassAttributes.
-    #[allow(dead_code)]
     Method {
         ty: Type,
         is_abstract: bool,
@@ -273,7 +270,6 @@ enum ClassFieldInner {
     },
     /// Nested class definitions (class statements inside class body).
     /// These are always of type `Type::ClassDef`, and we treat them as read-only.
-    #[allow(dead_code)]
     NestedClass { ty: Type },
     /// Class attributes (includes staticmethods, Django fields, regular attrs).
     /// These may also be shadowed on instances, unless they are marked as ClassVar.
@@ -282,7 +278,6 @@ enum ClassFieldInner {
     /// class body as class attributes even though in many cases they will not be defined on
     /// the class; `initialization` tracks information about whether we are sure that access
     /// should succeed.
-    #[allow(dead_code)]
     ClassAttribute {
         ty: Type,
         annotation: Option<Annotation>,
@@ -297,7 +292,6 @@ enum ClassFieldInner {
         has_choices: bool,
     },
     /// Instance-only attributes (defined in methods, not in class body).
-    #[allow(dead_code)]
     InstanceAttribute {
         ty: Type,
         annotation: Option<Annotation>,
@@ -310,7 +304,7 @@ enum ClassFieldInner {
 /// checks. This information is not needed to understand the class field, it is
 /// only used for efficiency.
 #[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
-pub enum IsInherited {
+enum IsInherited {
     No,
     Maybe,
 }
@@ -2182,6 +2176,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             DataclassMember::KwOnlyMarker
         } else if field.is_initialized_in_method() // This member is defined in a method without being declared on the class
             || field.is_class_var() // Class variables are not dataclass fields
+            || matches!(field.0, ClassFieldInner::Method { .. }) // Methods are not dataclass fields
             || (!field.has_explicit_annotation()
                 && self
                     .get_inherited_type_and_annotation(cls, name)

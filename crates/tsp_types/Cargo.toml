@@ -10,6 +10,5 @@ license = "MIT"
 
 [dependencies]
 lsp-server = "0.7.2"
-lsp-types = { git = "https://github.com/astral-sh/lsp-types", rev = "3512a9f33eadc5402cfab1b8f7340824c8ca1439" }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }

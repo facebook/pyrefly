@@ -1402,7 +1402,7 @@ def g(x: type) -> None: ...
 f(int)
 f(Type)
 f(type)
-f(42)  # E: not assignable to parameter `x` with type `type[Unknown]`
+f(42)  # E: not assignable to parameter `x` with type `type[Any]`
 
 g(int)
 g(Type)
@@ -1609,6 +1609,14 @@ testcase!(
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/1903
 (:=).:  # E: Type cannot be declared in assignment to non-self attribute `:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Parse error: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_augassign_walrus_rhs,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/1991
+1 += (c := 1)  # E: Parse error: Invalid augmented assignment target
 "#,
 );
 
@@ -2008,4 +2016,23 @@ testcase!(
 def test():
     x: (yield from [1])  # E:
     "#,
+);
+
+testcase!(
+    test_passing_callable_as_type_not_allowed,
+    r#"
+from typing import Callable, Type, Any
+def takes_type(x: type): ...
+def takes_Type(x: Type): ...
+def takes_type_any(x: type[Any]): ...
+def takes_Type_any(x: Type[Any]): ...
+takes_type(Callable) # E: is not assignable to parameter `x` with type `type` in function
+takes_type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type` in function
+takes_Type(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_Type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
+"#,
 );

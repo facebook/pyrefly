@@ -19,10 +19,13 @@ use itertools::Itertools as _;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_util::fs_anyhow;
 use serde::Deserialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tempfile::NamedTempFile;
+use tracing::error;
+use tracing::info;
 use vec1::Vec1;
 #[allow(unused_imports)]
 use vec1::vec1;
@@ -55,51 +58,63 @@ impl Include {
 }
 
 pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
+    /// Query the sourcedb for the set of files provided, running from the CWD.
+    /// Returns the parsed source database or any errors that occurred, and an
+    /// optional string representing a unique ID from the build system,
+    /// if available and applicable.
     fn query_source_db(
         &self,
         files: &SmallSet<Include>,
         cwd: &Path,
-    ) -> anyhow::Result<TargetManifestDatabase> {
+    ) -> (anyhow::Result<TargetManifestDatabase>, Option<String>) {
         if files.is_empty() {
-            return Ok(TargetManifestDatabase {
-                db: SmallMap::new(),
-                root: cwd.to_path_buf(),
-            });
+            return (
+                Ok(TargetManifestDatabase {
+                    db: SmallMap::new(),
+                    root: cwd.to_path_buf(),
+                }),
+                None,
+            );
         }
 
-        let mut argfile =
-            NamedTempFile::with_prefix("pyrefly_build_query_").with_context(|| {
-                "Failed to create temporary argfile for querying source DB".to_owned()
-            })?;
-        let mut argfile_args = OsString::from("--");
-        files.iter().flat_map(Include::to_cli_arg).for_each(|arg| {
-            argfile_args.push("\n");
-            argfile_args.push(arg);
-        });
+        let build_id_file = NamedTempFile::with_prefix("pyrefly_build_id_")
+            .inspect_err(|e| error!("Failed to create build ID tempfile: {e:#?}"))
+            .ok();
 
-        argfile
-            .as_file_mut()
-            .write_all(argfile_args.as_encoded_bytes())
-            .with_context(|| "Could not write to argfile when querying source DB".to_owned())?;
-
-        let mut cmd = self.construct_command();
-        cmd.arg(format!("@{}", argfile.path().display()));
-        cmd.current_dir(cwd);
-
-        let result = cmd.output()?;
-        if !result.status.success() {
-            let stdout = String::from_utf8(result.stdout)
-                .unwrap_or_else(|_| "<Failed to parse stdout from source DB query>".to_owned());
-            let stderr = String::from_utf8(result.stderr).unwrap_or_else(|_| {
-                "<Failed to parse stderr from Buck source DB query>".to_owned()
+        let result = (|| {
+            let mut argfile =
+                NamedTempFile::with_prefix("pyrefly_build_query_").with_context(|| {
+                    "Failed to create temporary argfile for querying source DB".to_owned()
+                })?;
+            let mut argfile_args = OsString::from("--");
+            files.iter().flat_map(Include::to_cli_arg).for_each(|arg| {
+                argfile_args.push("\n");
+                argfile_args.push(arg);
             });
 
-            return Err(anyhow::anyhow!(
-                "Source DB query failed...\nSTDOUT: {stdout}\nSTDERR: {stderr}"
-            ));
-        }
+            argfile
+                .as_file_mut()
+                .write_all(argfile_args.as_encoded_bytes())
+                .with_context(|| "Could not write to argfile when querying source DB".to_owned())?;
 
-        match serde_json::from_slice(&result.stdout)
+            let mut cmd = self.construct_command(build_id_file.as_ref().map(|b| b.path()));
+            cmd.arg(format!("@{}", argfile.path().display()));
+            cmd.current_dir(cwd);
+
+            let result = cmd.output()?;
+            if !result.status.success() {
+                let stdout = String::from_utf8(result.stdout)
+                    .unwrap_or_else(|_| "<Failed to parse stdout from source DB query>".to_owned());
+                let stderr = String::from_utf8(result.stderr).unwrap_or_else(|_| {
+                    "<Failed to parse stderr from Buck source DB query>".to_owned()
+                });
+
+                return Err(anyhow::anyhow!(
+                    "Source DB query failed...\nSTDOUT: {stdout}\nSTDERR: {stderr}"
+                ));
+            }
+
+            match serde_json::from_slice(&result.stdout)
                 .with_context(|| {
                     format!(
                         "Failed to construct valid `TargetManifestDatabase` from querier result. Command run: {} {}",
@@ -107,34 +122,54 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
                         cmd.get_args().map(|a| a.to_string_lossy()).join(" "),
                     )
                 }) {
-            Err(e) => {
-                let Some(downcast) = e.downcast_ref::<serde_json::error::Error>() else {
-                    return Err(e);
-                };
-                let Ok(content) = String::from_utf8(result.stdout) else {
-                    return Err(e);
-                };
-                let lines = content.lines().collect::<Vec<_>>();
-                let error_line = downcast.line();
-                let start = std::cmp::max(0, error_line - 30);
-                let end = std::cmp::min(lines.len() - 1, error_line + 20);
-                let cont = std::cmp::min(error_line + 1, end);
+                    Err(e) => {
+                        let Some(downcast) = e.downcast_ref::<serde_json::error::Error>() else {
+                            return Err(e);
+                        };
+                        let Ok(content) = String::from_utf8(result.stdout) else {
+                            return Err(e);
+                        };
+                        let lines = content.lines().collect::<Vec<_>>();
+                        let error_line = downcast.line();
+                        let start = std::cmp::max(0, error_line - 30);
+                        let end = std::cmp::min(lines.len() - 1, error_line + 20);
+                        let cont = std::cmp::min(error_line + 1, end);
 
-                let e = e.context(
-                    format!(
-                        "Context: ```\n{} # THIS LINE HAS A PROBLEM\n{}\n```",
-                        lines[start..=error_line].iter().join("\n"),
-                        lines[cont..=end].iter().join("\n"),
-                    )
-                );
+                        let e = e.context(
+                            format!(
+                                "Context: ```\n{} # THIS LINE HAS A PROBLEM\n{}\n```",
+                                lines[start..=error_line].iter().join("\n"),
+                                lines[cont..=end].iter().join("\n"),
+                            )
+                        );
 
-                Err(e)
-            },
-            ok => ok,
+                        Err(e)
+                    },
+                    ok => ok,
+            }
+        })();
+
+        let build_id = (|| {
+            let build_id_file = build_id_file?;
+            let build_id_path = build_id_file.path();
+            let build_id = fs_anyhow::read_to_string(build_id_path)
+                .inspect_err(|e| error!("Failed to read build ID from file {e:#?}"))
+                .ok()?;
+            if build_id.is_empty() {
+                None
+            } else {
+                Some(build_id)
+            }
+        })();
+
+        if let Some(build_id) = &build_id {
+            info!("Source DB build ID: {build_id}");
         }
+
+        (result, build_id)
     }
 
-    fn construct_command(&self) -> Command;
+    fn construct_command(&self, build_id_file: Option<&Path>) -> Command;
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]

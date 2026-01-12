@@ -63,13 +63,17 @@ impl BxlQuerier {
 }
 
 impl SourceDbQuerier for BxlQuerier {
-    fn construct_command(&self) -> Command {
+    fn construct_command(&self, build_id_path: Option<&Path>) -> Command {
         let mut cmd = Command::new("buck2");
         if let Some(isolation_dir) = &self.0.isolation_dir {
             cmd.arg("--isolation-dir");
             cmd.arg(isolation_dir);
         }
         cmd.arg("bxl");
+        if let Some(build_id_path) = build_id_path {
+            cmd.arg("--write-build-id");
+            cmd.arg(build_id_path);
+        }
         cmd.arg("--reuse-current-config");
         if let Some(metadata) = &self.0.extras {
             cmd.args(metadata);

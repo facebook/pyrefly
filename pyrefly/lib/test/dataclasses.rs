@@ -751,6 +751,18 @@ D(x=1)  # E: Unexpected keyword argument `x`
 );
 
 testcase!(
+    test_bare_classvar,
+    r#"
+from typing import ClassVar
+import dataclasses
+@dataclasses.dataclass
+class C:
+    replace: ClassVar = dataclasses.replace
+C()
+    "#,
+);
+
+testcase!(
     test_hashable,
     r#"
 from typing import Hashable

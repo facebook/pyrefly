@@ -170,10 +170,21 @@ impl Transaction<'_> {
                 callee_range,
             ))
         } else {
-            answers
-                .get_type_trace(callee_range)
-                .map(|t| self.coerce_type_to_callable(handle, t))
-                .map(|t| (vec![t], 0, active_argument, callee_range))
+            answers.get_type_trace(callee_range).map(|t| {
+                let coerced = self.coerce_type_to_callable(handle, t);
+                // If the coerced type is an Overload, expand it into multiple signatures
+                // so signature help displays each overload separately.
+                if let Type::Overload(overload) = coerced {
+                    let callables: Vec<Type> = overload
+                        .signatures
+                        .into_iter()
+                        .map(|s| s.as_type())
+                        .collect();
+                    (callables, 0, active_argument, callee_range)
+                } else {
+                    (vec![coerced], 0, active_argument, callee_range)
+                }
+            })
         }
     }
 

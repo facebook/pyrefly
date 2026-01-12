@@ -492,7 +492,7 @@ assert_type(Truthy() or int(), Truthy)
 assert_type(int() if Truthy() else str(), int)
 assert_type(int() if Falsey() else str(), str)
 
-# Test the use of a non-boolean-convertable type in boolean operators.
+# Test the use of a non-boolean-convertible type in boolean operators.
 #
 # The runtime only uses truthiness in short-circuiting here, so it is actually
 # legal to use a non-boolable value as the rightmost entry of a bool op.

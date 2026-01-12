@@ -985,37 +985,22 @@ impl GleanState<'_> {
 
     fn make_import_fact(
         &mut self,
-        from_name: &str,
-        from_name_range: TextRange,
-        as_name: &str,
-        as_name_range: TextRange,
+        from_name: &Identifier,
+        as_name: &Identifier,
+        resolved_name: Option<&str>,
         top_level_declaration: &python::Declaration,
-        resolve_original_name: bool,
     ) -> DeclarationInfo {
         let as_name_fqname = join_names(self.module_name.as_str(), as_name);
-        let from_name_fact = python::Name::new(from_name.to_owned());
+        let from_name_fact = python::Name::new(from_name.id().to_string());
         let as_name_fact = python::Name::new(as_name_fqname.clone());
-        let original_name = if resolve_original_name
-            && let Some(name) = self
-                .find_fqname_definition_at_position(from_name_range.start())
-                .first()
-        {
-            name.clone()
-        } else {
-            from_name.to_owned()
-        };
 
-        self.record_name_with_position(from_name.to_owned(), as_name_range.start());
-        self.record_name_for_import(as_name_fqname, &original_name);
-        self.add_xref(python::XRefViaName {
-            target: python::Name::new(original_name),
-            source: to_span(from_name_range),
-        });
+        self.record_name_with_position(from_name.id().to_string(), as_name.range.start());
+        self.record_name_for_import(as_name_fqname, resolved_name.unwrap_or(from_name));
         let import_fact = python::ImportStatement::new(from_name_fact, as_name_fact);
 
         DeclarationInfo {
             declaration: python::Declaration::imp(import_fact),
-            decl_span: to_span(from_name_range),
+            decl_span: to_span(from_name.range),
             definition: None,
             def_span: None,
             top_level_decl: top_level_declaration.clone(),
@@ -1033,36 +1018,22 @@ impl GleanState<'_> {
             .iter()
             .flat_map(|import| {
                 let from_name = &import.name;
+
+                for (module, range) in all_modules_with_range(from_name) {
+                    self.record_name(module.clone());
+                    self.add_xref(python::XRefViaName {
+                        target: python::Name::new(module),
+                        source: to_span(range),
+                    });
+                }
+
                 if let Some(as_name) = &import.asname {
-                    let mut it = all_modules_with_range(from_name).peekable();
-                    while let Some((module, range)) = it.next() {
-                        if it.peek().is_some() {
-                            self.record_name(module.clone());
-                            self.add_xref(python::XRefViaName {
-                                target: python::Name::new(module),
-                                source: to_span(range),
-                            });
-                        }
-                    }
-                    vec![self.make_import_fact(
-                        from_name.as_str(),
-                        from_name.range(),
-                        as_name.as_str(),
-                        as_name.range(),
-                        top_level_declaration,
-                        true,
-                    )]
+                    vec![self.make_import_fact(from_name, as_name, None, top_level_declaration)]
                 } else {
                     all_modules_with_range(from_name)
                         .map(|(module, range)| {
-                            self.make_import_fact(
-                                &module,
-                                range,
-                                &module,
-                                range,
-                                top_level_declaration,
-                                false,
-                            )
+                            let mod_id = Identifier::new(Name::new(module), range);
+                            self.make_import_fact(&mod_id, &mod_id, None, top_level_declaration)
                         })
                         .collect()
                 }
@@ -1142,13 +1113,23 @@ impl GleanState<'_> {
                         join_names(x, from_name.id())
                     });
                 let as_name = import.asname.as_ref().unwrap_or(from_name);
+
+                let resolved_name = self
+                    .find_fqname_definition_at_position(from_name.range.start())
+                    .first()
+                    .map_or(from_name.id().to_string(), |name| name.to_owned());
+
+                self.add_xref(python::XRefViaName {
+                    target: python::Name::new(resolved_name.clone()),
+                    source: to_span(from_name.range),
+                });
+
+                let from_name_id = Identifier::new(Name::new(from_name_string), from_name.range);
                 decl_infos.push(self.make_import_fact(
-                    &from_name_string,
-                    from_name.range,
-                    as_name.as_str(),
-                    as_name.range,
+                    &from_name_id,
+                    as_name,
+                    Some(&resolved_name),
                     top_level_declaration,
-                    true,
                 ));
             }
         }

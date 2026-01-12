@@ -6,6 +6,7 @@
  */
 
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -55,7 +56,7 @@ impl CustomQuerier {
 }
 
 impl SourceDbQuerier for CustomQuerier {
-    fn construct_command(&self) -> Command {
+    fn construct_command(&self, _: Option<&Path>) -> Command {
         let mut cmd = Command::new(self.0.command.first());
         cmd.args(self.0.command.iter().skip(1));
         cmd

@@ -49,7 +49,6 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -87,6 +86,24 @@ mod dict_completions;
 mod quick_fixes;
 
 pub(crate) use self::quick_fixes::extract_function::LocalRefactorCodeAction;
+
+#[derive(Debug)]
+pub(crate) enum CalleeKind {
+    /// A direct function call: `foo()`
+    Function(Identifier),
+    /// A method call: `obj.method()` - stores base expression range + method name
+    Method(TextRange, Identifier),
+    /// Unknown callee (e.g., callable returned from another call)
+    Unknown,
+}
+
+pub(crate) fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
+    match call.func.as_ref() {
+        Expr::Name(name) => CalleeKind::Function(Ast::expr_name_identifier(name.clone())),
+        Expr::Attribute(attr) => CalleeKind::Method(attr.value.range(), attr.attr.clone()),
+        _ => CalleeKind::Unknown,
+    }
+}
 
 fn default_true() -> bool {
     true
@@ -191,23 +208,6 @@ impl DefinitionMetadata {
             DefinitionMetadata::Variable(symbol_kind) => symbol_kind.as_ref().copied(),
             DefinitionMetadata::VariableOrAttribute(symbol_kind) => symbol_kind.as_ref().copied(),
         }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum CalleeKind {
-    // Function name
-    Function(Identifier),
-    // Range of the base expr + method name
-    Method(TextRange, Identifier),
-    Unknown,
-}
-
-fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
-    match call.func.as_ref() {
-        Expr::Name(name) => CalleeKind::Function(Ast::expr_name_identifier(name.clone())),
-        Expr::Attribute(attr) => CalleeKind::Method(attr.value.range(), attr.attr.clone()),
-        _ => CalleeKind::Unknown,
     }
 }
 
@@ -1512,14 +1512,34 @@ impl<'a> Transaction<'a> {
                 }
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context:
                     IdentifierContext::ImportedModule {
                         name: module_name, ..
                     },
-            }) => self
-                .find_definition_for_imported_module(handle, module_name, preference)
-                .map_or(vec![], |item| vec![item]),
+            }) => {
+                // Build the module name for lookup based on identifier position.
+                let components = module_name.components();
+
+                let target_module_name =
+                    if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
+                        // Identifier matches a module component.
+                        ModuleName::from_parts(&components[..=idx])
+                    } else if identifier.as_str() == module_name.as_str() {
+                        // Identifier matches full module name; decide which component based on position offset.
+                        let module_str = module_name.as_str();
+                        let offset = (position - identifier.range.start())
+                            .to_usize()
+                            .min(module_str.len());
+                        let idx = module_str[..offset].matches('.').count();
+                        ModuleName::from_parts(&components[..=idx])
+                    } else {
+                        // Fallback: use the whole module name.
+                        module_name
+                    };
+                self.find_definition_for_imported_module(handle, target_module_name, preference)
+                    .map_or(vec![], |item| vec![item])
+            }
             Some(IdentifierWithContext {
                 identifier: _,
                 context:
@@ -1895,12 +1915,36 @@ impl<'a> Transaction<'a> {
         quick_fixes::extract_function::extract_function_code_actions(self, handle, selection)
     }
 
+    pub fn extract_field_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_field::extract_field_code_actions(self, handle, selection)
+    }
+
     pub fn extract_variable_code_actions(
         &self,
         handle: &Handle,
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
         quick_fixes::extract_variable::extract_variable_code_actions(self, handle, selection)
+    }
+
+    pub fn pull_members_up_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_members::pull_members_up_code_actions(self, handle, selection)
+    }
+
+    pub fn push_members_down_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_members::push_members_down_code_actions(self, handle, selection)
     }
 
     /// Determines whether a module is a third-party package.
@@ -2065,7 +2109,7 @@ impl<'a> Transaction<'a> {
         Some(references)
     }
 
-    fn local_references_from_definition(
+    pub(crate) fn local_references_from_definition(
         &self,
         handle: &Handle,
         definition_metadata: DefinitionMetadata,
@@ -3221,7 +3265,7 @@ impl<'a> CancellableTransaction<'a> {
     ///
     /// This is a common pattern in workspace-wide
     /// references-related features
-    fn process_rdeps_with_definition<T>(
+    pub(crate) fn process_rdeps_with_definition<T>(
         &mut self,
         sys_info: &SysInfo,
         definition: &TextRangeWithModule,
@@ -3361,228 +3405,12 @@ impl<'a> CancellableTransaction<'a> {
 
         Ok(all_implementations)
     }
-
-    /// Finds all incoming calls(functions that call this function) of a function across the entire codebase.
-    ///
-    /// This searches transitive reverse dependencies to find all locations where
-    /// the target function is called. For each call site, it identifies the
-    /// containing function.
-    ///
-    /// Returns a vector of tuples containing:
-    /// - Module where the call occurs
-    /// - Vector of (call_site_range, containing_function_name, containing_function_range)
-    ///
-    /// Returns Err if the request is canceled during execution.
-    pub fn find_global_incoming_calls_from_function_definition(
-        &mut self,
-        sys_info: &SysInfo,
-        definition_kind: DefinitionMetadata,
-        target_definition: &TextRangeWithModule,
-    ) -> Result<Vec<(Module, Vec<(TextRange, String, TextRange)>)>, Cancelled> {
-        // Use process_rdeps_with_definition to find references and filter to call sites in a single pass
-        let results = self.process_rdeps_with_definition(
-            sys_info,
-            target_definition,
-            |transaction, handle, patched_definition| {
-                let module_info = transaction.as_ref().get_module_info(handle)?;
-                let ast = transaction.as_ref().get_ast(handle)?;
-
-                let references = transaction
-                    .as_ref()
-                    .local_references_from_definition(
-                        handle,
-                        definition_kind.clone(),
-                        patched_definition.range,
-                        &patched_definition.module,
-                    )
-                    .unwrap_or_default();
-
-                if references.is_empty() {
-                    return None;
-                }
-
-                let ref_set: std::collections::HashSet<TextRange> =
-                    references.into_iter().collect();
-
-                let mut callers_in_file = Vec::new();
-
-                ast.visit(&mut |expr| {
-                    if let Expr::Call(call) = expr
-                        && ref_set
-                            .iter()
-                            .any(|ref_range| call.func.range().contains(ref_range.start()))
-                        && let Some((containing_func_name, containing_func_range)) =
-                            Self::find_containing_function_for_call(
-                                handle,
-                                &ast,
-                                call.range().start(),
-                            )
-                    {
-                        callers_in_file.push((
-                            call.range(),
-                            containing_func_name,
-                            containing_func_range,
-                        ));
-                    }
-                });
-
-                if callers_in_file.is_empty() {
-                    None
-                } else {
-                    Some((module_info, callers_in_file))
-                }
-            },
-        )?;
-
-        Ok(results)
-    }
-
-    /// Finds outgoing calls(functions called by) of a function, resolving across files.
-    ///
-    /// Given a function definition, this method finds all Call expressions within
-    /// that function's body and resolves each call target to its definition,
-    /// which may be in other files.
-    ///
-    /// Returns a vector of tuples containing:
-    /// - Target module (where the callee is defined)
-    /// - Vector of (call_site_range, callee_definition_range)
-    ///
-    /// Results are grouped by target module for consistency with find_global_callers_from_definition.
-    ///
-    /// Returns Err if the request is canceled during execution.
-    pub fn find_global_outgoing_calls_from_function_definition(
-        &mut self,
-        handle: &Handle,
-        position: TextSize,
-    ) -> Result<Vec<(Module, Vec<(TextRange, TextRange)>)>, Cancelled> {
-        // Resolve cursor position to function definition (handles both definitions and call sites)
-        let definitions =
-            self.as_ref()
-                .find_definition(handle, position, FindPreference::default());
-        let Some(target_def) = definitions.into_iter().next() else {
-            return Ok(Vec::new());
-        };
-
-        // Get handle for module where target function is defined (may differ from original handle)
-        let target_handle = Handle::new(
-            target_def.module.name(),
-            target_def.module.path().dupe(),
-            handle.sys_info().dupe(),
-        );
-
-        let Some(target_ast) = self.as_ref().get_ast(&target_handle) else {
-            return Ok(Vec::new());
-        };
-
-        let Some(func_def) = Self::find_function_at_position_in_ast(
-            &target_ast,
-            target_def.definition_range.start(),
-        ) else {
-            return Ok(Vec::new());
-        };
-
-        let mut callees_by_module: std::collections::HashMap<
-            ModulePath,
-            (Module, Vec<(TextRange, TextRange)>),
-        > = std::collections::HashMap::new();
-
-        for stmt in &func_def.body {
-            stmt.visit(&mut |expr| {
-                if let Expr::Call(call) = expr {
-                    let call_pos = call
-                        .func
-                        .range()
-                        .end()
-                        .checked_sub(TextSize::from(1))
-                        .unwrap_or(call.func.range().start());
-
-                    let definitions = self.as_ref().find_definition(
-                        &target_handle,
-                        call_pos,
-                        FindPreference::default(),
-                    );
-
-                    for def in definitions {
-                        let module_path = def.module.path().dupe();
-                        callees_by_module
-                            .entry(module_path)
-                            .or_insert_with(|| (def.module.clone(), Vec::new()))
-                            .1
-                            .push((call.range(), def.definition_range));
-                    }
-                }
-            });
-        }
-
-        let mut result: Vec<(Module, Vec<(TextRange, TextRange)>)> =
-            callees_by_module.into_values().collect();
-        result.sort_by_key(|(module, _)| module.path().dupe());
-
-        Ok(result)
-    }
-
-    /// Helper: Finds a function definition at a specific position in an AST.
-    ///
-    /// This is used by call hierarchy to identify the function being queried.
-    /// Returns None if no function is found at the position.
-    ///
-    /// Uses `locate_node` for efficient single-pass traversal, consistent with
-    /// other LSP position-based queries. Handles nested functions and methods.
-    pub(crate) fn find_function_at_position_in_ast(
-        ast: &ModModule,
-        position: TextSize,
-    ) -> Option<&StmtFunctionDef> {
-        let covering_nodes = Ast::locate_node(ast, position);
-
-        // Find the first StmtFunctionDef in the covering nodes
-        // This returns the innermost function containing the position
-        for node in covering_nodes.iter() {
-            if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-                return Some(func_def);
-            }
-        }
-        None
-    }
-
-    /// Helper: Creates call hierarchy information for the function containing a call site.
-    ///
-    /// Given a call site position, finds the enclosing function and returns
-    /// information needed to represent it in the call hierarchy.
-    fn find_containing_function_for_call(
-        handle: &Handle,
-        ast: &ModModule,
-        position: TextSize,
-    ) -> Option<(String, TextRange)> {
-        let covering_nodes = Ast::locate_node(ast, position);
-
-        // Look through the node chain for the containing function
-        for (i, node) in covering_nodes.iter().enumerate() {
-            if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-                // Check if this is a method (next node is a ClassDef)
-                if let Some(AnyNodeRef::StmtClassDef(class_def)) = covering_nodes.get(i + 1) {
-                    let name = format!(
-                        "{}.{}.{}",
-                        handle.module(),
-                        class_def.name.id,
-                        func_def.name.id
-                    );
-                    return Some((name, func_def.name.range()));
-                } else {
-                    // Top-level function
-                    let name = format!("{}.{}", handle.module(), func_def.name.id);
-                    return Some((name, func_def.name.range()));
-                }
-            }
-        }
-        None
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use ruff_python_ast::name::Name;
 
-    use super::CancellableTransaction;
     use super::Transaction;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
@@ -3640,88 +3468,5 @@ mod tests {
     fn match_summary(params: &[Param], idx: usize) -> Option<(&str, bool)> {
         Transaction::<'static>::param_name_for_positional_argument(params, idx)
             .map(|match_| (match_.name.as_str(), match_.is_vararg_repeat))
-    }
-
-    #[test]
-    fn test_find_function_at_position_in_ast() {
-        use pyrefly_python::ast::Ast;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = r#"
-def top_level():
-    pass
-
-class MyClass:
-    def method(self):
-        pass
-"#;
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-
-        // Finds top-level function
-        let pos_in_func = TextSize::from(5);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_in_func);
-        assert_eq!(result.unwrap().name.id.as_str(), "top_level");
-
-        // Finds class method
-        let pos_in_method = TextSize::from(50);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_in_method);
-        assert_eq!(result.unwrap().name.id.as_str(), "method");
-    }
-
-    #[test]
-    fn test_find_function_at_position_in_ast_returns_none_outside_functions() {
-        use pyrefly_python::ast::Ast;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = "x = 10\n";
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-
-        let pos_outside = TextSize::from(0);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_outside);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_find_containing_function_for_call() {
-        use std::path::PathBuf;
-
-        use pyrefly_build::handle::Handle;
-        use pyrefly_python::ast::Ast;
-        use pyrefly_python::module_name::ModuleName;
-        use pyrefly_python::module_path::ModulePath;
-        use pyrefly_python::sys_info::SysInfo;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = r#"
-def my_function():
-    x = call()
-
-class MyClass:
-    def method(self):
-        y = call()
-"#;
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-        let handle = Handle::new(
-            ModuleName::from_str("test"),
-            ModulePath::memory(PathBuf::from("test.py")),
-            SysInfo::default(),
-        );
-
-        // Returns qualified name for top-level function
-        let pos_in_func = TextSize::from(30);
-        let (name, _) =
-            CancellableTransaction::find_containing_function_for_call(&handle, &ast, pos_in_func)
-                .unwrap();
-        assert_eq!(name, "test.my_function");
-
-        // Returns qualified name for class method
-        let pos_in_method = TextSize::from(85);
-        let (name, _) =
-            CancellableTransaction::find_containing_function_for_call(&handle, &ast, pos_in_method)
-                .unwrap();
-        assert_eq!(name, "test.MyClass.method");
     }
 }

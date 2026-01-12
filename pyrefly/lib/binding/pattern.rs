@@ -38,7 +38,7 @@ use crate::binding::scope::FlowStyle;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
-use crate::types::facet::FacetKind;
+use crate::types::facet::UnresolvedFacetKind;
 
 impl<'a> BindingsBuilder<'a> {
     // Traverse a pattern and bind all the names; key is the reference for the value that's being matched on
@@ -79,13 +79,27 @@ impl<'a> BindingsBuilder<'a> {
             Pattern::MatchAs(p) => {
                 // If there's no name for this pattern, refine the variable being matched
                 // If there is a new name, refine that instead
+                let original_subject = match_subject.clone();
+                let alias_name = p.name.as_ref().map(|name| name.id.clone());
                 let mut subject = match_subject;
                 if let Some(name) = &p.name {
                     self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
                     subject = Some(NarrowingSubject::Name(name.id.clone()));
                 };
                 if let Some(pattern) = p.pattern {
-                    self.bind_pattern(subject, *pattern, subject_idx)
+                    let mut narrow_ops = self.bind_pattern(subject, *pattern, subject_idx);
+                    if let (Some(alias_name), Some(original_subject)) =
+                        (&alias_name, &original_subject)
+                        && alias_name != original_subject.name()
+                        && let Some((alias_op, range)) = narrow_ops.0.get(alias_name).cloned()
+                    {
+                        narrow_ops.and_for_subject(
+                            original_subject,
+                            alias_op.for_subject(original_subject),
+                            range,
+                        );
+                    }
+                    narrow_ops
                 } else {
                     NarrowOps::new()
                 }
@@ -152,7 +166,7 @@ impl<'a> BindingsBuilder<'a> {
                             );
                             let subject_for_subpattern = match_subject.clone().and_then(|s| {
                                 if !seen_star {
-                                    Some(s.with_facet(FacetKind::Index(i)))
+                                    Some(s.with_facet(UnresolvedFacetKind::Index(i)))
                                 } else {
                                     None
                                 }
@@ -200,7 +214,7 @@ impl<'a> BindingsBuilder<'a> {
                         let subject_at_key = key_name.and_then(|key| {
                             match_subject
                                 .clone()
-                                .map(|s| s.with_facet(FacetKind::Key(key)))
+                                .map(|s| s.with_facet(UnresolvedFacetKind::Key(key)))
                         });
                         narrow_ops.and_all(self.bind_pattern(
                             subject_at_key,
@@ -303,7 +317,7 @@ impl<'a> BindingsBuilder<'a> {
                      }| {
                         let subject_for_attr = match_subject
                             .clone()
-                            .map(|s| s.with_facet(FacetKind::Attribute(attr.id.clone())));
+                            .map(|s| s.with_facet(UnresolvedFacetKind::Attribute(attr.id.clone())));
                         let attr_key = self.insert_binding(
                             Key::Anon(attr.range()),
                             Binding::PatternMatchClassKeyword(x.cls.clone(), attr, subject_idx),

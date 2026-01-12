@@ -33,15 +33,18 @@ use vec1::vec1;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingDecorator;
+use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
+use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
+use crate::binding::binding::PrivateAttributeAccessCheck;
 use crate::binding::binding::SuperStyle;
 use crate::binding::bindings::AwaitContext;
 use crate::binding::bindings::BindingsBuilder;
@@ -83,7 +86,7 @@ pub enum Usage {
     ///   to ensure unpinned Vars cannot leak into the binding graph and cause
     ///   nondeterminism.
     ///
-    /// It carries an optional current idx so we could detect mutliple usages to
+    /// It carries an optional current idx so we could detect multiple usages to
     /// the same key within the same binding.
     Narrowing(Option<Idx<Key>>),
     /// I'm a usage in some context (a type variable declaration, an annotation,
@@ -518,6 +521,10 @@ impl<'a> BindingsBuilder<'a> {
         self.with_semantic_checker(|semantic, context| semantic.visit_expr(x, context));
 
         match x {
+            Expr::Attribute(attr) => {
+                self.check_private_attribute_usage(attr);
+                self.ensure_expr(&mut attr.value, usage);
+            }
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
                 self.start_fork_and_branch(x.range);
@@ -797,6 +804,21 @@ impl<'a> BindingsBuilder<'a> {
                 x.recurse_mut(&mut |x| self.ensure_expr(x, usage));
             }
         }
+    }
+
+    fn check_private_attribute_usage(&mut self, attr: &ExprAttribute) {
+        if !Ast::is_mangled_attr(&attr.attr.id) {
+            return;
+        }
+        let expect = PrivateAttributeAccessCheck {
+            value: (*attr.value).clone(),
+            attr: attr.attr.clone(),
+            class_idx: self.scopes.current_method_context(),
+        };
+        self.insert_binding(
+            KeyExpect(attr.attr.range()),
+            BindingExpect::PrivateAttributeAccess(expect),
+        );
     }
 
     /// Execute through the expr, ensuring every name has a binding.

@@ -212,8 +212,18 @@ impl Ast {
         Identifier::new(x.id, x.range)
     }
 
+    /// Returns true if this is a synthesized empty name from parser error recovery.
+    ///
+    /// The parser uses empty identifiers when recovering from syntax errors.
+    /// Treat any empty identifier as synthesized, even if we still know the range, so
+    /// downstream stages don't try to bind it.
     pub fn is_synthesized_empty_name(x: &ExprName) -> bool {
-        x.id.as_str().is_empty() && x.range.is_empty()
+        x.id.as_str().is_empty()
+    }
+
+    /// Same as `is_synthesized_empty_name` but for `Identifier` instead of `ExprName`.
+    pub fn is_synthesized_empty_identifier(x: &Identifier) -> bool {
+        x.id.as_str().is_empty()
     }
 
     /// Calls a function on all of the names bound by this lvalue expression.

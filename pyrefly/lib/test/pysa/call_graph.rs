@@ -1434,7 +1434,7 @@ class B(A):
 );
 
 call_graph_testcase!(
-    test_overriden_repr_call,
+    test_overridden_repr_call,
     TEST_MODULE_NAME,
     r#"
 class C:
@@ -6284,6 +6284,48 @@ def foo(x: int | list[int], y: int | list[int]):
                         .with_receiver_class_for_test("builtins.list", context),
                 ]),
             )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_augmented_assign_setitem,
+    TEST_MODULE_NAME,
+    r#"
+def foo(d: dict[str, int], k: str, v: int):
+  d[k] += v
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:3-3:12|artificial-call|augmented-assign-dunder-call",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.int.__add__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.int", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+                (
+                    "3:3-3:12|artificial-call|augmented-assign-statement>subscript-set-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.dict.__setitem__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.dict", context),
+                    ]),
+                ),
+                (
+                    "3:3-3:7|artificial-call|augmented-assign-rhs>subscript-get-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.dict.__getitem__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.dict", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+            ],
         )]
     }
 );

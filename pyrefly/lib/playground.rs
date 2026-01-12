@@ -33,6 +33,7 @@ use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
@@ -91,8 +92,12 @@ impl SourceDatabase for PlaygroundSourceDatabase {
         Some(Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
     }
 
-    fn query_source_db(&self, _: SmallSet<ModulePathBuf>, _: bool) -> anyhow::Result<bool> {
-        Ok(false)
+    fn query_source_db(
+        &self,
+        _: SmallSet<ModulePathBuf>,
+        _: bool,
+    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
+        (Ok(false), TelemetrySourceDbRebuildInstanceStats::default())
     }
 
     fn get_paths_to_watch(&self) -> SmallSet<WatchPattern<'_>> {

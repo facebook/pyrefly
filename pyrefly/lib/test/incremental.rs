@@ -361,6 +361,41 @@ fn test_error_clearing_on_dependency() {
         "Expected errors after fixing the dependency"
     );
 }
+#[test]
+fn test_failed_import_invalidation_via_rdeps() {
+    // This tests that when a module's exports change to satisfy a previously-failed import,
+    // the module with the failed import is invalidated even if it's not explicitly requested.
+    //
+    // The key difference from test_error_clearing_on_dependency is that we DON'T include
+    // the module with the failed import in the `want` list - we only request a third module
+    // that depends on it transitively.
+    let mut i = Incremental::new();
+
+    // Setup: bar has a failed import from foo
+    i.set("foo", "x = 1"); // foo exists but doesn't export `y`
+    i.set("bar", "from foo import y"); // bar tries to import y - FAILS
+    i.set("main", "import bar"); // main imports bar
+
+    // Initial check - all modules computed
+    i.unchecked(&["main"]);
+
+    // Now foo exports `y` - bar's failed import should now succeed
+    i.set("foo", "y = 2");
+
+    // Only request main, NOT bar directly.
+    // Before the fix: bar wouldn't be invalidated because:
+    //   - bar is not in foo's rdeps (the import failed)
+    //   - bar is not in the `want` list
+    // After the fix: invalidate_failed_imports_from scans for failed imports and invalidates bar
+    let res = i.unchecked(&["main"]);
+
+    // bar should be recomputed because its failed import now succeeds
+    assert!(
+        res.changed.contains(&"bar".to_owned()),
+        "bar should have been recomputed, but changed = {:?}",
+        res.changed
+    );
+}
 
 #[test]
 fn test_stale_class() {

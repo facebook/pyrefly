@@ -270,6 +270,7 @@ impl SemanticTokenBuilder {
                         SemanticTokenType::FUNCTION
                     }
                     Some(Type::ClassDef(_)) => SemanticTokenType::CLASS,
+                    Some(Type::Module(_)) => SemanticTokenType::NAMESPACE,
                     _ => SemanticTokenType::PROPERTY,
                 };
                 self.push_if_in_range(attr.attr.range(), kind, Vec::new());

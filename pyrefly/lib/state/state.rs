@@ -760,6 +760,41 @@ impl<'a> Transaction<'a> {
         finish(&mut write);
     }
 
+    /// Try to mark a module as dirty due to dependency changes.
+    /// Returns true if the module was newly marked dirty.
+    fn try_mark_module_dirty(
+        &self,
+        module_data: &ArcId<ModuleDataMut>,
+        dirtied: &mut Vec<ArcId<ModuleDataMut>>,
+    ) -> bool {
+        loop {
+            let reader = module_data.state.read();
+            if reader.epochs.computed == self.data.now || reader.dirty.deps {
+                // Either doesn't need setting, or already set
+                return false;
+            }
+            // This can potentially race with `clean`, so make sure we use the `last` as our exclusive key,
+            // which importantly is a different key to the `first` that `clean` uses.
+            // Slight risk of a busy-loop, but better than a deadlock.
+            if let Some(exclusive) = reader.exclusive(Step::last()) {
+                if exclusive.epochs.computed == self.data.now || exclusive.dirty.deps {
+                    return false;
+                }
+                dirtied.push(module_data.dupe());
+                exclusive.write().dirty.deps = true;
+                return true;
+            }
+            // continue around the loop - failed to get the lock, but we really want it
+        }
+    }
+
+    /// Compute a module up to the given step, performing single-level fine-grained
+    /// invalidation of direct dependents when exports change.
+    ///
+    /// When a module's exports change during the Solutions step, this function
+    /// invalidates only those direct rdeps that import the specific names that changed.
+    /// This is the normal incremental path. For transitive invalidation (used when
+    /// mutable dependency cycles are detected), see `invalidate_rdeps`.
     fn demand(&self, module_data: &ArcId<ModuleDataMut>, step: Step) {
         let mut computed = false;
         loop {
@@ -853,28 +888,7 @@ impl<'a> Transaction<'a> {
                     // We clone so we drop the lock immediately
                     let rdeps = module_data.rdeps.lock().iter().cloned().collect::<Vec<_>>();
                     for x in rdeps.iter().map(|handle| self.get_module(handle)) {
-                        loop {
-                            let reader = x.state.read();
-                            if reader.epochs.computed == self.data.now || reader.dirty.deps {
-                                // Either doesn't need setting, or already set
-                                break;
-                            }
-                            // This can potentially race with `clean`, so make sure we use the `last` as our exclusive key,
-                            // which importantly is a different key to the `first` that `clean` uses.
-                            // Slight risk of a busy-loop, but better than a deadlock.
-                            if let Some(exclusive) = reader.exclusive(Step::last()) {
-                                if exclusive.epochs.computed == self.data.now
-                                    || exclusive.dirty.deps
-                                {
-                                    break;
-                                }
-                                dirtied.push(x.dupe());
-                                let mut writer = exclusive.write();
-                                writer.dirty.deps = true;
-                                break;
-                            }
-                            // continue around the loop - failed to get the lock, but we really want it
-                        }
+                        self.try_mark_module_dirty(&x, &mut dirtied);
                     }
                     self.stats.lock().dirty_rdeps += dirtied.len();
                     self.data.dirty.lock().extend(dirtied);
@@ -998,7 +1012,7 @@ impl<'a> Transaction<'a> {
                 ArcId::new(m.clone_for_mutation())
             } else {
                 created = true;
-                let config = self.data.state.get_config(handle.module(), handle.path());
+                let config = self.data.state.get_config(handle);
                 ArcId::new(ModuleDataMut::new(
                     handle.dupe(),
                     require,
@@ -1229,6 +1243,11 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Transitively invalidate all modules in the dependency chain of the changed modules.
+    ///
+    /// This is called from `run_internal` when a mutable dependency cycle is detected
+    /// (i.e., the same module changes twice in one run), as a fallback to ensure all
+    /// cyclic modules reach a stable state.
     fn invalidate_rdeps(&mut self, changed: &[ArcId<ModuleDataMut>]) {
         // Those that I have yet to follow
         let mut follow: Vec<ArcId<ModuleDataMut>> = changed.iter().map(|x| x.dupe()).collect();
@@ -1387,7 +1406,7 @@ impl<'a> Transaction<'a> {
         // If they change, set find to dirty.
         let mut dirty_set = self.data.dirty.lock();
         for (handle, module_data) in self.data.updated_modules.iter_unordered() {
-            let config2 = self.data.state.get_config(handle.module(), handle.path());
+            let config2 = self.data.state.get_config(handle);
             if config2 != *module_data.config.read() {
                 *module_data.config.write() = config2;
                 module_data.state.write(Step::Load).unwrap().dirty.find = true;
@@ -1396,7 +1415,7 @@ impl<'a> Transaction<'a> {
         }
         for (handle, module_data) in self.readable.modules.iter() {
             if self.data.updated_modules.get(handle).is_none() {
-                let config2 = self.data.state.get_config(handle.module(), handle.path());
+                let config2 = self.data.state.get_config(handle);
                 if module_data.config != config2 {
                     let module_data = self.get_module(handle);
                     *module_data.config.write() = config2;
@@ -1783,11 +1802,15 @@ impl State {
         &self.config_finder
     }
 
-    fn get_config(&self, name: ModuleName, path: &ModulePath) -> ArcId<ConfigFile> {
-        if matches!(path.details(), ModulePathDetails::BundledTypeshed(_)) {
+    fn get_config(&self, handle: &Handle) -> ArcId<ConfigFile> {
+        if matches!(
+            handle.path().details(),
+            ModulePathDetails::BundledTypeshed(_)
+        ) {
             BundledTypeshedStdlib::config()
         } else {
-            self.config_finder.python_file(name, path)
+            self.config_finder
+                .python_file(handle.module_kind(), handle.path())
         }
     }
 

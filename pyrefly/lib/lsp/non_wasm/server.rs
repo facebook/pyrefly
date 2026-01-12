@@ -179,6 +179,7 @@ use pyrefly_config::config::ConfigSource;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
@@ -215,6 +216,10 @@ use crate::config::config::ConfigFile;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
+use crate::lsp::non_wasm::call_hierarchy::find_function_at_position_in_ast;
+use crate::lsp::non_wasm::call_hierarchy::prepare_call_hierarchy_item;
+use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
+use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
 use crate::lsp::non_wasm::lsp::apply_change_events;
 use crate::lsp::non_wasm::lsp::as_notification;
 use crate::lsp::non_wasm::lsp::as_request;
@@ -631,6 +636,7 @@ pub fn capabilities(
             code_action_kinds: Some(vec![
                 CodeActionKind::QUICKFIX,
                 CodeActionKind::REFACTOR_EXTRACT,
+                CodeActionKind::new("refactor.move"),
             ]),
             ..Default::default()
         })),
@@ -1561,10 +1567,10 @@ impl Server {
 
     pub fn set_file_stats(&self, uri: Url, telemetry: &mut TelemetryEvent) {
         let config_root = if let Ok(path) = uri.to_file_path() {
-            let config = self
-                .state
-                .config_finder()
-                .python_file(ModuleName::unknown(), &ModulePath::filesystem(path));
+            let config = self.state.config_finder().python_file(
+                ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+                &ModulePath::filesystem(path),
+            );
             config
                 .source
                 .root()
@@ -1628,10 +1634,10 @@ impl Server {
         if let Some(path) = to_real_path(e.path()) {
             // When no file covers this, we'll get the default configured config which includes "everything"
             // and excludes `.<file>`s.
-            let config = self
-                .state
-                .config_finder()
-                .python_file(ModuleName::unknown(), e.path());
+            let config = self.state.config_finder().python_file(
+                ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+                e.path(),
+            );
 
             let type_error_status = self.type_error_display_status(e.path().as_path());
 
@@ -1694,7 +1700,7 @@ impl Server {
         let config = self
             .state
             .config_finder()
-            .python_file(handle.module(), handle.path());
+            .python_file(handle.module_kind(), handle.path());
         match self
             .workspaces
             .get_with(path.to_path_buf(), |(_, w)| w.display_type_errors)
@@ -1988,7 +1994,7 @@ impl Server {
             let path_config = self
                 .state
                 .config_finder()
-                .python_file(unknown, &module_path);
+                .python_file(ModuleNameWithKind::guaranteed(unknown), &module_path);
             if config != path_config {
                 continue;
             }
@@ -2066,7 +2072,7 @@ impl Server {
                 .map(|x| make_open_handle(&server.state, x))
                 .collect::<Vec<_>>();
             for handle in handles {
-                let config = config_finder.python_file(handle.module(), handle.path());
+                let config = config_finder.python_file(handle.module_kind(), handle.path());
                 configs_to_paths
                     .entry(config)
                     .or_default()
@@ -2822,10 +2828,19 @@ impl Server {
                 }));
             }
         };
+        if let Some(refactors) = transaction.extract_field_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
         if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.pull_members_up_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.push_members_down_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
         if actions.is_empty() {
@@ -3735,37 +3750,7 @@ impl Server {
                     &target_def,
                 )
             },
-            |callers| {
-                let mut incoming_calls = Vec::new();
-                for (caller_module, call_sites) in callers {
-                    for (call_range, caller_name, caller_def_range) in call_sites {
-                        let Some(caller_uri) = module_info_to_uri(&caller_module) else {
-                            continue;
-                        };
-
-                        let from = lsp_types::CallHierarchyItem {
-                            name: caller_name
-                                .split('.')
-                                .next_back()
-                                .unwrap_or(&caller_name)
-                                .to_owned(),
-                            kind: lsp_types::SymbolKind::FUNCTION,
-                            tags: None,
-                            detail: Some(caller_name),
-                            uri: caller_uri,
-                            range: caller_module.to_lsp_range(caller_def_range),
-                            selection_range: caller_module.to_lsp_range(caller_def_range),
-                            data: None,
-                        };
-
-                        incoming_calls.push(lsp_types::CallHierarchyIncomingCall {
-                            from,
-                            from_ranges: vec![caller_module.to_lsp_range(call_range)],
-                        });
-                    }
-                }
-                incoming_calls
-            },
+            transform_incoming_calls,
         );
     }
 
@@ -3812,33 +3797,7 @@ impl Server {
                 Ok((callees, definition.module))
             },
             move |(callees, source_module)| {
-                let mut outgoing_calls = Vec::new();
-                for (target_module, calls) in callees {
-                    let target_uri = lsp_types::Url::from_file_path(target_module.path().as_path())
-                        .unwrap_or_else(|()| uri_for_transform.clone());
-
-                    for (call_range, target_def_range) in calls {
-                        let target_name_short = target_module.code_at(target_def_range);
-                        let target_name = format!("{}.{}", target_module.name(), target_name_short);
-
-                        let to = lsp_types::CallHierarchyItem {
-                            name: target_name_short.to_owned(),
-                            kind: lsp_types::SymbolKind::FUNCTION,
-                            tags: None,
-                            detail: Some(target_name),
-                            uri: target_uri.clone(),
-                            range: target_module.to_lsp_range(target_def_range),
-                            selection_range: target_module.to_lsp_range(target_def_range),
-                            data: None,
-                        };
-
-                        outgoing_calls.push(lsp_types::CallHierarchyOutgoingCall {
-                            to,
-                            from_ranges: vec![source_module.to_lsp_range(call_range)],
-                        });
-                    }
-                }
-                outgoing_calls
+                transform_outgoing_calls(callees, &source_module, &uri_for_transform)
             },
         );
     }
@@ -3854,10 +3813,6 @@ impl Server {
         transaction: &Transaction<'_>,
         params: lsp_types::CallHierarchyPrepareParams,
     ) -> Option<Vec<lsp_types::CallHierarchyItem>> {
-        use lsp_types::CallHierarchyItem;
-        use lsp_types::SymbolKind;
-        use ruff_text_size::Ranged;
-
         let uri = &params.text_document_position_params.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, None)?;
         let module_info = transaction.get_module_info(&handle)?;
@@ -3886,28 +3841,10 @@ impl Server {
 
             // Look for function at the definition position, not the original cursor position
             if let Some(func_def) =
-                crate::state::state::CancellableTransaction::find_function_at_position_in_ast(
-                    &ast,
-                    def.definition_range.start(),
-                )
+                find_function_at_position_in_ast(&ast, def.definition_range.start())
             {
-                let name = func_def.name.id.to_string();
-                let detail = Some(format!("{}.{}", def.module.name(), name));
-                let kind = SymbolKind::FUNCTION;
-
-                let range = def.module.to_lsp_range(func_def.range());
-                let selection_range = def.module.to_lsp_range(func_def.name.range());
-
-                return Some(vec![CallHierarchyItem {
-                    name,
-                    kind,
-                    tags: None,
-                    detail,
-                    uri: def_uri,
-                    range,
-                    selection_range,
-                    data: None,
-                }]);
+                let item = prepare_call_hierarchy_item(func_def, &def.module, def_uri);
+                return Some(vec![item]);
             }
         }
         None

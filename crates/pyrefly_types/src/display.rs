@@ -256,7 +256,9 @@ impl<'a> TypeDisplayContext<'a> {
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
         if self.always_display_module_name {
-            output.write_str(&format!("{}.{}", module, name))
+            output.write_str(module)?;
+            output.write_str(".")?;
+            output.write_str(name)
         } else {
             output.write_str(name)
         }
@@ -435,13 +437,25 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     Ok(())
                 } else {
-                    output.write_str("Overload[")?;
+                    if is_toplevel {
+                        output.write_str("Overload[\n  ")?;
+                    } else {
+                        output.write_str("Overload[")?;
+                    }
                     self.fmt_helper_generic(&overload.signatures.first().as_type(), false, output)?;
                     for sig in overload.signatures.iter().skip(1) {
-                        output.write_str(", ")?;
+                        if is_toplevel {
+                            output.write_str("\n  ")?;
+                        } else {
+                            output.write_str(", ")?;
+                        }
                         self.fmt_helper_generic(&sig.as_type(), false, output)?;
                     }
-                    output.write_str("]")
+                    if is_toplevel {
+                        output.write_str("\n]")
+                    } else {
+                        output.write_str("]")
+                    }
                 }
             }
             Type::ParamSpecValue(x) => {
@@ -488,7 +502,7 @@ impl<'a> TypeDisplayContext<'a> {
                                 output.write_str("def ")?;
                                 output.write_str(func_name.as_ref().as_str())?;
                                 output.write_str("[")?;
-                                output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                                write!(output, "{}", commas_iter(|| tparams.iter()))?;
                                 output.write_str("]")?;
                                 match self.lsp_display_mode {
                                     LspDisplayMode::Hover => {
@@ -519,7 +533,7 @@ impl<'a> TypeDisplayContext<'a> {
                         output.write_str("BoundMethod[")?;
                         self.fmt_helper_generic(obj, false, output)?;
                         output.write_str(", ")?;
-                        self.fmt_helper_generic(&func.clone().as_type(), false, output)?;
+                        self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output)?;
                         output.write_str("]")
                     }
                 }
@@ -644,14 +658,14 @@ impl<'a> TypeDisplayContext<'a> {
             }) => {
                 if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     output.write_str("[")?;
-                    output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
                     output.write_str("]")?;
                     c.fmt_with_type_with_newlines(output, &|t, o| {
                         self.fmt_helper_generic(t, false, o)
                     })
                 } else {
                     output.write_str("[")?;
-                    output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
                     output.write_str("]")?;
                     self.fmt_helper_generic(&body.clone().as_type(), false, output)
                 }
@@ -670,7 +684,7 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("def ")?;
                     output.write_str(func_name.as_ref().as_str())?;
                     output.write_str("[")?;
-                    output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
                     output.write_str("]")?;
                     match self.lsp_display_mode {
                         LspDisplayMode::Hover => {
@@ -689,7 +703,7 @@ impl<'a> TypeDisplayContext<'a> {
                 }
                 _ => {
                     output.write_str("[")?;
-                    output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
+                    write!(output, "{}", commas_iter(|| tparams.iter()))?;
                     output.write_str("]")?;
                     self.fmt_helper_generic(&body.clone().as_type(), false, output)
                 }
@@ -708,6 +722,7 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str(ta.name.as_str())
                 }
             }
+            Type::Type(box Type::Any(_)) => output.write_str("type[Any]"),
             Type::Type(ty) => {
                 output.write_str("type[")?;
                 self.fmt_helper_generic(ty, false, output)?;
@@ -738,42 +753,43 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Concatenate(args, pspec) => {
                 self.maybe_fmt_with_module("typing", "Concatenate", output)?;
                 output.write_str("[")?;
-                output.write_str(&format!(
+                write!(
+                    output,
                     "{}",
                     commas_iter(|| append(args.iter().map(|x| x.0.clone()), [pspec]))
-                ))?;
+                )?;
                 output.write_str("]")
             }
             Type::Module(m) => {
                 output.write_str("Module[")?;
-                output.write_str(&format!("{m}"))?;
+                write!(output, "{m}")?;
                 output.write_str("]")
             }
-            Type::Var(var) => output.write_str(&format!("{var}")),
-            Type::Quantified(var) => output.write_str(&format!("{var}")),
-            Type::QuantifiedValue(var) => output.write_str(&format!("{var}")),
-            Type::ElementOfTypeVarTuple(var) => output.write_str(&format!("ElementOf[{var}]")),
+            Type::Var(var) => write!(output, "{var}"),
+            Type::Quantified(var) => write!(output, "{var}"),
+            Type::QuantifiedValue(var) => write!(output, "{var}"),
+            Type::ElementOfTypeVarTuple(var) => write!(output, "ElementOf[{var}]"),
             Type::Args(q) => {
                 output.write_str("Args[")?;
-                output.write_str(&format!("{q}"))?;
+                write!(output, "{q}")?;
                 output.write_str("]")
             }
             Type::Kwargs(q) => {
                 output.write_str("Kwargs[")?;
-                output.write_str(&format!("{q}"))?;
+                write!(output, "{q}")?;
                 output.write_str("]")
             }
             Type::ArgsValue(q) => {
                 output.write_str("ArgsValue[")?;
-                output.write_str(&format!("{q}"))?;
+                write!(output, "{q}")?;
                 output.write_str("]")
             }
             Type::KwargsValue(q) => {
                 output.write_str("KwargsValue[")?;
-                output.write_str(&format!("{q}"))?;
+                write!(output, "{q}")?;
                 output.write_str("]")
             }
-            Type::SpecialForm(x) => output.write_str(&format!("{x}")),
+            Type::SpecialForm(x) => write!(output, "{x}"),
             Type::Ellipsis => output.write_str("Ellipsis"),
             Type::Any(style) => match style {
                 AnyStyle::Explicit => self.maybe_fmt_with_module("typing", "Any", output),
@@ -1652,11 +1668,19 @@ pub mod tests {
             metadata: Box::new(sig1.metadata.clone()),
         });
 
-        // Test compact display mode (non-hover)
+        // Test compact display mode as toplevel type (non-hover)
         let ctx = TypeDisplayContext::new(&[&overload]);
         assert_eq!(
             ctx.display(&overload).to_string(),
-            "Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]"
+            "Overload[\n  (x: Any) -> None\n  [T](x: Any, y: Any) -> None\n]"
+        );
+
+        // Test compact display mode as non-toplevel type (non-hover)
+        let type_form_of_overload = Type::type_form(overload.clone());
+        let ctx = TypeDisplayContext::new(&[&type_form_of_overload]);
+        assert_eq!(
+            ctx.display(&type_form_of_overload).to_string(),
+            "type[Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]"
         );
 
         // Test hover display mode (with @overload decorators)
@@ -1691,11 +1715,19 @@ def overloaded_func[T](
             }),
         }));
 
-        // Test compact display mode (non-hover)
+        // Test compact display mode as toplevel type (non-hover)
         let ctx = TypeDisplayContext::new(&[&bound_method_overload]);
         assert_eq!(
             ctx.display(&bound_method_overload).to_string(),
-            "BoundMethod[Any, Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]"
+            "BoundMethod[Any, Overload[\n  (x: Any) -> None\n  [T](x: Any, y: Any) -> None\n]]"
+        );
+
+        // Test compact display mode as non-toplevel type (non-hover)
+        let type_form_of_bound_method_overload = Type::type_form(bound_method_overload.clone());
+        let ctx = TypeDisplayContext::new(&[&type_form_of_bound_method_overload]);
+        assert_eq!(
+            ctx.display(&type_form_of_bound_method_overload).to_string(),
+            "type[BoundMethod[Any, Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]]"
         );
 
         // Test hover display mode (with @overload decorators)

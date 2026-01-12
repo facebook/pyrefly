@@ -33,6 +33,7 @@ use pyrefly_config::config::ConfigFile;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::finder::ConfigError;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::args::clap_env;
@@ -524,7 +525,7 @@ impl Handles {
         for path in &self.path_data {
             let unknown = ModuleName::unknown();
             configs
-                .entry(config_finder.python_file(unknown, path))
+                .entry(config_finder.python_file(ModuleNameWithKind::guaranteed(unknown), path))
                 .or_insert_with(SmallSet::new)
                 .insert(path.dupe());
         }
@@ -700,7 +701,7 @@ impl CheckArgs {
         let sys_info = holder
             .as_ref()
             .config_finder()
-            .python_file(module_name, &module_path)
+            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path)
             .get_sys_info();
         let handle = Handle::new(module_name, module_path.clone(), sys_info);
 

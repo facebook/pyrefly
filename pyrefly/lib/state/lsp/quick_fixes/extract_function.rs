@@ -16,7 +16,6 @@ use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFunctionDef;
@@ -25,6 +24,9 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use super::extract_shared::first_parameter_name;
+use super::extract_shared::function_has_decorator;
+use super::extract_shared::line_indent_and_start;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 
@@ -356,7 +358,7 @@ fn method_context_from_function(
     }
     let receiver_name = first_parameter_name(&function_def.parameters)?;
     let (method_indent, insert_position) =
-        indent_and_line_start(source, function_def.range().start())?;
+        line_indent_and_start(source, function_def.range().start())?;
     Some(MethodContext {
         class_name: class_def.name.id.to_string(),
         receiver_name,
@@ -365,30 +367,9 @@ fn method_context_from_function(
     })
 }
 
-fn first_parameter_name(parameters: &Parameters) -> Option<String> {
-    if let Some(param) = parameters.posonlyargs.first() {
-        return Some(param.name().id.to_string());
-    }
-    parameters
-        .args
-        .first()
-        .map(|param| param.name().id.to_string())
-}
-
 fn is_static_or_class_method(function_def: &StmtFunctionDef) -> bool {
-    function_def.decorator_list.iter().any(|decorator| {
-        decorator_matches_name(&decorator.expression, "staticmethod")
-            || decorator_matches_name(&decorator.expression, "classmethod")
-    })
-}
-
-fn decorator_matches_name(decorator: &Expr, name: &str) -> bool {
-    match decorator {
-        Expr::Name(identifier) => identifier.id.as_str() == name,
-        Expr::Attribute(attribute) => attribute.attr.as_str() == name,
-        Expr::Call(call) => decorator_matches_name(call.func.as_ref(), name),
-        _ => false,
-    }
+    function_has_decorator(function_def, "staticmethod")
+        || function_has_decorator(function_def, "classmethod")
 }
 
 fn detect_block_indent(selection_text: &str) -> String {
@@ -402,23 +383,6 @@ fn detect_block_indent(selection_text: &str) -> String {
             .collect::<String>();
     }
     String::new()
-}
-
-fn indent_and_line_start(source: &str, position: TextSize) -> Option<(String, TextSize)> {
-    let mut idx = position.to_usize();
-    if idx > source.len() {
-        idx = source.len();
-    }
-    let line_start = source[..idx]
-        .rfind('\n')
-        .map(|start| start + 1)
-        .unwrap_or(0);
-    let indent = source[line_start..idx]
-        .chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect();
-    let insert_position = TextSize::try_from(line_start).ok()?;
-    Some((indent, insert_position))
 }
 
 fn build_helper_text(

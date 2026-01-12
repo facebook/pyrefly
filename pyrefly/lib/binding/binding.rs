@@ -100,7 +100,7 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 11);
-assert_words!(BindingExpect, 11);
+assert_words!(BindingExpect, 16);
 assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 23);
 assert_words!(BindingTParams, 10);
@@ -555,6 +555,13 @@ pub enum ExprOrBinding {
     Binding(Binding),
 }
 
+#[derive(Clone, Debug)]
+pub struct PrivateAttributeAccessCheck {
+    pub value: Expr,
+    pub attr: Identifier,
+    pub class_idx: Option<Idx<KeyClass>>,
+}
+
 impl DisplayWith<Bindings> for ExprOrBinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
@@ -594,6 +601,8 @@ pub enum BindingExpect {
         narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
         subject_range: TextRange,
     },
+    /// Track private attribute accesses that need semantic validation.
+    PrivateAttributeAccess(PrivateAttributeAccessCheck),
 }
 
 impl DisplayWith<Bindings> for BindingExpect {
@@ -643,6 +652,17 @@ impl DisplayWith<Bindings> for BindingExpect {
                 ctx.display(*new),
                 ctx.display(*existing),
                 name
+            ),
+            Self::PrivateAttributeAccess(expectation) => write!(
+                f,
+                "PrivateAttributeAccess({}, {}, {})",
+                m.display(&expectation.value),
+                expectation.attr.id,
+                if let Some(class_idx) = expectation.class_idx {
+                    format!("{}", ctx.display(class_idx))
+                } else {
+                    "None".to_owned()
+                }
             ),
             Self::MatchExhaustiveness {
                 subject_idx,
@@ -1293,6 +1313,16 @@ pub enum FirstUse {
     UsedBy(Idx<Key>),
 }
 
+/// Information about a branch in a Phi node.
+#[derive(Clone, Debug)]
+pub struct BranchInfo {
+    /// The type key from this branch.
+    pub value_key: Idx<Key>,
+    /// The last `Binding::StmtExpr` in this branch, if any.
+    /// Used to check for type-based termination (NoReturn/Never) at solve time.
+    pub termination_key: Option<Idx<Key>>,
+}
+
 #[derive(Clone, Debug)]
 pub enum Binding {
     /// An expression, optionally with a Key saying what the type must be.
@@ -1361,12 +1391,16 @@ pub enum Binding {
     /// The option range tracks the original name's location for renamed import.
     /// e.g. in `from foo import bar as baz`, we should track the range of `bar`.
     Import(ModuleName, Name, Option<TextRange>),
+    /// An import via module-level __getattr__ for incomplete stubs.
+    /// See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
+    ImportViaGetattr(ModuleName, Name),
     /// A class definition, points to a BindingClass and any decorators.
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
     /// A phi node, representing the union of several alternative keys.
-    Phi(JoinStyle<Idx<Key>>, SmallSet<Idx<Key>>),
+    /// Each BranchInfo contains the value key and optional termination key from one branch.
+    Phi(JoinStyle<Idx<Key>>, Vec<BranchInfo>),
     /// A phi node for a name that was defined above a loop. This can involve recursion
     /// due to reassingment in the loop, so we provide a prior idx of the type from above
     /// the loop, which can be used if the resulting Var is forced.
@@ -1555,6 +1589,7 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::Function(x, _pred, _class) => write!(f, "Function({})", ctx.display(*x)),
             Self::Import(m, n, original_name) => write!(f, "Import({m}, {n}, {original_name:?})"),
+            Self::ImportViaGetattr(m, n) => write!(f, "ImportViaGetattr({m}, {n})"),
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
             Self::AugAssign(a, s) => write!(f, "AugAssign({}, {})", ann(a), m.display(s)),
@@ -1585,11 +1620,13 @@ impl DisplayWith<Bindings> for Binding {
                     }
                 )
             }
-            Self::Phi(style, xs) => {
+            Self::Phi(style, branches) => {
                 write!(
                     f,
                     "Phi({style:?}, {})",
-                    intersperse_iter("; ", || xs.iter().map(|x| ctx.display(*x))),
+                    intersperse_iter("; ", || branches
+                        .iter()
+                        .map(|branch| ctx.display(branch.value_key))),
                 )
             }
             Self::LoopPhi(k, xs) => {
@@ -1781,7 +1818,7 @@ impl Binding {
                     Some(SymbolKind::Function)
                 }
             }
-            Binding::Import(_, _, _) => {
+            Binding::Import(_, _, _) | Binding::ImportViaGetattr(_, _) => {
                 // TODO: maybe we can resolve it to see its symbol kind
                 Some(SymbolKind::Variable)
             }

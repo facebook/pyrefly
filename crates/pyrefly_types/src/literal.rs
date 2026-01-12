@@ -53,7 +53,7 @@ pub struct LitEnum {
 impl Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Lit::Str(_) => write!(f, "{}", self.to_string_escaped(true)),
+            Lit::Str(_) => self.write_escaped(f, true),
             Lit::Int(x) => write!(f, "{x}"),
             Lit::Bool(x) => {
                 let s = if *x { "True" } else { "False" };
@@ -177,33 +177,60 @@ impl Lit {
         }
     }
 
-    pub fn to_string_escaped(&self, use_single_quotes_for_string: bool) -> String {
+    /// Writes the escaped string representation directly to a formatter.
+    /// This avoids allocating intermediate strings for each character.
+    pub fn write_escaped(
+        &self,
+        f: &mut impl fmt::Write,
+        use_single_quotes_for_string: bool,
+    ) -> fmt::Result {
         match self {
             Lit::Str(s) => {
-                let escaped: String = s
-                    .chars()
-                    .map(|c| match c {
-                        // https://docs.python.org/3/reference/lexical_analysis.html#escape-sequences
-                        '\\' => "\\\\".to_owned(),
-                        '\'' if use_single_quotes_for_string => "\\'".to_owned(),
-                        '\"' if !use_single_quotes_for_string => "\\\"".to_owned(),
-                        '\x07' => "\\a".to_owned(), // \a
-                        '\x08' => "\\b".to_owned(), // \b
-                        '\x0c' => "\\f".to_owned(), // \f
-                        '\n' => "\\n".to_owned(),
-                        '\r' => "\\r".to_owned(),
-                        '\t' => "\\t".to_owned(),
-                        '\x0b' => "\\v".to_owned(), // \v
-                        _ => c.to_string(),
-                    })
-                    .collect::<String>();
-                if use_single_quotes_for_string {
-                    format!("'{escaped}'")
+                let quote = if use_single_quotes_for_string {
+                    '\''
                 } else {
-                    format!("\"{escaped}\"")
+                    '"'
+                };
+                f.write_char(quote)?;
+
+                // Batch non-escaped characters to minimize write calls
+                let mut start = 0;
+                for (i, c) in s.char_indices() {
+                    let escape = match c {
+                        '\\' => Some("\\\\"),
+                        '\'' if use_single_quotes_for_string => Some("\\'"),
+                        '\"' if !use_single_quotes_for_string => Some("\\\""),
+                        '\x07' => Some("\\a"),
+                        '\x08' => Some("\\b"),
+                        '\x0c' => Some("\\f"),
+                        '\n' => Some("\\n"),
+                        '\r' => Some("\\r"),
+                        '\t' => Some("\\t"),
+                        '\x0b' => Some("\\v"),
+                        _ => None,
+                    };
+                    if let Some(esc) = escape {
+                        if start < i {
+                            f.write_str(&s[start..i])?;
+                        }
+                        f.write_str(esc)?;
+                        start = i + c.len_utf8();
+                    }
                 }
+                if start < s.len() {
+                    f.write_str(&s[start..])?;
+                }
+
+                f.write_char(quote)
             }
-            lit => lit.to_string(),
+            lit => write!(f, "{lit}"),
         }
+    }
+
+    pub fn to_string_escaped(&self, use_single_quotes_for_string: bool) -> String {
+        let mut result = String::new();
+        self.write_escaped(&mut result, use_single_quotes_for_string)
+            .unwrap();
+        result
     }
 }

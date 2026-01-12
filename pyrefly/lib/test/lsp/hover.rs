@@ -788,3 +788,118 @@ from lib import bar as baz
         report.trim(),
     );
 }
+
+#[test]
+fn hover_on_first_component_of_multi_part_import() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("(module) mymod:"),
+        "Expected hover to show 'mymod', got: {report}"
+    );
+    assert!(
+        !report.contains("(module) mymod.submod:"),
+        "Hover should not show 'mymod.submod' when hovering over 'mymod', got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_middle_component_of_multi_part_import() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let mymod_submod_deep_init = r#"# mymod/submod/deep/__init__.py
+class Bar: ...
+"#;
+    let code = r#"
+from mymod.submod.deep import Bar
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+            ("mymod.submod.deep", mymod_submod_deep_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("(module) mymod.submod:"),
+        "Expected hover to show 'mymod.submod', got: {report}"
+    );
+    assert!(
+        !report.contains("(module) mymod.submod.deep:"),
+        "Hover should not show 'mymod.submod.deep' when hovering over 'submod', got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_first_component_when_intermediate_module_missing() {
+    // Only mymod.submod exists, not mymod itself
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("mymod.submod", mymod_submod_init)],
+        get_test_report,
+    );
+    // When clicking on 'mymod' in 'mymod.submod', hover shows the full identifier
+    // 'mymod.submod' even though mymod itself doesn't exist
+    assert!(
+        report.contains("mymod.submod: Module[mymod]"),
+        "Expected hover to show full module name 'mymod.submod', got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_middle_component_when_intermediate_module_missing() {
+    // Only mymod and mymod.submod.deep exist, not mymod.submod
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_deep_init = r#"# mymod/submod/deep/__init__.py
+class Bar: ...
+"#;
+    let code = r#"
+from mymod.submod.deep import Bar
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod.deep", mymod_submod_deep_init),
+        ],
+        get_test_report,
+    );
+    // When clicking on 'submod' in 'mymod.submod.deep', hover shows the full identifier
+    // 'mymod.submod.deep' even though mymod.submod itself doesn't exist
+    assert!(
+        report.contains("mymod.submod.deep: Module[mymod]"),
+        "Expected hover to show full module name 'mymod.submod.deep', got: {report}"
+    );
+}

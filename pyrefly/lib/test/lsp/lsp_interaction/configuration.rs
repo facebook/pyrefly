@@ -1164,7 +1164,6 @@ fn test_error_missing_imports_mode() {
     interaction.shutdown().expect("Failed to shutdown");
 }
 
-// TODO(kylei): fix fallback search heuristics for nested projects
 #[test]
 fn test_fallback_search_path_heuristics_nested() {
     let test_files_root = get_test_files_root();
@@ -1189,7 +1188,7 @@ fn test_fallback_search_path_heuristics_nested() {
     interaction.client.did_open("src/main.py");
     interaction
         .client
-        .expect_publish_diagnostics_error_count(root.join("src/main.py"), 1)
+        .expect_publish_diagnostics_error_count(root.join("src/main.py"), 0)
         .unwrap();
     interaction.shutdown().unwrap();
 }
