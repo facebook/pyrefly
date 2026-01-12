@@ -45,7 +45,7 @@ class MyEnum(Enum):
 
 assert_type(MyEnum.X, Literal[MyEnum.X])
 assert_type(MyEnum["X"], Literal[MyEnum.X])
-assert_type(MyEnum.__PRIVATE, int)
+assert_type(MyEnum.__PRIVATE, int)  # E: Private attribute `__PRIVATE` cannot be accessed outside of its defining class
 assert_type(MyEnum.X.name, Literal["X"])
 assert_type(MyEnum.X._name_, Literal["X"])
 assert_type(MyEnum.X.value, int)
@@ -430,7 +430,7 @@ testcase!(
     test_magic_enum_attr_3_10,
     TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
     r#"
-from typing_extensions import assert_type
+from typing_extensions import assert_type, Any
 import enum
 class E(enum.Enum):
     _value_: int
@@ -439,7 +439,7 @@ class E(enum.Enum):
     @enum._magic_enum_attr
     def foo(self) -> str: ...
 e = E.E0
-assert_type(e.foo, str)
+assert_type(e.foo, Any)
     "#,
 );
 
@@ -447,7 +447,7 @@ testcase!(
     test_magic_enum_attr_3_11,
     TestEnv::new_with_version(PythonVersion::new(3, 11, 0)),
     r#"
-from typing_extensions import assert_type, Any
+from typing_extensions import assert_type
 import enum
 class E(enum.Enum):
     _value_: int
@@ -680,5 +680,25 @@ class InclusionLevel(Enum):
         return self.value >  self.B.value
 
 x: Callable[[InclusionLevel], bool] = InclusionLevel.is_included
+    "#,
+);
+
+testcase!(
+    test_callable_enum,
+    r#"
+from enum import Enum
+from typing import assert_type
+
+class MyCallable:
+    def __call__(self) -> int:
+        return 42
+
+class E1(MyCallable, Enum):
+    pass
+
+class E2(E1):
+    X = 1
+
+assert_type(E2.X(), int)
     "#,
 );

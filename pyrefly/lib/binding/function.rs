@@ -8,6 +8,7 @@
 use std::mem;
 
 use dupe::Dupe as _;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
@@ -44,6 +45,7 @@ use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::LastStmt;
@@ -59,10 +61,10 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
 use crate::binding::scope::UnusedParameter;
+use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::types::types::Type;
 
 struct Decorators {
@@ -71,7 +73,7 @@ struct Decorators {
     is_abstract_method: bool,
     is_override: bool,
     is_classmethod: bool,
-    decorators: Box<[(Idx<Key>, TextRange)]>,
+    decorators: Box<[Idx<KeyDecorator>]>,
 }
 
 pub struct SelfAssignments {
@@ -298,6 +300,7 @@ impl<'a> BindingsBuilder<'a> {
         YieldsAndReturns,
         Option<SelfAssignments>,
         Vec<UnusedParameter>,
+        Vec<UnusedVariable>,
     ) {
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
@@ -307,7 +310,14 @@ impl<'a> BindingsBuilder<'a> {
             body,
             &NestingContext::function(ShortIdentifier::new(func_name), parent.dupe()),
         );
-        self.scopes.pop_function_scope()
+        let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
+            self.scopes.pop_function_scope();
+        (
+            yields_and_returns,
+            self_assignments,
+            unused_parameters,
+            unused_variables,
+        )
     }
 
     fn unchecked_function_body_scope(
@@ -360,7 +370,7 @@ impl<'a> BindingsBuilder<'a> {
         implicit_return: Option<Idx<Key>>,
         should_infer_return_type: bool,
         stub_or_impl: FunctionStubOrImpl,
-        decorators: Box<[(Idx<Key>, TextRange)]>,
+        decorators: Box<[Idx<KeyDecorator>]>,
     ) {
         let is_generator =
             !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
@@ -369,7 +379,7 @@ impl<'a> BindingsBuilder<'a> {
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
             .returns
-            .into_map(|(idx, x)| {
+            .into_map(|(idx, x, is_unreachable)| {
                 self.insert_binding_idx(
                     idx,
                     Binding::ReturnExplicit(ReturnExplicit {
@@ -378,6 +388,7 @@ impl<'a> BindingsBuilder<'a> {
                         is_generator,
                         is_async,
                         range: x.range,
+                        is_unreachable,
                     }),
                 )
             })
@@ -386,14 +397,27 @@ impl<'a> BindingsBuilder<'a> {
         // Collect the keys of yield expressions.
         let yield_keys = yields_and_returns
             .yields
-            .into_map(|(idx, x)| self.insert_binding_idx(idx, BindingYield::Yield(return_ann, x)))
+            .into_map(|(idx, x, is_unreachable)| {
+                self.insert_binding_idx(
+                    idx,
+                    if is_unreachable {
+                        BindingYield::Unreachable(x)
+                    } else {
+                        BindingYield::Yield(return_ann, x)
+                    },
+                )
+            })
             .into_boxed_slice();
         let yield_from_keys = yields_and_returns
             .yield_froms
-            .into_map(|(idx, x)| {
+            .into_map(|(idx, x, is_unreachable)| {
                 self.insert_binding_idx(
                     idx,
-                    BindingYieldFrom::YieldFrom(return_ann, IsAsync::new(is_async), x),
+                    if is_unreachable {
+                        BindingYieldFrom::Unreachable(x)
+                    } else {
+                        BindingYieldFrom::YieldFrom(return_ann, IsAsync::new(is_async), x)
+                    },
                 )
             })
             .into_boxed_slice();
@@ -406,7 +430,7 @@ impl<'a> BindingsBuilder<'a> {
                         range,
                         annotation,
                         stub_or_impl,
-                        decorators: decorators.into_iter().map(|x| x.0).collect(),
+                        decorators,
                         implicit_return,
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                         has_explicit_return: !return_keys.is_empty(),
@@ -564,8 +588,8 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             match self.untyped_def_behavior {
                 UntypedDefBehavior::SkipAndInferReturnAny => {
-                    let (yields_and_returns, self_assignments, unused_parameters) = self
-                        .function_body_scope(
+                    let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
+                        self.function_body_scope(
                             parameters,
                             body,
                             range,
@@ -578,6 +602,7 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     if should_report_unused_parameters {
                         self.record_unused_parameters(unused_parameters);
+                        self.record_unused_variables(unused_variables);
                     }
                     self.analyze_return_type(
                         func_name,
@@ -593,8 +618,8 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 UntypedDefBehavior::CheckAndInferReturnAny => {
                     let implicit_return = self.implicit_return(&body, func_name);
-                    let (yields_and_returns, self_assignments, unused_parameters) = self
-                        .function_body_scope(
+                    let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
+                        self.function_body_scope(
                             parameters,
                             body,
                             range,
@@ -607,6 +632,7 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     if should_report_unused_parameters {
                         self.record_unused_parameters(unused_parameters);
+                        self.record_unused_variables(unused_variables);
                     }
                     self.analyze_return_type(
                         func_name,
@@ -622,8 +648,8 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 UntypedDefBehavior::CheckAndInferReturnType => {
                     let implicit_return = self.implicit_return(&body, func_name);
-                    let (yields_and_returns, self_assignments, unused_parameters) = self
-                        .function_body_scope(
+                    let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
+                        self.function_body_scope(
                             parameters,
                             body,
                             range,
@@ -636,6 +662,7 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     if should_report_unused_parameters {
                         self.record_unused_parameters(unused_parameters);
+                        self.record_unused_variables(unused_variables);
                     }
                     self.analyze_return_type(
                         func_name,

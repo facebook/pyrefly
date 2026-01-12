@@ -1,0 +1,9 @@
+#!/bin/bash
+if [[ "$1" == "-c" && "$2" == *"import json, sys"* ]]; then
+    cat << 'EOF'
+{"python_platform": "linux", "python_version": "3.12.0", "site_package_path": []}
+EOF
+else
+    echo "Mock python interpreter - args:" "$@" >&2
+    exit 1
+fi

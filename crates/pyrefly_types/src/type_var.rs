@@ -73,19 +73,19 @@ impl Restriction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum PreInferenceVariance {
-    PCovariant,
-    PContravariant,
-    PInvariant,
-    PUndefined,
+    Covariant,
+    Contravariant,
+    Invariant,
+    Undefined,
 }
 
 impl Display for PreInferenceVariance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PreInferenceVariance::PCovariant => write!(f, "PCovariant"),
-            PreInferenceVariance::PContravariant => write!(f, "PContravariant"),
-            PreInferenceVariance::PInvariant => write!(f, "PInvariant"),
-            PreInferenceVariance::PUndefined => write!(f, "PUndefined"),
+            PreInferenceVariance::Covariant => write!(f, "Covariant"),
+            PreInferenceVariance::Contravariant => write!(f, "Contravariant"),
+            PreInferenceVariance::Invariant => write!(f, "Invariant"),
+            PreInferenceVariance::Undefined => write!(f, "Undefined"),
         }
     }
 }

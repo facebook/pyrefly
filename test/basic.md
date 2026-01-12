@@ -21,6 +21,7 @@ $ echo -e "from typing import reveal_type\nreveal_type(1)" > $TMPDIR/empty.py &&
 ```scrut {output_stream: stderr}
 $ $PYREFLY check $TEST_PY
  INFO Querying Buck for source DB (glob?)
+ INFO Source DB build ID: * (glob?)
  INFO Finished querying Buck for source DB (glob?)
  INFO 0 errors
 [0]

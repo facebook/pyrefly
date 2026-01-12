@@ -15,8 +15,12 @@ use std::sync::Arc;
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use itertools::Either;
+use pyrefly_graph::calculation::Calculation;
+use pyrefly_graph::calculation::ProposalResult;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::display::commas_iter;
 use pyrefly_util::recurser::Guard;
@@ -42,14 +46,12 @@ use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
+use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
-use crate::graph::calculation::Calculation;
-use crate::graph::calculation::ProposalResult;
-use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
@@ -158,6 +160,16 @@ impl CalcStack {
         }
         None
     }
+}
+
+const MAXIMUM_CYCLE_DEPTH: usize = 100;
+
+/// Normalize a raw cycle for comparison by sorting and deduplicating.
+fn normalize_raw_cycle(raw: &Vec1<CalcId>) -> Vec<CalcId> {
+    let mut normalized: Vec<CalcId> = raw.iter().duped().collect();
+    normalized.sort();
+    normalized.dedup();
+    normalized
 }
 
 /// Represent a cycle we are currently solving.
@@ -285,6 +297,23 @@ impl Cycle {
             self.unwound.push(c);
         }
     }
+
+    /// Get all participants in this cycle as a sorted vector for comparison.
+    ///
+    /// This normalizes the cycle representation so cycles can be compared regardless
+    /// of where they were detected or how far they've been processed.
+    fn participants_normalized(&self) -> Vec<CalcId> {
+        let mut participants: Vec<CalcId> = self
+            .recursion_stack
+            .iter()
+            .chain(self.unwind_stack.iter())
+            .chain(self.unwound.iter())
+            .duped()
+            .collect();
+        participants.sort();
+        participants.dedup();
+        participants
+    }
 }
 
 /// Represents the current cycle state prior to attempting a particular calculation.
@@ -306,6 +335,17 @@ enum CycleState {
     BreakAt,
 }
 
+enum CycleDetectedResult {
+    /// Break immediately at the idx where we detected the cycle, so that we
+    /// unwind back to the same idx.
+    BreakHere,
+    /// Continue recursing until we hit some other idx that is the minimal `break_at` idx.
+    Continue,
+    /// Duplicate cycle detected in the stack - this indicates infinite recursion.
+    /// Raise a Pyrefly error and produce a placeholder result.
+    DuplicateCycleDetected,
+}
+
 /// Represent the current thread's cycles, which form a stack
 /// because we can encounter a new one while solving another.
 pub struct Cycles(RefCell<Vec<Cycle>>);
@@ -321,14 +361,33 @@ impl Cycles {
 
     /// Handle a cycle we just detected.
     ///
-    /// Return whether or not to break immediately (which is relatively
-    /// common, since we break on the minimal idx which is often where we would
-    /// detect the problem).
-    fn on_cycle_detected(&self, raw: Vec1<CalcId>) -> bool {
+    /// Return whether to break immediately (which is relatively common, since
+    /// we break on the minimal idx which is often where we detect the problem)
+    /// or continue recursing.
+    fn on_cycle_detected(&self, raw: Vec1<CalcId>) -> CycleDetectedResult {
+        if self.0.borrow().len() > MAXIMUM_CYCLE_DEPTH {
+            // Check if this is a duplicate of an existing cycle (indicating infinite recursion)
+            let normalized_raw = normalize_raw_cycle(&raw);
+            let has_duplicate =
+                self.0.borrow().iter().any(|existing_cycle| {
+                    existing_cycle.participants_normalized() == normalized_raw
+                });
+            if has_duplicate {
+                // Don't push the duplicate cycle - just return DuplicateCycleDetected
+                return CycleDetectedResult::DuplicateCycleDetected;
+            }
+            // High depth but no duplicate - treat as normal cycle
+        }
+
+        // Normal cycle detection logic
         let cycle = Cycle::new(raw);
-        let res = cycle.break_at == cycle.detected_at;
+        let result = if cycle.break_at == cycle.detected_at {
+            CycleDetectedResult::BreakHere
+        } else {
+            CycleDetectedResult::Continue
+        };
         self.0.borrow_mut().push(cycle);
-        res
+        result
     }
 
     fn pre_calculate_state(&self, current: &CalcId) -> CycleState {
@@ -497,12 +556,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ProposalResult::CycleBroken(r) => Arc::new(K::promote_recursive(r)),
                 ProposalResult::CycleDetected => {
                     let current_cycle = self.stack().current_cycle().unwrap();
-                    let break_immediately = self.cycles().on_cycle_detected(current_cycle);
-                    if break_immediately {
-                        self.attempt_to_unwind_cycle_from_here(idx, calculation)
-                            .unwrap_or_else(|r| Arc::new(K::promote_recursive(r)))
-                    } else {
-                        self.calculate_and_record_answer(current, idx, calculation)
+                    match self.cycles().on_cycle_detected(current_cycle) {
+                        CycleDetectedResult::BreakHere => self
+                            .attempt_to_unwind_cycle_from_here(idx, calculation)
+                            .unwrap_or_else(|r| Arc::new(K::promote_recursive(r))),
+                        CycleDetectedResult::Continue => {
+                            self.calculate_and_record_answer(current, idx, calculation)
+                        }
+                        CycleDetectedResult::DuplicateCycleDetected => {
+                            let range = self.bindings().idx_to_key(idx).range();
+                            self.base_errors.add(
+                                range,
+                                ErrorInfo::Kind(ErrorKind::InternalError),
+                                vec1![format!(
+                                    "Duplicate cycle detected at {current}; likely infinite recursion in type resolution"
+                                )],
+                            );
+                            self.attempt_to_unwind_cycle_from_here(idx, calculation)
+                                .unwrap_or_else(|r| Arc::new(K::promote_recursive(r)))
+                        }
                     }
                 }
                 ProposalResult::Calculatable => {
@@ -560,30 +632,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         let binding = self.bindings().get(idx);
-        let answer = K::solve(self, binding, self.base_errors);
-        let (v, rec) = calculation.record_value(answer);
-        // If this was the first write to a Calculation that had a recursive placeholder,
-        // we need to record the placeholder => final answer correspondence.
-        if let Some(r) = rec {
-            let k = self.bindings().idx_to_key(idx).range();
-            // Always force recursive Vars as soon as we produce the final answer. This limits
-            // nondeterminism by ensuring that nothing downstream of the cycle can pin the type
-            // once the cycle has finished (although there can still be data races where the
-            // Var escapes the cycle in another thread before it has finished computing).
-            //
-            // `Var::ZERO` is just a dummy value used by a few of the `K: Solve`
-            // implementations that doesn't actually use the Var, so we have to skip it.
-            K::record_recursive(self, k, &v, r, self.base_errors);
-            if r != Var::ZERO {
-                self.solver().force_var(r);
-            }
-        }
+
+        let answer = calculation
+            .record_value(K::solve(self, binding, self.base_errors), |var, answer| {
+                self.finalize_recursive_answer::<K>(idx, var, answer)
+            });
         // Handle cycle unwinding, if applicable.
         //
         // TODO(stroxler): we eventually need to use is-a-cycle-active information to isolate
         // placeholder values.
         self.cycles().on_calculation_finished(&current);
-        v
+        answer
+    }
+
+    /// Finalize a recursive answer. This takes the raw value produced by `K::solve` and calls
+    /// `K::record_recursive` in order to:
+    /// - ensure that the `Variables` map in `solver.rs` is updated
+    /// - possibly simplify the result; in particular a recursive solution that comes out to be
+    ///   a union that includes the recursive solution is simplified, which is important for
+    ///   some kinds of cycles, particularly those coming from LoopPhi
+    /// - force the recursive var if necessary; we skip Var::ZERO (which is an unforcable
+    ///   placeholder used by some kinds of bindings that aren't Types) in this step.
+    fn finalize_recursive_answer<K: Solve<Ans>>(
+        &self,
+        idx: Idx<K>,
+        var: Var,
+        answer: Arc<K::Answer>,
+    ) -> Arc<K::Answer>
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        let range = self.bindings().idx_to_key(idx).range();
+        let final_answer = K::record_recursive(self, range, answer, var, self.base_errors);
+        if var != Var::ZERO {
+            self.solver().force_var(var);
+        }
+        final_answer
     }
 
     /// Attempt to record a cycle placeholder result to unwind a cycle from here.
@@ -708,12 +793,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn record_recursive(
         &self,
         loc: TextRange,
-        answer: Type,
+        ty: Type,
         recursive: Var,
         errors: &ErrorCollector,
-    ) {
+    ) -> Type {
         self.solver()
-            .record_recursive::<Ans>(recursive, answer, self.type_order(), errors, loc);
+            .record_recursive::<Ans>(recursive, ty, self.type_order(), errors, loc)
     }
 
     /// Check if `got` matches `want`, returning `want` if the check fails.
@@ -797,12 +882,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fn go(&mut self, ty: &Type, in_type: bool) {
                 match ty {
                     Type::Never(_) if !in_type => (),
-                    Type::Union(tys) => {
+                    Type::Union(box Union { members, .. }) => {
                         self.seen_union = true;
-                        tys.iter().for_each(|ty| self.go(ty, in_type))
+                        members.iter().for_each(|ty| self.go(ty, in_type))
                     }
-                    Type::Type(box Type::Union(tys)) if !in_type => {
-                        tys.iter().for_each(|ty| self.go(ty, true))
+                    Type::Type(box Type::Union(box Union { members, .. })) if !in_type => {
+                        members.iter().for_each(|ty| self.go(ty, true))
                     }
                     Type::Var(v) if let Some(_guard) = self.me.recurse(*v) => {
                         self.go(&self.me.solver().force_var(*v), in_type)

@@ -32,8 +32,16 @@ pub struct Stdlib {
     bool: StdlibResult<ClassType>,
     int: StdlibResult<ClassType>,
     bytes: StdlibResult<ClassType>,
+    bytearray: StdlibResult<ClassType>,
     float: StdlibResult<ClassType>,
     complex: StdlibResult<ClassType>,
+    decimal: StdlibResult<ClassType>,
+    date: StdlibResult<ClassType>,
+    datetime: StdlibResult<ClassType>,
+    time: StdlibResult<ClassType>,
+    timedelta: StdlibResult<ClassType>,
+    path: StdlibResult<ClassType>,
+    uuid: StdlibResult<ClassType>,
     slice: StdlibResult<(Class, Arc<TParams>)>,
     base_exception: StdlibResult<ClassType>,
     /// Introduced in Python 3.11.
@@ -42,7 +50,10 @@ pub struct Stdlib {
     exception_group: Option<StdlibResult<(Class, Arc<TParams>)>>,
     list: StdlibResult<(Class, Arc<TParams>)>,
     dict: StdlibResult<(Class, Arc<TParams>)>,
+    deque: StdlibResult<(Class, Arc<TParams>)>,
+    frozenset: StdlibResult<(Class, Arc<TParams>)>,
     dict_items: StdlibResult<(Class, Arc<TParams>)>,
+    dict_keys: StdlibResult<(Class, Arc<TParams>)>,
     dict_values: StdlibResult<(Class, Arc<TParams>)>,
     mapping: StdlibResult<(Class, Arc<TParams>)>,
     set: StdlibResult<(Class, Arc<TParams>)>,
@@ -80,6 +91,7 @@ pub struct Stdlib {
     none_type: StdlibResult<ClassType>,
     function_type: StdlibResult<ClassType>,
     method_type: StdlibResult<ClassType>,
+    module_type: StdlibResult<ClassType>,
     enum_meta: StdlibResult<ClassType>,
     enum_flag: StdlibResult<ClassType>,
     enum_class: StdlibResult<ClassType>,
@@ -154,8 +166,16 @@ impl Stdlib {
             bool: lookup_concrete(builtins, "bool"),
             int: lookup_concrete(builtins, "int"),
             bytes: lookup_concrete(builtins, "bytes"),
+            bytearray: lookup_concrete(builtins, "bytearray"),
             float: lookup_concrete(builtins, "float"),
             complex: lookup_concrete(builtins, "complex"),
+            decimal: lookup_concrete(ModuleName::from_str("decimal"), "Decimal"),
+            date: lookup_concrete(ModuleName::from_str("datetime"), "date"),
+            datetime: lookup_concrete(ModuleName::from_str("datetime"), "datetime"),
+            time: lookup_concrete(ModuleName::from_str("datetime"), "time"),
+            timedelta: lookup_concrete(ModuleName::from_str("datetime"), "timedelta"),
+            path: lookup_concrete(ModuleName::from_str("pathlib"), "Path"),
+            uuid: lookup_concrete(ModuleName::from_str("uuid"), "UUID"),
             slice: lookup_generic(builtins, "slice", 3),
             base_exception: lookup_concrete(builtins, "BaseException"),
             base_exception_group: version
@@ -166,7 +186,10 @@ impl Stdlib {
                 .then(|| lookup_generic(builtins, "ExceptionGroup", 1)),
             list: lookup_generic(builtins, "list", 1),
             dict: lookup_generic(builtins, "dict", 2),
+            deque: lookup_generic(ModuleName::collections(), "deque", 1),
+            frozenset: lookup_generic(builtins, "frozenset", 1),
             dict_items: lookup_generic(collections_abc, "dict_items", 2),
+            dict_keys: lookup_generic(collections_abc, "dict_keys", 2),
             dict_values: lookup_generic(collections_abc, "dict_values", 2),
             set: lookup_generic(builtins, "set", 1),
             tuple: lookup_generic(builtins, "tuple", 1),
@@ -192,6 +215,7 @@ impl Stdlib {
             traceback_type: lookup_concrete(types, "TracebackType"),
             function_type: lookup_concrete(types, "FunctionType"),
             method_type: lookup_concrete(types, "MethodType"),
+            module_type: lookup_concrete(types, "ModuleType"),
             mapping: lookup_generic(typing, "Mapping", 2),
             enum_meta: lookup_concrete(enum_, "EnumMeta"),
             enum_flag: lookup_concrete(enum_, "Flag"),
@@ -290,8 +314,40 @@ impl Stdlib {
         Self::primitive(&self.complex)
     }
 
+    pub fn decimal(&self) -> &ClassType {
+        Self::primitive(&self.decimal)
+    }
+
     pub fn bytes(&self) -> &ClassType {
         Self::primitive(&self.bytes)
+    }
+
+    pub fn bytearray(&self) -> &ClassType {
+        Self::primitive(&self.bytearray)
+    }
+
+    pub fn date(&self) -> &ClassType {
+        Self::primitive(&self.date)
+    }
+
+    pub fn datetime(&self) -> &ClassType {
+        Self::primitive(&self.datetime)
+    }
+
+    pub fn time(&self) -> &ClassType {
+        Self::primitive(&self.time)
+    }
+
+    pub fn timedelta(&self) -> &ClassType {
+        Self::primitive(&self.timedelta)
+    }
+
+    pub fn path(&self) -> &ClassType {
+        Self::primitive(&self.path)
+    }
+
+    pub fn uuid(&self) -> &ClassType {
+        Self::primitive(&self.uuid)
     }
 
     pub fn str(&self) -> &ClassType {
@@ -340,6 +396,22 @@ impl Stdlib {
         Self::apply(&self.list, vec![x])
     }
 
+    pub fn list_object(&self) -> &Class {
+        &Self::unwrap(&self.list).0
+    }
+
+    pub fn deque(&self, x: Type) -> ClassType {
+        Self::apply(&self.deque, vec![x])
+    }
+
+    pub fn frozenset(&self, x: Type) -> ClassType {
+        Self::apply(&self.frozenset, vec![x])
+    }
+
+    pub fn frozenset_object(&self) -> &Class {
+        &Self::unwrap(&self.frozenset).0
+    }
+
     pub fn dict(&self, key: Type, value: Type) -> ClassType {
         Self::apply(&self.dict, vec![key, value])
     }
@@ -352,6 +424,10 @@ impl Stdlib {
         Self::apply(&self.dict_items, vec![key, value])
     }
 
+    pub fn dict_keys(&self, key: Type, value: Type) -> ClassType {
+        Self::apply(&self.dict_keys, vec![key, value])
+    }
+
     pub fn dict_values(&self, key: Type, value: Type) -> ClassType {
         Self::apply(&self.dict_values, vec![key, value])
     }
@@ -362,6 +438,10 @@ impl Stdlib {
 
     pub fn set(&self, x: Type) -> ClassType {
         Self::apply(&self.set, vec![x])
+    }
+
+    pub fn set_object(&self) -> &Class {
+        &Self::unwrap(&self.set).0
     }
 
     pub fn iterable(&self, x: Type) -> ClassType {
@@ -449,6 +529,10 @@ impl Stdlib {
 
     pub fn method_type(&self) -> &ClassType {
         Self::primitive(&self.method_type)
+    }
+
+    pub fn module_type(&self) -> &ClassType {
+        Self::primitive(&self.module_type)
     }
 
     pub fn property(&self) -> &ClassType {

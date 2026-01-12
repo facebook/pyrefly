@@ -17,7 +17,6 @@
 #![deny(clippy::inefficient_to_string)]
 #![deny(clippy::mem_replace_option_with_some)]
 #![deny(clippy::str_to_string)]
-#![deny(clippy::string_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(box_patterns)]
 #![feature(if_let_guard)]
@@ -42,6 +41,7 @@ pub mod special_form;
 pub mod stdlib;
 pub mod tuple;
 pub mod type_info;
+pub mod type_output;
 pub mod type_var;
 pub mod type_var_tuple;
 pub mod typed_dict;

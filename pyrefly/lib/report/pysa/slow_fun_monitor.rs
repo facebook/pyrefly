@@ -58,7 +58,7 @@ impl SlowFunctionMonitor {
 }
 
 /// Calls the given function and provides it a handle to a SlowFunctionMonitor,
-/// which can be used to call `alarm()` to monitor slow functions.
+/// which can be used to call `monitor_function()` to monitor slow functions.
 /// Internally, this uses a single thread with low overhead.
 pub fn slow_fun_monitor_scope<F, R>(f: F) -> R
 where

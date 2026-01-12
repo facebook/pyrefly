@@ -5,11 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Response;
-use serde_json::json;
-
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::util::check_inlay_hint_label_values;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -17,10 +15,12 @@ fn test_inlay_hints() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction.initialize(InitializeSettings {
-        configuration: Some(None),
-        ..Default::default()
-    });
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
     interaction.open_notebook(
         "notebook.ipynb",
         vec![
@@ -30,46 +30,102 @@ fn test_inlay_hints() {
         ],
     );
 
-    interaction.inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(json!([{
-            "label": " -> tuple[Literal[1], Literal[2]]",
-            "position": {"character": 21, "line": 0},
-            "textEdits": [{
-                "newText": " -> tuple[Literal[1], Literal[2]]",
-                "range": {"end": {"character": 21, "line": 0}, "start": {"character": 21, "line": 0}}
-            }]
-        }])),
-        error: None,
-    });
+    interaction
+        .inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+            let hint = &hints[0];
+            if hint.position.line != 0 || hint.position.character != 21 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (" -> ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", false),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", false),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
 
-    interaction.inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(json!([{
-            "label": ": tuple[Literal[1], Literal[2]]",
-            "position": {"character": 6, "line": 0},
-            "textEdits": [{
-                "newText": ": tuple[Literal[1], Literal[2]]",
-                "range": {"end": {"character": 6, "line": 0}, "start": {"character": 6, "line": 0}}
-            }]
-        }])),
-        error: None,
-    });
+    interaction
+        .inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+            let hint = &hints[0];
+            if hint.position.line != 0 || hint.position.character != 6 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (": ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", false),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", false),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
 
-    interaction.inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(json!([{
-            "label": " -> Literal[0]",
-            "position": {"character": 15, "line": 0},
-            "textEdits": [{
-                "newText": " -> Literal[0]",
-                "range": {"end": {"character": 15, "line": 0}, "start": {"character": 15, "line": 0}}
-            }]
-        }])),
-        error: None,
-    });
-    interaction.shutdown();
+    interaction
+        .inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+            let hint = &hints[0];
+            if hint.position.line != 0 || hint.position.character != 15 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (" -> ", false),
+                    ("Literal", false),
+                    ("[", false),
+                    ("0", false),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
 }

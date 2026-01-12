@@ -1,0 +1,4 @@
+# Configuration simulating an editable package installation
+# Editable packages appear in both site-packages (via .pth files) AND search_path
+site_package_path = ["venv_editable/lib/python3.12/site-packages"]
+search_path = ["."]

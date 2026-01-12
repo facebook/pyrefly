@@ -48,9 +48,7 @@
     "Line 87: Unexpected errors ['Expected a type form, got instance of `(self: Self@ClassD) -> None`']",
     "Line 96: Unexpected errors ['assert_type(Any, int) failed']"
   ],
-  "annotations_generators.py": [
-    "Line 190: Unexpected errors ['Expected to yield a value of type `int`, but a bare `yield` gives `None` instead']"
-  ],
+  "annotations_generators.py": [],
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
   "callables_annotation.py": [
@@ -137,11 +135,7 @@
   "generics_defaults.py": [
     "Line 170: Unexpected errors ['assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
   ],
-  "generics_defaults_referential.py": [
-    "Line 66: Unexpected errors ['Expected default `TypeVar[X1]` of `Ok1` to be assignable to the upper bound of `float`']",
-    "Line 67: Unexpected errors ['Expected default `TypeVar[X1]` of `AlsoOk1` to be assignable to the upper bound of `int`']",
-    "Line 77: Unexpected errors ['Expected default `TypeVar[Y2]` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`']"
-  ],
+  "generics_defaults_referential.py": [],
   "generics_defaults_specialization.py": [],
   "generics_paramspec_basic.py": [],
   "generics_paramspec_components.py": [
@@ -188,9 +182,7 @@
     "Line 85: Unexpected errors ['Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`']"
   ],
   "generics_typevartuple_callable.py": [],
-  "generics_typevartuple_concat.py": [
-    "Line 56: Unexpected errors ['Returned type `tuple[*tuple[object | T, ...], object | T]` is not assignable to declared return type `tuple[*Ts, T]`']"
-  ],
+  "generics_typevartuple_concat.py": [],
   "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [
     "Line 51: Unexpected errors ['assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed']",
@@ -234,33 +226,24 @@
   "overloads_definitions.py": [],
   "overloads_evaluation.py": [],
   "protocols_class_objects.py": [
-    "Line 29: Expected 1 errors",
-    "Line 34: Expected 1 errors",
     "Line 104: Expected 1 errors",
     "Line 106: Expected 1 errors",
     "Line 107: Expected 1 errors",
-    "Line 108: Expected 1 errors",
-    "Line 26: Unexpected errors ['Cannot instantiate `Proto` because it is a protocol']"
+    "Line 108: Expected 1 errors"
   ],
   "protocols_definition.py": [
     "Line 116: Expected 1 errors",
     "Line 117: Expected 1 errors",
     "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`\\n  Protocol `Template` requires attribute `temp`']"
   ],
-  "protocols_explicit.py": [
-    "Line 89: Expected 1 errors"
-  ],
+  "protocols_explicit.py": [],
   "protocols_generic.py": [],
   "protocols_merging.py": [],
   "protocols_modules.py": [
     "Line 25: Unexpected errors ['`Module[_protocols_modules1]` is not assignable to `Options1`\\n  `Module[_protocols_modules1].timeout` has type `Literal[100]`, which is not consistent with `int` in `Options1.timeout` (the type of read-write attributes cannot be changed)']"
   ],
   "protocols_recursive.py": [],
-  "protocols_runtime_checkable.py": [
-    "Line 88: Expected 1 errors",
-    "Line 92: Expected 1 errors",
-    "Line 96: Expected 1 errors"
-  ],
+  "protocols_runtime_checkable.py": [],
   "protocols_self.py": [],
   "protocols_subtyping.py": [],
   "protocols_variance.py": [
@@ -283,12 +266,7 @@
   "qualifiers_final_annotation.py": [
     "Line 34: Expected 1 errors",
     "Line 38: Expected 1 errors",
-    "Line 62: Expected 1 errors",
-    "Line 63: Expected 1 errors",
     "Line 107: Expected 1 errors",
-    "Line 149: Expected 1 errors",
-    "Line 152: Expected 1 errors",
-    "Line 155: Expected 1 errors",
     "Line 166: Expected 1 errors",
     "Line 170: Expected 1 errors",
     "Line 131: Unexpected errors ['Expected first item to be a string literal', 'Expected first item to be a string literal']",
@@ -302,13 +280,9 @@
   "specialtypes_none.py": [],
   "specialtypes_promotions.py": [],
   "specialtypes_type.py": [
-    "Line 70: Expected 1 errors",
     "Line 84: Unexpected errors ['assert_type(type, type[Any]) failed']",
     "Line 99: Unexpected errors ['Object of class `type` has no attribute `unknown`']",
     "Line 100: Unexpected errors ['Object of class `type` has no attribute `unknown`']",
-    "Line 102: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
-    "Line 106: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
-    "Line 110: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
     "Line 139: Unexpected errors ['assert_type(type, type[Any]) failed']"
   ],
   "tuples_type_compat.py": [],
@@ -325,9 +299,7 @@
   "typeddicts_readonly_inheritance.py": [],
   "typeddicts_readonly_kwargs.py": [],
   "typeddicts_readonly_update.py": [],
-  "typeddicts_required.py": [
-    "Line 71: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMovie']`\"]"
-  ],
+  "typeddicts_required.py": [],
   "typeddicts_type_consistency.py": [],
   "typeddicts_usage.py": []
 }

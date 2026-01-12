@@ -12,6 +12,7 @@
  */
 
 use pyrefly_types::callable::FuncMetadata;
+use pyrefly_types::types::Union;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
@@ -19,12 +20,14 @@ use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::solve::TypeFormContext;
+use crate::alt::types::decorated_function::Decorator;
 use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -65,11 +68,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .explicit_any()
                     .noreturn_to_never()
                     .anon_callables()
+                    .anon_typed_dicts(self.stdlib)
                     .distribute_type_over_union();
                 // Make assert_type(Self@SomeClass, typing.Self) work.
                 ty.subst_self_type_mut(&self_form);
-                // Re-sort unions. Make sure to keep this as the final step before comparison.
-                ty.sort_unions()
+                // Re-sort unions & drop any display names.
+                // Make sure to keep this as the final step before comparison.
+                ty.sort_unions_and_drop_names()
             };
             let a = normalize_type(a, expr_a);
             let b = normalize_type(b, expr_b);
@@ -278,10 +283,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_or_tuple: &Expr,
         errors: &ErrorCollector,
     ) -> Type {
-        // We call expr_infer in order to check for errors, but we don't need to do anything with
-        // the result, as the `obj` parameter has type `object`.
-        self.expr_infer(obj, errors);
-        self.check_arg_is_class_object(class_or_tuple, &FunctionKind::IsInstance, errors);
+        self.check_arg_is_class_object(obj, class_or_tuple, &FunctionKind::IsInstance, errors);
         self.stdlib.bool().clone().to_type()
     }
 
@@ -291,26 +293,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_or_tuple: &Expr,
         errors: &ErrorCollector,
     ) -> Type {
-        // Verify that the `cls` argument has type `type`.
-        self.check_type(
-            &self.expr_infer(cls, errors),
-            &self.stdlib.builtins_type().clone().to_type(),
-            cls.range(),
-            errors,
-            &|| {
-                TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
-                    Some(Name::new_static("cls")),
-                    Some(FunctionKind::IsSubclass),
-                ))
-            },
-        );
-        self.check_arg_is_class_object(class_or_tuple, &FunctionKind::IsSubclass, errors);
+        self.check_arg_is_class_object(cls, class_or_tuple, &FunctionKind::IsSubclass, errors);
         self.stdlib.bool().clone().to_type()
     }
 
     fn check_type_is_class_object(
         &self,
         ty: Type,
+        object_type: Option<Type>,
         contains_subscript: bool,
         range: TextRange,
         func_kind: &FunctionKind,
@@ -350,23 +340,76 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 // Check if this is a protocol that needs @runtime_checkable
-                if metadata.is_protocol() && !metadata.is_runtime_checkable_protocol() {
-                    self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                    format!("Protocol `{}` is not decorated with @runtime_checkable and cannot be used with {}", cls.name(), func_display()),
-                );
-                } else if metadata.is_protocol() && metadata.is_runtime_checkable_protocol() {
-                    // Additional validation for runtime checkable protocols:
-                    // issubclass() can only be used with non-data protocols
-                    if *func_kind == FunctionKind::IsSubclass && self.is_data_protocol(cls, range) {
+                if metadata.is_protocol() && !metadata.is_typed_dict() {
+                    if !metadata.is_runtime_checkable_protocol() {
                         self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                        format!("Protocol `{}` has non-method members and cannot be used with issubclass()", cls.name()),
-                    );
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            format!("Protocol `{}` is not decorated with @runtime_checkable and cannot be used with {}", cls.name(), func_display()),
+                        );
+                    } else {
+                        // Additional validation for runtime checkable protocols:
+                        // issubclass() can only be used with non-data protocols
+                        if *func_kind == FunctionKind::IsSubclass
+                            && self.is_data_protocol(cls, range)
+                        {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                format!("Protocol `{}` has non-method members and cannot be used with issubclass()", cls.name()),
+                            );
+                        }
+                        // Check for unsafe overlap:
+                        // https://typing.python.org/en/latest/spec/protocol.html#runtime-checkable-decorator-and-narrowing-types-by-isinstance
+                        // We need to check if there is any field with unassignable types, since the `isinstance` check only
+                        // checks for the presence of the fields, not their types.
+                        //
+                        // Type arguments for the protocol are not provided, so we'll use
+                        // fresh vars and solve them during the `is_subset_eq` check below.
+                        let protocol_metadata = metadata.protocol_metadata().unwrap();
+                        if let Some(object_type) = &object_type
+                            && let Type::ClassType(protocol_class_type) =
+                                self.instantiate_fresh_class(cls)
+                        {
+                            let mut unsafe_overlap_errors = vec![];
+                            for field_name in &protocol_metadata.members {
+                                if !self.has_attr(object_type, field_name) {
+                                    // It's okay if the field is missing, since
+                                    // we only care about unsafe overlaps
+                                    continue;
+                                }
+                                if let Err(subset_err) = self.is_protocol_subset_at_attr(
+                                    object_type,
+                                    &protocol_class_type,
+                                    field_name,
+                                    &mut |x, y| self.is_subset_eq_with_reason(x, y),
+                                ) {
+                                    let error_msg = subset_err
+                                        .to_error_msg()
+                                        .map(|msg| format!(": {msg}"))
+                                        .unwrap_or_default();
+                                    unsafe_overlap_errors.push(format!(
+                                        "Attribute `{}` has incompatible types{}",
+                                        field_name, error_msg,
+                                    ));
+                                }
+                            }
+                            if !unsafe_overlap_errors.is_empty() {
+                                let mut full_msg = vec1![format!(
+                                    "Runtime checkable protocol `{}` has an unsafe overlap with type `{}`",
+                                    cls.name(),
+                                    self.for_display(object_type.clone())
+                                )];
+                                full_msg.extend(unsafe_overlap_errors);
+                                errors.add(
+                                    range,
+                                    ErrorInfo::Kind(ErrorKind::UnsafeOverlap),
+                                    full_msg,
+                                );
+                            }
+                        }
                     }
                 }
             } else if contains_subscript
@@ -384,6 +427,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.for_display(ty)
                     ),
                 );
+            } else if let Type::Type(box Type::SpecialForm(special_form)) = &ty {
+                if !special_form.isinstance_safe() {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        format!("Expected class object, got special form `{}`", special_form),
+                    );
+                }
             } else if self.unwrap_class_object_silently(&ty).is_none() {
                 self.error(
                     errors,
@@ -427,7 +479,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
 
                 // If it's not a callable type, it's a data member
-                if !ty.is_function_type() {
+                if !ty.is_toplevel_callable() {
                     return true;
                 }
             }
@@ -435,24 +487,50 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         false
     }
 
+    // isinstance(object, classinfo) / issubclass(class, classinfo)
     fn check_arg_is_class_object(
         &self,
-        arg_expr: &Expr,
+        object_or_class_expr: &Expr,
+        classinfo_expr: &Expr,
         func_kind: &FunctionKind,
         errors: &ErrorCollector,
     ) {
-        let arg_class_type = self.expr_infer(arg_expr, errors);
+        let classinfo_type = self.expr_infer(classinfo_expr, errors);
         let mut contains_subscript = false;
-        arg_expr.visit(&mut |e| {
+        classinfo_expr.visit(&mut |e| {
             if matches!(e, Expr::Subscript(_)) {
                 contains_subscript = true;
             }
         });
 
+        let object_type = if matches!(func_kind, FunctionKind::IsInstance) {
+            Some(self.expr_infer(object_or_class_expr, errors))
+        } else if matches!(func_kind, FunctionKind::IsSubclass) {
+            let ty = self.expr_infer(object_or_class_expr, errors);
+            // Verify that the `cls` argument has type `type`.
+            self.check_type(
+                &ty,
+                &self.stdlib.builtins_type().clone().to_type(),
+                object_or_class_expr.range(),
+                errors,
+                &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                        Some(Name::new_static("cls")),
+                        Some(FunctionKind::IsSubclass),
+                    ))
+                },
+            );
+            // Untype to get the class object type
+            self.untype_opt(ty, object_or_class_expr.range(), errors)
+        } else {
+            unreachable!("unexpected function kind in check_arg_is_class_object")
+        };
+
         self.check_type_is_class_object(
-            arg_class_type,
+            classinfo_type,
+            object_type,
             contains_subscript,
-            arg_expr.range(),
+            classinfo_expr.range(),
             func_kind,
             errors,
         );
@@ -475,7 +553,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Could be anything inside here, so add in Any.
                     res.push(Type::Any(AnyStyle::Implicit));
                 }
-                Type::Tuple(Tuple::Concrete(ts)) | Type::Union(ts) => {
+                Type::Tuple(Tuple::Concrete(ts)) | Type::Union(box Union { members: ts, .. }) => {
                     for t in ts {
                         f(me, t, res)
                     }
@@ -490,7 +568,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         f(me, t, res)
                     }
                 }
-                Type::Type(box Type::Union(ts)) => {
+                Type::Type(box Type::Union(box Union { members: ts, .. })) => {
                     for t in ts {
                         f(me, Type::type_form(t), res)
                     }
@@ -511,7 +589,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         kws: &[CallKeyword],
         errors: &ErrorCollector,
     ) -> Option<Type> {
-        let special_decorator = self.get_special_decorator(callee)?;
+        let decorator = Decorator {
+            ty: callee.clone(),
+            deprecation: None,
+        };
+        let special_decorator = self.get_special_decorator(&decorator)?;
         // Does this call have a single positional argument?
         // If not, it cannot be a decorator application.
         if kws.is_empty()

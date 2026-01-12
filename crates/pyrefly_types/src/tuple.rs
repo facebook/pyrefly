@@ -6,13 +6,13 @@
  */
 
 use std::fmt;
-use std::fmt::Display;
 
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
-use pyrefly_util::display::commas_iter;
+use pyrefly_python::qname::QName;
 
+use crate::type_output::TypeOutput;
 use crate::types::Type;
 
 /*
@@ -50,14 +50,6 @@ impl Tuple {
         }
     }
 
-    pub fn concrete(elts: Vec<Type>) -> Self {
-        Self::Concrete(elts)
-    }
-
-    pub fn unbounded(elt: Type) -> Self {
-        Self::Unbounded(Box::new(elt))
-    }
-
     pub fn unpacked(prefix: Vec<Type>, middle: Type, suffix: Vec<Type>) -> Tuple {
         if prefix.is_empty()
             && suffix.is_empty()
@@ -68,35 +60,54 @@ impl Tuple {
         Self::Unpacked(Box::new((prefix, middle, suffix)))
     }
 
-    pub fn fmt_with_type<'a, D: Display + 'a>(
-        &'a self,
-        f: &mut fmt::Formatter<'_>,
-        wrap: impl Fn(&'a Type) -> D,
+    pub fn fmt_with_type<O: TypeOutput>(
+        &self,
+        output: &mut O,
+        tuple_qname: Option<&QName>,
+        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
-        let contents = match self {
+        output.write_builtin("tuple", tuple_qname)?;
+        output.write_str("[")?;
+        match self {
             Self::Concrete(elts) => {
                 if elts.is_empty() {
-                    "()".to_owned()
+                    output.write_str("()")?;
                 } else {
-                    format!("{}", commas_iter(|| elts.iter().map(&wrap)))
+                    for (i, elt) in elts.iter().enumerate() {
+                        if i > 0 {
+                            output.write_str(", ")?;
+                        }
+                        write_type(elt, output)?;
+                    }
                 }
             }
-            Self::Unbounded(ty) => format!("{}, ...", wrap(ty)),
-            Self::Unpacked(box (prefix, unpacked, suffix)) => {
-                let prefix = if prefix.is_empty() {
-                    "".to_owned()
-                } else {
-                    format!("{}, ", commas_iter(|| prefix.iter().map(&wrap)))
-                };
-                let suffix = if suffix.is_empty() {
-                    "".to_owned()
-                } else {
-                    format!(", {}", commas_iter(|| suffix.iter().map(&wrap)))
-                };
-                let unpacked = format!("*{}", wrap(unpacked));
-                format!("{prefix}{unpacked}{suffix}")
+            Self::Unbounded(ty) => {
+                write_type(ty, output)?;
+                output.write_str(", ...")?;
             }
-        };
-        write!(f, "tuple[{contents}]")
+            Self::Unpacked(box (prefix, unpacked, suffix)) => {
+                for (i, ty) in prefix.iter().enumerate() {
+                    if i > 0 {
+                        output.write_str(", ")?;
+                    }
+                    write_type(ty, output)?;
+                }
+                if !prefix.is_empty() {
+                    output.write_str(", ")?;
+                }
+                output.write_str("*")?;
+                write_type(unpacked, output)?;
+                if !suffix.is_empty() {
+                    output.write_str(", ")?;
+                    for (i, ty) in suffix.iter().enumerate() {
+                        if i > 0 {
+                            output.write_str(", ")?;
+                        }
+                        write_type(ty, output)?;
+                    }
+                }
+            }
+        }
+        output.write_str("]")
     }
 }

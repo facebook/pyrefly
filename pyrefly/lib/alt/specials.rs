@@ -7,6 +7,7 @@
 
 use std::slice;
 
+use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
@@ -80,7 +81,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         return None;
                     } else {
-                        return Some((Tuple::unbounded(t.clone()), false));
+                        return Some((Tuple::Unbounded(Box::new(t.clone())), false));
                     }
                 } else {
                     self.error(
@@ -161,7 +162,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(middle) = middle {
             Some((Tuple::unpacked(prefix, middle, suffix), has_unpack))
         } else {
-            Some((Tuple::concrete(prefix), has_unpack))
+            Some((Tuple::Concrete(prefix), has_unpack))
         }
     }
 
@@ -200,7 +201,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 fn is_valid_literal(x: &Type) -> bool {
                     match x {
                         Type::None | Type::Literal(_) | Type::Any(AnyStyle::Error) => true,
-                        Type::Union(xs) => xs.iter().all(is_valid_literal),
+                        Type::Union(box Union { members: xs, .. }) => {
+                            xs.iter().all(is_valid_literal)
+                        }
                         _ => false,
                     }
                 }
@@ -305,7 +308,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )),
             SpecialForm::Tuple => match self.check_args_and_construct_tuple(arguments, errors) {
                 Some((tuple, _)) => Type::type_form(Type::Tuple(tuple)),
-                None => Type::type_form(Type::Tuple(Tuple::unbounded(Type::any_error()))),
+                None => Type::type_form(Type::unbounded_tuple(Type::any_error())),
             },
             SpecialForm::Literal => {
                 if parens {
@@ -336,7 +339,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     let args = arguments[0..arguments.len() - 1]
                         .iter()
-                        .map(|x| self.expr_untype(x, TypeFormContext::TupleOrCallableParam, errors))
+                        .map(|x| {
+                            (
+                                self.expr_untype(x, TypeFormContext::TupleOrCallableParam, errors),
+                                Required::Required,
+                            )
+                        })
                         .collect();
                     let pspec = self.expr_untype(
                         arguments.last().unwrap(),
@@ -469,7 +477,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 ErrorInfo::Kind(ErrorKind::BadSpecialization),
                 format!(
-                    "``Unpack requires exactly one argument but got {}",
+                    "`Unpack` requires exactly one argument but got {}",
                     arguments.len()
                 ),
             ),
@@ -490,6 +498,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 TypeFormContext::TypeArgument,
                 errors,
             )),
+            SpecialForm::Annotated => self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                "`Annotated` needs at least one piece of metadata in addition to the type"
+                    .to_owned(),
+            ),
             // Keep this in sync with `SpecialForm::can_be_subscripted``
             SpecialForm::SelfType
             | SpecialForm::LiteralString
@@ -508,8 +523,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | SpecialForm::Protocol
             | SpecialForm::ReadOnly
             | SpecialForm::NotRequired
-            | SpecialForm::Required
-            | SpecialForm::Annotated => self.error(
+            | SpecialForm::Required => self.error(
                 errors,
                 range,
                 ErrorInfo::Kind(ErrorKind::InvalidAnnotation),

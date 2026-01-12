@@ -11,18 +11,23 @@ use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
 use pyrefly_types::callable::ParamList;
+use pyrefly_types::callable::PropertyMetadata;
+use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
+use pyrefly_types::types::Union;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::class::class_field::ClassField;
 use crate::alt::class::enums::VALUE_PROP;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -67,7 +72,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassDef(cls) => {
                 self.get_django_field_type_from_class(cls, class, field_name, initial_value_expr)
             }
-            Type::Union(union) => {
+            Type::Union(box Union { members: union, .. }) => {
                 let transformed: Vec<_> = union
                     .iter()
                     .map(|variant| {
@@ -99,30 +104,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
 
-        if field_name.is_some()
+        let base_type = if field_name.is_some()
             && let Some(e) = initial_value_expr
             && let Some(call_expr) = e.as_call_expr()
             && let Some(to_expr) = call_expr.arguments.args.first()
-            && let Some(model_type) = self.resolve_target(to_expr)
+            && let Some(model_type) = self.resolve_target(to_expr, class)
         {
             if self.is_foreign_key_field(field) {
-                // If nullable, union with None
-                if self.is_django_field_nullable(call_expr) {
-                    return Some(self.union(model_type, Type::None));
-                } else {
-                    return Some(model_type);
-                }
-            }
-
-            if self.is_many_to_many_field(field) {
-                // TODO: check if nullability applies to this case as well
+                Some(model_type)
+            } else if self.is_many_to_many_field(field) {
                 return self.get_manager_type(model_type);
+            } else {
+                None
             }
-        }
+        } else {
+            None
+        };
 
-        // Default: use _pyi_private_get_type from the field class
-        self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
-            .map(|field| field.ty())
+        let base_type = base_type.or_else(|| {
+            self.get_class_member(field, &DJANGO_PRIVATE_GET_TYPE)
+                .map(|field| field.ty())
+        })?;
+
+        if let Some(e) = initial_value_expr
+            && let Some(call_expr) = e.as_call_expr()
+            && self.is_django_field_nullable(call_expr)
+        {
+            Some(self.union(base_type, Type::None))
+        } else {
+            Some(base_type)
+        }
     }
 
     /// Check if a class inherits from Django's Field class
@@ -173,14 +184,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(manager_type)
     }
 
-    fn resolve_target(&self, to_expr: &Expr) -> Option<Type> {
+    fn resolve_target(&self, to_expr: &Expr, class: &Class) -> Option<Type> {
         match to_expr {
             // Use expr_infer to resolve the name in the current scope
             Expr::Name(_) => {
                 let model_type = self.expr_infer(to_expr, &self.error_swallower());
                 Some(self.class_def_to_instance_type(&model_type))
             }
-            // TODO: handle self references and forward references (string literals case) for foreign keys specifically
+            Expr::StringLiteral(ExprStringLiteral { value, .. }) => {
+                if value.to_str() == "self" {
+                    Some(self.instantiate(class))
+                } else {
+                    // Handle forward reference - look up the model by name in the current module
+                    // This requires that the model class is imported or defined in the current module
+                    let class_name = Name::new(value.to_str());
+                    let module_name = class.module_name();
+
+                    if self
+                        .exports
+                        .get(module_name)
+                        .finding()?
+                        .exports(self.exports)
+                        .contains_key(&class_name)
+                    {
+                        let model_type =
+                            self.get_from_export(module_name, None, &KeyExport(class_name));
+                        Some(self.class_def_to_instance_type(&model_type))
+                    } else {
+                        None
+                    }
+                }
+            }
             // we may have to extend this function to handle different kinds of fields in the future
             _ => None,
         }
@@ -288,7 +322,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (
                 CHOICES,
                 self.stdlib
-                    .list(Type::Tuple(Tuple::Concrete(vec![values_type, label_type])))
+                    .list(Type::concrete_tuple(vec![values_type, label_type]))
                     .to_type(),
             ),
         ];
@@ -303,7 +337,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn property(&self, cls: &Class, name: Name, ty: Type) -> Type {
         let signature = Callable::list(ParamList::new(vec![self.class_self_param(cls, false)]), ty);
         let mut metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), name);
-        metadata.flags.is_property_getter = true;
+        metadata.flags.property_metadata = Some(PropertyMetadata {
+            role: PropertyRole::Getter,
+            getter: Type::any_error(),
+            setter: None,
+            has_deleter: false,
+        });
         Type::Function(Box::new(Function {
             signature,
             metadata,
@@ -352,11 +391,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    /// Returns the primary key type of the related model.
-    fn get_foreign_key_id_type(&self, cls: &Class, field_name: &Name) -> Option<Type> {
-        // Get the class field
-        let class_field = self.get_field_from_current_class_only(cls, field_name)?;
+    /// Check if a Django field has a `choices` argument.
+    pub fn has_django_field_choices(&self, call_expr: &ExprCall) -> bool {
+        call_expr.arguments.keywords.iter().any(|keyword| {
+            keyword
+                .arg
+                .as_ref()
+                .is_some_and(|name| name.as_str() == CHOICES.as_str())
+        })
+    }
 
+    /// Create a get_FOO_display method signature for a field with choices.
+    /// The method takes self and returns str.
+    fn get_display_method(&self, cls: &Class, method_name: &Name) -> ClassSynthesizedField {
+        let params = vec![self.class_self_param(cls, false)];
+        let ret = self.stdlib.str().clone().to_type();
+        ClassSynthesizedField::new(Type::Function(Box::new(Function {
+            signature: Callable::list(ParamList::new(params), ret),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), method_name.clone()),
+        })))
+    }
+
+    /// Returns the primary key type of the related model.
+    fn get_foreign_key_id_type(&self, class_field: &ClassField) -> Option<Type> {
         // Check if this is a ForeignKey field using the cached metadata
         if !class_field.is_foreign_key() {
             return None;
@@ -365,7 +422,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Get the related model type from the field
         let ty = class_field.ty();
         let (related_cls, is_foreign_key_nullable) = match ty {
-            Type::Union(union) => {
+            Type::Union(box Union { members: union, .. }) => {
                 // Nullable foreign key: extract the class type from the union
                 let cls = union.iter().find_map(|variant| match variant {
                     Type::ClassType(cls) => Some(cls.clone()),
@@ -406,10 +463,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         // Synthesize `<field_name>_id` fields for ForeignKey fields
+        // and `get_<field_name>_display()` methods for fields with choices
         for field_name in cls.fields() {
-            if let Some(fk_id_type) = self.get_foreign_key_id_type(cls, field_name) {
+            let Some(class_field) = self.get_field_from_current_class_only(cls, field_name) else {
+                continue;
+            };
+            if let Some(fk_id_type) = self.get_foreign_key_id_type(&class_field) {
                 let id_field_name = Name::new(format!("{}_id", field_name));
                 fields.insert(id_field_name, ClassSynthesizedField::new(fk_id_type));
+            }
+            if class_field.has_choices() {
+                let method_name = Name::new(format!("get_{}_display", field_name));
+                fields.insert(
+                    method_name.clone(),
+                    self.get_display_method(cls, &method_name),
+                );
             }
         }
 

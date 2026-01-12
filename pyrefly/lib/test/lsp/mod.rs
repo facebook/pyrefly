@@ -7,10 +7,12 @@
 
 #![cfg(test)]
 
+mod call_hierarchy;
 mod code_actions;
 mod completion;
 mod declaration;
 mod definition;
+mod diagnostic;
 mod document_symbols;
 mod folding_ranges;
 mod hover;

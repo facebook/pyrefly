@@ -1,0 +1,9 @@
+from _typeshed import Incomplete
+from conans.client.downloaders.download import run_downloader as run_downloader
+from conans.client.tools.files import check_md5 as check_md5, check_sha1 as check_sha1, check_sha256 as check_sha256, unzip as unzip
+from conans.errors import ConanException as ConanException
+from conans.util.fallbacks import default_output as default_output, default_requester as default_requester
+
+def get(url, md5: Incomplete | None = ..., sha1: Incomplete | None = ..., sha256: Incomplete | None = ..., destination: str = ..., filename: str = ..., keep_permissions: bool = ..., pattern: Incomplete | None = ..., requester: Incomplete | None = ..., output: Incomplete | None = ..., verify: bool = ..., retry: Incomplete | None = ..., retry_wait: Incomplete | None = ..., overwrite: bool = ..., auth: Incomplete | None = ..., headers: Incomplete | None = ..., strip_root: bool = ...) -> None: ...
+def ftp_download(ip, filename, login: str = ..., password: str = ...) -> None: ...
+def download(url, filename, verify: bool = ..., out: Incomplete | None = ..., retry: Incomplete | None = ..., retry_wait: Incomplete | None = ..., overwrite: bool = ..., auth: Incomplete | None = ..., headers: Incomplete | None = ..., requester: Incomplete | None = ..., md5: Incomplete | None = ..., sha1: Incomplete | None = ..., sha256: Incomplete | None = ...) -> None: ...

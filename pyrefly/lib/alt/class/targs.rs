@@ -248,7 +248,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let quantified = Quantified::type_var_tuple(Name::new_static("Ts"), self.uniques, None);
         let tparams = TParams::new(vec![TParam {
             quantified: quantified.clone(),
-            variance: PreInferenceVariance::PCovariant,
+            variance: PreInferenceVariance::Covariant,
         }]);
         let tuple_ty = Type::Tuple(Tuple::Unpacked(Box::new((
             Vec::new(),
@@ -481,7 +481,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::Unpack(t) => {
                     if !suffix.is_empty() {
-                        middle.push(Type::Tuple(Tuple::unbounded(self.unions(suffix))));
+                        middle.push(Type::unbounded_tuple(self.unions(suffix)));
                         suffix = Vec::new();
                     } else {
                         middle.push((**t).clone())
@@ -507,8 +507,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         match middle.as_slice() {
-            [] => Type::tuple(prefix),
-            [middle] => Type::Tuple(Tuple::unpacked(prefix, middle.clone(), suffix)),
+            [] => Type::concrete_tuple(prefix),
+            [middle] => Type::unpacked_tuple(prefix, middle.clone(), suffix),
             // We can't precisely model unpacking two unbounded iterables, so we'll keep any
             // concrete prefix and suffix elements and merge everything in between into an unbounded tuple
             _ => {
@@ -519,11 +519,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .unwrap_or(self.stdlib.object().clone().to_type())
                     })
                     .collect();
-                Type::Tuple(Tuple::unpacked(
+                Type::unpacked_tuple(
                     prefix,
-                    Type::Tuple(Tuple::unbounded(self.unions(middle_types))),
+                    Type::unbounded_tuple(self.unions(middle_types)),
                     suffix,
-                ))
+                )
             }
         }
     }

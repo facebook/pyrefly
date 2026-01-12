@@ -26,13 +26,10 @@ impl ConfigOptionMigrater for PythonInterpreter {
     ) -> anyhow::Result<()> {
         // https://mypy.readthedocs.io/en/latest/config_file.html#import-discovery
         // python_executable can only be set in the top level `[mypy]` global section
-        let python_executable = mypy_cfg.get("mypy", "python_executable");
-
-        if python_executable.is_none() {
+        let Some(python_interpreter_path) = mypy_cfg.get("mypy", "python_executable") else {
             return Err(anyhow::anyhow!("No python_executable found in mypy config"));
-        }
+        };
 
-        let python_interpreter_path = python_executable.unwrap();
         pyrefly_cfg.interpreters.python_interpreter_path =
             PathBuf::from_str(&python_interpreter_path)
                 .ok()

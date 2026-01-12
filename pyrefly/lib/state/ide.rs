@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::module_name::ModuleName;
@@ -45,7 +46,7 @@ pub struct ImportEdit {
 pub enum IntermediateDefinition {
     Local(Export),
     NamedImport(TextRange, ModuleName, Name, Option<TextRange>),
-    Module(ModuleName),
+    Module(TextRange, ModuleName),
 }
 
 pub fn key_to_intermediate_definition(
@@ -87,7 +88,9 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             | Binding::LoopPhi(k, ..) => {
                 current_idx = *k;
             }
-            Binding::Phi(_, ks) if !ks.is_empty() => current_idx = *ks.iter().next().unwrap(),
+            Binding::Phi(_, branches) if !branches.is_empty() => {
+                current_idx = branches[0].value_key
+            }
             Binding::PossibleLegacyTParam(k, _) => {
                 let binding = bindings.get(*k);
                 current_idx = binding.idx();
@@ -98,10 +101,9 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             {
                 current_idx = bindings.key_to_idx(&key);
             }
-            Binding::AssignToAttribute(attribute, _)
-                if let Some(key) =
-                    base_key_of_assign_target(&Expr::Attribute(attribute.clone())) =>
-            {
+            Binding::AssignToAttribute {
+                attr: attribute, ..
+            } if let Some(key) = base_key_of_assign_target(&Expr::Attribute(attribute.clone())) => {
                 current_idx = bindings.key_to_idx(&key);
             }
             _ => {
@@ -137,7 +139,33 @@ fn create_intermediate_definition_from(
                     *original_name_range,
                 ));
             }
-            Binding::Module(name, ..) => return Some(IntermediateDefinition::Module(*name)),
+            Binding::ImportViaGetattr(m, _name) => {
+                // For __getattr__ imports, the name doesn't exist directly in the module,
+                // so we point to __getattr__ instead.
+                return Some(IntermediateDefinition::NamedImport(
+                    def_key.range(),
+                    *m,
+                    pyrefly_python::dunder::GETATTR.clone(),
+                    None,
+                ));
+            }
+            Binding::Module(name, path, ..) => {
+                let imported_module_name = if path.len() == 1 {
+                    // This corresponds to the case for `import x.y` -- the corresponding key would
+                    // always be `Key::Import(x)`, so the actual module that corresponds to the key
+                    // should be `x` instead of `x.y`.
+                    ModuleName::from_name(&path[0])
+                } else {
+                    // This corresponds to all other cases (e.g. `import x.y as z` or `from x.y
+                    // import z`) -- the corresponding key would be `Key::Definition(z)` so the
+                    // actual module that corresponds to the key must be `x.y`.
+                    name.dupe()
+                };
+                return Some(IntermediateDefinition::Module(
+                    def_key.range(),
+                    imported_module_name,
+                ));
+            }
             Binding::Function(idx, ..) => {
                 let func = bindings.get(*idx);
                 let undecorated = bindings.get(func.undecorated_idx);
@@ -150,7 +178,7 @@ fn create_intermediate_definition_from(
                     location: undecorated.def.name.range,
                     symbol_kind: Some(symbol_kind),
                     docstring_range: func.docstring_range,
-                    is_deprecated: false,
+                    deprecation: None,
                     special_export: None,
                 }));
             }
@@ -161,7 +189,7 @@ fn create_intermediate_definition_from(
                             location: def_key.range(),
                             symbol_kind: Some(SymbolKind::Class),
                             docstring_range: None,
-                            is_deprecated: false,
+                            deprecation: None,
                             special_export: None,
                         }))
                     }
@@ -173,7 +201,7 @@ fn create_intermediate_definition_from(
                         location: def.name.range,
                         symbol_kind: Some(SymbolKind::Class),
                         docstring_range: *docstring_range,
-                        is_deprecated: false,
+                        deprecation: None,
                         special_export: None,
                     })),
                 };
@@ -183,7 +211,7 @@ fn create_intermediate_definition_from(
                     location: def_key.range(),
                     symbol_kind: current_binding.symbol_kind(),
                     docstring_range: None,
-                    is_deprecated: false,
+                    deprecation: None,
                     special_export: None,
                 }));
             }
@@ -296,7 +324,7 @@ fn handle_require_absolute_import(config_finder: &ConfigFinder, handle: &Handle)
     ) {
         return true;
     }
-    let config = config_finder.python_file(handle.module(), handle.path());
+    let config = config_finder.python_file(handle.module_kind(), handle.path());
     config
         .search_path()
         .any(|search_path| handle.path().as_path().starts_with(search_path))

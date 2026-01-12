@@ -14,13 +14,14 @@ use crate::literal::Lit;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::types::Type;
+use crate::types::Union;
 
 /// Turn unions of unions into a flattened list for one union, and return the deduped list.
 fn flatten_and_dedup(xs: Vec<Type>) -> Vec<Type> {
     fn flatten(xs: Vec<Type>, res: &mut Vec<Type>) {
         for x in xs {
             match x {
-                Type::Union(xs) => flatten(xs, res),
+                Type::Union(box Union { members, .. }) => flatten(members, res),
                 Type::Never(_) => {}
                 _ => res.push(x),
             }
@@ -74,8 +75,14 @@ fn unions_internal(
         if let Some(stdlib) = stdlib {
             collapse_literals(&mut res, stdlib, enum_members.unwrap_or(&|_| None));
         }
+        collapse_tuple_unions_with_empty(&mut res);
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
-        try_collapse(res).unwrap_or_else(Type::Union)
+        try_collapse(res).unwrap_or_else(|members| {
+            Type::Union(Box::new(Union {
+                members,
+                display_name: None,
+            }))
+        })
     })
 }
 
@@ -247,6 +254,47 @@ fn collapse_literals(
     }
 }
 
+fn collapse_tuple_unions_with_empty(types: &mut Vec<Type>) {
+    let Some(empty_idx) = types.iter().position(|t| match t {
+        Type::Tuple(Tuple::Concrete(elts)) => elts.is_empty(),
+        _ => false,
+    }) else {
+        return;
+    };
+
+    let mut empty_is_redundant = false;
+    for (idx, ty) in types.iter_mut().enumerate() {
+        if idx == empty_idx {
+            continue;
+        }
+        match ty {
+            Type::Tuple(Tuple::Unbounded(_)) => {
+                empty_is_redundant = true;
+            }
+            Type::Tuple(Tuple::Unpacked(unpacked)) => {
+                let (prefix, middle, suffix) = &**unpacked;
+                if prefix.len() + suffix.len() == 1
+                    && let Type::Tuple(Tuple::Unbounded(elem)) = middle
+                    && prefix
+                        .iter()
+                        .chain(suffix.iter())
+                        .all(|fixed| fixed == elem.as_ref())
+                {
+                    *ty = Type::unbounded_tuple(elem.as_ref().clone());
+                    empty_is_redundant = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if empty_is_redundant {
+        types.remove(empty_idx);
+        types.sort();
+        types.dedup();
+    }
+}
+
 fn flatten_unpacked_concrete_tuples(elts: Vec<Type>) -> Vec<Type> {
     let mut result = Vec::new();
     for elt in elts {
@@ -300,6 +348,7 @@ pub fn simplify_tuples(tuple: Tuple) -> Tuple {
 mod tests {
     use crate::simplify::intersect;
     use crate::simplify::unions;
+    use crate::tuple::Tuple;
     use crate::types::NeverStyle;
     use crate::types::Type;
 
@@ -347,5 +396,31 @@ mod tests {
             intersect(vec![Type::any_implicit(), Type::any_tuple()], Type::never()),
         ];
         assert_eq!(unions(xs), Type::any_implicit());
+    }
+
+    #[test]
+    fn test_union_empty_with_prefix_variadic_tuple() {
+        let xs = vec![
+            Type::concrete_tuple(vec![]),
+            Type::Tuple(Tuple::unpacked(
+                vec![Type::None],
+                Type::unbounded_tuple(Type::None),
+                Vec::new(),
+            )),
+        ];
+        assert_eq!(unions(xs), Type::unbounded_tuple(Type::None));
+    }
+
+    #[test]
+    fn test_union_empty_with_suffix_variadic_tuple() {
+        let xs = vec![
+            Type::concrete_tuple(vec![]),
+            Type::Tuple(Tuple::unpacked(
+                Vec::new(),
+                Type::unbounded_tuple(Type::None),
+                vec![Type::None],
+            )),
+        ];
+        assert_eq!(unions(xs), Type::unbounded_tuple(Type::None));
     }
 }

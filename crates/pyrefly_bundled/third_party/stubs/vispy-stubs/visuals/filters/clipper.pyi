@@ -1,0 +1,19 @@
+# Copyright (c) Vispy Development Team. All Rights Reserved.
+# Distributed under the (new) BSD License. See LICENSE.txt for more info.
+
+from ...geometry import Rect
+from ..transforms import NullTransform
+from .base_filter import Filter
+
+class Clipper(Filter):
+    FRAG_SHADER: str = ...
+
+    def __init__(self, bounds=..., transform=None): ...
+    @property
+    def bounds(self): ...
+    @bounds.setter
+    def bounds(self, b): ...
+    @property
+    def transform(self): ...
+    @transform.setter
+    def transform(self, tr): ...

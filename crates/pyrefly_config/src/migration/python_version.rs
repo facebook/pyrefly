@@ -25,13 +25,10 @@ impl ConfigOptionMigrater for PythonVersionConfig {
     ) -> anyhow::Result<()> {
         // https://mypy.readthedocs.io/en/latest/config_file.html#import-discovery
         // python_version can only be set in the top level `[mypy]` global section
-        let python_version = mypy_cfg.get("mypy", "python_version");
-
-        if python_version.is_none() {
+        let Some(version) = mypy_cfg.get("mypy", "python_version") else {
             return Err(anyhow::anyhow!("No python_version found in mypy config"));
-        }
+        };
 
-        let version = python_version.unwrap();
         pyrefly_cfg.python_environment.python_version = PythonVersion::from_str(&version).ok();
         Ok(())
     }

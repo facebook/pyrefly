@@ -28,34 +28,34 @@ testcase!(
     bug = "Our handling of ClassVar and methods is fishy, and our error messages are not clear",
     test_typed_dict_with_illegal_members,
     r#"
-from typing import TypedDict, ClassVar, reveal_type
+from typing import Any, TypedDict, ClassVar, assert_type
 # Although classmethods, classvars, and static methods do actually
 # work at runtime, type checkers seem to agree that these are not
 # permissible in typed dicts.
 class D(TypedDict):
-    cv: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict or NamedTuple members
-    x: str = "x"  # E: TypedDict item `x` may not be initialized
-    z = "z"  # E: TypedDict item `z` may not be initialized
-    def f(self) -> None:  # E: TypedDict item `f` may not be initialized
-        self.w = "w"
+    cv: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict members
+    x: str = "x"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    z = "z"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+    def f(self) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+        self.w = "w"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
     @classmethod
-    def g(cls) -> None:  # E: TypedDict item `g` may not be initialized
-        cls.u = "u"  # E: TypedDict item `u` may not be initialized
+    def g(cls) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+        cls.u = "u"  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
     @staticmethod
-    def h(self) -> None:  # E: TypedDict item `h` may not be initialized
+    def h(self) -> None:  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
         ...
 def foo(d: D):
-    reveal_type(d["cv"])  # E: revealed type: int
-    reveal_type(d["x"])  # E: revealed type: str
-    reveal_type(d["z"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have key `z`
-    reveal_type(d["f"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
-    reveal_type(d["g"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
-    reveal_type(d["h"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
-    reveal_type(d["w"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
-    reveal_type(d["u"])  # E: revealed type: Unknown  # E: TypedDict `D` does not have
-    reveal_type(D.cv)  # E: revealed type: int
-    reveal_type(D.g)  # E: revealed type: BoundMethod[type[D], (cls: type[D]) -> None]
-    reveal_type(D.h)  # E: revealed type: (self: Unknown) -> None
+    assert_type(d["cv"], int)
+    assert_type(d["x"], str)
+    assert_type(d["z"], Any)  # E: TypedDict `D` does not have key `z`
+    assert_type(d["f"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["g"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["h"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["w"], Any)  # E: TypedDict `D` does not have
+    assert_type(d["u"], Any)  # E: TypedDict `D` does not have
+    assert_type(D.cv, int)
+    assert_type(D.g, Any)
+    assert_type(D.h, Any)
     "#,
 );
 
@@ -78,8 +78,8 @@ testcase!(
     r#"
 from typing import TypedDict, Required, NotRequired, ReadOnly, ClassVar, Final
 class MyDict(TypedDict):
-    v: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict or NamedTuple members
-    w: Final[int]  # E: `Final` may not be used for TypedDict or NamedTuple members
+    v: ClassVar[int]  # E: `ClassVar` may not be used for TypedDict members
+    w: Final[int]  # E: `Final` may not be used for TypedDict members
     x: NotRequired  # E: Expected a type argument for `NotRequired`
     y: Required  # E: Expected a type argument for `Required`
     z: ReadOnly  # E: Expected a type argument for `ReadOnly`
@@ -112,7 +112,7 @@ c4: Coord = {"x": 1, "y": "foo"}  # E: `Literal['foo']` is not assignable to Typ
 c5: Coord = {"x": 1}  # E: Missing required key `y` for TypedDict `Coord`
 c6: Coord = {"x": 1, **{"y": 2, **{"z": 3}}}
 d: dict[str, int] = {}
-c7: Coord = {"x": 1, **d}  # E: Unpacked `dict[str, int]` is not assignable to `Partial[Coord]`
+c7: Coord = {"x": 1, **d}  # E: Unpacked `dict[str, int]` is not assignable to `Coord`
 
 def foo(c: Coord) -> None:
     pass
@@ -308,15 +308,19 @@ def foo(c: Coord, key: str, key2: Literal["x", "y"]):
 testcase!(
     test_typed_dict_delete,
     r#"
-from typing import TypedDict, ReadOnly, Required
+from typing import TypedDict, ReadOnly, Required, LiteralString, NotRequired
 class Coord(TypedDict, total=False):
     x: int
     y: ReadOnly[str]
     z: Required[bool]
-def foo(c: Coord):
+class JustX(TypedDict, extra_items=int):
+    x: NotRequired[int]
+def foo(c: Coord, c2: Coord | JustX, c3: JustX, k: LiteralString):
     del c["x"]  # OK
     del c["y"]  # E: Key `y` in TypedDict `Coord` may not be deleted
     del c["z"]  # E: Key `z` in TypedDict `Coord` may not be deleted
+    del c2["x"]  # OK
+    del c3[k] # OK
     "#,
 );
 
@@ -494,7 +498,7 @@ td3 = TD3(a="str", f=5)
 td4 = TD4(a=42)
 td5 = TD5(a=100)
 
-td12 = td1 | td2 # E: `|` is not supported between `TypedDict[TD1]` and `TypedDict[TD2]`
+td12 = td1 | td2 # E: `|` is not supported between `TD1` and `TD2`
 td14 = td1 | td4
 assert_type(td14.get("a"), int)
 td13 = td1 | td3 # E:   No matching overload found for function `_typeshed._type_checker_internals.TypedDictFallback.__or__`
@@ -519,7 +523,7 @@ x |= y
 
 assert_type((x["a"]), int | str)
 
-x |= {} # E: Augmented assignment produces a value of type `dict[str, object]`, which is not assignable to `TypedDict[TD]`
+x |= {} # E: Augmented assignment produces a value of type `dict[str, object]`, which is not assignable to `TD`
 
 x: TD = {"a": 1, "b": 2}
 x.__ior__(y)
@@ -564,9 +568,9 @@ class Pair(TypedDict):
 
 def foo(a: Coord, b: Coord3D, c: Pair):
     coord: Coord = b
-    coord2: Coord3D = a  # E: `TypedDict[Coord]` is not assignable to `TypedDict[Coord3D]`
-    coord3: Coord = c  # E: `TypedDict[Pair]` is not assignable to `TypedDict[Coord]`
-    coord4: Pair = a  # E: `TypedDict[Coord]` is not assignable to `TypedDict[Pair]`
+    coord2: Coord3D = a  # E: `Coord` is not assignable to `Coord3D`
+    coord3: Coord = c  # E: `Pair` is not assignable to `Coord`
+    coord4: Pair = a  # E: `Coord` is not assignable to `Pair`
     "#,
 );
 
@@ -582,7 +586,7 @@ class TD2(TypedDict):
     a: ReadOnly[object]
 
 def foo(td: TD, td2: TD2) -> None:
-    td: TD = td2  # E: `TypedDict[TD2]` is not assignable to `TypedDict[TD]`
+    td: TD = td2  # E: `TD2` is not assignable to `TD`
     td2: TD2 = td
     "#,
 );
@@ -599,8 +603,8 @@ class CoordNotRequired(TypedDict):
     y: NotRequired[int]
 
 def foo(a: Coord, b: CoordNotRequired):
-    coord: Coord = b  # E: `TypedDict[CoordNotRequired]` is not assignable to `TypedDict[Coord]`
-    coord2: CoordNotRequired = a  # E: `TypedDict[Coord]` is not assignable to `TypedDict[CoordNotRequired]`
+    coord: Coord = b  # E: `CoordNotRequired` is not assignable to `Coord`
+    coord2: CoordNotRequired = a  # E: `Coord` is not assignable to `CoordNotRequired`
     "#,
 );
 
@@ -664,7 +668,7 @@ f1(**x)
 f2(**x)  # E: Argument `int` is not assignable to parameter `z` with type `str` in function `f2`
 f3(**x)  # E: Unexpected keyword argument `z`
 f4(**x)
-f5(**x)  # E: Expected key `z` to be required
+f5(**x)
 f6(**x)  # E: Argument `int` is not assignable to parameter `z` with type `str` in function `f6`
 f1(1, **x)  # E: Multiple values for argument `x`
     "#,
@@ -730,8 +734,8 @@ class TD3(TypedDict):
 
 def foo(td2: TD2, td3: TD3) -> None:
     t1: TD2 = td3  # OK
-    t2: TD = td2  # E: `TypedDict[TD2]` is not assignable to `TypedDict[TD]`
-    t3: TD = td3  # E: `TypedDict[TD3]` is not assignable to `TypedDict[TD]`
+    t2: TD = td2  # E: `TD2` is not assignable to `TD`
+    t3: TD = td3  # E: `TD3` is not assignable to `TD`
     "#,
 );
 
@@ -744,7 +748,7 @@ class A(TypedDict):
 class B(A):
     y: str
 B(x=0, y='1')  # OK
-B(x=0, y=1)  # E: Argument `Literal[1]` is not assignable to parameter `y` with type `str` in function `B.__init__`
+B(x=0, y=1)  # E: No matching overload found for function `B.__init__`
     "#,
 );
 
@@ -778,11 +782,11 @@ testcase!(
 from typing import TypedDict, NotRequired
 class D(TypedDict):
      x: int
-     y: int = 5  # E: TypedDict item `y` may not be initialized
+     y: int = 5  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
      z: NotRequired[int]
 # Default values are completely ignored in constructor behavior, so requiredness in `__init__` should be
 # determined entirely by whether the field is required in the resulting dict.
-D(x=5)  # E: Missing argument `y`
+D(x=5)  # E: No matching overload found for function `D.__init__`
     "#,
 );
 
@@ -982,7 +986,7 @@ testcase!(
 from typing import TypedDict
 class C(TypedDict):
     x: int
-C(0)  # E: Expected argument `x` to be passed by name in function `C.__init__`
+C(0)  # E: No matching overload found for function `C.__init__`
     "#,
 );
 
@@ -1254,7 +1258,7 @@ from typing import TypedDict
 class Movie(TypedDict, extra_items=int):
     name: str
 good_movie = Movie(name='Toy Story', year=1995)
-bad_movie = Movie(name='Toy Story', studio='Pixar')  # E: `Literal['Pixar']` is not assignable to kwargs type `int`
+bad_movie = Movie(name='Toy Story', studio='Pixar')  # E: No matching overload found for function `Movie.__init__`
     "#,
 );
 
@@ -1436,7 +1440,7 @@ class C(TypedDict):
 a1: A = B()
 # Not allowed because `C` implicitly has extra_items `ReadOnly[object]`, and `object` is not
 # assignable to `int`.
-a2: A = C()  # E: `TypedDict[C]` is not assignable to `TypedDict[A]`
+a2: A = C()  # E: `C` is not assignable to `A`
     "#,
 );
 
@@ -1457,9 +1461,9 @@ class C(TypedDict, extra_items=int):
 
 td1: TDReadWrite = A(x=0)
 # not ok because `x` is required
-td2: TDReadWrite = B(x=0)  # E: `TypedDict[B]` is not assignable to `TypedDict[TDReadWrite]`
+td2: TDReadWrite = B(x=0)  # E: `B` is not assignable to `TDReadWrite`
 # not ok because `bool` is not consistent with `int`
-td3: TDReadWrite = C(x=True)  # E: `TypedDict[C]` is not assignable to `TypedDict[TDReadWrite]`
+td3: TDReadWrite = C(x=True)  # E: `C` is not assignable to `TDReadWrite`
 
 td4: TDReadOnly = A(x=0)
 td5: TDReadOnly = B(x=0)
@@ -1479,7 +1483,7 @@ class C(TypedDict, extra_items=str):
     pass
 a1: A = B()
 # Not ok because `str` is not assignable to `int`
-a2: A = C()  # E: `TypedDict[C]` is not assignable to `TypedDict[A]`
+a2: A = C()  # E: `C` is not assignable to `A`
     "#,
 );
 
@@ -1495,7 +1499,7 @@ class C(TypedDict, extra_items=bool):
     pass
 a1: A = B()
 # Not ok because `bool` is not consistent with `int`
-a2: A = C()  # E: `TypedDict[C]` is not assignable to `TypedDict[A]`
+a2: A = C()  # E: `C` is not assignable to `A`
     "#,
 );
 
@@ -1690,7 +1694,7 @@ from typing import Mapping, TypedDict
 class A(TypedDict, extra_items=int):
     x: str
 m1: Mapping[str, str | int] = A(x='')
-m2: Mapping[str, int] = A(x='')  # E: `TypedDict[A]` is not assignable to `Mapping[str, int]`
+m2: Mapping[str, int] = A(x='')  # E: `A` is not assignable to `Mapping[str, int]`
     "#,
 );
 
@@ -1714,7 +1718,7 @@ from typing import NotRequired, TypedDict
 class A(TypedDict, extra_items=bool):
     x: NotRequired[bool]
 d1: dict[str, bool] = A(x=True)
-d2: dict[str, int] = A(x=False)  # E: `TypedDict[A]` is not assignable to `dict[str, int]`
+d2: dict[str, int] = A(x=False)  # E: `A` is not assignable to `dict[str, int]`
     "#,
 );
 
@@ -1828,13 +1832,13 @@ testcase!(
     test_unpack_inherited_typeddict,
     r#"
 import typing_extensions as te
-    
+
 class InheritFromMe(te.TypedDict):
     foo: bool
-    
+
 class TestBadUnpackingError(InheritFromMe):
     bar: bool
-    
+
 unpack_this: InheritFromMe = {"foo": True}
 test1: TestBadUnpackingError = {"bar": True, **unpack_this}
 test2: TestBadUnpackingError = {"bar": True, "foo": True}
@@ -1858,11 +1862,11 @@ class B4(TypedDict, extra_items=str):
     x: int
 a: A = {'x': 0, 'y': ''}
 # not ok because B1 does not have key `y`
-b1: B1 = {'x': 0, **a}  # E: `TypedDict[A]` is not assignable to `Partial[B1]`
+b1: B1 = {'x': 0, **a}  # E: `A` is not assignable to `B1`
 # not ok because extra items in B2 must have type `int`, not `str`
-b2: B2 = {'x': 0, **a}  # E: `TypedDict[A]` is not assignable to `Partial[B2]`
+b2: B2 = {'x': 0, **a}  # E: `A` is not assignable to `B2`
 # not ok because extra items in B2 are read-only
-b3: B3 = {'x': 0, **a}  # E: `TypedDict[A]` is not assignable to `Partial[B3]`
+b3: B3 = {'x': 0, **a}  # E: `A` is not assignable to `B3`
 # ok, `y` in A and extra items in B2 both have type `str`
 b4: B4 = {'x': 0, **a}
     "#,
@@ -1902,7 +1906,7 @@ t2: Target = {'y': '', **closed}
 # Ok, `extra` has only extra items of the right type
 t3: Target = {'y': '', **extra}
 # Not ok, the extra items have the wrong type
-t4: Target = {'y': '', **extra_wrong_type}  # E: `TypedDict[ExtraWrongType]` is not assignable to `Partial[Target]`
+t4: Target = {'y': '', **extra_wrong_type}  # E: `ExtraWrongType` is not assignable to `Target`
     "#,
 );
 
@@ -1941,4 +1945,174 @@ def f(foo: Foo, k: Literal["bar", "baz"]):
     print(foo[k])
     foo[k] = 2
     "#,
+);
+
+testcase!(
+    test_recursive_functional_typeddict,
+    r#"
+from typing import NamedTuple, TypedDict, Optional
+ListNode = TypedDict('ListNode', {
+    'value': int,
+    'next': Optional['ListNode'],
+})
+"#,
+);
+
+testcase!(
+    test_defines_init,
+    r#"
+from typing import TypedDict, Any
+def any() -> Any: ...
+class D(TypedDict):
+    x: int
+    __init__ = any()  # E: TypedDict members must be declared in the form `field: Annotation` with no assignment
+D(x=5)
+"#,
+);
+
+testcase!(
+    test_typed_dict_missing_key_via_subscript,
+    r#"
+from typing import TypedDict
+class TD(TypedDict):
+    foo: int
+
+td: TD = {"foo": 1}
+td["fo"]  # E: TypedDict `TD` does not have key `fo`\n  Did you mean `foo`?
+"#,
+);
+
+testcase!(
+    test_notrequired_with_extra_items_as_kwargs,
+    r#"
+from typing import TypedDict, NotRequired
+
+class TD(TypedDict, extra_items=str):
+    field1: NotRequired[str]
+    field2: NotRequired[str]
+
+class TD2(TypedDict, extra_items=str):
+    field1: NotRequired[str]
+
+class TD3(TypedDict):
+    field1: NotRequired[str]
+    field2: NotRequired[str]
+
+def fun(field1: str, field2: str):
+    pass
+
+def test(x: TD, y: TD2, z: TD3):
+    fun(**x)
+    fun(**y)  # E: Missing argument `field2` in function `fun`
+    fun(**z)
+"#,
+);
+
+testcase!(
+    test_extra_items_literalstring_key,
+    r#"
+from typing import TypedDict, LiteralString
+
+class TD(TypedDict, extra_items=str):
+    ...
+def test(x: TD, k1: LiteralString, k2: str):
+    x[k1]
+    x[k2]
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_usage,
+    r#"
+from typing import TypedDict, Unpack, Mapping
+
+class TD(TypedDict):
+    x: int
+    y: str
+d = { "x": 1, "y": "2" }
+d = { "x": 2, "y": "3" }
+
+def test(**kwargs: Unpack[TD]): pass
+test(**d)
+test(**{ "x": 1, "y": "2" })
+
+def test2(**kwargs: str | int): pass
+test2(**d)
+test2(**{ "x": 1, "y": "2" })
+
+def test3(x: int, y: str): pass
+test3(**d)
+test3(**{ "x": 1, "y": "2" })
+
+d2: dict[str, str | int] = { "x": 1, "y": "2" }
+d2 = d
+m: Mapping[str, str | int] = { "x": 1, "y": "2" }
+m = d
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_return,
+    r#"
+def foo():
+    return {
+        "a": "b",
+        "c": {
+            "d": "e"
+        }
+    }
+foo()
+x: str = foo()["a"]
+"#,
+);
+
+testcase!(
+    test_typed_dict_none_var_pinning,
+    r#"
+from typing import assert_type
+x = { "foo": None }
+x["foo"] = 1
+# currently extra_items does not use the var, but we could
+assert_type(x["bar"], None)
+"#,
+);
+
+testcase!(
+    test_typed_dict_constructor_with_dict_literal,
+    r#"
+from typing import TypedDict, NotRequired
+
+class TD(TypedDict):
+    x: int
+    y: NotRequired[str]
+
+x: TD = TD({"x": 1, "y": "2"})
+x = TD({"x": 1}, y="2")
+x = TD({"x": 1})
+"#,
+);
+
+testcase!(
+    test_generic_typed_dict_inheritance_with_unpack,
+    r#"
+from typing import TypedDict, Type, Generic
+from typing_extensions import TypeVar, Unpack
+
+_T = TypeVar("_T", default=str)
+
+class Base(TypedDict, Generic[_T], total=False):
+    default: _T | None
+
+T = TypeVar('T')
+
+class Child(Base[T], total=False):
+    other: Type[T]
+
+def test(**kwargs: Unpack[Child[int]]) -> None:
+    pass
+
+# Should accept default=5 because Child[int] should have default: int | None
+test(other=int, default=5)
+test(other=int, default="") # E: Argument `Literal['']` is not assignable to parameter `default` with type `int | None`
+"#,
 );

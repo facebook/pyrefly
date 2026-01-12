@@ -324,3 +324,27 @@ result5 = x.replace(old, non_lit)
 assert_type(result5, str)
 "#,
 );
+
+testcase!(
+    test_literal_string_as_collection,
+    r#"
+from collections.abc import Container, Collection, Sequence
+
+a: Container[str] = ""
+b: Collection[str] = ""
+c: Sequence[str] = ""
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2068
+testcase!(
+    test_literal_string_join_loop_inference,
+    r#"
+def test():
+    items = ["a", "b"]
+    lines = []
+    for k in items:
+        lines.append(f"*{k}")
+    return "\n".join(lines)
+"#,
+);

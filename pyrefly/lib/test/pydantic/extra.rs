@@ -13,7 +13,7 @@ pydantic_testcase!(
 from pydantic import BaseModel
 
 class ModelAllow(BaseModel, extra="allow"):
-    x: int 
+    x: int
 
 ModelAllow(x=1, y=2)
 
@@ -40,7 +40,7 @@ from pydantic import BaseModel
 class ModelForbid(BaseModel, extra="ignore"):
     x: int
 
-ModelForbid(x=1, y=2) 
+ModelForbid(x=1, y=2)
 "#,
 );
 
@@ -64,7 +64,7 @@ from pydantic import BaseModel
 class ModelForbid(BaseModel, extra=True): # E: Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'
     x: int
 
-ModelForbid(x=1, y=2) 
+ModelForbid(x=1, y=2)
 "#,
 );
 
@@ -76,7 +76,7 @@ from pydantic import BaseModel
 class ModelForbid(BaseModel, extra="123"): # E: Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'
     x: int
 
-ModelForbid(x=1, y=2) 
+ModelForbid(x=1, y=2)
 "#,
 );
 
@@ -87,9 +87,9 @@ from pydantic import BaseModel, ConfigDict
 
 class ModelAllow(BaseModel):
     model_config = ConfigDict(extra="allow")
-    x: int 
+    x: int
 
-ModelAllow(x=1, y=2) 
+ModelAllow(x=1, y=2)
 
 "#,
 );
@@ -129,7 +129,7 @@ class ModelForbid(BaseModel):
     model_config = ConfigDict()
     x: int
 
-ModelForbid(x=1, y=2) 
+ModelForbid(x=1, y=2)
 "#,
 );
 
@@ -143,10 +143,10 @@ pydantic_testcase!(
 from pydantic import BaseModel, ConfigDict
 
 class ModelForbid(BaseModel):
-    model_config = ConfigDict(extra=False) # E: Argument `Literal[False]` is not assignable to parameter `extra` with type `Literal['allow', 'forbid', 'ignore'] | None`
+    model_config = ConfigDict(extra=False) # E: No matching overload found for function `pydantic.config.ConfigDict.__init__`
     x: int
 
-ModelForbid(x=1, y=2) 
+ModelForbid(x=1, y=2)
 "#,
 );
 
@@ -156,9 +156,9 @@ pydantic_testcase!(
 from pydantic import BaseModel, ConfigDict
 
 class ModelForbid(BaseModel):
-    model_config = ConfigDict(extra="123") # E: Argument `Literal['123']` is not assignable to parameter `extra` with type `Literal['allow', 'forbid', 'ignore'] | None`
+    model_config = ConfigDict(extra="123") # E: No matching overload found for function `pydantic.config.ConfigDict.__init__`
     x: int
 
-ModelForbid(x=1, y=2) 
+ModelForbid(x=1, y=2)
 "#,
 );

@@ -11,10 +11,12 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_graph::calculation::Calculation;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::Deprecation;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -24,8 +26,8 @@ use starlark_map::small_set::SmallSet;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::DunderAllEntry;
+use crate::export::definitions::DunderAllKind;
 use crate::export::special::SpecialExport;
-use crate::graph::calculation::Calculation;
 use crate::module::module_info::ModuleInfo;
 use crate::state::loader::FindingOrError;
 
@@ -40,7 +42,7 @@ pub struct Export {
     pub location: TextRange,
     pub symbol_kind: Option<SymbolKind>,
     pub docstring_range: Option<TextRange>,
-    pub is_deprecated: bool,
+    pub deprecation: Option<Deprecation>,
     pub special_export: Option<SpecialExport>,
 }
 
@@ -76,7 +78,7 @@ struct ExportsInner {
 
 impl Display for Exports {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for x in self.0.definitions.dunder_all.iter() {
+        for x in self.0.definitions.dunder_all.entries.iter() {
             match x {
                 DunderAllEntry::Name(_, x) => writeln!(f, "export {x}")?,
                 DunderAllEntry::Module(_, x) => writeln!(f, "from {x} import *")?,
@@ -122,7 +124,7 @@ impl Exports {
     pub fn wildcard(&self, lookup: &dyn LookupExport) -> Arc<SmallSet<Name>> {
         let f = || {
             let mut result = SmallSet::new();
-            for x in &self.0.definitions.dunder_all {
+            for x in &self.0.definitions.dunder_all.entries {
                 match x {
                     DunderAllEntry::Name(_, x) => {
                         result.insert(x.clone());
@@ -159,11 +161,56 @@ impl Exports {
             .contains(name)
     }
 
+    /// Returns entries in `__all__` that don't exist in the module's definitions.
+    /// Only validates explicitly user-defined `__all__` entries, not synthesized ones.
+    /// Returns a vector of (range, name) tuples for invalid entries.
+    pub fn invalid_dunder_all_entries(
+        &self,
+        lookup: &dyn LookupExport,
+        module_info: &ModuleInfo,
+    ) -> Vec<(TextRange, Name)> {
+        // Only validate if __all__ was explicitly defined by the user
+        if self.0.definitions.dunder_all.kind == DunderAllKind::Inferred {
+            return Vec::new();
+        }
+        let mut invalid = Vec::new();
+        for entry in &self.0.definitions.dunder_all.entries {
+            if let DunderAllEntry::Name(range, name) = entry {
+                // Check if name exists in definitions
+                if self.0.definitions.definitions.contains_key(name) {
+                    continue;
+                }
+                // Check if name is available through a wildcard import
+                let mut found_in_import = false;
+                for (module, _) in self.0.definitions.import_all.iter() {
+                    if let Some(exports) = lookup.get(*module).finding()
+                        && exports.wildcard(lookup).contains(name)
+                    {
+                        found_in_import = true;
+                        break;
+                    }
+                }
+                if found_in_import {
+                    continue;
+                }
+                // In __init__.py, __all__ can list submodule names
+                if module_info.path().is_init() {
+                    let submodule = module_info.name().append(name);
+                    if lookup.get(submodule).finding().is_some() {
+                        continue;
+                    }
+                }
+                invalid.push((*range, name.clone()));
+            }
+        }
+        invalid
+    }
+
     pub fn exports(&self, lookup: &dyn LookupExport) -> Arc<SmallMap<Name, ExportLocation>> {
         let f = || {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
             for (name, definition) in self.0.definitions.definitions.iter_hashed() {
-                let is_deprecated = self.0.definitions.deprecated.contains_hashed(name);
+                let deprecation = self.0.definitions.deprecated.get_hashed(name).cloned();
                 let special_export = self.0.definitions.special_exports.get_hashed(name).copied();
                 let export = match &definition.style {
                     DefinitionStyle::Annotated(symbol_kind, ..)
@@ -172,7 +219,7 @@ impl Exports {
                             location: definition.range,
                             symbol_kind: Some(*symbol_kind),
                             docstring_range: definition.docstring_range,
-                            is_deprecated,
+                            deprecation,
                             special_export,
                         })
                     }
@@ -186,14 +233,14 @@ impl Exports {
                         location: definition.range,
                         symbol_kind: None,
                         docstring_range: definition.docstring_range,
-                        is_deprecated,
+                        deprecation,
                         special_export,
                     }),
                     DefinitionStyle::ImplicitGlobal => ExportLocation::ThisModule(Export {
                         location: definition.range,
                         symbol_kind: Some(SymbolKind::Constant),
                         docstring_range: None,
-                        is_deprecated,
+                        deprecation,
                         special_export,
                     }),
                     DefinitionStyle::ImportAs(from, name) => {

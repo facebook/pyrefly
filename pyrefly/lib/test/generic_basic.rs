@@ -69,6 +69,14 @@ class C[T](Generic[T]):  # E: Redundant
 );
 
 testcase!(
+    test_class_type_params_can_reference_class,
+    r#"
+class C[T: C](set[object]):
+    pass
+    "#,
+);
+
+testcase!(
     test_type_argument_error_default,
     r#"
 from typing import Any, assert_type
@@ -87,7 +95,7 @@ assert_type(C2[int], type[C2[int, *tuple[Any, ...]]])
 );
 
 testcase!(
-    bug = "same result in pyright, but revisit this once variance is implemented for properties",
+    bug = "T is pinned prematurely due to https://github.com/facebook/pyrefly/issues/105",
     test_generics,
     r#"
 from typing import Literal
@@ -95,7 +103,7 @@ class C[T]: ...
 def append[T](x: C[T], y: T):
     pass
 v: C[int] = C()
-append(v, "test") 
+append(v, "test")  # E: `Literal['test']` is not assignable to parameter `y` with type `int`
 "#,
 );
 testcase!(
@@ -119,10 +127,10 @@ class B: ...
 class C[T]: ...
 class D[T = A]: ...
 def f[E](e: type[E]) -> E: ...
-assert_type(f(A), A) 
-assert_type(f(B), B) 
-assert_type(f(C), C[Any]) 
-assert_type(f(D), D) 
+assert_type(f(A), A)
+assert_type(f(B), B)
+assert_type(f(C), C[Any])
+assert_type(f(D), D)
 "#,
 );
 
@@ -180,7 +188,7 @@ class A[*Ts, T = int]:  # E: TypeVar `T` with a default cannot follow TypeVarTup
     pass
 class B[*Ts, T1, T2 = T1]:  # E: TypeVar `T2` with a default cannot follow TypeVarTuple `Ts`
     pass
-assert_type(B[int](), B[*tuple[()], int, int]) 
+assert_type(B[int](), B[*tuple[()], int, int])
 assert_type(B[int, str](), B[*tuple[()], int, str])
 assert_type(B[int, str, float, bool, bytes](), B[int, str, float, bool, bytes])
 # It doesn't matter too much how we fill in the type arguments when they aren't
@@ -193,14 +201,14 @@ b: B[tuple[tuple[Any, ...], Any, Any]] = B()  # Here's one valid way to pin them
 testcase!(
     test_paramspec_with_default_after_typevartuple,
     r#"
-from typing import Any, reveal_type, assert_type
+from typing import Any, assert_type
 class A[*Ts, **P1, **P2 = P1]:
     pass
 class B[*Ts, T, **P = [int, str]]:
     pass
-assert_type(A[[int, str]](), A[*tuple[()], [int, str], [int, str]]) 
+assert_type(A[[int, str]](), A[*tuple[()], [int, str], [int, str]])
 assert_type(A[bool, [int, str]](),  A[bool, [int, str], [int, str]])
-assert_type(A[bool, bytes, [int, str]](), A[bool, bytes, [int, str], [int, str]]) 
+assert_type(A[bool, bytes, [int, str]](), A[bool, bytes, [int, str], [int, str]])
 assert_type(B[int, str, float](), B[int, str, float, [int, str]])
     "#,
 );
@@ -478,6 +486,34 @@ from typing import assert_type
 def f[T](x: list[T] | list[None], y: list[T]) -> T:
     return y[0]
 assert_type(f([None], [0]), int)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1675
+testcase!(
+    test_generic_should_equal_itself,
+    r#"
+from typing import cast, Iterator, Any
+def condition() -> bool: ...
+def f[T](iterator: Iterator[T]) -> T:
+    res = cast(T, None)
+    while condition():
+        for i in iterator:
+            res = i
+    return res
+    "#,
+);
+
+testcase!(
+    test_bounded_type_var_subscriptable,
+    r#"
+from collections.abc import Sequence
+
+def test[S: Sequence[int]](sequence: S) -> int:
+    return sequence[0]
+
+def test2[S](not_a_sequence: S) -> int:
+    return not_a_sequence[0]  # E: `S` is not subscriptable
     "#,
 );
 

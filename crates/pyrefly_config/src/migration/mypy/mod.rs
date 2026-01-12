@@ -10,5 +10,4 @@ mod pyproject;
 pub(crate) mod regex_converter;
 pub(crate) mod util;
 
-pub use ini::MypyConfig;
 pub use pyproject::parse_pyproject_config;

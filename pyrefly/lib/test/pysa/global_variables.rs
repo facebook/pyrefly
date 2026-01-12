@@ -12,12 +12,14 @@ use ruff_python_ast::name::Name;
 
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::global_variable::GlobalVariable;
+use crate::report::pysa::global_variable::collect_global_variables;
 use crate::report::pysa::global_variable::export_global_variables;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleIds;
 use crate::report::pysa::types::PysaType;
 use crate::test::pysa::utils::create_location;
 use crate::test::pysa::utils::create_state;
+use crate::test::pysa::utils::get_class;
 use crate::test::pysa::utils::get_handle_for_module_name;
 
 fn create_global_variable(type_: Option<PysaType>, location: PysaLocation) -> GlobalVariable {
@@ -40,7 +42,9 @@ fn test_exported_global_variables(
 
     let expected_globals = create_expected_globals(&context);
 
-    let actual_globals = export_global_variables(&context);
+    let whole_program_global_variables =
+        collect_global_variables(&handles, &transaction, &module_ids);
+    let actual_globals = export_global_variables(&whole_program_global_variables, &context);
 
     assert_eq!(expected_globals, actual_globals);
 }
@@ -224,4 +228,29 @@ import typing
 T = typing.TypeVar("T")
 "#,
     &|_: &ModuleContext| { HashMap::new() },
+);
+
+exported_global_variables_testcase!(
+    test_callables_not_exported,
+    r#"
+class A:
+    def __init__(self) -> None:
+        pass
+    def foo(self) -> None:
+        pass
+a = A()
+foo = a.foo
+"#,
+    &|context: &ModuleContext| {
+        HashMap::from([(
+            "a".into(),
+            create_global_variable(
+                Some(PysaType::from_class(
+                    &get_class("test", "A", context),
+                    context,
+                )),
+                create_location(7, 1, 7, 2),
+            ),
+        )])
+    },
 );
