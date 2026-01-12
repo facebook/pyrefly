@@ -2738,11 +2738,34 @@ impl<'a> BindingsBuilder<'a> {
         // - It was defined before the loop (base_has_value), OR
         // - It's defined in all loop body branches (since the loop definitely runs at least once)
         //
+        // For regular Loop where the variable is defined in all loop body branches but not
+        // in the base: we need to decide whether to flag "may be uninitialized".
+        // - If the loop body has a termination key (function call that might be NoReturn),
+        //   defer to solve time to check if it's actually Never. This handles patterns like
+        //   else-branch + while where the while condition is implied by the else condition.
+        // - Otherwise, flag it as uninitialized (the loop might not run).
+        //
         // For other merges, a name is always defined if it's defined in all branches.
         // If some branches are missing but have termination keys, we defer to solve time
         // to check if those termination keys are Never.
+        let n_loop_body_branches = if matches!(merge_style, MergeStyle::Loop) {
+            n_branches - 1 // n_branches includes +1 for base
+        } else {
+            n_branches
+        };
+        let defined_in_all_loop_body_branches = n_values == n_loop_body_branches;
+        // Check if any loop body branch has a termination key
+        let loop_has_any_term_key = all_termination_keys.iter().any(|k| k.is_some());
         let this_name_always_defined = match merge_style {
             MergeStyle::LoopDefinitelyRuns => base_has_value || n_values == n_branches,
+            MergeStyle::Loop if defined_in_all_loop_body_branches && loop_has_any_term_key => {
+                // Variable is in all loop body branches, and at least one branch has a
+                // termination key. Be lenient: treat as "always defined" for now, and
+                // rely on solve-time check of the termination key to catch real issues.
+                // This handles patterns like else-branch + while where the condition
+                // implies the loop runs.
+                true
+            }
             _ => n_values == n_branches,
         };
         match value_idxs.len() {
