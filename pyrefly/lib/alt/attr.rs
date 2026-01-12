@@ -848,7 +848,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        // Check ancestors
+        // Check ancestors - compute slots metadata on-demand for each
         let mro = self.get_mro_for_class(class);
         for ancestor in mro.ancestors(self.stdlib) {
             // Special case: `object` is the root of all classes and implicitly allows
@@ -1020,23 +1020,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 Attribute::ClassAttribute(class_attr) => {
-                    // Check slots restriction before allowing the write.
-                    // This covers instance attribute assignments like `self.y = 3`.
-                    let instance_class_for_slots = match &found_on {
-                        AttributeBase1::ClassInstance(cls) => Some(cls.class_object()),
-                        AttributeBase1::SelfType(cls) => Some(cls.class_object()),
-                        _ => None,
-                    };
-                    if let Some(class) = instance_class_for_slots {
-                        if let Some(msg) = self.check_attr_violates_slots(class, attr_name) {
-                            self.error(
-                                errors,
-                                range,
-                                ErrorInfo::new(ErrorKind::MissingAttribute, context),
-                                msg,
-                            );
-                            should_narrow = false;
-                            continue;
+                    // Only check slots for regular instance attributes (ReadWrite/ReadOnly).
+                    // Properties and Descriptors are class-level attributes that don't consume slots.
+                    // Python's __slots__ only restricts instance attributes, not descriptors.
+                    let should_check_slots = matches!(
+                        &class_attr,
+                        ClassAttribute::ReadWrite(_) | ClassAttribute::ReadOnly(_, _)
+                    );
+
+                    if should_check_slots {
+                        // Check slots restriction before allowing the write.
+                        // This covers instance attribute assignments like `self.y = 3`.
+                        let instance_class_for_slots = match &found_on {
+                            AttributeBase1::ClassInstance(cls) => Some(cls.class_object()),
+                            AttributeBase1::SelfType(cls) => Some(cls.class_object()),
+                            _ => None,
+                        };
+                        if let Some(class) = instance_class_for_slots {
+                            if let Some(msg) = self.check_attr_violates_slots(class, attr_name) {
+                                self.error(
+                                    errors,
+                                    range,
+                                    ErrorInfo::new(ErrorKind::MissingAttribute, context),
+                                    msg,
+                                );
+                                should_narrow = false;
+                                continue;
+                            }
                         }
                     }
 

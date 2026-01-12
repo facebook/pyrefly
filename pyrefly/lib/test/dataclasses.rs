@@ -1643,3 +1643,25 @@ class Child(Parent):
         self.z = 3  # OK - child has implicit __dict__
     "#,
 );
+
+testcase!(
+    test_slots_init_inheritance,
+    r#"
+class Base:
+    __slots__ = ("x",)
+
+    def __init__(self, x: int, flag: bool = False):
+        self.x = x
+
+class Child(Base):
+    __slots__ = ("y",)
+
+    def __init__(self, x: int, y: int):
+        super().__init__(x)
+        self.y = y
+
+# Test instantiation works
+b = Base(1)
+c = Child(1, 2)
+    "#,
+);
