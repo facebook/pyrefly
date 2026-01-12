@@ -7,33 +7,13 @@
 
 use serde_json::json;
 
-<<<<<<< HEAD
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::util::ExpectedInlayHint;
+use crate::util::ExpectedTextEdit;
 use crate::util::check_inlay_hint_label_values;
 use crate::util::get_test_files_root;
 use crate::util::inlay_hints_match_expected;
-use crate::util::ExpectedInlayHint;
-use crate::util::ExpectedTextEdit;
-||||||| parent of 394f30f3a (fmt)
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::check_inlay_hint_label_values;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
-use crate::test::lsp::lsp_interaction::util::inlay_hints_match_expected;
-use crate::test::lsp::lsp_interaction::util::ExpectedInlayHint;
-use crate::test::lsp::lsp_interaction::util::ExpectedTextEdit;
-=======
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::check_inlay_hint_label_values;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
-use crate::test::lsp::lsp_interaction::util::inlay_hints_match_expected;
-use crate::test::lsp::lsp_interaction::util::ExpectedInlayHint;
-use crate::test::lsp::lsp_interaction::util::ExpectedTextEdit;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
-use crate::test::lsp::lsp_interaction::util::inlay_hints_match_expected;
->>>>>>> 394f30f3a (fmt)
 
 #[test]
 fn test_inlay_hint_default_config() {
@@ -48,40 +28,6 @@ fn test_inlay_hint_default_config() {
         .unwrap();
 
     interaction.client.did_open("inlay_hint_test.py");
-
-    let expected = [
-        ExpectedInlayHint {
-            labels: &[
-                " -> ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]", "]",
-            ],
-            position: (6, 21),
-            text_edit: ExpectedTextEdit {
-                new_text: " -> tuple[Literal[1], Literal[2]]",
-                range_start: (6, 21),
-                range_end: (6, 21),
-            },
-        },
-        ExpectedInlayHint {
-            labels: &[
-                ": ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]", "]",
-            ],
-            position: (11, 6),
-            text_edit: ExpectedTextEdit {
-                new_text: ": tuple[Literal[1], Literal[2]]",
-                range_start: (11, 6),
-                range_end: (11, 6),
-            },
-        },
-        ExpectedInlayHint {
-            labels: &[" -> ", "Literal", "[", "0", "]"],
-            position: (14, 15),
-            text_edit: ExpectedTextEdit {
-                new_text: " -> Literal[0]",
-                range_start: (14, 15),
-                range_end: (14, 15),
-            },
-        },
-    ];
 
     interaction
         .client
