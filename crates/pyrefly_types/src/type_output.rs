@@ -150,7 +150,11 @@ impl TypeOutput for OutputWithLocations<'_> {
         use std::fmt::Write;
         let mut s = String::new();
         s.write_fmt(args)?;
-        self.parts.push((s, None));
+        self.parts.push(TypeLabelPart {
+            text: s,
+            location: None,
+            symbol: None,
+        });
         Ok(())
     }
 
@@ -212,10 +216,18 @@ impl TypeOutput for OutputWithLocations<'_> {
         match qname {
             Some(q) => {
                 let location = TextRangeWithModule::new(q.module().clone(), q.range());
-                self.parts.push((name.to_owned(), Some(location)));
+                self.parts.push(TypeLabelPart {
+                    text: name.to_owned(),
+                    location: Some(location),
+                    symbol: None,
+                });
             }
             None => {
-                self.parts.push((name.to_owned(), None));
+                self.parts.push(TypeLabelPart {
+                    text: name.to_owned(),
+                    location: None,
+                    symbol: None,
+                });
             }
         }
         Ok(())
@@ -632,7 +644,7 @@ mod tests {
         // Verify each part
         assert_eq!(parts[0].text, "tuple");
         assert!(
-            parts[0].1.is_none(),
+            parts[0].location.is_none(),
             "tuple should not have location without stdlib"
         );
 
