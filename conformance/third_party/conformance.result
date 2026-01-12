@@ -185,7 +185,7 @@
   "generics_typevartuple_concat.py": [],
   "generics_typevartuple_overloads.py": [],
   "generics_typevartuple_specialization.py": [
-    "Line 51: Unexpected errors ['assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed']",
+    "Line 51: Unexpected errors ['assert_type(tuple[int, tuple[()]], tuple[int]) failed']",
     "Line 94: Unexpected errors ['assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed']",
     "Line 153: Unexpected errors ['Unpacked argument cannot be used for type parameter T1']",
     "Line 157: Unexpected errors ['assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed']"

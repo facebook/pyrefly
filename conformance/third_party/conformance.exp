@@ -6757,8 +6757,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed",
-      "description": "assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed",
+      "concise_description": "assert_type(tuple[int, tuple[()]], tuple[int]) failed",
+      "description": "assert_type(tuple[int, tuple[()]], tuple[int]) failed",
       "line": 51,
       "name": "assert-type",
       "severity": "error",
