@@ -1214,6 +1214,9 @@ impl Server {
                     SignatureHelpRequest::METHOD,
                     ResolveCompletionItem::METHOD,
                 const ONLY_ONCE: &[&str] = &[Completion::METHOD, SignatureHelpRequest::METHOD];
+                    ResolveCompletionItem::METHOD,];
+                    SignatureHelpRequest::METHOD];
+                    SignatureHelpRequest::METHOD,
                     GotoDefinition::METHOD,
                     ProvideType::METHOD,
                 ];
