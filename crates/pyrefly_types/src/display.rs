@@ -7,7 +7,6 @@
 
 //! Display a type. The complexity comes from if we have two classes with the same name,
 //! we want to display disambiguating information (e.g. module name or location).
-use std::borrow::Cow;
 use std::fmt;
 use std::fmt::Display;
 
@@ -263,13 +262,12 @@ impl<'a> TypeDisplayContext<'a> {
         name: &str,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
-        if self.always_display_module_name {
-            output.write_str(module)?;
-            output.write_str(".")?;
-            output.write_str(name)
-        } else {
-            output.write_str(name)
-        }
+        let module_name = ModuleName::from_str(module);
+        output.write_symbol(
+            module_name,
+            std::borrow::Cow::Borrowed(name),
+            self.always_display_module_name,
+        )
     }
 
     /// Helper function to format a sequence of types with a separator.
@@ -903,10 +901,7 @@ impl Type {
         rendered
     }
 
-    pub fn get_types_with_locations(
-        &self,
-        stdlib: Option<&Stdlib>,
-    ) -> Vec<(String, Option<TextRangeWithModule>)> {
+    pub fn get_types_with_locations(&self, stdlib: Option<&Stdlib>) -> Vec<TypeLabelPart> {
         let mut ctx = TypeDisplayContext::new(&[self]);
         if let Some(s) = stdlib {
             ctx.set_stdlib(s);
