@@ -432,7 +432,6 @@ a = A()
 );
 
 testcase!(
-    bug = "Type should be inferred as returning Any (https://github.com/facebook/pyrefly/issues/2072)",
     test_abstract_method_abc,
     r#"
 from abc import ABC
@@ -442,8 +441,29 @@ class A(ABC):
         raise NotImplementedError()
 
 class B(A):
-    def foo(self):  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+    def foo(self):
         x = 1
         print(x)
+"#,
+);
+
+testcase!(
+    test_abstract_method_abc_transitive,
+    r#"
+from abc import ABC
+
+class A(ABC):
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    def bar(self):
+        raise NotImplementedError()
+
+class C(B):
+    def foo(self):
+        pass
+    def bar(self):
+        pass
 "#,
 );

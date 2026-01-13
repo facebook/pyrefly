@@ -1215,6 +1215,11 @@ pub enum ReturnTypeKind {
         /// whether these two fields are empty or not.
         yields: Box<[Idx<KeyYield>]>,
         yield_froms: Box<[Idx<KeyYieldFrom>]>,
+        /// Whether the function body is trivial (e.g., `pass`, `raise NotImplementedError()`).
+        /// Used to detect abstract methods in ABC subclasses.
+        body_is_trivial: bool,
+        /// The class metadata key, if this function is a method. Used to check if the class extends ABC.
+        class_metadata_key: Option<Idx<KeyClassMetadata>>,
     },
 }
 
