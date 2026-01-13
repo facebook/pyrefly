@@ -7,12 +7,12 @@
 
 use clap::Parser;
 use clap::ValueEnum;
-use lsp_server::Connection;
 use lsp_types::InitializeParams;
 use lsp_types::ServerInfo;
 use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::util::CommandExitStatus;
+use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::server::initialize_finish;
 use crate::lsp::non_wasm::server::initialize_start;

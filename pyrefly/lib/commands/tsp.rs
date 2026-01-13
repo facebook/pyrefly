@@ -6,13 +6,13 @@
  */
 
 use clap::Parser;
-use lsp_server::Connection;
 use lsp_types::InitializeParams;
 use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::lsp::IndexingMode;
 use crate::commands::util::CommandExitStatus;
 use crate::lsp::non_wasm::queue::LspQueue;
+use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::initialize_finish;
 use crate::lsp::non_wasm::server::initialize_start;
 use crate::tsp::server::tsp_capabilities;

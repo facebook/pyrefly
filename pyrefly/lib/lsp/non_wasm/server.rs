@@ -15,17 +15,16 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
+use std::thread::JoinHandle;
 use std::time::Instant;
 
+use crossbeam_channel::Receiver;
+use crossbeam_channel::Sender;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
 use itertools::Itertools;
-use lsp_server::Connection;
 use lsp_server::ErrorCode;
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_server::ResponseError;
 use lsp_types::CallHierarchyServerCapability;
 use lsp_types::CodeAction;
@@ -229,6 +228,11 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
+use crate::lsp::non_wasm::protocol::read_lsp_message;
+use crate::lsp::non_wasm::protocol::write_lsp_message;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
@@ -318,6 +322,80 @@ pub trait TspInterface: Send + Sync {
     ) -> anyhow::Result<ProcessEvent>;
 
     fn telemetry_state(&self) -> TelemetryServerState;
+}
+
+pub struct Connection {
+    pub sender: Sender<Message>,
+    pub receiver: Receiver<Message>,
+}
+
+pub struct IoThreads {
+    reader: JoinHandle<std::io::Result<()>>,
+    writer: JoinHandle<std::io::Result<()>>,
+}
+
+impl IoThreads {
+    pub fn join(self) -> std::io::Result<()> {
+        let reader_result = match self.reader.join() {
+            Ok(result) => result,
+            Err(e) => std::panic::panic_any(e),
+        };
+        let writer_result = match self.writer.join() {
+            Ok(result) => result,
+            Err(e) => std::panic::panic_any(e),
+        };
+        reader_result.and(writer_result)
+    }
+}
+
+impl Connection {
+    pub fn stdio() -> (Self, IoThreads) {
+        let (reader_sender, reader_receiver) = crossbeam_channel::unbounded();
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
+        let reader = std::thread::spawn(move || {
+            let mut stdin = std::io::stdin().lock();
+            while let Some(msg) = read_lsp_message(&mut stdin)? {
+                let is_exit = match &msg {
+                    Message::Notification(x) => x.method == Exit::METHOD,
+                    _ => false,
+                };
+                if reader_sender.send(msg).is_err() || is_exit {
+                    break;
+                }
+            }
+            Ok(())
+        });
+        let writer = std::thread::spawn(move || {
+            let mut stdout = std::io::stdout().lock();
+            while let Ok(msg) = writer_receiver.recv() {
+                write_lsp_message(&mut stdout, msg)?
+            }
+            Ok(())
+        });
+        (
+            Self {
+                sender: writer_sender,
+                receiver: reader_receiver,
+            },
+            IoThreads { reader, writer },
+        )
+    }
+
+    #[cfg(test)]
+    pub fn memory() -> (Self, Self) {
+        let (s1, r1) = crossbeam_channel::unbounded();
+        let (s2, r2) = crossbeam_channel::unbounded();
+        (
+            Self {
+                sender: s1,
+                receiver: r2,
+            },
+            Self {
+                sender: s2,
+                receiver: r1,
+            },
+        )
+    }
 }
 
 struct ServerConnection(Connection);
@@ -1005,7 +1083,9 @@ impl Server {
                     info!("Response for unknown request: {x:?}");
                 }
             }
-            LspEvent::LspRequest(x) => {
+            LspEvent::LspRequest(mut x) => {
+                telemetry_event.set_activity_key(std::mem::take(&mut x.activity_key));
+
                 // These are messages where VS Code will use results from previous document versions,
                 // we really don't want to implicitly cancel those.
                 const ONLY_ONCE: &[&str] = &[
@@ -1595,6 +1675,7 @@ impl Server {
             id: id.clone(),
             method: T::METHOD.to_owned(),
             params: serde_json::to_value(params).unwrap(),
+            activity_key: None,
         };
         self.connection.send(Message::Request(request.clone()));
         self.outgoing_requests.lock().insert(id, request);

@@ -10,6 +10,8 @@ use std::time::Instant;
 
 use anyhow::Error;
 use lsp_types::Url;
+use serde::Deserialize;
+use serde::Serialize;
 use uuid::Uuid;
 
 pub trait Telemetry: Send + Sync {
@@ -46,6 +48,7 @@ pub struct TelemetryEvent {
     pub task_id: Option<TelemetryTaskId>,
     pub sourcedb_rebuild_stats: Option<TelemetrySourceDbRebuildStats>,
     pub sourcedb_rebuild_instance_stats: Option<TelemetrySourceDbRebuildInstanceStats>,
+    pub activity_key: Option<ActivityKey>,
 }
 
 pub struct TelemetryFileStats {
@@ -99,6 +102,12 @@ pub struct TelemetrySourceDbRebuildInstanceStats {
     pub build_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityKey {
+    pub id: String,
+    pub name: String,
+}
+
 impl TelemetryEvent {
     pub fn new_dequeued(
         kind: TelemetryEventKind,
@@ -121,6 +130,7 @@ impl TelemetryEvent {
                 task_id: None,
                 sourcedb_rebuild_stats: None,
                 sourcedb_rebuild_instance_stats: None,
+                activity_key: None,
             },
             queue,
         )
@@ -145,7 +155,12 @@ impl TelemetryEvent {
             task_id,
             sourcedb_rebuild_stats: None,
             sourcedb_rebuild_instance_stats: None,
+            activity_key: None,
         }
+    }
+
+    pub fn set_activity_key(&mut self, activity_key: Option<ActivityKey>) {
+        self.activity_key = activity_key;
     }
 
     pub fn set_invalidate_duration(&mut self, duration: Duration) {

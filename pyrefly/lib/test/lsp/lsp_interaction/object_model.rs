@@ -16,12 +16,7 @@ use std::thread::{self};
 use std::time::Duration;
 
 use crossbeam_channel::RecvTimeoutError;
-use lsp_server::Connection;
-use lsp_server::Message;
-use lsp_server::Notification;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_server::ResponseError;
 use lsp_types::CompletionList;
 use lsp_types::CompletionResponse;
@@ -73,6 +68,12 @@ use serde_json::json;
 use crate::commands::lsp::IndexingMode;
 use crate::commands::lsp::LspArgs;
 use crate::commands::lsp::run_lsp;
+use crate::lsp::non_wasm::protocol::JsonRpcMessage;
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Notification;
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
+use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::wasm::provide_type::ProvideType;
 use crate::test::util::init_test;
 
@@ -281,12 +282,12 @@ impl TestClient {
             .recv_timeout(self.recv_timeout)
     }
 
-    pub fn send_message(&self, message: Message) {
+    pub fn send_message(&self, msg: Message) {
         eprintln!(
             "client--->server {}",
-            serde_json::to_string(&message).unwrap()
+            serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
         );
-        if let Err(err) = self.send_timeout(message.clone()) {
+        if let Err(err) = self.send_timeout(msg) {
             panic!("Failed to send message to language server: {err}");
         }
     }
@@ -302,6 +303,7 @@ impl TestClient {
             id: id.clone(),
             method: R::METHOD.to_owned(),
             params: serde_json::to_value(params).unwrap(),
+            activity_key: None,
         }));
         ClientRequestHandle {
             id,
@@ -329,6 +331,7 @@ impl TestClient {
         self.send_message(Message::Notification(Notification {
             method: N::METHOD.to_owned(),
             params: serde_json::to_value(params).unwrap(),
+            activity_key: None,
         }));
     }
 
@@ -678,7 +681,10 @@ impl TestClient {
         loop {
             match self.recv_timeout() {
                 Ok(msg) => {
-                    eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                    eprintln!(
+                        "client<---server {}",
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                    );
                     if let Some(actual) = matcher(msg) {
                         return Ok(actual);
                     }
@@ -952,7 +958,10 @@ impl TestClient {
     pub fn expect_any_message(&self) -> Result<(), LspMessageError> {
         match self.recv_timeout() {
             Ok(msg) => {
-                eprintln!("client<---server {}", serde_json::to_string(&msg).unwrap());
+                eprintln!(
+                    "client<---server {}",
+                    serde_json::to_string(&JsonRpcMessage::from_message(msg)).unwrap()
+                );
                 Ok(())
             }
             Err(RecvTimeoutError::Timeout) => Err(LspMessageError::Timeout {
