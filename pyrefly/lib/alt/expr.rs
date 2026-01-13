@@ -267,9 +267,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self_type_annotation;
         }
         let res = match x {
-            Expr::Name(x) => self
-                .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                .arc_clone(),
+            Expr::Name(x) => {
+                if Ast::is_synthesized_empty_name(x) {
+                    TypeInfo::of_ty(Type::any_error())
+                } else {
+                    self.get(&Key::BoundName(ShortIdentifier::expr_name(x)))
+                        .arc_clone()
+                }
+            }
             Expr::Attribute(x) => {
                 let base = self.expr_infer_type_info_with_hint(&x.value, None, errors);
                 self.record_external_attribute_definition_index(
@@ -295,10 +300,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.subscript_infer(&base, &x.slice, x.range(), errors)
             }
             Expr::Named(x) => match &*x.target {
-                Expr::Name(name) => self
+                Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => self
                     .get(&Key::Definition(ShortIdentifier::expr_name(name)))
                     .arc_clone(),
-                _ => TypeInfo::of_ty(Type::any_error()), // syntax error
+                _ => self.expr_infer_type_info_with_hint(&x.value, hint, errors),
             },
             // All other expressions operate at the `Type` level only, so we avoid the overhead of
             // wrapping and unwrapping `TypeInfo` by computing the result as a `Type` and only wrapping
