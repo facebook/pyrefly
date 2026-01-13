@@ -1,3 +1,8 @@
 debug.json
 debug.js
 target/
+
+# Ignore all files in schemas/ except specific JSON schemas
+schemas/*
+!schemas/pyproject-tool-pyrefly.json
+!schemas/pyrefly.json
