@@ -141,6 +141,11 @@
       "type": "boolean",
       "default": true
     },
+    "skip-lsp-config-indexing": {
+      "description": "Should Pyrefly try to index the project's files? Disabling this may speed up LSP operations on large projects.",
+      "type": "boolean",
+      "default": false
+    },
     "build-system": {
       "description": "Pyrefly supports integrating into build systems to discover targets to type check and their dependencies. Currently supports Buck2 and custom queries.",
       "type": "object",
