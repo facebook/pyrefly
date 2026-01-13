@@ -1218,9 +1218,32 @@ def outer():
     # MOVE-START
     # MOVE-END
     return inner(1)
-
 def inner(x):
     return x + 1
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn make_local_function_top_level_inserts_pass() {
+    let code = r#"
+def outer():
+    # MOVE-START
+    def inner():
+        return 1
+    # MOVE-END
+"#;
+    let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles) = compute_make_top_level_actions(code, selection);
+    assert_eq!(vec!["Make `inner` top-level"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def outer():
+    # MOVE-START
+    pass
+def inner():
+    return 1
+    # MOVE-END
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -1241,7 +1264,6 @@ class C:
     let expected = r#"
 def foo(self, x):
     return x + 1
-
 class C:
     # MOVE-START
     foo = foo
@@ -1267,10 +1289,34 @@ class C:
     let expected = r#"
 def bar(x):
     return x
-
 class C:
     # MOVE-START
     bar = staticmethod(bar)
+    # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn make_classmethod_top_level_with_wrapper() {
+    let code = r#"
+class C:
+    # MOVE-START
+    @classmethod
+    def baz(cls, x):
+        return x
+    # MOVE-END
+"#;
+    let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles) = compute_make_top_level_actions(code, selection);
+    assert_eq!(vec!["Make `baz` top-level"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def baz(cls, x):
+    return x
+class C:
+    # MOVE-START
+    baz = classmethod(baz)
     # MOVE-END
 "#;
     assert_eq!(expected.trim(), updated.trim());

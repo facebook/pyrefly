@@ -136,7 +136,9 @@ pub(crate) fn make_local_function_top_level_code_actions(
             return None;
         }
     }
-    if contains_nonlocal(context.function_def) && matches!(context.parent, ParentKind::Function) {
+    if matches!(context.parent, ParentKind::Function)
+        && contains_nonlocal_or_global(context.function_def)
+    {
         return None;
     }
 
@@ -541,9 +543,23 @@ fn range_without_decorators(source: &str, range: TextRange, decorators: &[Decora
         .first()
         .map(|first| first.range().cover(decorators.last().unwrap().range()));
     decorators_range.map_or(range, |decorators_range| {
-        let start = line_end_position(source, decorators_range.end());
+        let line_start = line_end_position(source, decorators_range.end());
+        let start =
+            first_non_whitespace_offset(source, line_start, range.end()).unwrap_or(line_start);
         TextRange::new(start, range.end())
     })
+}
+
+fn first_non_whitespace_offset(source: &str, start: TextSize, end: TextSize) -> Option<TextSize> {
+    let start_idx = start.to_usize().min(source.len());
+    let end_idx = end.to_usize().min(source.len());
+    if start_idx >= end_idx {
+        return None;
+    }
+    source[start_idx..end_idx]
+        .char_indices()
+        .find(|(_, ch)| !matches!(ch, ' ' | '\t' | '\r' | '\n'))
+        .and_then(|(idx, _)| TextSize::try_from(start_idx + idx).ok())
 }
 
 fn method_wrapper_kind(function_def: &StmtFunctionDef) -> Option<MethodWrapper> {
@@ -560,24 +576,25 @@ fn method_wrapper_kind(function_def: &StmtFunctionDef) -> Option<MethodWrapper> 
             }
             kind = MethodWrapper::Classmethod;
         } else {
+            // Only support static/class methods for now to avoid changing decorator semantics.
             return None;
         }
     }
     Some(kind)
 }
 
-fn contains_nonlocal(function_def: &StmtFunctionDef) -> bool {
-    struct NonlocalFinder {
+fn contains_nonlocal_or_global(function_def: &StmtFunctionDef) -> bool {
+    struct ScopeModifierFinder {
         found: bool,
     }
 
-    impl<'a> ruff_python_ast::visitor::Visitor<'a> for NonlocalFinder {
+    impl<'a> ruff_python_ast::visitor::Visitor<'a> for ScopeModifierFinder {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
             if self.found {
                 return;
             }
             match stmt {
-                Stmt::Nonlocal(_) => {
+                Stmt::Nonlocal(_) | Stmt::Global(_) => {
                     self.found = true;
                 }
                 Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
@@ -586,7 +603,7 @@ fn contains_nonlocal(function_def: &StmtFunctionDef) -> bool {
         }
     }
 
-    let mut finder = NonlocalFinder { found: false };
+    let mut finder = ScopeModifierFinder { found: false };
     finder.visit_body(&function_def.body);
     finder.found
 }
