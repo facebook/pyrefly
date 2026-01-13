@@ -507,6 +507,20 @@ impl<'a> Transaction<'a> {
         ans.get_chosen_overload_trace(range)
     }
 
+    fn import_handle_with_preference(
+        &self,
+        handle: &Handle,
+        module: ModuleName,
+        preference: FindPreference,
+    ) -> Option<Handle> {
+        match preference.prefer_pyi {
+            true => self.import_handle(handle, module, None).finding(),
+            false => self
+                .import_handle_prefer_executable(handle, module, None)
+                .finding(),
+        }
+    }
+
     fn type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
@@ -940,12 +954,7 @@ impl<'a> Transaction<'a> {
         let mut gas = RESOLVE_EXPORT_INITIAL_GAS;
         let mut name = name;
         while !gas.stop() {
-            let handle = match preference.prefer_pyi {
-                true => self.import_handle(handle, m, None).finding()?,
-                false => self
-                    .import_handle_prefer_executable(handle, m, None)
-                    .finding()?,
-            };
+            let handle = self.import_handle_with_preference(handle, m, preference)?;
             match self.get_exports(&handle).get(&name) {
                 Some(ExportLocation::ThisModule(export)) => {
                     return Some((handle.clone(), export.clone()));
@@ -953,6 +962,22 @@ impl<'a> Transaction<'a> {
                 Some(ExportLocation::OtherModule(module, aliased_name)) => {
                     if let Some(aliased_name) = aliased_name {
                         name = aliased_name.clone();
+                    }
+                    if *module == m && handle.path().is_init() {
+                        let submodule = m.append(&name);
+                        let sub_handle =
+                            self.import_handle_with_preference(&handle, submodule, preference)?;
+                        let docstring_range = self.get_module_docstring_range(&sub_handle);
+                        return Some((
+                            sub_handle,
+                            Export {
+                                location: TextRange::default(),
+                                symbol_kind: Some(SymbolKind::Module),
+                                docstring_range,
+                                deprecation: None,
+                                special_export: None,
+                            },
+                        ));
                     }
                     m = *module;
                 }
@@ -1023,12 +1048,7 @@ impl<'a> Transaction<'a> {
                         },
                     ));
                 }
-                let handle = match preference.prefer_pyi {
-                    true => self.import_handle(handle, name, None).finding()?,
-                    false => self
-                        .import_handle_prefer_executable(handle, name, None)
-                        .finding()?,
-                };
+                let handle = self.import_handle_with_preference(handle, name, preference)?;
                 let docstring_range = self.get_module_docstring_range(&handle);
                 Some((
                     handle,
@@ -1383,12 +1403,7 @@ impl<'a> Transaction<'a> {
         preference: FindPreference,
     ) -> Option<FindDefinitionItemWithDocstring> {
         // TODO: Handle relative import (via ModuleName::new_maybe_relative)
-        let handle = match preference.prefer_pyi {
-            true => self.import_handle(handle, module_name, None).finding()?,
-            false => self
-                .import_handle_prefer_executable(handle, module_name, None)
-                .finding()?,
-        };
+        let handle = self.import_handle_with_preference(handle, module_name, preference)?;
         // if the module is not yet loaded, force loading by asking for exports
         // necessary for imports that are not in tdeps (e.g. .py when there is also a .pyi)
         // todo(kylei): better solution

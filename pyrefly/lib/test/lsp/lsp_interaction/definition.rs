@@ -535,3 +535,20 @@ fn goto_def_on_none_goes_to_builtins_stub() {
         })
         .unwrap();
 }
+
+#[test]
+fn test_goto_def_imported_submodule_with_alias() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("nested_package_imports");
+    test_go_to_def(
+        root_path,
+        None,
+        "main.py",
+        vec![
+            // `from pkg import sub as sub` -> first `sub`
+            (5, 16, "pkg/sub.py", 0, 0, 0, 0),
+            // `from pkg import sub as sub` -> second `sub`
+            (5, 23, "pkg/sub.py", 0, 0, 0, 0),
+        ],
+    );
+}
