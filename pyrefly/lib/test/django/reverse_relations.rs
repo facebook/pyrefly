@@ -42,3 +42,21 @@ author = Author()
 author.written_books  # E: `Author` has no attribute `written_books`
 "#,
 );
+
+django_testcase!(
+    test_foreign_key_reverse_disabled,
+    r#"
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+
+class Book(models.Model):
+    # related_name='+' disables the reverse accessor entirely
+    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name='+')
+
+author = Author()
+# No reverse accessor should exist
+author.book_set  # E: `Author` has no attribute `book_set`
+"#,
+);
