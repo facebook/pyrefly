@@ -6,6 +6,25 @@
  */
 
 use crate::django_testcase;
+use crate::test::django::util::django_env;
+use crate::test::util::TestEnv;
+use crate::testcase;
+
+// Cross-module reverse relations: when the FK target is in a different module,
+// reverse relations cannot be synthesized yet because our current analysis only scans the current module.
+fn django_env_with_separate_models() -> TestEnv {
+    let mut env = django_env();
+    env.add(
+        "author",
+        r#"
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+"#,
+    );
+    env
+}
 
 django_testcase!(
     bug = "Reverse relations not yet implemented",
@@ -75,5 +94,22 @@ class Person(models.Model):
 
 person = Person()
 person.person_set  # E: `Person` has no attribute `person_set`
+"#,
+);
+
+testcase!(
+    bug = "Cross-module reverse relations not supported",
+    test_foreign_key_reverse_cross_module,
+    django_env_with_separate_models(),
+    r#"
+from django.db import models
+from .author import Author
+
+class Book(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+
+# Author is defined in a different module, so reverse relation won't be synthesized
+author = Author()
+author.book_set  # E: `Author` has no attribute `book_set`
 "#,
 );
