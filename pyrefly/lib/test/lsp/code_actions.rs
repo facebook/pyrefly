@@ -208,7 +208,8 @@ fn compute_module_member_move_actions(
     Vec<String>,
     std::collections::HashMap<String, ModuleInfo>,
 ) {
-    let (handles, state) = mk_multi_file_state_assert_no_errors(code_by_module, Require::Everything);
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(code_by_module, Require::Everything);
     let handle = handles.get(module_name).unwrap();
     let transaction = state.transaction();
     let module_info = transaction.get_module_info(handle).unwrap();
@@ -1177,11 +1178,8 @@ def foo():
 "#;
     let code_b = "";
     let selection = find_marked_range_with(code_a, "# MOVE-START", "# MOVE-END");
-    let (module_info, actions, titles, module_infos) = compute_module_member_move_actions(
-        &[("a", code_a), ("b", code_b)],
-        "a",
-        selection,
-    );
+    let (module_info, actions, titles, module_infos) =
+        compute_module_member_move_actions(&[("a", code_a), ("b", code_b)], "a", selection);
     assert_eq!(vec!["Move `foo` to `b`"], titles);
     let updated_a = apply_refactor_edits_for_module(&module_info, &actions[0]);
     let updated_b = apply_refactor_edits_for_module(

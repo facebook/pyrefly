@@ -79,12 +79,8 @@ pub(crate) fn move_module_member_code_actions(
         if target_info.path() == module_info.path() {
             continue;
         }
-        let insert_edit = build_module_insertion_edit(
-            &target_info,
-            target_ast.as_ref(),
-            &member_text,
-            None,
-        )?;
+        let insert_edit =
+            build_module_insertion_edit(&target_info, target_ast.as_ref(), &member_text, None)?;
         let (removal_edit, import_edit) = build_removal_and_import_edits(
             transaction,
             handle,
@@ -100,7 +96,10 @@ pub(crate) fn move_module_member_code_actions(
             edits.push(import_edit);
         }
         actions.push(LocalRefactorCodeAction {
-            title: format!("Move `{member_name}` to `{}`", target_handle.module().as_str()),
+            title: format!(
+                "Move `{member_name}` to `{}`",
+                target_handle.module().as_str()
+            ),
             edits,
             kind: move_kind(),
         });
@@ -217,8 +216,12 @@ fn build_local_function_move_action(
 ) -> Option<LocalRefactorCodeAction> {
     let (title, insert_edit, import_target) = match target {
         Some((target_handle, target_info, target_ast)) => {
-            let insert_edit =
-                build_module_insertion_edit(&target_info, target_ast.as_ref(), function_text, None)?;
+            let insert_edit = build_module_insertion_edit(
+                &target_info,
+                target_ast.as_ref(),
+                function_text,
+                None,
+            )?;
             (
                 format!(
                     "Move `{}` to `{}`",
@@ -232,20 +235,20 @@ fn build_local_function_move_action(
         None => {
             let insert_position = match context.parent {
                 ParentKind::Class(class_def) => {
-                    let (_, line_start) =
-                        line_indent_and_start(source, class_def.range().start())?;
+                    let (_, line_start) = line_indent_and_start(source, class_def.range().start())?;
                     line_start
                 }
-                ParentKind::Function => {
-                    let insert_position = module_insertion_point(ast, source)?;
-                    insert_position
-                }
+                ParentKind::Function => module_insertion_point(ast, source)?,
                 ParentKind::Module => return None,
             };
             let insert_text = prepare_insertion_text(source, insert_position, function_text);
             (
                 format!("Make `{}` top-level", context.function_def.name.id),
-                (module_info.dupe(), TextRange::at(insert_position, TextSize::new(0)), insert_text),
+                (
+                    module_info.dupe(),
+                    TextRange::at(insert_position, TextSize::new(0)),
+                    insert_text,
+                ),
                 None,
             )
         }
@@ -322,13 +325,29 @@ fn build_removal_and_import_edits(
     target_handle: &Handle,
     import_format: ImportFormat,
     removal_range: TextRange,
-) -> Option<((Module, TextRange, String), Option<(Module, TextRange, String)>)> {
-    let import_edit =
-        build_import_edit(transaction, handle, module_info, ast, member_name, target_handle, import_format);
-    let removal_text = if import_edit.as_ref().is_some_and(|edit| edit.1.start() == removal_range.start()) {
+) -> Option<(
+    (Module, TextRange, String),
+    Option<(Module, TextRange, String)>,
+)> {
+    let import_edit = build_import_edit(
+        transaction,
+        handle,
+        module_info,
+        ast,
+        member_name,
+        target_handle,
+        import_format,
+    );
+    let removal_text = if import_edit
+        .as_ref()
+        .is_some_and(|edit| edit.1.start() == removal_range.start())
+    {
         // If the import would be inserted exactly at the removal location (typically the first
         // statement), fold the import into the removal replacement to avoid overlapping edits.
-        import_edit.as_ref().map(|edit| edit.2.clone()).unwrap_or_default()
+        import_edit
+            .as_ref()
+            .map(|edit| edit.2.clone())
+            .unwrap_or_default()
     } else {
         String::new()
     };
@@ -373,18 +392,15 @@ fn has_existing_import(ast: &ModModule, module_name: ModuleName, name: &str) -> 
             if let Some(module) = &import_from.module
                 && ModuleName::from_name(&module.id) == module_name
             {
-                import_from
-                    .names
-                    .iter()
-                    .any(|alias| {
-                        if alias.name.id.as_str() != name {
-                            return false;
-                        }
-                        match &alias.asname {
-                            None => true,
-                            Some(asname) => asname.id.as_str() == name,
-                        }
-                    })
+                import_from.names.iter().any(|alias| {
+                    if alias.name.id.as_str() != name {
+                        return false;
+                    }
+                    match &alias.asname {
+                        None => true,
+                        Some(asname) => asname.id.as_str() == name,
+                    }
+                })
             } else {
                 false
             }
@@ -400,8 +416,8 @@ fn build_module_insertion_edit(
     insert_position: Option<TextSize>,
 ) -> Option<(Module, TextRange, String)> {
     let source = module_info.contents();
-    let position =
-        insert_position.unwrap_or_else(|| module_insertion_point(ast, source).unwrap_or(TextSize::new(0)));
+    let position = insert_position
+        .unwrap_or_else(|| module_insertion_point(ast, source).unwrap_or(TextSize::new(0)));
     let insert_text = prepare_insertion_text(source, position, member_text);
     Some((
         module_info.dupe(),
@@ -420,13 +436,11 @@ fn module_insertion_point(ast: &ModModule, source: &str) -> Option<TextSize> {
 
 fn find_module_member<'a>(ast: &'a ModModule, selection: TextSize) -> Option<&'a Stmt> {
     ast.body.iter().find(|stmt| {
-        stmt.range().contains(selection) && matches!(
-            stmt,
-            Stmt::FunctionDef(_)
-                | Stmt::ClassDef(_)
-                | Stmt::Assign(_)
-                | Stmt::AnnAssign(_)
-        )
+        stmt.range().contains(selection)
+            && matches!(
+                stmt,
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Assign(_) | Stmt::AnnAssign(_)
+            )
     })
 }
 
@@ -438,14 +452,13 @@ fn find_local_function_context<'a>(
     for stmt in &ast.body {
         if let Stmt::ClassDef(class_def) = stmt
             && class_def.range().contains(selection)
-        {
-            if let Some(found) = find_local_function_context_in_body(
+            && let Some(found) = find_local_function_context_in_body(
                 &class_def.body,
                 selection,
                 ParentKind::Class(class_def),
-            ) {
-                return Some(found);
-            }
+            )
+        {
+            return Some(found);
         }
         if let Stmt::FunctionDef(function_def) = stmt
             && function_def.range().contains(selection)
@@ -477,14 +490,13 @@ fn find_local_function_context_in_body<'a>(
     for stmt in body {
         if let Stmt::ClassDef(class_def) = stmt
             && class_def.range().contains(selection)
-        {
-            if let Some(found) = find_local_function_context_in_body(
+            && let Some(found) = find_local_function_context_in_body(
                 &class_def.body,
                 selection,
                 ParentKind::Class(class_def),
-            ) {
-                return Some(found);
-            }
+            )
+        {
+            return Some(found);
         }
         if let Stmt::FunctionDef(function_def) = stmt
             && function_def.range().contains(selection)
@@ -524,11 +536,7 @@ fn function_text_for_top_level(
     Some((text, from_indent))
 }
 
-fn range_without_decorators(
-    source: &str,
-    range: TextRange,
-    decorators: &[Decorator],
-) -> TextRange {
+fn range_without_decorators(source: &str, range: TextRange, decorators: &[Decorator]) -> TextRange {
     let decorators_range = decorators
         .first()
         .map(|first| first.range().cover(decorators.last().unwrap().range()));
@@ -629,11 +637,15 @@ fn sibling_module_targets(
         } else {
             components.len() == parent_len + 1 && &components[..parent_len] == parent_prefix
         };
-        let is_parent_module = parent_len > 0 && components.len() == parent_len && components == parent_prefix;
+        let is_parent_module =
+            parent_len > 0 && components.len() == parent_len && components == parent_prefix;
         if !is_sibling && !is_parent_module {
             continue;
         }
-        let Some(target_handle) = transaction.import_handle(handle, module_name, None).finding() else {
+        let Some(target_handle) = transaction
+            .import_handle(handle, module_name, None)
+            .finding()
+        else {
             continue;
         };
         let Some(target_info) = transaction.get_module_info(&target_handle) else {
@@ -694,8 +706,7 @@ fn statement_removal_range_from_range(source: &str, range: TextRange) -> Option<
 fn needs_pass_after_removal(body: &[Stmt], removed_range: TextRange) -> bool {
     let mut non_docstring = body.iter().filter(|stmt| !is_docstring_stmt(stmt));
     let only_stmt = non_docstring.next();
-    non_docstring.next().is_none()
-        && only_stmt.is_some_and(|stmt| stmt.range() == removed_range)
+    non_docstring.next().is_none() && only_stmt.is_some_and(|stmt| stmt.range() == removed_range)
 }
 
 fn line_end_position(source: &str, position: TextSize) -> TextSize {
@@ -707,7 +718,12 @@ fn line_end_position(source: &str, position: TextSize) -> TextSize {
     }
 }
 
-fn reindent_statement(source: &str, range: TextRange, from_indent: &str, to_indent: &str) -> String {
+fn reindent_statement(
+    source: &str,
+    range: TextRange,
+    from_indent: &str,
+    to_indent: &str,
+) -> String {
     let start = range.start().to_usize().min(source.len());
     let end = range.end().to_usize().min(source.len());
     let raw = if start < end { &source[start..end] } else { "" };
