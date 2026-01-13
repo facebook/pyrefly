@@ -2692,12 +2692,14 @@ impl<'a> Transaction<'a> {
             return true;
         }
 
-        // Include re-export if original is a parent package of canonical
-        if canonical_components.len() > original_components.len() {
-            canonical_components
+        // Include re-export if original is a parent package of canonical.
+        if canonical_components.len() > original_components.len()
+            && canonical_components
                 .iter()
                 .zip(original_components.iter())
                 .all(|(c, o)| c == o)
+        {
+            return true;
         }
         // Some stdlib shims encode dotted modules with underscores (e.g. _collections_abc).
         if canonical_module.as_str().starts_with('_') && original_module.as_str().contains('.') {
