@@ -1620,7 +1620,7 @@ testcase!(
     test_crash_on_incomplete_walrus,
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/2093
-(:=)  # E: Parse error: Expected an expression # E: Parse error: Expected an expression
+(:=  # E: Parse error: Expected an expression # E: Parse error: Expected an expression
 "#,
 );
 
