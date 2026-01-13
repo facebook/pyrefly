@@ -4,6 +4,13 @@ title: IDE Supported Features
 description: Supported features for Pyrefly's IDE extension
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # IDE Supported Features
 
 Pyrefly’s language server powers a complete editing experience while **fully disabling Pylance**, ensuring no interference between checkers.
@@ -315,6 +322,13 @@ title: IDE Installation
 
 description: How to add Pyrefly Language Server and Typechecking to your IDE
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
 
 # Add Pyrefly to your IDE
 Pyrefly seamlessly integrates into IDEs with our [VSCode](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) and [OpenVSX](https://open-vsx.org/extension/meta/pyrefly) extensions. For other editors like vim/emacs, see [other editors](#other-editors).
@@ -671,6 +685,13 @@ title: Infer
 description: Automatically add type annotations to your code with the Pyrefly infer feature.
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Pyrefly Infer
 
 Manually adding type annotations to your code can be tedius and time-consuming. Pyrefly can help with this task by automatically adding type annotations to your code.
@@ -700,6 +721,13 @@ slug: /configuration
 
 description: Configure Pyrefly settings and options
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
 
 # Pyrefly Configuration
 
@@ -1858,6 +1886,13 @@ title: Experimental Django Support
 description: Pyrefly experimental support for Django ORM.
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Experimental Django Support
 
 Pyrefly includes **experimental support** for [Django](https://www.djangoproject.com/), a popular Python web framework. This feature aims to provide improved static type checking for Django's Object-Relational Mapping (ORM) system, which is used to interact with databases.
@@ -2142,6 +2177,13 @@ title: Pyrefly Error Kinds
 
 description: Pyrefly error categories and suppression codes
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
 
 # Pyrefly Error Kinds
 
@@ -3438,6 +3480,14 @@ title: Pyrefly Error Suppressions
 
 description: Learn how to suppress type check errors in Pyrefly with code comments and baseline files.
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 import CodeSnippet from '@site/src/sandbox/CodeSnippet'
 
 ## Error Suppression Comments
@@ -3554,6 +3604,13 @@ slug: /import-resolution
 
 description: How imports in a given file are found by Pyrefly and their bindings are resolved, including files that are being type checked
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
 
 # Import Resolution
 
@@ -3766,6 +3823,13 @@ title: Introduction
 description: Guides and references for all you need to know about Pyrefly type checker and IDE extension.
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 import CodeSnippet from '@site/src/sandbox/CodeSnippet'
 
 Pyrefly is a fast type checker and language server for Python with powerful IDE features. It analyzes your Python code to help you catch type-related errors before your code runs, making your applications more reliable and easier to maintain. Pyrefly supports both IDE integration and CLI usage, giving you flexibility in how you incorporate type checking into your workflow.
@@ -3812,6 +3876,13 @@ In this example, Pyrefly flags the second call to `greet()` because we're passin
 title: Installation
 description: How to install Pyrefly
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
 
 Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new release every Monday. We often release more frequently when shipping new features and bug fixes.
 
@@ -4000,6 +4071,13 @@ title: Migrating from Mypy
 description: How to switch your type checker configuration from Mypy to Pyrefly
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 ## Running Pyrefly
 
 Like mypy, pyrefly can be given a list of files to check:
@@ -4143,6 +4221,13 @@ title: Migrating from Pyright
 description: How to switch your type checker configuration from Pyright to Pyrefly
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 ## Running Pyrefly
 
 Like pyright, pyrefly can be given a list of files to check:
@@ -4262,6 +4347,13 @@ title: Migration Guides
 description: How to switch from another type checker to Pyrefly
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 Welcome to the Pyrefly migration guide. This section provides resources to help you transition from other type checkers to Pyrefly.
 
 ## Migration Guides
@@ -4278,6 +4370,13 @@ Choose the appropriate guide based on your current type checker to get started w
 title: Pydantic Lax Mode Type Conversions
 description: Complete reference of how Pyrefly converts types in Pydantic lax mode.
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
 
 # Pydantic Lax Mode Type Conversions
 
@@ -4339,6 +4438,13 @@ Named unions are used for atomic types to keep type signatures concise.
 title: Experimental Pydantic Support
 description: Pyrefly experimental support for Pydantic.
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
 
 # Experimental Pydantic Support
 
@@ -4551,6 +4657,13 @@ description:
     Python and IDE extension.
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Pyrefly Frequently Asked Questions
 
 ## How do I pronounce Pyrefly?
@@ -4611,6 +4724,13 @@ title: Typing Features and PEPS
 description: Typing features and associated PEPs available in each Python version.
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 *Typing Features and PEPS available in each Python Version.*
 
 | Feature (click PEP for details) | What it adds / looks like | Introduced in |
@@ -4643,6 +4763,13 @@ description: Typing features and associated PEPs available in each Python versio
 title: Python Typing 101
 description: A gentle, example‑driven introduction to static type hints in Python.
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
 
 import CodeSnippet from '@site/src/sandbox/CodeSnippet'
 
@@ -4887,6 +5014,13 @@ title: Typing for Python Developers
 
 description: Get to know Python's Type System with working examples
 ---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
 
 import CodeSnippet from '@site/src/sandbox/CodeSnippet'
 
