@@ -1975,6 +1975,34 @@ impl<'a> Transaction<'a> {
         quick_fixes::move_members::push_members_down_code_actions(self, handle, selection)
     }
 
+    pub fn move_module_member_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+        import_format: ImportFormat,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_module::move_module_member_code_actions(
+            self,
+            handle,
+            selection,
+            import_format,
+        )
+    }
+
+    pub fn make_local_function_top_level_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+        import_format: ImportFormat,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_module::make_local_function_top_level_code_actions(
+            self,
+            handle,
+            selection,
+            import_format,
+        )
+    }
+
     /// Determines whether a module is a third-party package.
     ///
     /// Checks if the module's path is located within any of the configured

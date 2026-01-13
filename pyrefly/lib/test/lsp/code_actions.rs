@@ -198,6 +198,59 @@ fn compute_move_actions(
     (module_info, edit_sets, titles)
 }
 
+fn compute_module_member_move_actions(
+    code_by_module: &[(&'static str, &str)],
+    module_name: &'static str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+    std::collections::HashMap<String, ModuleInfo>,
+) {
+    let (handles, state) = mk_multi_file_state_assert_no_errors(code_by_module, Require::Everything);
+    let handle = handles.get(module_name).unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let mut module_infos = std::collections::HashMap::new();
+    for (name, _) in code_by_module {
+        if let Some(handle) = handles.get(*name) {
+            if let Some(info) = transaction.get_module_info(handle) {
+                module_infos.insert((*name).to_owned(), info);
+            }
+        }
+    }
+    let actions = transaction
+        .move_module_member_code_actions(handle, selection, ImportFormat::Absolute)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles, module_infos)
+}
+
+fn compute_make_top_level_actions(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .make_local_function_top_level_code_actions(handle, selection, ImportFormat::Absolute)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
 fn compute_pull_up_actions(
     code: &str,
 ) -> (
@@ -1112,6 +1165,117 @@ class Child(Base):
 "#;
     let (_module_info, _actions, titles) = compute_push_down_actions(code);
     assert!(titles.is_empty(), "expected no push-down actions");
+}
+
+#[test]
+fn move_module_member_to_sibling() {
+    let code_a = r#"
+# MOVE-START
+def foo():
+    return 1
+# MOVE-END
+"#;
+    let code_b = "";
+    let selection = find_marked_range_with(code_a, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles, module_infos) = compute_module_member_move_actions(
+        &[("a", code_a), ("b", code_b)],
+        "a",
+        selection,
+    );
+    assert_eq!(vec!["Move `foo` to `b`"], titles);
+    let updated_a = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let updated_b = apply_refactor_edits_for_module(
+        module_infos.get("b").expect("missing module b"),
+        &actions[0],
+    );
+    let expected_a = r#"
+# MOVE-START
+from b import foo
+# MOVE-END
+"#;
+    let expected_b = r#"
+def foo():
+    return 1
+"#;
+    assert_eq!(expected_a.trim(), updated_a.trim());
+    assert_eq!(expected_b.trim(), updated_b.trim());
+}
+
+#[test]
+fn make_local_function_top_level() {
+    let code = r#"
+def outer():
+    # MOVE-START
+    def inner(x):
+        return x + 1
+    # MOVE-END
+    return inner(1)
+"#;
+    let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles) = compute_make_top_level_actions(code, selection);
+    assert_eq!(vec!["Make `inner` top-level"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def outer():
+    # MOVE-START
+    # MOVE-END
+    return inner(1)
+
+def inner(x):
+    return x + 1
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn make_method_top_level_with_wrapper() {
+    let code = r#"
+class C:
+    # MOVE-START
+    def foo(self, x):
+        return x + 1
+    # MOVE-END
+"#;
+    let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles) = compute_make_top_level_actions(code, selection);
+    assert_eq!(vec!["Make `foo` top-level"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def foo(self, x):
+    return x + 1
+
+class C:
+    # MOVE-START
+    foo = foo
+    # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn make_staticmethod_top_level_with_wrapper() {
+    let code = r#"
+class C:
+    # MOVE-START
+    @staticmethod
+    def bar(x):
+        return x
+    # MOVE-END
+"#;
+    let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles) = compute_make_top_level_actions(code, selection);
+    assert_eq!(vec!["Make `bar` top-level"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def bar(x):
+    return x
+
+class C:
+    # MOVE-START
+    bar = staticmethod(bar)
+    # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
 }
 
 #[test]
