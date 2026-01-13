@@ -953,28 +953,39 @@ impl Type {
         }
     }
 
-    pub fn is_type_variable(&self) -> bool {
-        match self {
-            Type::Quantified(_) | Type::TypeVarTuple(_) | Type::TypeVar(_) | Type::ParamSpec(_) => {
-                true
-            }
-            _ => false,
-        }
+    /// Is this type an unreplaced reference to a legacy type variable? Note that references to
+    /// in-scope legacy type variables in functions and classes are replaced with Quantified, so
+    /// this type only appears in cases like a TypeVar definition or an out-of-scope type variable.
+    pub fn is_raw_legacy_type_variable(&self) -> bool {
+        matches!(
+            TypeVariable::new(self),
+            Some(
+                TypeVariable::LegacyTypeVar(_)
+                    | TypeVariable::LegacyTypeVarTuple(_)
+                    | TypeVariable::LegacyParamSpec(_)
+            )
+        )
     }
 
-    fn visit_type_variables(&self, f: &mut dyn FnMut(&Type)) {
-        fn visit(ty: &Type, f: &mut dyn FnMut(&Type)) {
-            if ty.is_type_variable() {
-                f(ty);
+    fn visit_type_variables<'a>(&'a self, f: &mut dyn FnMut(TypeVariable<'a>)) {
+        fn visit<'a>(ty: &'a Type, f: &mut dyn FnMut(TypeVariable<'a>)) {
+            if let Some(tv) = TypeVariable::new(ty) {
+                f(tv);
                 return;
             }
-            let mut recurse_targs = |targs: &TArgs| {
+            let mut recurse_targs = |targs: &'a TArgs| {
                 for targ in targs.as_slice().iter() {
                     visit(targ, f);
                 }
             };
             match ty {
-                // In `A[X]`, the only part we need to check for type variables is `X`.
+                // In `A[X]`, we only check `X` for a couple reasons:
+                // * If we were to blindly visit the entire ClassType, we would find Quantifieds in
+                //   the definition of the class, which is almost never what we want: we want to
+                //   know if `X` contains any references to Quantifieds, not whether `A` is generic.
+                //   See https://github.com/facebook/pyrefly/issues/1962.
+                // * Not checking the rest of the ClassType is a critical performance optimization
+                //   when visiting Vars. See https://github.com/facebook/pyrefly/issues/2016.
                 Type::ClassType(cls) => recurse_targs(cls.targs()),
                 Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs()),
                 _ => ty.recurse(&mut |ty| visit(ty, f)),
@@ -983,20 +994,47 @@ impl Type {
         visit(self, f)
     }
 
+    pub fn for_each_quantified<'a>(&'a self, f: &mut impl FnMut(&'a Quantified)) {
+        self.visit_type_variables(&mut |x| {
+            if let TypeVariable::Quantified(x) = x {
+                f(x);
+            }
+        })
+    }
+
+    pub fn collect_quantifieds<'a>(&'a self, acc: &mut SmallSet<&'a Quantified>) {
+        self.for_each_quantified(&mut |q| {
+            acc.insert(q);
+        });
+    }
+
+    /// Checks if the type contains any reference to a type variable. This may be a reference that
+    /// has been resolved to a function- or class-scoped type parameter (i.e., a Quantified) or an
+    /// unresolved reference to a legacy type variable.
     pub fn contains_type_variable(&self) -> bool {
         let mut seen = false;
-        let mut f = |_: &Type| seen = true;
+        let mut f = |t| {
+            seen |= matches!(
+                t,
+                TypeVariable::Quantified(_)
+                    | TypeVariable::LegacyTypeVar(_)
+                    | TypeVariable::LegacyTypeVarTuple(_)
+                    | TypeVariable::LegacyParamSpec(_)
+            )
+        };
         self.visit_type_variables(&mut f);
         seen
     }
 
-    pub fn collect_type_variables(&self, acc: &mut Vec<Name>) {
-        let mut f = |t: &Type| {
+    /// Collect unreplaced references to legacy type variables. Note that references to in-scope
+    /// legacy type variables in functions and classes are replaced with Quantified, so unreplaced
+    /// references only appear in cases like a TypeVar definition or an out-of-scope type variable.
+    pub fn collect_raw_legacy_type_variables(&self, acc: &mut Vec<Name>) {
+        let mut f = |t| {
             let name = match t {
-                Type::TypeVar(t) => t.qname().id(),
-                Type::TypeVarTuple(t) => t.qname().id(),
-                Type::ParamSpec(p) => p.qname().id(),
-                Type::Quantified(q) => q.name(),
+                TypeVariable::LegacyTypeVar(t) => t.qname().id(),
+                TypeVariable::LegacyTypeVarTuple(t) => t.qname().id(),
+                TypeVariable::LegacyParamSpec(p) => p.qname().id(),
                 _ => return,
             };
             acc.push(name.clone());
@@ -1004,31 +1042,33 @@ impl Type {
         self.visit_type_variables(&mut f)
     }
 
-    /// Check if the type contains a Var that may have been instantiated from a Quantified.
-    pub fn may_contain_quantified_var(&self) -> bool {
-        fn f(ty: &Type, seen: &mut bool) {
-            if *seen || matches!(ty, Type::Var(_)) {
-                *seen = true;
+    /// Transform unreplaced references to legacy type variables. Note that references to in-scope
+    /// legacy type variables in functions and classes are replaced with Quantified, so unreplaced
+    /// references only appear in cases like a TypeVar definition or an out-of-scope type variable.
+    pub fn transform_raw_legacy_type_variables(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        fn visit(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
+            if ty.is_raw_legacy_type_variable() {
+                f(ty);
                 return;
             }
-            let mut recurse_targs = |targs: &TArgs| {
-                for targ in targs.as_slice().iter() {
-                    f(targ, seen);
-                    if *seen {
-                        break;
-                    }
+            let mut recurse_targs = |targs: &mut TArgs| {
+                for targ in targs.as_mut().iter_mut() {
+                    visit(targ, f);
                 }
             };
             match ty {
-                // Vars created by instantiate_fresh_class() would only appear in targs,
-                // so we can skip checking the rest of the type.
-                Type::ClassType(cls) => recurse_targs(cls.targs()),
-                Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs()),
-                _ => ty.recurse(&mut |ty| f(ty, seen)),
+                Type::ClassType(cls) => recurse_targs(cls.targs_mut()),
+                Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs_mut()),
+                _ => ty.recurse_mut(&mut |ty| visit(ty, f)),
             }
         }
+        visit(self, f)
+    }
+
+    /// Check if the type contains a Var that may have been instantiated from a Quantified.
+    pub fn may_contain_quantified_var(&self) -> bool {
         let mut seen = false;
-        f(self, &mut seen);
+        self.visit_type_variables(&mut |t| seen |= matches!(t, TypeVariable::Var));
         seen
     }
 
@@ -1127,20 +1167,6 @@ impl Type {
                 *t = replacement.clone();
             }
         })
-    }
-
-    pub fn for_each_quantified<'a>(&'a self, f: &mut impl FnMut(&'a Quantified)) {
-        self.universe(&mut |x| {
-            if let Type::Quantified(x) = x {
-                f(x);
-            }
-        })
-    }
-
-    pub fn collect_quantifieds<'a>(&'a self, acc: &mut SmallSet<&'a Quantified>) {
-        self.for_each_quantified(&mut |q| {
-            acc.insert(q);
-        });
     }
 
     pub fn any(&self, mut predicate: impl FnMut(&Type) -> bool) -> bool {
@@ -1741,6 +1767,33 @@ impl Type {
             members,
             display_name: None,
         }))
+    }
+}
+
+/// Various type-variable-like things
+enum TypeVariable<'a> {
+    /// A function or class type parameter created from a reference to an in-scope legacy or scoped type variable
+    Quantified(&'a Quantified),
+    /// A legacy typing.TypeVar appearing in a position where it is not resolved to an in-scope type variable
+    LegacyTypeVar(&'a TypeVar),
+    /// A legacy typing.TypeVarTuple appearing in a position where it is not resolved to an in-scope type variable
+    LegacyTypeVarTuple(&'a TypeVarTuple),
+    /// A legacy typing.ParamSpec appearing in a position where it is not resolved to an in-scope type variable
+    LegacyParamSpec(&'a ParamSpec),
+    /// A placeholder type that may have been instantiated from a Quantified
+    Var,
+}
+
+impl<'a> TypeVariable<'a> {
+    fn new(ty: &'a Type) -> Option<Self> {
+        match ty {
+            Type::Quantified(q) => Some(Self::Quantified(q)),
+            Type::TypeVar(t) => Some(Self::LegacyTypeVar(t)),
+            Type::TypeVarTuple(t) => Some(Self::LegacyTypeVarTuple(t)),
+            Type::ParamSpec(p) => Some(Self::LegacyParamSpec(p)),
+            Type::Var(_) => Some(Self::Var),
+            _ => None,
+        }
     }
 }
 

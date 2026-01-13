@@ -1505,7 +1505,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if let Some(default) = tparam.quantified.default() {
                 let mut out_of_scope_names = Vec::new();
-                default.collect_type_variables(&mut out_of_scope_names);
+                default.collect_raw_legacy_type_variables(&mut out_of_scope_names);
                 out_of_scope_names.retain(|name| !seen.contains(name));
                 if !out_of_scope_names.is_empty() {
                     self.error(errors, range, ErrorInfo::Kind(ErrorKind::InvalidTypeVar), format!(
@@ -2706,44 +2706,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn wrap_callable_legacy_typevars(&self, ty: Type) -> Type {
-        match ty {
+        ty.transform(&mut |ty| match ty {
             Type::Callable(callable) => {
-                let (callable, tparams) = self.promote_callable_legacy_typevars(*callable);
-                if tparams.is_empty() {
-                    Type::Callable(Box::new(callable))
-                } else {
-                    Forallable::Callable(callable).forall(Arc::new(TParams::new(tparams)))
+                let tparams = self.promote_callable_legacy_typevars(callable);
+                if !tparams.is_empty() {
+                    *ty = Forallable::Callable((**callable).clone())
+                        .forall(Arc::new(TParams::new(tparams)));
                 }
             }
-            _ => ty,
-        }
+            _ => {}
+        })
     }
 
-    fn promote_callable_legacy_typevars(&self, mut callable: Callable) -> (Callable, Vec<TParam>) {
-        let mut seen_type_vars: SmallMap<TypeVar, Quantified> = SmallMap::new();
+    fn promote_callable_legacy_typevars(&self, callable: &mut Callable) -> Vec<TParam> {
+        let mut seen_type_vars = SmallMap::new();
         let mut tparams = Vec::new();
         callable.visit_mut(&mut |ty| {
-            if let Type::TypeVar(tv) = ty {
-                let q = seen_type_vars
-                    .entry(tv.dupe())
-                    .or_insert_with(|| {
-                        let q = Quantified::type_var(
-                            tv.qname().id().clone(),
-                            self.uniques,
-                            tv.default().cloned(),
-                            tv.restriction().clone(),
-                        );
-                        tparams.push(TParam {
-                            quantified: q.clone(),
-                            variance: tv.variance(),
-                        });
-                        q
-                    })
-                    .clone();
-                *ty = Type::Quantified(Box::new(q));
-            }
+            ty.transform_raw_legacy_type_variables(&mut |ty| {
+                if let Type::TypeVar(tv) = ty {
+                    let q = seen_type_vars
+                        .entry(tv.dupe())
+                        .or_insert_with(|| {
+                            let q = Quantified::type_var(
+                                tv.qname().id().clone(),
+                                self.uniques,
+                                tv.default().cloned(),
+                                tv.restriction().clone(),
+                            );
+                            tparams.push(TParam {
+                                quantified: q.clone(),
+                                variance: tv.variance(),
+                            });
+                            q
+                        })
+                        .clone();
+                    *ty = Type::Quantified(Box::new(q));
+                }
+                // TODO: handle TypeVarTuple and ParamSpec
+            });
         });
-        (callable, tparams)
+        tparams
     }
 
     fn check_implicit_return_against_annotation(

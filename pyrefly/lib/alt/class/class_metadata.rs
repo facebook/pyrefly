@@ -171,14 +171,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metaclass = calculated_metaclass.get();
         if let Some(metaclass) = &metaclass {
             self.check_base_class_metaclasses(cls, metaclass, &base_metaclasses, errors);
-            if metaclass.targs().as_slice().iter().any(|targ| {
-                targ.any(|ty| {
-                    matches!(
-                        ty,
-                        Type::TypeVar(_) | Type::TypeVarTuple(_) | Type::ParamSpec(_)
-                    )
-                })
-            }) {
+            if metaclass
+                .targs()
+                .as_slice()
+                .iter()
+                .any(|targ| targ.any(|ty| ty.is_raw_legacy_type_variable()))
+            {
                 self.error(
                     errors,
                     cls.range(),
