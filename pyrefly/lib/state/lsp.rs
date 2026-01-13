@@ -2831,16 +2831,11 @@ impl<'a> Transaction<'a> {
         module: ModuleName,
         symbol: &str,
     ) -> Option<lsp_types::Documentation> {
-        for handle in self.search_exports_exact(symbol) {
+        for (handle, export) in self.search_exports_exact(symbol) {
             if handle.module() != module {
                 continue;
             }
-            let exports = self.get_exports(&handle);
-            if let Some((_, ExportLocation::ThisModule(export))) =
-                exports.iter().find(|(name, _)| name.as_str() == symbol)
-            {
-                return self.get_documentation_from_export(Some((handle, export.clone())));
-            }
+            return self.get_documentation_from_export(Some((handle, export)));
         }
         None
     }
