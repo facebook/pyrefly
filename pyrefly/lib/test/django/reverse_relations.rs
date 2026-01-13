@@ -113,3 +113,145 @@ author = Author()
 author.book_set  # E: `Author` has no attribute `book_set`
 "#,
 );
+
+// OneToOneField reverse relation: returns single object (not a manager like FK)
+// Default name is just the lowercase model name without `_set`
+django_testcase!(
+    bug = "Reverse relations not yet implemented",
+    test_one_to_one_reverse_default_name,
+    r#"
+from django.db import models
+
+class Place(models.Model):
+    name = models.CharField(max_length=50)
+
+class Restaurant(models.Model):
+    place = models.OneToOneField(Place, on_delete=models.CASCADE)
+
+place = Place()
+# OneToOne reverse is just the lowercase model name (no _set suffix)
+place.restaurant  # E: `Place` has no attribute `restaurant`
+"#,
+);
+
+// ManyToManyField reverse relation: returns a manager like FK
+django_testcase!(
+    bug = "Reverse relations not yet implemented",
+    test_many_to_many_reverse_default_name,
+    r#"
+from django.db import models
+
+class Tag(models.Model):
+    name = models.CharField(max_length=50)
+
+class Article(models.Model):
+    tags = models.ManyToManyField(Tag)
+
+tag = Tag()
+# ManyToMany default reverse name is <model_lowercase>_set
+tag.article_set  # E: `Tag` has no attribute `article_set`
+"#,
+);
+
+django_testcase!(
+    bug = "Reverse relations not yet implemented",
+    test_one_to_one_reverse_custom_name,
+    r#"
+from django.db import models
+
+class Place(models.Model):
+    name = models.CharField(max_length=50)
+
+class Restaurant(models.Model):
+    place = models.OneToOneField(Place, on_delete=models.CASCADE, related_name='dining_spot')
+
+place = Place()
+place.dining_spot  # E: `Place` has no attribute `dining_spot`
+"#,
+);
+
+django_testcase!(
+    test_one_to_one_reverse_disabled,
+    r#"
+from django.db import models
+
+class Place(models.Model):
+    name = models.CharField(max_length=50)
+
+class Restaurant(models.Model):
+    place = models.OneToOneField(Place, on_delete=models.CASCADE, related_name='+')
+
+place = Place()
+# No reverse accessor should exist
+place.restaurant  # E: `Place` has no attribute `restaurant`
+"#,
+);
+
+django_testcase!(
+    bug = "Reverse relations not yet implemented",
+    test_many_to_many_reverse_custom_name,
+    r#"
+from django.db import models
+
+class Tag(models.Model):
+    name = models.CharField(max_length=50)
+
+class Article(models.Model):
+    tags = models.ManyToManyField(Tag, related_name='tagged_articles')
+
+tag = Tag()
+tag.tagged_articles  # E: `Tag` has no attribute `tagged_articles`
+"#,
+);
+
+django_testcase!(
+    test_many_to_many_reverse_disabled,
+    r#"
+from django.db import models
+
+class Tag(models.Model):
+    name = models.CharField(max_length=50)
+
+class Article(models.Model):
+    tags = models.ManyToManyField(Tag, related_name='+')
+
+tag = Tag()
+# No reverse accessor should exist
+tag.article_set  # E: `Tag` has no attribute `article_set`
+"#,
+);
+
+// Self-referential ManyToMany is symmetrical by default, meaning no reverse accessor
+// is created because the relation is bidirectional through the same field
+django_testcase!(
+    test_many_to_many_self_reference_symmetrical,
+    r#"
+from django.db import models
+
+class Person(models.Model):
+    name = models.CharField(max_length=100)
+    # Symmetrical M2M: friends is accessible from both sides via the same field
+    friends = models.ManyToManyField('self')
+
+person = Person()
+# No person_set because symmetrical=True (default for self-referential M2M)
+person.person_set  # E: `Person` has no attribute `person_set`
+"#,
+);
+
+django_testcase!(
+    bug = "Reverse relations not yet implemented",
+    test_many_to_many_self_reference_asymmetrical,
+    r#"
+from django.db import models
+
+class Person(models.Model):
+    name = models.CharField(max_length=100)
+    # Asymmetrical M2M: followers vs following relationship
+    following = models.ManyToManyField('self', symmetrical=False, related_name='followers')
+
+person = Person()
+# With symmetrical=False, reverse accessor is created
+person.followers  # E: `Person` has no attribute `followers`
+"#,
+);
