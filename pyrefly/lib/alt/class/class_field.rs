@@ -50,6 +50,7 @@ use crate::alt::attr::AttrSubsetError;
 use crate::alt::attr::ClassBase;
 use crate::alt::attr::NoAccessReason;
 use crate::alt::callable::CallArg;
+pub use crate::alt::class::django::DjangoRelationKind;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
@@ -286,8 +287,9 @@ enum ClassFieldInner {
         /// ClassVar: can read from instance, but cannot write/shadow from instance
         is_classvar: bool,
         is_staticmethod: bool,
-        /// Django ForeignKey - triggers synthesis of _id field
-        is_foreign_key: bool,
+        /// Django relation field kind (ForeignKey, OneToOne, ManyToMany)
+        /// Used for synthesizing _id fields and reverse relations
+        django_relation_kind: Option<DjangoRelationKind>,
         /// Django field with choices - triggers synthesis of get_FOO_display method
         has_choices: bool,
     },
@@ -332,7 +334,7 @@ impl ClassField {
         annotation: Option<Annotation>,
         initialization: ClassFieldInitialization,
         read_only_reason: Option<ReadOnlyReason>,
-        is_foreign_key: bool,
+        django_relation_kind: Option<DjangoRelationKind>,
         has_choices: bool,
         is_inherited: IsInherited,
     ) -> Self {
@@ -344,7 +346,7 @@ impl ClassField {
                 read_only_reason,
                 is_classvar: false,
                 is_staticmethod: false,
-                is_foreign_key,
+                django_relation_kind,
                 has_choices,
             },
             is_inherited,
@@ -357,7 +359,7 @@ impl ClassField {
             None,
             ClassFieldInitialization::Magic,
             None,
-            false,
+            None,
             false,
             IsInherited::Maybe,
         )
@@ -373,7 +375,7 @@ impl ClassField {
             Some(annotation),
             ClassFieldInitialization::Uninitialized,
             read_only_reason,
-            false,
+            None,
             false,
             IsInherited::Maybe,
         )
@@ -432,7 +434,7 @@ impl ClassField {
                     read_only_reason: None,
                     is_classvar: false,
                     is_staticmethod: false,
-                    is_foreign_key: false,
+                    django_relation_kind: None,
                     has_choices: false,
                 },
                 IsInherited::Maybe,
@@ -449,7 +451,7 @@ impl ClassField {
                 read_only_reason: None,
                 is_classvar: false,
                 is_staticmethod: false,
-                is_foreign_key: false,
+                django_relation_kind: None,
                 has_choices: false,
             },
             IsInherited::Maybe,
@@ -527,7 +529,7 @@ impl ClassField {
                 read_only_reason,
                 is_classvar,
                 is_staticmethod,
-                is_foreign_key,
+                django_relation_kind,
                 has_choices,
             } => {
                 let mut ty = ty.clone();
@@ -540,7 +542,7 @@ impl ClassField {
                         read_only_reason: read_only_reason.clone(),
                         is_classvar: *is_classvar,
                         is_staticmethod: *is_staticmethod,
-                        is_foreign_key: *is_foreign_key,
+                        django_relation_kind: *django_relation_kind,
                         has_choices: *has_choices,
                     },
                     self.1.clone(),
@@ -747,14 +749,29 @@ impl ClassField {
         }
     }
 
-    pub fn is_foreign_key(&self) -> bool {
+    /// Returns true if this is a ForeignKey or OneToOneField that synthesizes an `_id` field.
+    /// ManyToManyField does NOT synthesize an `_id` field (uses a junction table instead).
+    pub fn synthesizes_id_field(&self) -> bool {
         match &self.0 {
-            ClassFieldInner::Property { .. } => false,
-            ClassFieldInner::Descriptor { .. } => false,
-            ClassFieldInner::Method { .. } => false,
-            ClassFieldInner::NestedClass { .. } => false,
-            ClassFieldInner::ClassAttribute { is_foreign_key, .. } => *is_foreign_key,
-            ClassFieldInner::InstanceAttribute { .. } => false,
+            ClassFieldInner::ClassAttribute {
+                django_relation_kind,
+                ..
+            } => matches!(
+                django_relation_kind,
+                Some(DjangoRelationKind::ForeignKey | DjangoRelationKind::OneToOne)
+            ),
+            _ => false,
+        }
+    }
+
+    /// Returns the Django relation kind if this is a relation field.
+    pub fn django_relation_kind(&self) -> Option<DjangoRelationKind> {
+        match &self.0 {
+            ClassFieldInner::ClassAttribute {
+                django_relation_kind,
+                ..
+            } => *django_relation_kind,
+            _ => None,
         }
     }
 
@@ -1594,9 +1611,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             _ => {}
         };
-        // Check if this is a Django ForeignKey field
-        let is_foreign_key = metadata.is_django_model()
-            && matches!(&ty, Type::ClassType(cls) if self.is_foreign_key_field(cls.class_object()));
+        // Check if this is a Django relation field (ForeignKey, OneToOne, or ManyToMany)
+        let django_relation_kind = if metadata.is_django_model() {
+            match &ty {
+                Type::ClassType(cls) => self.get_django_relation_kind(cls.class_object()),
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         // Check if this is a Django field with choices
         let has_choices = if let ClassFieldDefinition::AssignedInBody {
@@ -1706,7 +1729,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             read_only_reason,
                             is_classvar: is_class_var,
                             is_staticmethod,
-                            is_foreign_key,
+                            django_relation_kind,
                             has_choices,
                         },
                         is_inherited,

@@ -11,7 +11,7 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 // Cross-module reverse relations: when the FK target is in a different module,
-// reverse relations cannot be synthesized yet because our current analysis only scans the current module.
+// reverse relations cannot be synthesized because we only scan the current module.
 fn django_env_with_separate_models() -> TestEnv {
     let mut env = django_env();
     env.add(
@@ -27,10 +27,12 @@ class Author(models.Model):
 }
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_foreign_key_reverse_default_name,
     r#"
+from typing import assert_type
 from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
+from django.db.models.query import QuerySet
 
 class Reporter(models.Model):
     full_name = models.CharField(max_length=70)
@@ -40,15 +42,17 @@ class Article(models.Model):
 
 reporter = Reporter()
 # Default reverse name is <model_lowercase>_set
-reporter.article_set  # E: `Reporter` has no attribute `article_set`
+assert_type(reporter.article_set, RelatedManager[Article])
+assert_type(reporter.article_set.all(), QuerySet[Article, Article])
 "#,
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_foreign_key_reverse_custom_name,
     r#"
+from typing import assert_type
 from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
 
 class Author(models.Model):
     name = models.CharField(max_length=100)
@@ -58,7 +62,7 @@ class Book(models.Model):
 
 author = Author()
 # Custom related_name should be used instead of default
-author.written_books  # E: `Author` has no attribute `written_books`
+assert_type(author.written_books, RelatedManager[Book])
 "#,
 );
 
@@ -82,10 +86,11 @@ author.book_set  # E: `Author` has no attribute `book_set`
 
 // Self-referential FK creates reverse accessor on the same model
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_foreign_key_reverse_self_reference,
     r#"
+from typing import assert_type
 from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
 
 class Person(models.Model):
     name = models.CharField(max_length=100)
@@ -93,7 +98,7 @@ class Person(models.Model):
     parent = models.ForeignKey('self', null=True, on_delete=models.CASCADE)
 
 person = Person()
-person.person_set  # E: `Person` has no attribute `person_set`
+assert_type(person.person_set, RelatedManager[Person])
 "#,
 );
 
@@ -117,9 +122,9 @@ author.book_set  # E: `Author` has no attribute `book_set`
 // OneToOneField reverse relation: returns single object (not a manager like FK)
 // Default name is just the lowercase model name without `_set`
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_one_to_one_reverse_default_name,
     r#"
+from typing import assert_type
 from django.db import models
 
 class Place(models.Model):
@@ -130,16 +135,17 @@ class Restaurant(models.Model):
 
 place = Place()
 # OneToOne reverse is just the lowercase model name (no _set suffix)
-place.restaurant  # E: `Place` has no attribute `restaurant`
+assert_type(place.restaurant, Restaurant)
 "#,
 );
 
 // ManyToManyField reverse relation: returns a manager like FK
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_many_to_many_reverse_default_name,
     r#"
+from typing import assert_type
 from django.db import models
+from django.db.models.fields.related_descriptors import ManyRelatedManager
 
 class Tag(models.Model):
     name = models.CharField(max_length=50)
@@ -149,14 +155,14 @@ class Article(models.Model):
 
 tag = Tag()
 # ManyToMany default reverse name is <model_lowercase>_set
-tag.article_set  # E: `Tag` has no attribute `article_set`
+assert_type(tag.article_set, ManyRelatedManager[Article, models.Model])
 "#,
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_one_to_one_reverse_custom_name,
     r#"
+from typing import assert_type
 from django.db import models
 
 class Place(models.Model):
@@ -166,7 +172,7 @@ class Restaurant(models.Model):
     place = models.OneToOneField(Place, on_delete=models.CASCADE, related_name='dining_spot')
 
 place = Place()
-place.dining_spot  # E: `Place` has no attribute `dining_spot`
+assert_type(place.dining_spot, Restaurant)
 "#,
 );
 
@@ -188,10 +194,11 @@ place.restaurant  # E: `Place` has no attribute `restaurant`
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_many_to_many_reverse_custom_name,
     r#"
+from typing import assert_type
 from django.db import models
+from django.db.models.fields.related_descriptors import ManyRelatedManager
 
 class Tag(models.Model):
     name = models.CharField(max_length=50)
@@ -200,7 +207,7 @@ class Article(models.Model):
     tags = models.ManyToManyField(Tag, related_name='tagged_articles')
 
 tag = Tag()
-tag.tagged_articles  # E: `Tag` has no attribute `tagged_articles`
+assert_type(tag.tagged_articles, ManyRelatedManager[Article, models.Model])
 "#,
 );
 
@@ -222,7 +229,7 @@ tag.article_set  # E: `Tag` has no attribute `article_set`
 );
 
 // Self-referential ManyToMany is symmetrical by default, meaning no reverse accessor
-// is created because the relation is bidirectional through the same field
+// is created because the relation is bidirectional through the same field.
 django_testcase!(
     test_many_to_many_self_reference_symmetrical,
     r#"
@@ -234,16 +241,17 @@ class Person(models.Model):
     friends = models.ManyToManyField('self')
 
 person = Person()
-# No person_set because symmetrical=True (default for self-referential M2M)
+# No reverse accessor for symmetrical M2M - access via the same field from both sides
 person.person_set  # E: `Person` has no attribute `person_set`
 "#,
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_many_to_many_self_reference_asymmetrical,
     r#"
+from typing import assert_type
 from django.db import models
+from django.db.models.fields.related_descriptors import ManyRelatedManager
 
 class Person(models.Model):
     name = models.CharField(max_length=100)
@@ -252,6 +260,6 @@ class Person(models.Model):
 
 person = Person()
 # With symmetrical=False, reverse accessor is created
-person.followers  # E: `Person` has no attribute `followers`
+assert_type(person.followers, ManyRelatedManager[Person, models.Model])
 "#,
 );
