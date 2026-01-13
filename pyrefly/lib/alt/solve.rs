@@ -2800,6 +2800,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::Type(_) | Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_) => {
                     true
                 }
+                Type::TypeAlias(ta) => check_type_form(&ta.as_type(), allow_none),
                 Type::None if allow_none => true,
                 Type::Union(box Union { members, .. }) => {
                     for member in members {
