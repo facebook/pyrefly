@@ -60,3 +60,20 @@ author = Author()
 author.book_set  # E: `Author` has no attribute `book_set`
 "#,
 );
+
+// Self-referential FK creates reverse accessor on the same model
+django_testcase!(
+    bug = "Reverse relations not yet implemented",
+    test_foreign_key_reverse_self_reference,
+    r#"
+from django.db import models
+
+class Person(models.Model):
+    name = models.CharField(max_length=100)
+    # Self-referential FK: a person can have a parent who is also a Person
+    parent = models.ForeignKey('self', null=True, on_delete=models.CASCADE)
+
+person = Person()
+person.person_set  # E: `Person` has no attribute `person_set`
+"#,
+);
