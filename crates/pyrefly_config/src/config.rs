@@ -975,7 +975,15 @@ impl ConfigFile {
                 ));
             }
             match self.interpreters.find_interpreter(self.source.root()) {
-                Ok(interpreter) => {
+                Ok(mut interpreter) => {
+                    if !interpreter.exists() {
+                         let root = self.source.root().unwrap_or(Path::new("."));
+                         // Attempt to auto-discover .venv if the configured path is invalid
+                         if let Some(found) = crate::environment::venv::find(root) {
+                             interpreter = crate::util::ConfigOrigin::auto(found);
+                         }
+                    }
+
                     let (env, error) = PythonEnvironment::get_interpreter_env(&interpreter);
                     self.python_environment.override_empty(env);
                     self.interpreters.python_interpreter_path = Some(interpreter);
