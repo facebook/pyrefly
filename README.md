@@ -24,10 +24,7 @@ you find bugs.
 
 - Try out pyrefly in your browser: [Sandbox](https://pyrefly.org/sandbox/)
 - Get the command-line tool: `pip install pyrefly`
-- Get the VSCode extension:
-  [Link](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly)
-- Get the Zed extension:
-  [Link](https://zed.dev/extensions/pyrefly)
+- Get the IDE Extension: [IDE installation page](https://pyrefly.org/en/docs/IDE/)
 
 ### Key Features:
 
