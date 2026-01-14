@@ -280,11 +280,46 @@ impl Transaction<'_> {
         active_argument: &ActiveArgument,
         parameter_docs: Option<&HashMap<String, String>>,
         function_docstring: Option<&Docstring>,
+        is_constructor_call: bool,
     ) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
-        let label = type_.as_lsp_string(LspDisplayMode::SignatureHelp);
+
+        // Display the return type as the class instance type instead of None
+        let display_type = if is_constructor_call
+            && let Some(mut callable) = type_.clone().to_callable()
+            && callable.ret.is_none()
+        {
+            // Check if first parameter is self or cls
+            let should_override = if let Params::List(ref params_list) = callable.params {
+                if let Some(
+                    Param::Pos(name, self_type, _) | Param::PosOnly(Some(name), self_type, _),
+                ) = params_list.items().first()
+                {
+                    if name.as_str() == "self" || name.as_str() == "cls" {
+                        callable.ret = self_type.clone();
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if should_override {
+                Type::Callable(Box::new(callable))
+            } else {
+                type_
+            }
+        } else {
+            type_
+        };
+
+        let label = display_type.as_lsp_string(LspDisplayMode::SignatureHelp);
         let (parameters, active_parameter) = if let Some(params) =
-            Self::normalize_singleton_function_type_into_params(type_)
+            Self::normalize_singleton_function_type_into_params(display_type)
         {
             // Create a type display context for consistent parameter formatting
             let param_types: Vec<&Type> = params.iter().map(|p| p.as_type()).collect();
@@ -335,6 +370,38 @@ impl Transaction<'_> {
             |(callables, chosen_overload_index, active_argument, callee_range)| {
                 let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
                 let function_docstring = self.function_docstring_for_callee(handle, callee_range);
+
+                // Determine if this is a constructor call vs direct __init__ call or regular method call
+                let is_constructor_call = self
+                    .get_module_info(handle)
+                    .map(|module| {
+                        let contents = module.contents();
+                        let start = callee_range.start().to_usize();
+                        let end = callee_range.end().to_usize();
+                        contents
+                            .get(start..end)
+                            .map(|callee_text| {
+                                if callee_text.ends_with(".__init__") {
+                                    return false;
+                                }
+                                if let Some(last_dot_pos) = callee_text.rfind('.') {
+                                    let after_dot = &callee_text[last_dot_pos + 1..];
+                                    if !after_dot.is_empty()
+                                        && after_dot
+                                            .chars()
+                                            .all(|c| c.is_alphanumeric() || c == '_')
+                                        && (after_dot.chars().next().unwrap().is_alphabetic()
+                                            || after_dot.starts_with('_'))
+                                    {
+                                        return false;
+                                    }
+                                }
+                                true
+                            })
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+
                 let signatures = callables
                     .into_iter()
                     .map(|t| {
@@ -343,6 +410,7 @@ impl Transaction<'_> {
                             &active_argument,
                             parameter_docs.as_ref(),
                             function_docstring.as_ref(),
+                            is_constructor_call,
                         )
                     })
                     .collect_vec();

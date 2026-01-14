@@ -30,8 +30,10 @@ use pyrefly_types::callable::Required;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
@@ -460,7 +462,81 @@ pub fn get_hover(
     }
 
     // Otherwise, fall through to the existing type hover logic
-    let type_ = transaction.get_type_at(handle, position)?;
+    let mut type_ = transaction.get_type_at(handle, position)?;
+
+    // Helper function to check if we're hovering over a callee and get its range
+    let find_callee_range_at_position = || -> Option<TextRange> {
+        use ruff_python_ast::Expr;
+        let mod_module = transaction.get_ast(handle)?;
+        let mut result = None;
+        mod_module.visit(&mut |expr: &Expr| {
+            if let Expr::Call(call) = expr {
+                // Check if position is within the callee (func) range
+                if call.func.range().contains(position) {
+                    result = Some(call.func.range());
+                }
+            }
+        });
+        result
+    };
+
+    // Check both: hovering in arguments area OR hovering over the callee itself
+    let callee_range_opt = transaction
+        .get_callables_from_call(handle, position)
+        .map(|(_, _, _, range)| range)
+        .or_else(find_callee_range_at_position);
+
+    if let Some(callee_range) = callee_range_opt {
+        // Determine if this is a constructor call vs direct __init__ call or regular method call
+        let is_constructor_call = transaction
+            .get_module_info(handle)
+            .map(|module| {
+                let contents = module.contents();
+                let start = callee_range.start().to_usize();
+                let end = callee_range.end().to_usize();
+                contents
+                    .get(start..end)
+                    .map(|callee_text| {
+                        if callee_text.ends_with(".__init__") {
+                            return false;
+                        }
+                        if let Some(last_dot_pos) = callee_text.rfind('.') {
+                            let after_dot = &callee_text[last_dot_pos + 1..];
+                            if !after_dot.is_empty()
+                                && after_dot.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                && (after_dot.chars().next().unwrap().is_alphabetic()
+                                    || after_dot.starts_with('_'))
+                            {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+
+        // Override the return type if this is a constructor call
+        if is_constructor_call {
+            if let Some(mut callable) = type_.clone().to_callable()
+                && callable.ret.is_none()
+            {
+                // Check if first parameter is self or cls
+                if let Params::List(ref params_list) = callable.params {
+                    if let Some(
+                        Param::Pos(name, self_type, _) | Param::PosOnly(Some(name), self_type, _),
+                    ) = params_list.items().first()
+                    {
+                        if name.as_str() == "self" || name.as_str() == "cls" {
+                            callable.ret = self_type.clone();
+                            type_ = Type::Callable(Box::new(callable));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let fallback_name_from_type = fallback_hover_name_from_type(&type_);
     let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,

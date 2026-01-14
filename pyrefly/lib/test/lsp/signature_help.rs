@@ -903,3 +903,82 @@ Signature Help Result: active=0
         report.trim(),
     );
 }
+
+#[test]
+fn constructor_signature_shows_instance_type() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str, age: int) -> None: ...
+
+Person()
+#      ^
+Person("Alice", )
+#              ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 | Person()
+           ^
+Signature Help Result: active=0
+- (self: Person, name: str, age: int) -> Person, parameters=[name: str, age: int], active parameter = 0
+
+7 | Person("Alice", )
+                   ^
+Signature Help Result: active=0
+- (self: Person, name: str, age: int) -> Person, parameters=[name: str, age: int], active parameter = 1
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn direct_init_call_shows_none() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str) -> None: ...
+
+p = Person.__new__(Person)
+Person.__init__(p, )
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    // Direct __init__ call should still show -> None
+    assert!(
+        report.contains("-> None"),
+        "Expected direct __init__ call to show -> None, got: {report}"
+    );
+    assert!(
+        report.contains("parameters=[name: str]"),
+        "Expected parameters, got: {report}"
+    );
+}
+
+#[test]
+fn generic_constructor_signature() {
+    let code = r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    def __init__(self, value: T) -> None: ...
+
+Box[str]()
+#        ^
+Box[int](42)
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    // Generic constructors should show the specialized instance type
+    assert!(
+        report.contains("-> Box[str]") || report.contains("Box[str]"),
+        "Expected generic constructor to show Box[str], got: {report}"
+    );
+    assert!(
+        report.contains("-> Box[int]") || report.contains("Box[int]"),
+        "Expected generic constructor to show Box[int], got: {report}"
+    );
+}
