@@ -2285,6 +2285,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn binding_to_type_info(&self, binding: &Binding, errors: &ErrorCollector) -> TypeInfo {
         match binding {
             Binding::Forward(k) => self.get_idx(*k).arc_clone(),
+            Binding::InitCheck {
+                forward_key,
+                name,
+                range,
+                termination_keys,
+            } => {
+                // Check if all termination keys resolve to Never.
+                // If any termination key is None (no terminal statement) or doesn't resolve
+                // to Never, we have a potentially uninitialized variable.
+                let all_never = termination_keys
+                    .iter()
+                    .all(|term_key| term_key.is_some_and(|tk| self.get_idx(tk).ty().is_never()));
+                if !all_never {
+                    self.error(
+                        errors,
+                        *range,
+                        ErrorInfo::Kind(ErrorKind::UnboundName),
+                        format!("`{name}` may be uninitialized"),
+                    );
+                }
+                self.get_idx(*forward_key).arc_clone()
+            }
             Binding::Narrow(k, op, range) => {
                 self.narrow(self.get_idx(*k).as_ref(), op, range.range(), errors)
             }
@@ -2865,7 +2887,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Binding::Narrow(..)
             | Binding::AssignToAttribute { .. }
             | Binding::AssignToSubscript(..)
-            | Binding::PossibleLegacyTParam(..) => {
+            | Binding::PossibleLegacyTParam(..)
+            | Binding::InitCheck { .. } => {
                 // These forms require propagating attribute narrowing information, so they
                 // are handled in `binding_to_type_info`
                 self.binding_to_type_info(binding, errors).into_ty()

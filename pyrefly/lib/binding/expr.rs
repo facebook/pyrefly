@@ -48,6 +48,7 @@ use crate::binding::binding::PrivateAttributeAccessCheck;
 use crate::binding::binding::SuperStyle;
 use crate::binding::bindings::AwaitContext;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::InitializedInFlow;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::bindings::LegacyTParamId;
 use crate::binding::bindings::NameLookupResult;
@@ -337,15 +338,37 @@ impl<'a> BindingsBuilder<'a> {
             } => {
                 // Uninitialized local errors are only reported when we are neither in a stub
                 // nor a static type context.
-                if !used_in_static_type
-                    && !self.module_info.path().is_interface()
-                    && let Some(error_message) = is_initialized.as_error_message(&name.id)
-                {
-                    self.error(
-                        name.range,
-                        ErrorInfo::Kind(ErrorKind::UnboundName),
-                        error_message,
-                    );
+                if !used_in_static_type && !self.module_info.path().is_interface() {
+                    match is_initialized {
+                        InitializedInFlow::Yes => {}
+                        InitializedInFlow::Conditionally => {
+                            self.error(
+                                name.range,
+                                ErrorInfo::Kind(ErrorKind::UnboundName),
+                                format!("`{}` may be uninitialized", name.id),
+                            );
+                        }
+                        InitializedInFlow::ConditionallyWithTermKeys(termination_keys) => {
+                            // Defer error check to solve time where we can check if
+                            // termination keys are Never
+                            return self.insert_binding(
+                                key,
+                                Binding::InitCheck {
+                                    forward_key: value,
+                                    name: name.id.clone(),
+                                    range: name.range,
+                                    termination_keys,
+                                },
+                            );
+                        }
+                        InitializedInFlow::No => {
+                            self.error(
+                                name.range,
+                                ErrorInfo::Kind(ErrorKind::UnboundName),
+                                format!("`{}` is uninitialized", name.id),
+                            );
+                        }
+                    }
                 }
                 self.insert_binding(key, Binding::Forward(value))
             }

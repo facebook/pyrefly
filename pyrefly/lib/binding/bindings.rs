@@ -132,17 +132,10 @@ impl NameLookupResult {
 pub enum InitializedInFlow {
     Yes,
     Conditionally,
+    /// Possibly uninitialized, but has termination keys to check at solve time.
+    /// If all termination keys resolve to Never, the variable is actually initialized.
+    ConditionallyWithTermKeys(Vec<Option<Idx<Key>>>),
     No,
-}
-
-impl InitializedInFlow {
-    pub fn as_error_message(&self, name: &Name) -> Option<String> {
-        match self {
-            InitializedInFlow::Yes => None,
-            InitializedInFlow::Conditionally => Some(format!("`{name}` may be uninitialized")),
-            InitializedInFlow::No => Some(format!("`{name}` is uninitialized")),
-        }
-    }
 }
 
 #[derive(Clone, Dupe, Debug)]
@@ -857,6 +850,7 @@ impl<'a> BindingsBuilder<'a> {
             FlowStyle::Other
             | FlowStyle::ClassField { .. }
             | FlowStyle::PossiblyUninitialized
+            | FlowStyle::PossiblyUninitializedWithTermKeys(_)
             | FlowStyle::Uninitialized => {
                 self.special_export_from_binding_idx(idx, visited_names, visited_keys)
             }

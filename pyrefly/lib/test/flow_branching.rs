@@ -861,6 +861,83 @@ assert_type(x, Literal[1])  # E: `x` may be uninitialized
     "#,
 );
 
+// Regression test for issue #2055: function calls at end of branch should NOT
+// suppress uninitialized variable errors (only NoReturn functions should)
+testcase!(
+    test_if_defines_variable_in_one_side_with_call,
+    r#"
+from typing import assert_type, Literal
+def condition() -> bool: ...
+def foo() -> None: pass
+if condition():
+    x = 1
+else:
+    pass
+    foo()
+assert_type(x, Literal[1])  # E: `x` may be uninitialized
+    "#,
+);
+
+// Counterpart to test above: NoReturn functions SHOULD suppress the error
+// since the branch never completes
+testcase!(
+    test_if_defines_variable_with_noreturn_branch,
+    r#"
+from typing import assert_type, Literal, NoReturn
+def condition() -> bool: ...
+def noreturn_func() -> NoReturn: raise Exception()
+if condition():
+    x = 1
+else:
+    noreturn_func()
+assert_type(x, Literal[1])  # No error - else branch never returns
+    "#,
+);
+
+// Nested branches: inner branch has regular call, outer branch has NoReturn.
+// The inner non-NoReturn call should still cause an error even though
+// the outer branch is NoReturn.
+testcase!(
+    test_nested_if_with_inner_regular_call,
+    r#"
+from typing import assert_type, Literal, NoReturn
+def condition() -> bool: ...
+def foo() -> None: pass
+def noreturn_func() -> NoReturn: raise Exception()
+if condition():
+    if condition():
+        x = 1
+    else:
+        foo()  # NOT NoReturn - should cause error
+else:
+    noreturn_func()
+assert_type(x, Literal[1])  # E: `x` may be uninitialized
+    "#,
+);
+
+// Complex case: multiple branches where one has nested NoReturn,
+// another initializes, and the outer else is NoReturn.
+// All non-initializing paths end with NoReturn, so no error.
+testcase!(
+    test_multiple_branches_all_noreturn,
+    r#"
+from typing import assert_type, Literal, NoReturn
+def condition() -> bool: ...
+def noreturn1() -> NoReturn: raise Exception()
+def noreturn2() -> NoReturn: raise Exception()
+if condition():
+    if condition():
+        x = 1
+    else:
+        noreturn1()
+elif condition():
+    x = 2
+else:
+    noreturn2()
+assert_type(x, Literal[1, 2])  # No error - all non-init paths are NoReturn
+    "#,
+);
+
 testcase!(
     test_while_true_defines_variable,
     r#"
