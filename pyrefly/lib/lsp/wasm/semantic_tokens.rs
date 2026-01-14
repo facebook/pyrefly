@@ -5,10 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
+
 use lsp_types::SemanticToken;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_python::symbol_kind::SymbolKind;
+use pyrefly_util::visit::Visit;
+use ruff_python_ast::Stmt;
 use ruff_text_size::TextRange;
 
+use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::bindings::Bindings;
 use crate::export::exports::Export;
@@ -70,6 +78,7 @@ impl Transaction<'_> {
         let legends = SemanticTokensLegends::new();
         let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), handle.sys_info());
         let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
+        let mut symbol_kinds: HashMap<ShortIdentifier, (ModuleName, SymbolKind)> = HashMap::new();
         for NamedBinding {
             definition_handle,
             definition_export,
@@ -81,8 +90,19 @@ impl Transaction<'_> {
                 ..
             } = definition_export
             {
-                builder.process_key(&key, definition_handle.module(), symbol_kind)
+                let binding = bindings.get(bindings.key_to_idx(&key));
+                let definition_module = match binding {
+                    Binding::Import(module, _, _) | Binding::Module(module, ..) => *module,
+                    _ => definition_handle.module(),
+                };
+                if let Key::Definition(short) = &key {
+                    symbol_kinds.insert(short.clone(), (definition_module, symbol_kind));
+                }
+                builder.process_key(&key, definition_module, symbol_kind);
             }
+        }
+        for stmt in &ast.body {
+            add_import_from_alias_tokens(&mut builder, stmt, &symbol_kinds);
         }
         builder.process_ast(&ast, &|range| self.get_type_trace(handle, range));
         Some(legends.convert_tokens_into_lsp_semantic_tokens(
@@ -91,4 +111,22 @@ impl Transaction<'_> {
             limit_cell_idx,
         ))
     }
+}
+
+fn add_import_from_alias_tokens(
+    builder: &mut SemanticTokenBuilder,
+    stmt: &Stmt,
+    symbol_kinds: &HashMap<ShortIdentifier, (ModuleName, SymbolKind)>,
+) {
+    if let Stmt::ImportFrom(import_from) = stmt {
+        for alias in &import_from.names {
+            if let Some(asname) = &alias.asname {
+                let key = ShortIdentifier::new(asname);
+                if let Some((definition_module, symbol_kind)) = symbol_kinds.get(&key) {
+                    builder.process_range(alias.name.range, *definition_module, *symbol_kind);
+                }
+            }
+        }
+    }
+    stmt.recurse(&mut |inner| add_import_from_alias_tokens(builder, inner, symbol_kinds));
 }
