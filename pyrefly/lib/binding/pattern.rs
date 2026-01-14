@@ -205,6 +205,24 @@ impl<'a> BindingsBuilder<'a> {
             }
             Pattern::MatchMapping(x) => {
                 let mut narrow_ops = NarrowOps::new();
+                let mut subject_idx = subject_idx;
+                // Narrow the match subject to mapping types (filters out None, etc.)
+                if let Some(subject) = &match_subject {
+                    let narrow_op = AtomicNarrowOp::IsMapping;
+                    subject_idx = self.insert_binding(
+                        Key::PatternNarrow(x.range()),
+                        Binding::Narrow(
+                            subject_idx,
+                            Box::new(NarrowOp::Atomic(None, narrow_op.clone())),
+                            NarrowUseLocation::Span(x.range()),
+                        ),
+                    );
+                    narrow_ops.and_all(NarrowOps::from_single_narrow_op_for_subject(
+                        subject.clone(),
+                        narrow_op,
+                        x.range,
+                    ));
+                }
                 x.keys
                     .into_iter()
                     .zip(x.patterns)
