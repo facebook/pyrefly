@@ -205,13 +205,8 @@ impl SpecialExport {
                 m.as_str(),
                 "typing" | "typing_extensions" | "collections.abc"
             ),
+            Self::SqlAlchemyMappedColumn => matches!(m.as_str(), "sqlalchemy.orm"),
             Self::Deprecated => matches!(m.as_str(), "warnings" | "typing_extensions"),
-            Self::SqlAlchemyMappedColumn => {
-                matches!(
-                    m.as_str(),
-                    "sqlalchemy.orm" | "sqlalchemy.orm._orm_constructors"
-                )
-            }
         }
     }
 

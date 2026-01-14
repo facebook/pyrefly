@@ -102,8 +102,8 @@ testcase!(
     test_sqlalchemy_mapped_column_infers_type,
     sqlalchemy_env(),
     r#"
-from typing import reveal_type
-from sqlalchemy.orm import mapped_column
+from typing import assert_type
+from sqlalchemy.orm import MappedColumn, mapped_column
 from sqlalchemy.sql.sqltypes import Integer, String
 
 class Model:
@@ -112,9 +112,9 @@ class Model:
     sku = mapped_column(String(), nullable=False)
     pk = mapped_column(Integer, primary_key=True)
 
-reveal_type(Model.name)  # E: revealed type: MappedColumn[str | None]
-reveal_type(Model.quantity)  # E: revealed type: MappedColumn[int | None]
-reveal_type(Model.sku)  # E: revealed type: MappedColumn[str]
-reveal_type(Model.pk)  # E: revealed type: MappedColumn[int]
+assert_type(Model.name, MappedColumn[str | None])
+assert_type(Model.quantity, MappedColumn[int | None])
+assert_type(Model.sku, MappedColumn[str])
+assert_type(Model.pk, MappedColumn[int])
 "#,
 );
