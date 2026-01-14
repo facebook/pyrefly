@@ -318,7 +318,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         for keyword in &call.arguments.keywords {
             if let Some(arg) = &keyword.arg
-                && matches!(arg.as_str(), "__type_pos" | "type_")
+                && matches!(arg.as_str(), "type_")
                 && let Some(ty) = self.python_type_from_type_engine_expr(&keyword.value)
             {
                 return Some(ty);
@@ -348,7 +348,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => {}
             }
         }
-        if primary_key { false } else { nullable }
+        !primary_key && nullable
     }
 
     fn expr_bool_literal(expr: &Expr) -> Option<bool> {
@@ -373,57 +373,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(inner) => self.python_type_from_type_engine_type(inner),
             Type::TypeAlias(alias) => self.python_type_from_type_engine_type(&alias.as_type()),
             Type::Union(u) => {
-                let mut inferred = None;
+                let mut inferred = Vec::new();
                 for member in &u.members {
                     if let Some(member_ty) = self.python_type_from_type_engine_type(member) {
-                        match &inferred {
-                            Some(existing) if existing != &member_ty => return None,
-                            None => inferred = Some(member_ty),
-                            _ => {}
-                        }
+                        inferred.push(member_ty);
                     }
                 }
-                inferred
+                if inferred.is_empty() {
+                    None
+                } else {
+                    inferred.sort();
+                    inferred.dedup();
+                    if inferred.len() == 1 {
+                        inferred.pop()
+                    } else {
+                        Some(Type::union(inferred))
+                    }
+                }
             }
             _ => None,
         }
     }
 
     fn python_type_from_type_engine_class(&self, cls: &ClassType) -> Option<Type> {
-        if Self::is_sqlalchemy_type_engine_class(cls.class_object()) {
+        if cls
+            .class_object()
+            .has_toplevel_qname("sqlalchemy.sql.type_api", "TypeEngine")
+        {
             return cls.targs().as_slice().first().cloned();
         }
-        let bases = self.get_base_types_for_class(cls.class_object());
-        for base in bases.iter() {
-            if let Some(ty) = self.python_type_from_type_engine_class(base) {
-                return Some(ty);
+        let mro = self.get_mro_for_class(cls.class_object());
+        for ancestor in mro.ancestors_no_object() {
+            if ancestor
+                .class_object()
+                .has_toplevel_qname("sqlalchemy.sql.type_api", "TypeEngine")
+            {
+                return ancestor.targs().as_slice().first().cloned();
             }
         }
         None
     }
 
-    fn is_sqlalchemy_type_engine_class(class: &Class) -> bool {
-        class.has_toplevel_qname("sqlalchemy.sql.type_api", "TypeEngine")
-    }
-
     fn apply_sqlalchemy_mapped_python_type(&self, mut ty: Type, python_type: Type) -> Type {
         ty.visit_mut(&mut |inner| {
             if let Type::ClassType(class_type) = inner
-                && Self::is_sqlalchemy_mapped_class(class_type.class_object())
+                && class_type
+                    .class_object()
+                    .has_toplevel_qname("sqlalchemy.orm.properties", "MappedColumn")
+                && let Some(slot) = class_type.targs_mut().as_mut().get_mut(0)
             {
-                if let Some(slot) = class_type.targs_mut().as_mut().get_mut(0) {
-                    *slot = python_type.clone();
-                }
+                *slot = python_type.clone();
             }
         });
         ty
-    }
-
-    fn is_sqlalchemy_mapped_class(class: &Class) -> bool {
-        class.has_toplevel_qname("sqlalchemy.orm.base", "Mapped")
-            || class.has_toplevel_qname("sqlalchemy.orm.base", "_MappedAnnotationBase")
-            || class.has_toplevel_qname("sqlalchemy.orm.base", "_DeclarativeMapped")
-            || class.has_toplevel_qname("sqlalchemy.orm.properties", "MappedColumn")
     }
 
     pub fn call_isinstance(
