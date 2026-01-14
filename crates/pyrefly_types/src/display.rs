@@ -7,10 +7,11 @@
 
 //! Display a type. The complexity comes from if we have two classes with the same name,
 //! we want to display disambiguating information (e.g. module name or location).
+use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Display;
 
-use pyrefly_python::module::TextRangeWithModule;
+use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
 use pyrefly_util::display::Fmt;
@@ -106,9 +107,8 @@ pub struct TypeDisplayContext<'a> {
     /// Display mode for formatting
     lsp_display_mode: LspDisplayMode,
     always_display_module_name: bool,
-    always_display_expanded_unions: bool,
-    /// Optional stdlib reference for resolving builtin type locations
-    stdlib: Option<&'a Stdlib>,
+    /// Modules encountered while formatting, used downstream (e.g. to decide which imports are required).
+    modules: RefCell<SmallSet<ModuleName>>,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -262,6 +262,9 @@ impl<'a> TypeDisplayContext<'a> {
         name: &str,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
+        self.modules
+            .borrow_mut()
+            .insert(ModuleName::from_str(module));
         if self.always_display_module_name {
             output.write_str(module)?;
             output.write_str(".")?;
@@ -269,6 +272,16 @@ impl<'a> TypeDisplayContext<'a> {
         } else {
             output.write_str(name)
         }
+    }
+
+    pub fn referenced_modules(&self) -> SmallSet<ModuleName> {
+        let mut modules = self.modules.borrow().clone();
+        for info in self.qnames.values() {
+            for module in info.info.keys() {
+                modules.insert(module.dupe());
+            }
+        }
+        modules
     }
 
     /// Helper function to format a sequence of types with a separator.
