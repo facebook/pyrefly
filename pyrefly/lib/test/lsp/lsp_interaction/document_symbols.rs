@@ -101,11 +101,20 @@ fn test_document_symbols_normal_file() {
                 .iter()
                 .any(|s| s.name == "normal_function" && s.kind == lsp_types::SymbolKind::FUNCTION);
 
-            let has_class = symbols
+            let class_symbol = symbols
                 .iter()
-                .any(|s| s.name == "NormalClass" && s.kind == lsp_types::SymbolKind::CLASS);
+                .find(|s| s.name == "NormalClass" && s.kind == lsp_types::SymbolKind::CLASS);
+            
+            let has_class_and_method = match class_symbol {
+                Some(c) => {
+                     c.children.as_ref().map_or(false, |children| {
+                        children.iter().any(|s| s.name == "normal_method" && s.kind == lsp_types::SymbolKind::METHOD)
+                     })
+                },
+                None => false,
+            };
 
-            has_function && has_class
+            has_function && has_class_and_method
         })
         .unwrap();
 
