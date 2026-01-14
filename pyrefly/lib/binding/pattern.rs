@@ -13,6 +13,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Int;
+use ruff_python_ast::MatchCase;
 use ruff_python_ast::Number;
 use ruff_python_ast::Pattern;
 use ruff_python_ast::PatternKeyword;
@@ -37,7 +38,7 @@ use crate::binding::scope::FlowStyle;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
-use crate::types::facet::FacetKind;
+use crate::types::facet::UnresolvedFacetKind;
 
 impl<'a> BindingsBuilder<'a> {
     // Traverse a pattern and bind all the names; key is the reference for the value that's being matched on
@@ -78,13 +79,27 @@ impl<'a> BindingsBuilder<'a> {
             Pattern::MatchAs(p) => {
                 // If there's no name for this pattern, refine the variable being matched
                 // If there is a new name, refine that instead
+                let original_subject = match_subject.clone();
+                let alias_name = p.name.as_ref().map(|name| name.id.clone());
                 let mut subject = match_subject;
                 if let Some(name) = &p.name {
                     self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
                     subject = Some(NarrowingSubject::Name(name.id.clone()));
                 };
                 if let Some(pattern) = p.pattern {
-                    self.bind_pattern(subject, *pattern, subject_idx)
+                    let mut narrow_ops = self.bind_pattern(subject, *pattern, subject_idx);
+                    if let (Some(alias_name), Some(original_subject)) =
+                        (&alias_name, &original_subject)
+                        && alias_name != original_subject.name()
+                        && let Some((alias_op, range)) = narrow_ops.0.get(alias_name).cloned()
+                    {
+                        narrow_ops.and_for_subject(
+                            original_subject,
+                            alias_op.for_subject(original_subject),
+                            range,
+                        );
+                    }
+                    narrow_ops
                 } else {
                     NarrowOps::new()
                 }
@@ -151,7 +166,7 @@ impl<'a> BindingsBuilder<'a> {
                             );
                             let subject_for_subpattern = match_subject.clone().and_then(|s| {
                                 if !seen_star {
-                                    Some(s.with_facet(FacetKind::Index(i)))
+                                    Some(s.with_facet(UnresolvedFacetKind::Index(i)))
                                 } else {
                                     None
                                 }
@@ -199,7 +214,7 @@ impl<'a> BindingsBuilder<'a> {
                         let subject_at_key = key_name.and_then(|key| {
                             match_subject
                                 .clone()
-                                .map(|s| s.with_facet(FacetKind::Key(key)))
+                                .map(|s| s.with_facet(UnresolvedFacetKind::Key(key)))
                         });
                         narrow_ops.and_all(self.bind_pattern(
                             subject_at_key,
@@ -233,12 +248,16 @@ impl<'a> BindingsBuilder<'a> {
                     );
                     // We're not sure whether the pattern matches all possible instances of a class, and
                     // the placeholder prevents negative narrowing from removing the class in later branches.
-                    let placeholder = NarrowOps::from_single_narrow_op_for_subject(
-                        subject.clone(),
-                        AtomicNarrowOp::Placeholder,
-                        x.cls.range(),
-                    );
-                    narrow_for_subject.and_all(placeholder);
+                    // However, if there are no arguments, it's just an isinstance check, so we don't need
+                    // the placeholder.
+                    if !x.arguments.patterns.is_empty() || !x.arguments.keywords.is_empty() {
+                        let placeholder = NarrowOps::from_single_narrow_op_for_subject(
+                            subject.clone(),
+                            AtomicNarrowOp::Placeholder,
+                            x.cls.range(),
+                        );
+                        narrow_for_subject.and_all(placeholder);
+                    }
                     narrow_for_subject
                 } else {
                     NarrowOps::new()
@@ -298,7 +317,7 @@ impl<'a> BindingsBuilder<'a> {
                      }| {
                         let subject_for_attr = match_subject
                             .clone()
-                            .map(|s| s.with_facet(FacetKind::Attribute(attr.id.clone())));
+                            .map(|s| s.with_facet(UnresolvedFacetKind::Attribute(attr.id.clone())));
                         let attr_key = self.insert_binding(
                             Key::Anon(attr.range()),
                             Binding::PatternMatchClassKeyword(x.cls.clone(), attr, subject_idx),
@@ -360,23 +379,31 @@ impl<'a> BindingsBuilder<'a> {
         // is carried over to the fallback case.
         let mut negated_prev_ops = NarrowOps::new();
         for case in x.cases {
+            let MatchCase {
+                pattern,
+                guard,
+                body,
+                range: case_range,
+                ..
+            } = case;
             self.start_branch();
-            if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
+            let case_is_irrefutable = pattern.is_wildcard() || pattern.is_irrefutable();
+            if case_is_irrefutable {
                 exhaustive = true;
             }
             self.bind_narrow_ops(
                 &negated_prev_ops,
-                NarrowUseLocation::Start(case.range),
+                NarrowUseLocation::Start(case_range),
                 &Usage::Narrowing(None),
             );
             let mut new_narrow_ops =
-                self.bind_pattern(match_narrowing_subject.clone(), case.pattern, subject_idx);
+                self.bind_pattern(match_narrowing_subject.clone(), pattern, subject_idx);
             self.bind_narrow_ops(
                 &new_narrow_ops,
-                NarrowUseLocation::Span(case.range),
+                NarrowUseLocation::Span(case_range),
                 &Usage::Narrowing(None),
             );
-            if let Some(mut guard) = case.guard {
+            if let Some(mut guard) = guard {
                 self.ensure_expr(&mut guard, &mut Usage::Narrowing(None));
                 let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));
                 self.bind_narrow_ops(
@@ -388,13 +415,30 @@ impl<'a> BindingsBuilder<'a> {
                 new_narrow_ops.and_all(guard_narrow_ops)
             }
             negated_prev_ops.and_all(new_narrow_ops.negate());
-            self.stmts(case.body, parent);
+            self.stmts(body, parent);
             self.finish_branch();
         }
         if exhaustive {
             self.finish_exhaustive_fork();
         } else {
             self.finish_non_exhaustive_fork(&negated_prev_ops);
+            if let Some(narrowing_subject) = match_narrowing_subject {
+                let narrow_ops_for_fall_through = negated_prev_ops
+                    .0
+                    .get(narrowing_subject.name())
+                    .map(|(op, range)| (Box::new(op.clone()), *range));
+                if let Some(narrow_ops_for_fall_through) = narrow_ops_for_fall_through {
+                    self.insert_binding(
+                        KeyExpect(x.range),
+                        BindingExpect::MatchExhaustiveness {
+                            subject_idx,
+                            narrowing_subject,
+                            narrow_ops_for_fall_through,
+                            subject_range: x.subject.range(),
+                        },
+                    );
+                }
+            }
         }
     }
 }

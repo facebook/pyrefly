@@ -7,16 +7,17 @@
 
 //! Utilities to deal with LSP details.
 
-use lsp_server::Notification;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_server::ResponseError;
 use lsp_types::TextDocumentContentChangeEvent;
 use ruff_source_file::LineIndex;
 use ruff_source_file::OneIndexed;
 use ruff_source_file::SourceLocation;
 use serde::de::DeserializeOwned;
+
+use crate::lsp::non_wasm::protocol::Notification;
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
 
 pub fn as_notification<T>(x: &Notification) -> Option<Result<T::Params, serde_json::Error>>
 where
@@ -77,6 +78,7 @@ where
     Notification {
         method: T::METHOD.to_owned(),
         params: serde_json::to_value(&params).unwrap(),
+        activity_key: None,
     }
 }
 

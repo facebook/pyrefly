@@ -7,7 +7,6 @@
 
 use std::cmp::Ordering;
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
 
 use dupe::Dupe;
 use fuzzy_matcher::FuzzyMatcher;
@@ -33,7 +32,6 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::display::LspDisplayMode;
-use pyrefly_types::facet::FacetKind;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -43,19 +41,15 @@ use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Alias;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ExprName;
-use ruff_python_ast::ExprNumberLiteral;
-use ruff_python_ast::ExprStringLiteral;
-use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Number;
-use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -89,9 +83,28 @@ use crate::types::module::ModuleType;
 use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
+mod dict_completions;
 mod quick_fixes;
 
 pub(crate) use self::quick_fixes::extract_function::LocalRefactorCodeAction;
+
+#[derive(Debug)]
+pub(crate) enum CalleeKind {
+    /// A direct function call: `foo()`
+    Function(Identifier),
+    /// A method call: `obj.method()` - stores base expression range + method name
+    Method(TextRange, Identifier),
+    /// Unknown callee (e.g., callable returned from another call)
+    Unknown,
+}
+
+pub(crate) fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
+    match call.func.as_ref() {
+        Expr::Name(name) => CalleeKind::Function(Ast::expr_name_identifier(name.clone())),
+        Expr::Attribute(attr) => CalleeKind::Method(attr.value.range(), attr.attr.clone()),
+        _ => CalleeKind::Unknown,
+    }
+}
 
 fn default_true() -> bool {
     true
@@ -196,23 +209,6 @@ impl DefinitionMetadata {
             DefinitionMetadata::Variable(symbol_kind) => symbol_kind.as_ref().copied(),
             DefinitionMetadata::VariableOrAttribute(symbol_kind) => symbol_kind.as_ref().copied(),
         }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum CalleeKind {
-    // Function name
-    Function(Identifier),
-    // Range of the base expr + method name
-    Method(TextRange, Identifier),
-    Unknown,
-}
-
-fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
-    match call.func.as_ref() {
-        Expr::Name(name) => CalleeKind::Function(Ast::expr_name_identifier(name.clone())),
-        Expr::Attribute(attr) => CalleeKind::Method(attr.value.range(), attr.attr.clone()),
-        _ => CalleeKind::Unknown,
     }
 }
 
@@ -512,6 +508,20 @@ impl<'a> Transaction<'a> {
         ans.get_chosen_overload_trace(range)
     }
 
+    fn import_handle_with_preference(
+        &self,
+        handle: &Handle,
+        module: ModuleName,
+        preference: FindPreference,
+    ) -> Option<Handle> {
+        match preference.prefer_pyi {
+            true => self.import_handle(handle, module, None).finding(),
+            false => self
+                .import_handle_prefer_executable(handle, module, None)
+                .finding(),
+        }
+    }
+
     fn type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
@@ -780,10 +790,17 @@ impl<'a> Transaction<'a> {
             }
             Some(IdentifierWithContext {
                 identifier: _,
-                context: IdentifierContext::ImportedName { .. },
+                context:
+                    IdentifierContext::ImportedName {
+                        name_after_import, ..
+                    },
             }) => {
-                // TODO(grievejia): handle definitions of imported names
-                None
+                let key = Key::Definition(ShortIdentifier::new(&name_after_import));
+                let bindings = self.get_bindings(handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type(handle, &key)
             }
             Some(IdentifierWithContext {
                 identifier: _,
@@ -938,12 +955,7 @@ impl<'a> Transaction<'a> {
         let mut gas = RESOLVE_EXPORT_INITIAL_GAS;
         let mut name = name;
         while !gas.stop() {
-            let handle = match preference.prefer_pyi {
-                true => self.import_handle(handle, m, None).finding()?,
-                false => self
-                    .import_handle_prefer_executable(handle, m, None)
-                    .finding()?,
-            };
+            let handle = self.import_handle_with_preference(handle, m, preference)?;
             match self.get_exports(&handle).get(&name) {
                 Some(ExportLocation::ThisModule(export)) => {
                     return Some((handle.clone(), export.clone()));
@@ -951,6 +963,22 @@ impl<'a> Transaction<'a> {
                 Some(ExportLocation::OtherModule(module, aliased_name)) => {
                     if let Some(aliased_name) = aliased_name {
                         name = aliased_name.clone();
+                    }
+                    if *module == m && handle.path().is_init() {
+                        let submodule = m.append(&name);
+                        let sub_handle =
+                            self.import_handle_with_preference(&handle, submodule, preference)?;
+                        let docstring_range = self.get_module_docstring_range(&sub_handle);
+                        return Some((
+                            sub_handle,
+                            Export {
+                                location: TextRange::default(),
+                                symbol_kind: Some(SymbolKind::Module),
+                                docstring_range,
+                                deprecation: None,
+                                special_export: None,
+                            },
+                        ));
                     }
                     m = *module;
                 }
@@ -1008,13 +1036,20 @@ impl<'a> Transaction<'a> {
                     Some((def_handle, export))
                 }
             }
-            IntermediateDefinition::Module(name) => {
-                let handle = match preference.prefer_pyi {
-                    true => self.import_handle(handle, name, None).finding()?,
-                    false => self
-                        .import_handle_prefer_executable(handle, name, None)
-                        .finding()?,
-                };
+            IntermediateDefinition::Module(import_range, name) => {
+                if matches!(preference.import_behavior, ImportBehavior::StopAtEverything) {
+                    return Some((
+                        handle.dupe(),
+                        Export {
+                            location: import_range,
+                            symbol_kind: Some(SymbolKind::Module),
+                            docstring_range: None,
+                            deprecation: None,
+                            special_export: None,
+                        },
+                    ));
+                }
+                let handle = self.import_handle_with_preference(handle, name, preference)?;
                 let docstring_range = self.get_module_docstring_range(&handle);
                 Some((
                     handle,
@@ -1283,6 +1318,15 @@ impl<'a> Transaction<'a> {
             covering_nodes.iter().find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
                     for op in &compare.ops {
+                        // Handle membership test operators (in/not in) - uses __contains__ on the right operand
+                        if matches!(op, CmpOp::In | CmpOp::NotIn)
+                            && let Some(answers) = self.get_answers(handle)
+                            && let Some(right_type) =
+                                answers.get_type_trace(compare.comparators.first()?.range())
+                        {
+                            return Some((right_type, dunder::CONTAINS));
+                        }
+                        // Handle rich comparison operators
                         if let Some(dunder_name) = dunder::rich_comparison_dunder(*op)
                             && let Some(answers) = self.get_answers(handle)
                             && let Some(left_type) = answers.get_type_trace(compare.left.range())
@@ -1331,6 +1375,24 @@ impl<'a> Transaction<'a> {
                     }
                     None
                 }
+                // Handle iteration `in` keyword in for loops
+                AnyNodeRef::StmtFor(stmt_for) => {
+                    if let Some(answers) = self.get_answers(handle)
+                        && let Some(iter_type) = answers.get_type_trace(stmt_for.iter.range())
+                    {
+                        return Some((iter_type, dunder::ITER));
+                    }
+                    None
+                }
+                // Handle iteration `in` keyword in comprehensions
+                AnyNodeRef::Comprehension(comp) => {
+                    if let Some(answers) = self.get_answers(handle)
+                        && let Some(iter_type) = answers.get_type_trace(comp.iter.range())
+                    {
+                        return Some((iter_type, dunder::ITER));
+                    }
+                    None
+                }
                 _ => None,
             })
         else {
@@ -1369,12 +1431,7 @@ impl<'a> Transaction<'a> {
         preference: FindPreference,
     ) -> Option<FindDefinitionItemWithDocstring> {
         // TODO: Handle relative import (via ModuleName::new_maybe_relative)
-        let handle = match preference.prefer_pyi {
-            true => self.import_handle(handle, module_name, None).finding()?,
-            false => self
-                .import_handle_prefer_executable(handle, module_name, None)
-                .finding()?,
-        };
+        let handle = self.import_handle_with_preference(handle, module_name, preference)?;
         // if the module is not yet loaded, force loading by asking for exports
         // necessary for imports that are not in tdeps (e.g. .py when there is also a .pyi)
         // todo(kylei): better solution
@@ -1498,14 +1555,34 @@ impl<'a> Transaction<'a> {
                 }
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context:
                     IdentifierContext::ImportedModule {
                         name: module_name, ..
                     },
-            }) => self
-                .find_definition_for_imported_module(handle, module_name, preference)
-                .map_or(vec![], |item| vec![item]),
+            }) => {
+                // Build the module name for lookup based on identifier position.
+                let components = module_name.components();
+
+                let target_module_name =
+                    if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
+                        // Identifier matches a module component.
+                        ModuleName::from_parts(&components[..=idx])
+                    } else if identifier.as_str() == module_name.as_str() {
+                        // Identifier matches full module name; decide which component based on position offset.
+                        let module_str = module_name.as_str();
+                        let offset = (position - identifier.range.start())
+                            .to_usize()
+                            .min(module_str.len());
+                        let idx = module_str[..offset].matches('.').count();
+                        ModuleName::from_parts(&components[..=idx])
+                    } else {
+                        // Fallback: use the whole module name.
+                        module_name
+                    };
+                self.find_definition_for_imported_module(handle, target_module_name, preference)
+                    .map_or(vec![], |item| vec![item])
+            }
             Some(IdentifierWithContext {
                 identifier: _,
                 context:
@@ -1881,12 +1958,36 @@ impl<'a> Transaction<'a> {
         quick_fixes::extract_function::extract_function_code_actions(self, handle, selection)
     }
 
+    pub fn extract_field_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::extract_field::extract_field_code_actions(self, handle, selection)
+    }
+
     pub fn extract_variable_code_actions(
         &self,
         handle: &Handle,
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
         quick_fixes::extract_variable::extract_variable_code_actions(self, handle, selection)
+    }
+
+    pub fn pull_members_up_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_members::pull_members_up_code_actions(self, handle, selection)
+    }
+
+    pub fn push_members_down_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_members::push_members_down_code_actions(self, handle, selection)
     }
 
     /// Determines whether a module is a third-party package.
@@ -2051,7 +2152,7 @@ impl<'a> Transaction<'a> {
         Some(references)
     }
 
-    fn local_references_from_definition(
+    pub(crate) fn local_references_from_definition(
         &self,
         handle: &Handle,
         definition_metadata: DefinitionMetadata,
@@ -2421,6 +2522,7 @@ impl<'a> Transaction<'a> {
                 {
                     continue;
                 }
+                let depth = handle_to_import_from.module().components().len();
                 let module_description = handle_to_import_from.module().as_str().to_owned();
                 let (insert_text, additional_text_edits, imported_module) = {
                     let (position, insert_text, module_name) = insert_import_edit(
@@ -2459,6 +2561,7 @@ impl<'a> Transaction<'a> {
                     } else {
                         None
                     },
+                    sort_text: Some(format!("4{}", depth)),
                     ..Default::default()
                 });
             }
@@ -2661,9 +2764,9 @@ impl<'a> Transaction<'a> {
         match param_type {
             Type::Literal(lit) => {
                 // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
-                let label = lit.to_string_escaped(true);
+                let label = lit.value.to_string_escaped(true);
                 let insert_text = if in_string_literal {
-                    if let Lit::Str(s) = lit {
+                    if let Lit::Str(s) = &lit.value {
                         s.to_string()
                     } else {
                         label.clone()
@@ -2685,193 +2788,6 @@ impl<'a> Transaction<'a> {
                 }
             }
             _ => {}
-        }
-    }
-
-    fn subscript_string_literal_at(
-        module: &ModModule,
-        position: TextSize,
-    ) -> Option<(ExprSubscript, ExprStringLiteral)> {
-        let nodes = Ast::locate_node(module, position);
-        let mut best: Option<(u8, TextSize, ExprSubscript, ExprStringLiteral)> = None;
-        for node in nodes {
-            if let AnyNodeRef::ExprSubscript(sub) = node
-                && let Expr::StringLiteral(lit) = sub.slice.as_ref()
-            {
-                let (priority, dist) = Self::string_literal_priority(position, lit.range());
-                let should_update = match &best {
-                    Some((best_prio, best_dist, _, _)) => {
-                        priority < *best_prio || (priority == *best_prio && dist < *best_dist)
-                    }
-                    None => true,
-                };
-                if should_update {
-                    best = Some((priority, dist, sub.clone(), lit.clone()));
-                    if priority == 0 && dist == TextSize::from(0) {
-                        break;
-                    }
-                }
-            }
-        }
-        best.map(|(_, _, sub, lit)| (sub, lit))
-    }
-
-    fn string_literal_priority(position: TextSize, range: TextRange) -> (u8, TextSize) {
-        if range.contains(position) {
-            (0, TextSize::from(0))
-        } else if position < range.start() {
-            (1, range.start() - position)
-        } else {
-            (2, position - range.end())
-        }
-    }
-
-    fn expression_facets(expr: &Expr) -> Option<(Identifier, Vec<FacetKind>)> {
-        let mut facets = Vec::new();
-        let mut current = expr;
-        loop {
-            match current {
-                Expr::Subscript(sub) => {
-                    match sub.slice.as_ref() {
-                        Expr::NumberLiteral(ExprNumberLiteral {
-                            value: Number::Int(idx),
-                            ..
-                        }) if idx.as_usize().is_some() => {
-                            facets.push(FacetKind::Index(idx.as_usize().unwrap()))
-                        }
-                        Expr::StringLiteral(lit) => {
-                            facets.push(FacetKind::Key(lit.value.to_string()))
-                        }
-                        _ => return None,
-                    }
-                    current = sub.value.as_ref();
-                }
-                Expr::Attribute(attr) => {
-                    facets.push(FacetKind::Attribute(attr.attr.id.clone()));
-                    current = attr.value.as_ref();
-                }
-                Expr::Name(name) => {
-                    facets.reverse();
-                    return Some((Ast::expr_name_identifier(name.clone()), facets));
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    fn collect_typed_dict_keys(
-        &self,
-        handle: &Handle,
-        base_type: Type,
-    ) -> Option<BTreeMap<String, Type>> {
-        self.ad_hoc_solve(handle, |solver| {
-            let mut map = BTreeMap::new();
-            let mut stack = vec![base_type];
-            while let Some(ty) = stack.pop() {
-                match ty {
-                    Type::TypedDict(td) | Type::PartialTypedDict(td) => {
-                        for (name, field) in solver.type_order().typed_dict_fields(&td) {
-                            map.entry(name.to_string())
-                                .or_insert_with(|| field.ty.clone());
-                        }
-                    }
-                    Type::Union(box Union { members, .. }) => {
-                        stack.extend(members.into_iter());
-                    }
-                    _ => {}
-                }
-            }
-            map
-        })
-    }
-
-    fn add_dict_key_completions(
-        &self,
-        handle: &Handle,
-        module: &ModModule,
-        position: TextSize,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        let Some((subscript, string_lit)) = Self::subscript_string_literal_at(module, position)
-        else {
-            return;
-        };
-        let literal_range = string_lit.range();
-        // Allow the cursor to sit a few characters before the literal (e.g. between nested
-        // subscripts) so completion requests fired just before the quotes still succeed.
-        let allowance = TextSize::from(4);
-        let lower_bound = literal_range
-            .start()
-            .checked_sub(allowance)
-            .unwrap_or_else(|| TextSize::new(0));
-        if position < lower_bound || position > literal_range.end() {
-            return;
-        }
-        let base_expr = subscript.value.as_ref();
-        let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
-
-        if let Some(bindings) = self.get_bindings(handle) {
-            let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
-                Some((identifier, facets))
-            } else if let Expr::Name(name) = base_expr {
-                Some((Ast::expr_name_identifier(name.clone()), Vec::new()))
-            } else {
-                None
-            };
-
-            if let Some((identifier, facets)) = base_info {
-                let short_id = ShortIdentifier::new(&identifier);
-                let idx_opt = {
-                    let bound_key = Key::BoundName(short_id);
-                    if bindings.is_valid_key(&bound_key) {
-                        Some(bindings.key_to_idx(&bound_key))
-                    } else {
-                        let def_key = Key::Definition(short_id);
-                        if bindings.is_valid_key(&def_key) {
-                            Some(bindings.key_to_idx(&def_key))
-                        } else {
-                            None
-                        }
-                    }
-                };
-
-                if let Some(idx) = idx_opt {
-                    let facets_clone = facets.clone();
-                    if let Some(keys) = self.ad_hoc_solve(handle, |solver| {
-                        let info = solver.get_idx(idx);
-                        info.key_facets_at(&facets_clone)
-                    }) {
-                        for (key, ty_opt) in keys {
-                            suggestions.entry(key).or_insert(ty_opt);
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(base_type) = self.get_type_trace(handle, base_expr.range())
-            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
-        {
-            for (key, ty) in typed_keys {
-                let entry = suggestions.entry(key).or_insert(None);
-                if entry.is_none() {
-                    *entry = Some(ty);
-                }
-            }
-        }
-
-        if suggestions.is_empty() {
-            return;
-        }
-
-        for (label, ty_opt) in suggestions {
-            let detail = ty_opt.as_ref().map(|ty| ty.to_string());
-            completions.push(CompletionItem {
-                label,
-                detail,
-                kind: Some(CompletionItemKind::FIELD),
-                ..Default::default()
-            });
         }
     }
 
@@ -3072,11 +2988,17 @@ impl<'a> Transaction<'a> {
                         supports_completion_item_details,
                     );
                 }
-                // If autoimport completions were skipped due to character threshold,
-                // mark the results as incomplete so clients keep asking for completions.
-                // This ensures autoimport completions will be checked once the threshold is reached,
-                // even if local completions are currently available.
-                if identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
+                // Mark results as incomplete in the following cases so clients keep asking
+                // for completions as the user types more:
+                // 1. If identifier is below MIN_CHARACTERS_TYPED_AUTOIMPORT threshold,
+                //    autoimport completions are skipped and will be checked once threshold
+                //    is reached.
+                // 2. If local completions exist and blocked autoimport completions,
+                //    the local completions might not match as the user continues typing,
+                //    and autoimport completions should then be shown.
+                if identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT
+                    || has_local_completions
+                {
                     is_incomplete = true;
                 }
                 self.add_builtins_autoimport_completions(handle, Some(&identifier), &mut result);
@@ -3166,8 +3088,22 @@ impl<'a> Transaction<'a> {
             .last()
             .map(|name| name.as_str())
             .unwrap_or("");
-        canonical_component.starts_with('_')
+
+        if canonical_component.starts_with('_')
             && canonical_component.trim_start_matches('_') == original_component
+        {
+            return true;
+        }
+
+        // Include re-export if original is a parent package of canonical
+        if canonical_components.len() > original_components.len() {
+            canonical_components
+                .iter()
+                .zip(original_components.iter())
+                .all(|(c, o)| c == o)
+        } else {
+            false
+        }
     }
 
     pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
@@ -3372,7 +3308,7 @@ impl<'a> CancellableTransaction<'a> {
     ///
     /// This is a common pattern in workspace-wide
     /// references-related features
-    fn process_rdeps_with_definition<T>(
+    pub(crate) fn process_rdeps_with_definition<T>(
         &mut self,
         sys_info: &SysInfo,
         definition: &TextRangeWithModule,
@@ -3512,228 +3448,12 @@ impl<'a> CancellableTransaction<'a> {
 
         Ok(all_implementations)
     }
-
-    /// Finds all incoming calls(functions that call this function) of a function across the entire codebase.
-    ///
-    /// This searches transitive reverse dependencies to find all locations where
-    /// the target function is called. For each call site, it identifies the
-    /// containing function.
-    ///
-    /// Returns a vector of tuples containing:
-    /// - Module where the call occurs
-    /// - Vector of (call_site_range, containing_function_name, containing_function_range)
-    ///
-    /// Returns Err if the request is canceled during execution.
-    pub fn find_global_incoming_calls_from_function_definition(
-        &mut self,
-        sys_info: &SysInfo,
-        definition_kind: DefinitionMetadata,
-        target_definition: &TextRangeWithModule,
-    ) -> Result<Vec<(Module, Vec<(TextRange, String, TextRange)>)>, Cancelled> {
-        // Use process_rdeps_with_definition to find references and filter to call sites in a single pass
-        let results = self.process_rdeps_with_definition(
-            sys_info,
-            target_definition,
-            |transaction, handle, patched_definition| {
-                let module_info = transaction.as_ref().get_module_info(handle)?;
-                let ast = transaction.as_ref().get_ast(handle)?;
-
-                let references = transaction
-                    .as_ref()
-                    .local_references_from_definition(
-                        handle,
-                        definition_kind.clone(),
-                        patched_definition.range,
-                        &patched_definition.module,
-                    )
-                    .unwrap_or_default();
-
-                if references.is_empty() {
-                    return None;
-                }
-
-                let ref_set: std::collections::HashSet<TextRange> =
-                    references.into_iter().collect();
-
-                let mut callers_in_file = Vec::new();
-
-                ast.visit(&mut |expr| {
-                    if let Expr::Call(call) = expr
-                        && ref_set
-                            .iter()
-                            .any(|ref_range| call.func.range().contains(ref_range.start()))
-                        && let Some((containing_func_name, containing_func_range)) =
-                            Self::find_containing_function_for_call(
-                                handle,
-                                &ast,
-                                call.range().start(),
-                            )
-                    {
-                        callers_in_file.push((
-                            call.range(),
-                            containing_func_name,
-                            containing_func_range,
-                        ));
-                    }
-                });
-
-                if callers_in_file.is_empty() {
-                    None
-                } else {
-                    Some((module_info, callers_in_file))
-                }
-            },
-        )?;
-
-        Ok(results)
-    }
-
-    /// Finds outgoing calls(functions called by) of a function, resolving across files.
-    ///
-    /// Given a function definition, this method finds all Call expressions within
-    /// that function's body and resolves each call target to its definition,
-    /// which may be in other files.
-    ///
-    /// Returns a vector of tuples containing:
-    /// - Target module (where the callee is defined)
-    /// - Vector of (call_site_range, callee_definition_range)
-    ///
-    /// Results are grouped by target module for consistency with find_global_callers_from_definition.
-    ///
-    /// Returns Err if the request is canceled during execution.
-    pub fn find_global_outgoing_calls_from_function_definition(
-        &mut self,
-        handle: &Handle,
-        position: TextSize,
-    ) -> Result<Vec<(Module, Vec<(TextRange, TextRange)>)>, Cancelled> {
-        // Resolve cursor position to function definition (handles both definitions and call sites)
-        let definitions =
-            self.as_ref()
-                .find_definition(handle, position, FindPreference::default());
-        let Some(target_def) = definitions.into_iter().next() else {
-            return Ok(Vec::new());
-        };
-
-        // Get handle for module where target function is defined (may differ from original handle)
-        let target_handle = Handle::new(
-            target_def.module.name(),
-            target_def.module.path().dupe(),
-            handle.sys_info().dupe(),
-        );
-
-        let Some(target_ast) = self.as_ref().get_ast(&target_handle) else {
-            return Ok(Vec::new());
-        };
-
-        let Some(func_def) = Self::find_function_at_position_in_ast(
-            &target_ast,
-            target_def.definition_range.start(),
-        ) else {
-            return Ok(Vec::new());
-        };
-
-        let mut callees_by_module: std::collections::HashMap<
-            ModulePath,
-            (Module, Vec<(TextRange, TextRange)>),
-        > = std::collections::HashMap::new();
-
-        for stmt in &func_def.body {
-            stmt.visit(&mut |expr| {
-                if let Expr::Call(call) = expr {
-                    let call_pos = call
-                        .func
-                        .range()
-                        .end()
-                        .checked_sub(TextSize::from(1))
-                        .unwrap_or(call.func.range().start());
-
-                    let definitions = self.as_ref().find_definition(
-                        &target_handle,
-                        call_pos,
-                        FindPreference::default(),
-                    );
-
-                    for def in definitions {
-                        let module_path = def.module.path().dupe();
-                        callees_by_module
-                            .entry(module_path)
-                            .or_insert_with(|| (def.module.clone(), Vec::new()))
-                            .1
-                            .push((call.range(), def.definition_range));
-                    }
-                }
-            });
-        }
-
-        let mut result: Vec<(Module, Vec<(TextRange, TextRange)>)> =
-            callees_by_module.into_values().collect();
-        result.sort_by_key(|(module, _)| module.path().dupe());
-
-        Ok(result)
-    }
-
-    /// Helper: Finds a function definition at a specific position in an AST.
-    ///
-    /// This is used by call hierarchy to identify the function being queried.
-    /// Returns None if no function is found at the position.
-    ///
-    /// Uses `locate_node` for efficient single-pass traversal, consistent with
-    /// other LSP position-based queries. Handles nested functions and methods.
-    pub(crate) fn find_function_at_position_in_ast(
-        ast: &ModModule,
-        position: TextSize,
-    ) -> Option<&StmtFunctionDef> {
-        let covering_nodes = Ast::locate_node(ast, position);
-
-        // Find the first StmtFunctionDef in the covering nodes
-        // This returns the innermost function containing the position
-        for node in covering_nodes.iter() {
-            if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-                return Some(func_def);
-            }
-        }
-        None
-    }
-
-    /// Helper: Creates call hierarchy information for the function containing a call site.
-    ///
-    /// Given a call site position, finds the enclosing function and returns
-    /// information needed to represent it in the call hierarchy.
-    fn find_containing_function_for_call(
-        handle: &Handle,
-        ast: &ModModule,
-        position: TextSize,
-    ) -> Option<(String, TextRange)> {
-        let covering_nodes = Ast::locate_node(ast, position);
-
-        // Look through the node chain for the containing function
-        for (i, node) in covering_nodes.iter().enumerate() {
-            if let AnyNodeRef::StmtFunctionDef(func_def) = node {
-                // Check if this is a method (next node is a ClassDef)
-                if let Some(AnyNodeRef::StmtClassDef(class_def)) = covering_nodes.get(i + 1) {
-                    let name = format!(
-                        "{}.{}.{}",
-                        handle.module(),
-                        class_def.name.id,
-                        func_def.name.id
-                    );
-                    return Some((name, func_def.name.range()));
-                } else {
-                    // Top-level function
-                    let name = format!("{}.{}", handle.module(), func_def.name.id);
-                    return Some((name, func_def.name.range()));
-                }
-            }
-        }
-        None
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use ruff_python_ast::name::Name;
 
-    use super::CancellableTransaction;
     use super::Transaction;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
@@ -3791,88 +3511,5 @@ mod tests {
     fn match_summary(params: &[Param], idx: usize) -> Option<(&str, bool)> {
         Transaction::<'static>::param_name_for_positional_argument(params, idx)
             .map(|match_| (match_.name.as_str(), match_.is_vararg_repeat))
-    }
-
-    #[test]
-    fn test_find_function_at_position_in_ast() {
-        use pyrefly_python::ast::Ast;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = r#"
-def top_level():
-    pass
-
-class MyClass:
-    def method(self):
-        pass
-"#;
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-
-        // Finds top-level function
-        let pos_in_func = TextSize::from(5);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_in_func);
-        assert_eq!(result.unwrap().name.id.as_str(), "top_level");
-
-        // Finds class method
-        let pos_in_method = TextSize::from(50);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_in_method);
-        assert_eq!(result.unwrap().name.id.as_str(), "method");
-    }
-
-    #[test]
-    fn test_find_function_at_position_in_ast_returns_none_outside_functions() {
-        use pyrefly_python::ast::Ast;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = "x = 10\n";
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-
-        let pos_outside = TextSize::from(0);
-        let result = CancellableTransaction::find_function_at_position_in_ast(&ast, pos_outside);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_find_containing_function_for_call() {
-        use std::path::PathBuf;
-
-        use pyrefly_build::handle::Handle;
-        use pyrefly_python::ast::Ast;
-        use pyrefly_python::module_name::ModuleName;
-        use pyrefly_python::module_path::ModulePath;
-        use pyrefly_python::sys_info::SysInfo;
-        use ruff_python_ast::PySourceType;
-        use ruff_text_size::TextSize;
-
-        let source = r#"
-def my_function():
-    x = call()
-
-class MyClass:
-    def method(self):
-        y = call()
-"#;
-        let (ast, _, _) = Ast::parse(source, PySourceType::Python);
-        let handle = Handle::new(
-            ModuleName::from_str("test"),
-            ModulePath::memory(PathBuf::from("test.py")),
-            SysInfo::default(),
-        );
-
-        // Returns qualified name for top-level function
-        let pos_in_func = TextSize::from(30);
-        let (name, _) =
-            CancellableTransaction::find_containing_function_for_call(&handle, &ast, pos_in_func)
-                .unwrap();
-        assert_eq!(name, "test.my_function");
-
-        // Returns qualified name for class method
-        let pos_in_method = TextSize::from(85);
-        let (name, _) =
-            CancellableTransaction::find_containing_function_for_call(&handle, &ast, pos_in_method)
-                .unwrap();
-        assert_eq!(name, "test.MyClass.method");
     }
 }

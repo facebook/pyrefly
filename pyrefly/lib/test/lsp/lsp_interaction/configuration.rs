@@ -1163,3 +1163,32 @@ fn test_error_missing_imports_mode() {
 
     interaction.shutdown().expect("Failed to shutdown");
 }
+
+#[test]
+fn test_fallback_search_path_heuristics_nested() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    let root = test_files_root
+        .path()
+        .join("fallback_search_path_heuristics_nested");
+    interaction.set_root(root.clone());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Url::from_file_path(&root).unwrap(),
+            )]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("src/main.py");
+    interaction
+        .client
+        .expect_publish_diagnostics_error_count(root.join("src/main.py"), 0)
+        .unwrap();
+    interaction.shutdown().unwrap();
+}

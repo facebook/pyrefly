@@ -12,6 +12,7 @@ use pyrefly_python::dunder;
 use pyrefly_types::simplify::unions_with_literals;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
+use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::name::Name;
@@ -55,7 +56,6 @@ use crate::types::typed_dict::TypedDictField;
 use crate::types::types::Forall;
 use crate::types::types::Overload;
 use crate::types::types::OverloadType;
-use crate::types::types::Substitution;
 use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -89,7 +89,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         dict_items.iter().for_each(|x| match &x.key {
             Some(key) => {
                 let key_type = self.expr_infer(key, item_errors);
-                if let Type::Literal(Lit::Str(name)) = key_type {
+                if let Type::Literal(lit) = &key_type
+                    && let Lit::Str(name) = &lit.value
+                {
                     let key_name = Name::new(name);
                     match fields.get(&key_name) {
                         Some(field) if is_update && field.is_read_only() => {
@@ -221,18 +223,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn class_field_to_typed_dict_field(
+    fn instantiate_typed_dict_field(
         &self,
-        class: &Class,
-        substitution: &Substitution,
+        typed_dict: &TypedDictInner,
         name: &Name,
         is_total: bool,
     ) -> Option<TypedDictField> {
-        self.get_class_member(class, name).and_then(|field| {
-            Arc::unwrap_or_clone(field)
-                .as_typed_dict_field_info(is_total)
-                .map(|field| field.substitute_with(substitution))
-        })
+        let member = self.get_class_member(typed_dict.class_object(), name)?;
+        let field = Arc::unwrap_or_clone(member);
+        let instantiated_ty = self.get_instantiated_typed_dict_field_type(typed_dict, name)?;
+        let mut typed_dict_field = field.as_typed_dict_field_info(is_total)?;
+        typed_dict_field.ty = instantiated_ty;
+        Some(typed_dict_field)
     }
 
     pub fn typed_dict_fields(&self, typed_dict: &TypedDict) -> SmallMap<Name, TypedDictField> {
@@ -240,8 +242,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             TypedDict::TypedDict(inner) => {
                 let class = inner.class_object();
                 let metadata = self.get_metadata_for_class(class);
-                let substitution = inner.targs().substitution();
-
                 match metadata.typed_dict_metadata() {
                     None => {
                         // This may happen during incremental update where `class` is stale/outdated
@@ -251,13 +251,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .fields
                         .iter()
                         .filter_map(|(name, is_total)| {
-                            self.class_field_to_typed_dict_field(
-                                class,
-                                &substitution,
-                                name,
-                                *is_total,
-                            )
-                            .map(|field| (name.clone(), field))
+                            self.instantiate_typed_dict_field(inner, name, *is_total)
+                                .map(|field| (name.clone(), field))
                         })
                         .collect(),
                 }
@@ -271,18 +266,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             TypedDict::TypedDict(inner) => {
                 let class = inner.class_object();
                 let metadata = self.get_metadata_for_class(class);
-                let substitution = inner.targs().substitution();
-
                 metadata
                     .typed_dict_metadata()
                     .and_then(|typed_dict_metadata| {
                         typed_dict_metadata.fields.get(name).and_then(|is_total| {
-                            self.class_field_to_typed_dict_field(
-                                class,
-                                &substitution,
-                                name,
-                                *is_total,
-                            )
+                            self.instantiate_typed_dict_field(inner, name, *is_total)
                         })
                     })
             }
@@ -476,7 +464,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         let tparams = vec![TParam {
             quantified: q.clone(),
-            variance: PreInferenceVariance::PInvariant,
+            variance: PreInferenceVariance::Invariant,
         }];
         OverloadType::Forall(Forall {
             tparams: Arc::new(TParams::new(tparams)),
@@ -1023,5 +1011,5 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 }
 
 fn name_to_literal_type(name: &Name) -> Type {
-    Type::Literal(Lit::Str(name.as_str().into()))
+    Lit::Str(name.as_str().into()).to_implicit_type()
 }

@@ -600,19 +600,7 @@
       "stop_line": 65
     }
   ],
-  "aliases_recursive.py": [
-    {
-      "code": -2,
-      "column": 45,
-      "concise_description": "Expected a type form, got instance of `Literal['RecursiveMapping']`",
-      "description": "Expected a type form, got instance of `Literal['RecursiveMapping']`",
-      "line": 42,
-      "name": "not-a-type",
-      "severity": "error",
-      "stop_column": 63,
-      "stop_line": 42
-    }
-  ],
+  "aliases_recursive.py": [],
   "aliases_type_statement.py": [
     {
       "code": -2,
@@ -1446,17 +1434,6 @@
       "severity": "error",
       "stop_column": 29,
       "stop_line": 135
-    },
-    {
-      "code": -2,
-      "column": 5,
-      "concise_description": "Expected to yield a value of type `int`, but a bare `yield` gives `None` instead",
-      "description": "Expected to yield a value of type `int`, but a bare `yield` gives `None` instead",
-      "line": 190,
-      "name": "invalid-yield",
-      "severity": "error",
-      "stop_column": 10,
-      "stop_line": 190
     }
   ],
   "annotations_methods.py": [
@@ -2574,7 +2551,7 @@
       "code": -2,
       "column": 21,
       "concise_description": "`Overloaded9` is not assignable to `FloatArg9`",
-      "description": "`Overloaded9` is not assignable to `FloatArg9`\n  `Overloaded9.__call__` has type `BoundMethod[Overloaded9, Overload[(self: Overloaded9, x: int) -> int, (self: Overloaded9, x: str) -> str]]`, which is not assignable to `BoundMethod[Overloaded9, (self: Overloaded9, x: float) -> float]`, the type of `FloatArg9.__call__`",
+      "description": "`Overloaded9` is not assignable to `FloatArg9`\n  `Overloaded9.__call__` has type `BoundMethod[Overloaded9, Overload[\n  (self: Overloaded9, x: int) -> int\n  (self: Overloaded9, x: str) -> str\n]]`, which is not assignable to `BoundMethod[Overloaded9, (self: Overloaded9, x: float) -> float]`, the type of `FloatArg9.__call__`",
       "line": 273,
       "name": "bad-assignment",
       "severity": "error",
@@ -2585,7 +2562,7 @@
       "code": -2,
       "column": 24,
       "concise_description": "`StrArg10` is not assignable to `Overloaded10`",
-      "description": "`StrArg10` is not assignable to `Overloaded10`\n  `StrArg10.__call__` has type `BoundMethod[StrArg10, (self: StrArg10, x: str) -> complex]`, which is not assignable to `BoundMethod[StrArg10, Overload[(self: StrArg10, x: int, y: str) -> float, (self: StrArg10, x: str) -> complex]]`, the type of `Overloaded10.__call__`",
+      "description": "`StrArg10` is not assignable to `Overloaded10`\n  `StrArg10.__call__` has type `BoundMethod[StrArg10, (self: StrArg10, x: str) -> complex]`, which is not assignable to `BoundMethod[StrArg10, Overload[\n  (self: StrArg10, x: int, y: str) -> float\n  (self: StrArg10, x: str) -> complex\n]]`, the type of `Overloaded10.__call__`",
       "line": 297,
       "name": "bad-assignment",
       "severity": "error",
@@ -3323,13 +3300,80 @@
     }
   ],
   "constructors_consistency.py": [],
-  "dataclasses_descriptors.py": [],
+  "dataclasses_descriptors.py": [
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Data descriptor `y` has incompatible default: `__get__` returns `Desc1 | int` which is not assignable to `__set__` value type `int`. The class-level descriptor value cannot be used as a default.",
+      "description": "Data descriptor `y` has incompatible default: `__get__` returns `Desc1 | int` which is not assignable to `__set__` value type `int`. The class-level descriptor value cannot be used as a default.",
+      "line": 32,
+      "name": "bad-class-definition",
+      "severity": "error",
+      "stop_column": 6,
+      "stop_line": 32
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Non-data descriptor `z` in dataclass is unsound. The dataclass __init__ writes to the instance dict, shadowing the descriptor. Add a __set__ method to make it a data descriptor.",
+      "description": "Non-data descriptor `z` in dataclass is unsound. The dataclass __init__ writes to the instance dict, shadowing the descriptor. Add a __set__ method to make it a data descriptor.",
+      "line": 58,
+      "name": "bad-class-definition",
+      "severity": "error",
+      "stop_column": 6,
+      "stop_line": 58
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(Desc2[int], list[int]) failed",
+      "description": "assert_type(Desc2[int], list[int]) failed",
+      "line": 61,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 30,
+      "stop_line": 61
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(Desc2[str], list[str]) failed",
+      "description": "assert_type(Desc2[str], list[str]) failed",
+      "line": 62,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 30,
+      "stop_line": 62
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(Desc2[int], int) failed",
+      "description": "assert_type(Desc2[int], int) failed",
+      "line": 66,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 66
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "assert_type(Desc2[str], str) failed",
+      "description": "assert_type(Desc2[str], str) failed",
+      "line": 67,
+      "name": "assert-type",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 67
+    }
+  ],
   "dataclasses_final.py": [
     {
       "code": -2,
       "column": 1,
       "concise_description": "Cannot set field `final_classvar`",
-      "description": "Cannot set field `final_classvar`\n  This field is marked as Final",
+      "description": "Cannot set field `final_classvar`\n  This field is marked as Final, and an initial value is provided",
       "line": 27,
       "name": "read-only",
       "severity": "error",
@@ -3351,7 +3395,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "Cannot set field `final_with_default`",
-      "description": "Cannot set field `final_with_default`\n  This field is marked as Final",
+      "description": "Cannot set field `final_with_default`\n  This field is marked as Final, and an initial value is provided",
       "line": 36,
       "name": "read-only",
       "severity": "error",
@@ -3373,7 +3417,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "Cannot set field `final_with_default`",
-      "description": "Cannot set field `final_with_default`\n  This field is marked as Final",
+      "description": "Cannot set field `final_with_default`\n  This field is marked as Final, and an initial value is provided",
       "line": 38,
       "name": "read-only",
       "severity": "error",
@@ -5307,28 +5351,6 @@
     },
     {
       "code": -2,
-      "column": 30,
-      "concise_description": "Expected default `TypeVar[X1]` of `Ok1` to be assignable to the upper bound of `float`",
-      "description": "Expected default `TypeVar[X1]` of `Ok1` to be assignable to the upper bound of `float`",
-      "line": 66,
-      "name": "invalid-type-var",
-      "severity": "error",
-      "stop_column": 32,
-      "stop_line": 66
-    },
-    {
-      "code": -2,
-      "column": 38,
-      "concise_description": "Expected default `TypeVar[X1]` of `AlsoOk1` to be assignable to the upper bound of `int`",
-      "description": "Expected default `TypeVar[X1]` of `AlsoOk1` to be assignable to the upper bound of `int`",
-      "line": 67,
-      "name": "invalid-type-var",
-      "severity": "error",
-      "stop_column": 40,
-      "stop_line": 67
-    },
-    {
-      "code": -2,
       "column": 40,
       "concise_description": "Expected default `TypeVar[X1]` of `Invalid1` to be assignable to the upper bound of `str`",
       "description": "Expected default `TypeVar[X1]` of `Invalid1` to be assignable to the upper bound of `str`",
@@ -5348,17 +5370,6 @@
       "severity": "error",
       "stop_column": 54,
       "stop_line": 74
-    },
-    {
-      "code": -2,
-      "column": 54,
-      "concise_description": "Expected default `TypeVar[Y2]` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`",
-      "description": "Expected default `TypeVar[Y2]` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`",
-      "line": 77,
-      "name": "invalid-type-var",
-      "severity": "error",
-      "stop_column": 56,
-      "stop_line": 77
     },
     {
       "code": -2,
@@ -9066,9 +9077,9 @@
       "code": -2,
       "column": 33,
       "concise_description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`",
-      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: expected `BoundMethod[Proto3, (self: Proto3, a: int) -> int]`, got `BoundMethod[Concrete3A, (self: Concrete3A, a: str) -> None]`",
+      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: `Concrete3A.method1` has type `BoundMethod[Concrete3A, (self: Concrete3A, a: str) -> None]`, which is not assignable to `BoundMethod[Concrete3A, (self: Concrete3A, a: int) -> int]`, the type of `Proto3.method1`",
       "line": 88,
-      "name": "invalid-argument",
+      "name": "unsafe-overlap",
       "severity": "error",
       "stop_column": 39,
       "stop_line": 88
@@ -9077,9 +9088,9 @@
       "code": -2,
       "column": 23,
       "concise_description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3B`",
-      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3B`\n  Attribute `method1` has incompatible types: expected `BoundMethod[Proto3, (self: Proto3, a: int) -> int]`, got `int`",
+      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3B`\n  Attribute `method1` has incompatible types: `Concrete3B.method1` has type `int`, which is not consistent with `BoundMethod[Concrete3B, (self: Concrete3B, a: int) -> int]` in `Proto3.method1` (the type of read-write attributes cannot be changed)",
       "line": 92,
-      "name": "invalid-argument",
+      "name": "unsafe-overlap",
       "severity": "error",
       "stop_column": 48,
       "stop_line": 92
@@ -9088,9 +9099,9 @@
       "code": -2,
       "column": 23,
       "concise_description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3B`",
-      "description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3B`\n  Attribute `method1` has incompatible types: expected `BoundMethod[NonDataProtocol, (self: NonDataProtocol) -> int]`, got `int`",
+      "description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3B`\n  Attribute `method1` has incompatible types: `Concrete3B.method1` has type `int`, which is not consistent with `BoundMethod[Concrete3B, (self: Concrete3B) -> int]` in `NonDataProtocol.method1` (the type of read-write attributes cannot be changed)",
       "line": 92,
-      "name": "invalid-argument",
+      "name": "unsafe-overlap",
       "severity": "error",
       "stop_column": 48,
       "stop_line": 92
@@ -9099,9 +9110,9 @@
       "code": -2,
       "column": 31,
       "concise_description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`",
-      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: expected `BoundMethod[Proto3, (self: Proto3, a: int) -> int]`, got `BoundMethod[Concrete3A, (self: Concrete3A, a: str) -> None]`",
+      "description": "Runtime checkable protocol `Proto3` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: `Concrete3A.method1` has type `BoundMethod[Concrete3A, (self: Concrete3A, a: str) -> None]`, which is not assignable to `BoundMethod[Concrete3A, (self: Concrete3A, a: int) -> int]`, the type of `Proto3.method1`",
       "line": 96,
-      "name": "invalid-argument",
+      "name": "unsafe-overlap",
       "severity": "error",
       "stop_column": 56,
       "stop_line": 96
@@ -9110,9 +9121,9 @@
       "code": -2,
       "column": 31,
       "concise_description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3A`",
-      "description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: expected `BoundMethod[NonDataProtocol, (self: NonDataProtocol) -> int]`, got `BoundMethod[Concrete3A, (self: Concrete3A, a: str) -> None]`",
+      "description": "Runtime checkable protocol `NonDataProtocol` has an unsafe overlap with type `Concrete3A`\n  Attribute `method1` has incompatible types: `Concrete3A.method1` has type `BoundMethod[Concrete3A, (self: Concrete3A, a: str) -> None]`, which is not assignable to `BoundMethod[Concrete3A, (self: Concrete3A) -> int]`, the type of `NonDataProtocol.method1`",
       "line": 96,
-      "name": "invalid-argument",
+      "name": "unsafe-overlap",
       "severity": "error",
       "stop_column": 56,
       "stop_line": 96
@@ -9403,6 +9414,17 @@
     {
       "code": -2,
       "column": 9,
+      "concise_description": "Cannot set field `ID5`",
+      "description": "Cannot set field `ID5`\n  This field is marked as Final, and an initial value is provided",
+      "line": 54,
+      "name": "read-only",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 54
+    },
+    {
+      "code": -2,
+      "column": 9,
       "concise_description": "Cannot set field `id3`",
       "description": "Cannot set field `id3`\n  This field is marked as Final",
       "line": 62,
@@ -9426,7 +9448,7 @@
       "code": -2,
       "column": 9,
       "concise_description": "Cannot set field `ID7`",
-      "description": "Cannot set field `ID7`\n  This field is marked as Final",
+      "description": "Cannot set field `ID7`\n  This field is marked as Final, and an initial value is provided",
       "line": 65,
       "name": "read-only",
       "severity": "error",
@@ -9437,7 +9459,7 @@
       "code": -2,
       "column": 9,
       "concise_description": "Cannot set field `ID7`",
-      "description": "Cannot set field `ID7`\n  This field is marked as Final",
+      "description": "Cannot set field `ID7`\n  This field is marked as Final, and an initial value is provided",
       "line": 67,
       "name": "read-only",
       "severity": "error",
@@ -9459,7 +9481,7 @@
       "code": -2,
       "column": 1,
       "concise_description": "Cannot set field `DEFAULT_ID`",
-      "description": "Cannot set field `DEFAULT_ID`\n  This field is marked as Final",
+      "description": "Cannot set field `DEFAULT_ID`\n  This field is marked as Final, and an initial value is provided",
       "line": 81,
       "name": "read-only",
       "severity": "error",
@@ -9612,8 +9634,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot assign to var x because it is marked final",
-      "description": "Cannot assign to var x because it is marked final",
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
       "line": 145,
       "name": "bad-assignment",
       "severity": "error",
@@ -9623,13 +9645,46 @@
     {
       "code": -2,
       "column": 15,
-      "concise_description": "Assignment target is marked final",
-      "description": "Assignment target is marked final",
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
       "line": 147,
       "name": "bad-assignment",
       "severity": "error",
       "stop_column": 16,
       "stop_line": 147
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
+      "line": 149,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 149
+    },
+    {
+      "code": -2,
+      "column": 10,
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
+      "line": 152,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 26,
+      "stop_line": 152
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Cannot assign to variable `x` because it is marked final",
+      "description": "Cannot assign to variable `x` because it is marked final",
+      "line": 155,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 155
     }
   ],
   "qualifiers_final_decorator.py": [
@@ -9853,6 +9908,17 @@
     },
     {
       "code": -2,
+      "column": 7,
+      "concise_description": "Argument `type[Callable]` is not assignable to parameter `x` with type `type[@_]` in function `func5`",
+      "description": "Argument `type[Callable]` is not assignable to parameter `x` with type `type[@_]` in function `func5`\n  `type` cannot accept special form `Callable` as an argument",
+      "line": 70,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 15,
+      "stop_line": 70
+    },
+    {
+      "code": -2,
       "column": 12,
       "concise_description": "Expected 1 type argument for `type`, got 2",
       "description": "Expected 1 type argument for `type`, got 2",
@@ -9897,39 +9963,6 @@
     },
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(Any, tuple[type, ...]) failed",
-      "description": "assert_type(Any, tuple[type, ...]) failed",
-      "line": 102,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 45,
-      "stop_line": 102
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(Any, tuple[type, ...]) failed",
-      "description": "assert_type(Any, tuple[type, ...]) failed",
-      "line": 106,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 45,
-      "stop_line": 106
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(Any, tuple[type, ...]) failed",
-      "description": "assert_type(Any, tuple[type, ...]) failed",
-      "line": 110,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 45,
-      "stop_line": 110
-    },
-    {
-      "code": -2,
       "column": 5,
       "concise_description": "Class `object` has no class attribute `unknown`",
       "description": "Class `object` has no class attribute `unknown`",
@@ -9964,8 +9997,8 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA1, type[type[Unknown]]] (trying to access unknown)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA1, type[type[Unknown]]] (trying to access unknown)",
+      "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA1, type[type[Any]]] (trying to access unknown)",
+      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA1, type[type[Any]]] (trying to access unknown)",
       "line": 143,
       "name": "missing-attribute",
       "severity": "error",

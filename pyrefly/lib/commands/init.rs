@@ -107,13 +107,11 @@ impl InitArgs {
             FilesArgs::get(Vec::new(), config_path, ConfigOverrideArgs::default())?;
 
         // Run the check directly
-        match check_args.run_once(filtered_globs, config_finder) {
-            Ok((status, errors)) => Ok((status, errors)),
-            Err(e) => {
-                error!("Failed to run pyrefly check: {}", e);
-                Ok((CommandExitStatus::Success, Vec::new())) // Still return success to match original behavior
-            }
+        let res = check_args.run_once(filtered_globs, config_finder);
+        if let Err(e) = &res {
+            error!("Failed to run pyrefly check: {}", e);
         }
+        res
     }
 
     fn prompt_error_suppression(

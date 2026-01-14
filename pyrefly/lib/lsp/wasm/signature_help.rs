@@ -18,6 +18,7 @@ use lsp_types::SignatureInformation;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::docstring::parse_parameter_documentation;
+use pyrefly_python::module::Module;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_util::prelude::VecExt;
@@ -120,6 +121,24 @@ impl Transaction<'_> {
         })
     }
 
+    fn count_argument_separators_before(
+        &self,
+        handle: &Handle,
+        arguments_range: TextRange,
+        position: TextSize,
+    ) -> Option<usize> {
+        let module = self.get_module_info(handle)?;
+        let contents = module.contents();
+        let len = contents.len();
+        let start = arguments_range.start().to_usize().min(len);
+        let end = arguments_range.end().to_usize().min(len);
+        let pos = position.to_usize().clamp(start, end);
+        contents
+            .get(start..pos)
+            .map(|slice| slice.bytes().filter(|&b| b == b',').count())
+            .or(Some(0))
+    }
+
     /// Finds the callable(s) (multiple if overloads exist) at position in document, returning them, chosen overload index, and arg index
     pub(crate) fn get_callables_from_call(
         &self,
@@ -151,53 +170,47 @@ impl Transaction<'_> {
                 callee_range,
             ))
         } else {
-            answers
-                .get_type_trace(callee_range)
-                .map(|t| self.coerce_type_to_callable(handle, t))
-                .map(|t| (vec![t], 0, active_argument, callee_range))
+            answers.get_type_trace(callee_range).map(|t| {
+                let coerced = self.coerce_type_to_callable(handle, t);
+                // If the coerced type is an Overload, expand it into multiple signatures
+                // so signature help displays each overload separately.
+                if let Type::Overload(overload) = coerced {
+                    let callables: Vec<Type> = overload
+                        .signatures
+                        .into_iter()
+                        .map(|s| s.as_type())
+                        .collect();
+                    (callables, 0, active_argument, callee_range)
+                } else {
+                    (vec![coerced], 0, active_argument, callee_range)
+                }
+            })
         }
     }
 
-    pub(crate) fn get_signature_help_at(
+    fn find_range_and_module(
         &self,
         handle: &Handle,
-        position: TextSize,
-    ) -> Option<SignatureHelp> {
-        self.get_callables_from_call(handle, position).map(
-            |(callables, chosen_overload_index, active_argument, callee_range)| {
-                let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
-                let function_docstring = self.function_docstring_for_callee(handle, callee_range);
-                let signatures = callables
-                    .into_iter()
-                    .map(|t| {
-                        Self::create_signature_information(
-                            t,
-                            &active_argument,
-                            parameter_docs.as_ref(),
-                            function_docstring.as_ref(),
-                        )
-                    })
-                    .collect_vec();
-                let active_parameter = signatures
-                    .get(chosen_overload_index)
-                    .and_then(|info| info.active_parameter);
-                SignatureHelp {
-                    signatures,
-                    active_signature: Some(chosen_overload_index as u32),
-                    active_parameter,
-                }
-            },
-        )
+        pos: TextSize,
+        preference: FindPreference,
+    ) -> Option<(TextRange, Module)> {
+        self.find_definition(handle, pos, preference)
+            .into_iter()
+            .find_map(|item| {
+                item.docstring_range
+                    .map(|range| (range, item.module.clone()))
+            })
     }
 
-    pub(crate) fn parameter_documentation_for_callee(
+    fn parameter_documentation_for_callee(
         &self,
         handle: &Handle,
         callee_range: TextRange,
     ) -> Option<HashMap<String, String>> {
-        let position = callee_range.start();
-        let docstring = self
-            .find_definition(
+        let position = callee_range.end();
+
+        let (range, module) = self
+            .find_range_and_module(
                 handle,
                 position,
                 FindPreference {
@@ -205,33 +218,21 @@ impl Transaction<'_> {
                     ..Default::default()
                 },
             )
-            .into_iter()
-            .find_map(|item| {
-                item.docstring_range
-                    .map(|range| (range, item.module.clone()))
-            })
-            .or_else(|| {
-                self.find_definition(handle, position, FindPreference::default())
-                    .into_iter()
-                    .find_map(|item| {
-                        item.docstring_range
-                            .map(|range| (range, item.module.clone()))
-                    })
-            })?;
-        let (range, module) = docstring;
+            .or_else(|| self.find_range_and_module(handle, position, FindPreference::default()))?;
+
         let docs = parse_parameter_documentation(module.code_at(range));
         if docs.is_empty() { None } else { Some(docs) }
     }
 
     /// Extract the full docstring for a callee to display in signature help.
-    pub(crate) fn function_docstring_for_callee(
+    fn function_docstring_for_callee(
         &self,
         handle: &Handle,
         callee_range: TextRange,
     ) -> Option<Docstring> {
-        let position = callee_range.start();
+        let position = callee_range.end();
         let (docstring_range, module) = self
-            .find_definition(
+            .find_range_and_module(
                 handle,
                 position,
                 FindPreference {
@@ -239,23 +240,42 @@ impl Transaction<'_> {
                     ..Default::default()
                 },
             )
-            .into_iter()
-            .find_map(|item| {
-                item.docstring_range
-                    .map(|range| (range, item.module.clone()))
-            })
-            .or_else(|| {
-                self.find_definition(handle, position, FindPreference::default())
-                    .into_iter()
-                    .find_map(|item| {
-                        item.docstring_range
-                            .map(|range| (range, item.module.clone()))
-                    })
-            })?;
+            .or_else(|| self.find_range_and_module(handle, position, FindPreference::default()))?;
+
         Some(Docstring(docstring_range, module))
     }
 
-    pub(crate) fn create_signature_information(
+    pub(crate) fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<Param>> {
+        let callable = type_.to_callable()?;
+        if let Params::List(params_list) = callable.params {
+            if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
+                params_list.items().first()
+                && (name.as_str() == "self" || name.as_str() == "cls")
+            {
+                let mut params = params_list.into_items();
+                params.remove(0);
+                return Some(params);
+            }
+            return Some(params_list.into_items());
+        }
+        None
+    }
+
+    pub(crate) fn active_parameter_index(
+        params: &[Param],
+        active_argument: &ActiveArgument,
+    ) -> Option<usize> {
+        match active_argument {
+            ActiveArgument::Positional(index) | ActiveArgument::Next(index) => {
+                (*index < params.len()).then_some(*index)
+            }
+            ActiveArgument::Keyword(name) => params
+                .iter()
+                .position(|param| param.name().is_some_and(|param_name| param_name == name)),
+        }
+    }
+
+    fn create_signature_information(
         type_: Type,
         active_argument: &ActiveArgument,
         parameter_docs: Option<&HashMap<String, String>>,
@@ -306,51 +326,35 @@ impl Transaction<'_> {
         }
     }
 
-    pub(crate) fn active_parameter_index(
-        params: &[Param],
-        active_argument: &ActiveArgument,
-    ) -> Option<usize> {
-        match active_argument {
-            ActiveArgument::Positional(index) | ActiveArgument::Next(index) => {
-                (*index < params.len()).then_some(*index)
-            }
-            ActiveArgument::Keyword(name) => params
-                .iter()
-                .position(|param| param.name().is_some_and(|param_name| param_name == name)),
-        }
-    }
-
-    pub(crate) fn count_argument_separators_before(
+    pub(crate) fn get_signature_help_at(
         &self,
         handle: &Handle,
-        arguments_range: TextRange,
         position: TextSize,
-    ) -> Option<usize> {
-        let module = self.get_module_info(handle)?;
-        let contents = module.contents();
-        let len = contents.len();
-        let start = arguments_range.start().to_usize().min(len);
-        let end = arguments_range.end().to_usize().min(len);
-        let pos = position.to_usize().clamp(start, end);
-        contents
-            .get(start..pos)
-            .map(|slice| slice.bytes().filter(|&b| b == b',').count())
-            .or(Some(0))
-    }
-
-    pub(crate) fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<Param>> {
-        let callable = type_.to_callable()?;
-        if let Params::List(params_list) = callable.params {
-            if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
-                params_list.items().first()
-                && (name.as_str() == "self" || name.as_str() == "cls")
-            {
-                let mut params = params_list.into_items();
-                params.remove(0);
-                return Some(params);
-            }
-            return Some(params_list.into_items());
-        }
-        None
+    ) -> Option<SignatureHelp> {
+        self.get_callables_from_call(handle, position).map(
+            |(callables, chosen_overload_index, active_argument, callee_range)| {
+                let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
+                let function_docstring = self.function_docstring_for_callee(handle, callee_range);
+                let signatures = callables
+                    .into_iter()
+                    .map(|t| {
+                        Self::create_signature_information(
+                            t,
+                            &active_argument,
+                            parameter_docs.as_ref(),
+                            function_docstring.as_ref(),
+                        )
+                    })
+                    .collect_vec();
+                let active_parameter = signatures
+                    .get(chosen_overload_index)
+                    .and_then(|info| info.active_parameter);
+                SignatureHelp {
+                    signatures,
+                    active_signature: Some(chosen_overload_index as u32),
+                    active_parameter,
+                }
+            },
+        )
     }
 }

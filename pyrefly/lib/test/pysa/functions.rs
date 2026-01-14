@@ -867,7 +867,7 @@ class Foo:
 );
 
 exported_functions_testcase!(
-    test_export_overriden_base_method,
+    test_export_overridden_base_method,
     r#"
 class A:
     def method(self):
@@ -917,7 +917,7 @@ class B(A):
 );
 
 exported_functions_testcase!(
-    test_export_overriden_base_method_with_indirection,
+    test_export_overridden_base_method_with_indirection,
     r#"
 class A:
     def method(self):
@@ -970,7 +970,7 @@ class C(A):
 );
 
 exported_functions_testcase!(
-    test_export_overriden_base_method_with_multi_inheritance,
+    test_export_overridden_base_method_with_multi_inheritance,
     r#"
 class A:
     def method(self):
@@ -1040,7 +1040,7 @@ class C(A, B):
 );
 
 exported_functions_testcase!(
-    test_export_overriden_base_method_depth_two,
+    test_export_overridden_base_method_depth_two,
     r#"
 class A:
     def method(self):
@@ -1111,7 +1111,7 @@ class C(B):
 );
 
 exported_functions_testcase!(
-    test_export_overriden_base_method_class_field,
+    test_export_overridden_base_method_class_field,
     r#"
 from dataclasses import dataclass
 

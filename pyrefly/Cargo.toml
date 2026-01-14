@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "0.46.0"
+version = "0.48.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -33,6 +33,7 @@ lsp-types = { git = "https://github.com/astral-sh/lsp-types", rev = "3512a9f33ea
 num-traits = { version = "0.2.19", default-features = false }
 parse-display = "0.8.2"
 paste = "1.0.14"
+percent-encoding = "2.1"
 pyrefly_build = { path = "../crates/pyrefly_build" }
 pyrefly_bundled = { path = "../crates/pyrefly_bundled" }
 pyrefly_config = { path = "../crates/pyrefly_config" }
@@ -59,7 +60,9 @@ tokio = { version = "1.47.1", features = ["macros", "rt"] }
 toml = { version = "0.9.8", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tsp_types = { path = "../crates/tsp_types" }
+uuid = { version = "1.17", features = ["js", "rng-getrandom", "v4"] }
 vec1 = { version = "1", features = ["serde"] }
+web-time = "1.1.0"
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 
 [dev-dependencies]

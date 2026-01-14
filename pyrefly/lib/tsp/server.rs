@@ -9,16 +9,19 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
 use lsp_types::ServerCapabilities;
-use pyrefly_util::telemetry::LspEventTelemetry;
+use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::telemetry::TelemetryEventKind;
 use tracing::info;
 use tsp_types::TSPRequests;
 
 use crate::commands::lsp::IndexingMode;
 use crate::lsp::non_wasm::lsp::new_response;
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::server::ProcessEvent;
 use crate::lsp::non_wasm::server::TspInterface;
@@ -45,7 +48,8 @@ impl<T: TspInterface> TspServer<T> {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &mut LspEventTelemetry,
+        telemetry: &impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {
@@ -67,7 +71,7 @@ impl<T: TspInterface> TspServer<T> {
                 return Ok(ProcessEvent::Continue);
             }
             // If it's not a TSP request, let the LSP server reject it since TSP server shouldn't handle LSP requests
-            self.inner.send_response(lsp_server::Response::new_err(
+            self.inner.send_response(Response::new_err(
                 request.id.clone(),
                 lsp_server::ErrorCode::MethodNotFound as i32,
                 format!("TSP server does not support LSP method: {}", request.method),
@@ -80,6 +84,7 @@ impl<T: TspInterface> TspServer<T> {
             ide_transaction_manager,
             canceled_requests,
             telemetry,
+            telemetry_event,
             subsequent_mutation,
             event,
         )?;
@@ -94,7 +99,7 @@ impl<T: TspInterface> TspServer<T> {
 
     fn handle_tsp_request<'a>(
         &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
+        _ide_transaction_manager: &mut TransactionManager<'a>,
         request: &Request,
     ) -> anyhow::Result<bool> {
         // Convert the request into a TSPRequests enum
@@ -111,13 +116,10 @@ impl<T: TspInterface> TspServer<T> {
 
         match msg {
             TSPRequests::GetSupportedProtocolVersionRequest { .. } => {
-                let transaction =
-                    ide_transaction_manager.non_committable_transaction(self.inner.state());
                 self.inner.send_response(new_response(
                     request.id.clone(),
-                    Ok(self.get_supported_protocol_version(&transaction)),
+                    Ok(self.get_supported_protocol_version()),
                 ));
-                ide_transaction_manager.save(transaction);
                 Ok(true)
             }
             TSPRequests::GetSnapshotRequest { .. } => {
@@ -137,18 +139,14 @@ impl<T: TspInterface> TspServer<T> {
 pub fn tsp_loop(
     lsp_server: impl TspInterface,
     _initialization_params: InitializeParams,
+    telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     eprintln!("Reading TSP messages");
     let server = TspServer::new(lsp_server);
 
     std::thread::scope(|scope| {
         // Start the recheck queue thread to process async tasks
-        scope.spawn(|| {
-            server
-                .inner
-                .recheck_queue()
-                .run_until_stopped(|task| server.inner.run_task(task));
-        });
+        scope.spawn(|| server.inner.run_recheck_queue(telemetry));
 
         scope.spawn(|| {
             dispatch_lsp_events(server.inner.connection(), server.inner.lsp_queue());
@@ -158,21 +156,23 @@ pub fn tsp_loop(
         let mut canceled_requests = HashSet::new();
 
         while let Ok((subsequent_mutation, event, enqueued_at)) = server.inner.lsp_queue().recv() {
-            let mut event_telemetry = LspEventTelemetry::new_dequeued(
-                event.describe(),
+            let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(
+                TelemetryEventKind::LspEvent(event.describe()),
                 enqueued_at,
-                server.inner.sourcedb_available(),
+                server.inner.telemetry_state(),
             );
             let event_description = event.describe();
 
             let result = server.process_event(
                 &mut ide_transaction_manager,
                 &mut canceled_requests,
+                telemetry,
                 &mut event_telemetry,
                 subsequent_mutation,
                 event,
             );
-            let (queue_duration, process_duration, result) = event_telemetry.finish(result);
+            let process_duration =
+                event_telemetry.finish_and_record(telemetry, result.as_ref().err());
             match result? {
                 ProcessEvent::Continue => {
                     info!(
@@ -186,7 +186,7 @@ pub fn tsp_loop(
             }
         }
 
-        server.inner.recheck_queue().stop();
+        server.inner.stop_recheck_queue();
         Ok(())
     })
 }

@@ -20,6 +20,7 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::name::Name;
 
 use crate::annotation::Qualifier;
+use crate::literal::LitStyle;
 use crate::types::NeverStyle;
 use crate::types::Type;
 
@@ -74,7 +75,7 @@ impl SpecialForm {
 
     pub fn to_type(self) -> Type {
         match self {
-            SpecialForm::LiteralString => Type::type_form(Type::LiteralString),
+            SpecialForm::LiteralString => Type::type_form(Type::LiteralString(LitStyle::Explicit)),
             SpecialForm::Never => Type::type_form(Type::Never(NeverStyle::Never)),
             SpecialForm::NoReturn => Type::type_form(Type::Never(NeverStyle::NoReturn)),
             _ => Type::type_form(Type::SpecialForm(self)),
@@ -104,6 +105,18 @@ impl SpecialForm {
             Self::Required => Some(Qualifier::Required),
             Self::TypeAlias => Some(Qualifier::TypeAlias),
             _ => None,
+        }
+    }
+
+    pub fn isinstance_safe(self) -> bool {
+        match self {
+            Self::Callable
+            | Self::Generic
+            | Self::Protocol
+            | Self::Tuple
+            | Self::Type
+            | Self::Union => true,
+            _ => false,
         }
     }
 }

@@ -195,7 +195,7 @@ fn hint_to_string(
     stdlib: &Stdlib,
     enum_members: &dyn Fn(&Class) -> Option<usize>,
 ) -> String {
-    let hint = hint.promote_literals(stdlib);
+    let hint = hint.promote_implicit_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
     let hint = match hint {
         Type::Union(box Union { members: types, .. }) => {
@@ -285,7 +285,9 @@ impl InferArgs {
                             let module_info = error.module();
                             let module_path = module_info.path().clone();
                             let config = state.config_finder().python_file(
-                                pyrefly_python::module_name::ModuleName::unknown(),
+                                pyrefly_python::module_name::ModuleNameWithKind::guaranteed(
+                                    pyrefly_python::module_name::ModuleName::unknown(),
+                                ),
                                 &module_path,
                             );
                             let handle = config.handle_from_module_path(module_path);

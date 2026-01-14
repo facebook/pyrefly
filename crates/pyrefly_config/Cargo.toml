@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_config"
-version = "0.46.0"
+version = "0.48.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -12,7 +12,7 @@ license = "MIT"
 anyhow = "1.0.98"
 clap = { version = "4.5.42", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 configparser = { version = "3.1.0", features = ["indexmap"] }
-convert_case = "0.6"
+convert_case = "0.10.0"
 derivative = "2.2"
 dupe = "0.9.1"
 enum-iterator = "2.1"

@@ -1434,7 +1434,7 @@ class B(A):
 );
 
 call_graph_testcase!(
-    test_overriden_repr_call,
+    test_overridden_repr_call,
     TEST_MODULE_NAME,
     r#"
 class C:
@@ -3464,6 +3464,40 @@ def fun(d: typing.Dict[str, int], e: typing.Dict[str, typing.Dict[str, int]]):
                 (
                     "12:3-12:18|artificial-call|subscript-set-item",
                     regular_call_callees(dict_setitem_target),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_dict_subscript_setitem_in_multi_assign,
+    TEST_MODULE_NAME,
+    r#"
+class LogRecord:
+    arg: dict[str, object]
+def foo(log: LogRecord):
+  x = log.arg["foo"] = {**log.arg["foo"]}
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "5:27-5:41|artificial-call|subscript-get-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.dict.__getitem__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.dict", context),
+                    ]),
+                ),
+                (
+                    "5:3-5:42|artificial-call|chained-assign:1>subscript-set-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.dict.__setitem__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.dict", context),
+                    ]),
                 ),
             ],
         )]
@@ -6105,6 +6139,270 @@ def foo():
                                 .with_is_static_method(true),
                         ],
                     ),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_augmented_assign_iadd,
+    TEST_MODULE_NAME,
+    r#"
+def foo():
+  x = 1
+  x += 1
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "4:3-4:9|artificial-call|augmented-assign-dunder-call",
+                regular_call_callees(vec![
+                    create_call_target("builtins.int.__add__", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.int", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_augmented_assign_isub,
+    TEST_MODULE_NAME,
+    r#"
+def foo():
+  x = 1
+  x -= 1
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "4:3-4:9|artificial-call|augmented-assign-dunder-call",
+                regular_call_callees(vec![
+                    create_call_target("builtins.int.__sub__", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.int", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_augmented_assign_list_iadd,
+    TEST_MODULE_NAME,
+    r#"
+def foo():
+  x = [1, 2]
+  x += [3]
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "4:3-4:11|artificial-call|augmented-assign-dunder-call",
+                regular_call_callees(vec![
+                    create_call_target("builtins.list.__iadd__", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.list", context),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_augmented_assign_custom_class,
+    TEST_MODULE_NAME,
+    r#"
+class Counter:
+    def __init__(self, value: int) -> None:
+        self.value = value
+    def __iadd__(self, other: int) -> "Counter":
+        self.value += other
+        return self
+
+def foo():
+    c = Counter(0)
+    c += 1
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "10:9-10:19",
+                    constructor_call_callees(
+                        vec![
+                            create_call_target("test.Counter.__init__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                                .with_receiver_class_for_test("test.Counter", context),
+                        ],
+                        vec![
+                            create_call_target("builtins.object.__new__", TargetType::Function)
+                                .with_is_static_method(true),
+                        ],
+                    ),
+                ),
+                (
+                    "11:5-11:11|artificial-call|augmented-assign-dunder-call",
+                    regular_call_callees(vec![
+                        create_call_target("test.Counter.__iadd__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("test.Counter", context),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_augmented_assign_union,
+    TEST_MODULE_NAME,
+    r#"
+def foo(x: int | list[int], y: int | list[int]):
+  x += y
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "3:3-3:9|artificial-call|augmented-assign-dunder-call",
+                regular_call_callees(vec![
+                    create_call_target("builtins.int.__add__", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.int", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                    create_call_target("builtins.list.__iadd__", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.list", context),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_augmented_assign_setitem,
+    TEST_MODULE_NAME,
+    r#"
+def foo(d: dict[str, int], k: str, v: int):
+  d[k] += v
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:3-3:12|artificial-call|augmented-assign-dunder-call",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.int.__add__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.int", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+                (
+                    "3:3-3:12|artificial-call|augmented-assign-statement>subscript-set-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.dict.__setitem__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.dict", context),
+                    ]),
+                ),
+                (
+                    "3:3-3:7|artificial-call|augmented-assign-rhs>subscript-get-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.dict.__getitem__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.dict", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_abs,
+    TEST_MODULE_NAME,
+    r#"
+def foo(x: int):
+  return abs(x)
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:10-3:16",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.abs", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+                (
+                    "3:10-3:16|artificial-call|abs-call",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.int.__abs__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.int", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    iter_iter_next,
+    TEST_MODULE_NAME,
+    r#"
+def foo(x: list[int]):
+  return next(iter(x))
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:15-3:22",
+                    regular_call_callees(vec![create_call_target(
+                        "builtins.iter",
+                        TargetType::Function,
+                    )]),
+                ),
+                (
+                    "3:10-3:23",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.next", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+                (
+                    "3:15-3:22|artificial-call|iter-call",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.list.__iter__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.list", context),
+                    ]),
+                ),
+                (
+                    "3:10-3:23|artificial-call|next-call",
+                    regular_call_callees(vec![
+                        create_call_target("typing.Iterator.__next__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("typing.Iterator", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
                 ),
             ],
         )]

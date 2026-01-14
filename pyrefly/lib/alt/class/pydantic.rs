@@ -25,10 +25,14 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::callable::CallArg;
+use crate::alt::callable::CallKeyword;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
@@ -52,6 +56,52 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::types::Type;
+
+fn int_literal_from_type(ty: &Type) -> Option<&LitInt> {
+    // We only currently enforce range constraints for literal ints.
+    match ty {
+        Type::Literal(lit) if let Lit::Int(lit) = &lit.value => Some(lit),
+        _ => None,
+    }
+}
+
+#[derive(Clone)]
+struct PydanticRangeConstraints {
+    gt: Option<Type>,
+    ge: Option<Type>,
+    lt: Option<Type>,
+    le: Option<Type>,
+}
+
+impl PydanticRangeConstraints {
+    fn from_keywords(keywords: &DataclassFieldKeywords) -> Option<Self> {
+        if keywords.gt.is_none()
+            && keywords.ge.is_none()
+            && keywords.lt.is_none()
+            && keywords.le.is_none()
+        {
+            return None;
+        }
+        Some(Self {
+            gt: keywords.gt.clone(),
+            ge: keywords.ge.clone(),
+            lt: keywords.lt.clone(),
+            le: keywords.le.clone(),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct PydanticParamConstraint {
+    field_name: Name,
+    constraints: PydanticRangeConstraints,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum PydanticParamKey {
+    Position(usize),
+    Name(Name),
+}
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_pydantic_root_model_type_via_mro(
@@ -284,7 +334,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // for v2.
         let extra = match keywords.iter().find(|(name, _)| name == &EXTRA) {
             Some((_, ann)) => match ann.get_type() {
-                Type::Literal(Lit::Str(s)) => match s.as_str() {
+                Type::Literal(lit) if let Lit::Str(s) = &lit.value => match s.as_str() {
                     "allow" | "ignore" => true,
                     "forbid" => false,
                     _ => {
@@ -414,14 +464,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        fn int_literal_from_type(ty: &Type) -> Option<&LitInt> {
-            // We only currently enforce range constraints for literal defaults, so carve out
-            // the `Literal[int]` case and ignore everything else.
-            match ty {
-                Type::Literal(Lit::Int(lit)) => Some(lit),
-                _ => None,
-            }
-        }
         let Some(default_ty) = &keywords.default else {
             return;
         };
@@ -498,5 +540,135 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         None
+    }
+
+    pub fn check_pydantic_argument_range_constraints(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        errors: &ErrorCollector,
+    ) {
+        let constraints = self.collect_pydantic_constraint_params(cls, dataclass);
+        if constraints.is_empty() {
+            return;
+        };
+
+        let infer_errors = self.error_swallower();
+        for (index, arg) in args.iter().enumerate() {
+            match arg {
+                CallArg::Arg(value) => {
+                    let value_ty = value.infer(self, &infer_errors);
+                    if let Some(info) = constraints.get(&PydanticParamKey::Position(index)) {
+                        self.emit_pydantic_argument_constraint(
+                            &value_ty,
+                            info,
+                            arg.range(),
+                            errors,
+                        );
+                    }
+                }
+                CallArg::Star(..) => {
+                    // Can't reliably map starred arguments to parameters.
+                    break;
+                }
+            }
+        }
+
+        for kw in keywords {
+            let Some(identifier) = kw.arg.as_ref() else {
+                continue;
+            };
+            let key = PydanticParamKey::Name(identifier.id.clone());
+            if let Some(info) = constraints.get(&key) {
+                let value_ty = kw.value.infer(self, &infer_errors);
+                self.emit_pydantic_argument_constraint(&value_ty, info, kw.range, errors);
+            }
+        }
+    }
+
+    fn collect_pydantic_constraint_params(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+    ) -> SmallMap<PydanticParamKey, PydanticParamConstraint> {
+        let mut constraints = SmallMap::new();
+        let mut position = 0;
+        for (field_name, _field, keywords) in self.iter_fields(cls, dataclass, true) {
+            if !keywords.init {
+                continue;
+            }
+            let Some(constraint) = PydanticRangeConstraints::from_keywords(&keywords) else {
+                continue;
+            };
+            let info = PydanticParamConstraint {
+                field_name: field_name.clone(),
+                constraints: constraint,
+            };
+            if keywords.init_by_name {
+                constraints.insert(PydanticParamKey::Name(field_name), info.clone());
+                if !keywords.is_kw_only() {
+                    constraints.insert(PydanticParamKey::Position(position), info.clone());
+                    position += 1;
+                }
+            }
+            if let Some(alias) = &keywords.init_by_alias {
+                constraints.insert(PydanticParamKey::Name(alias.clone()), info.clone());
+                if !keywords.is_kw_only() {
+                    constraints.insert(PydanticParamKey::Position(position), info);
+                    position += 1;
+                }
+            }
+        }
+        constraints
+    }
+
+    fn emit_pydantic_argument_constraint(
+        &self,
+        value_ty: &Type,
+        info: &PydanticParamConstraint,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let Some(value_lit) = int_literal_from_type(value_ty) else {
+            return;
+        };
+        let checks = [
+            ("gt", info.constraints.gt.as_ref()),
+            ("ge", info.constraints.ge.as_ref()),
+            ("lt", info.constraints.lt.as_ref()),
+            ("le", info.constraints.le.as_ref()),
+        ];
+        for (label, constraint_ty) in checks {
+            let Some(constraint_ty) = constraint_ty else {
+                continue;
+            };
+            let Some(constraint_lit) = int_literal_from_type(constraint_ty) else {
+                continue;
+            };
+            let comparison = value_lit.cmp(constraint_lit);
+            let violates = match label {
+                "gt" => !matches!(comparison, std::cmp::Ordering::Greater),
+                "ge" => matches!(comparison, std::cmp::Ordering::Less),
+                "lt" => !matches!(comparison, std::cmp::Ordering::Less),
+                "le" => matches!(comparison, std::cmp::Ordering::Greater),
+                _ => false,
+            };
+            if violates {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    format!(
+                        "Argument value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
+                        self.for_display(value_ty.clone()),
+                        label,
+                        self.for_display(constraint_ty.clone()),
+                        info.field_name
+                    ),
+                );
+            }
+        }
     }
 }

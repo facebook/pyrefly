@@ -52,6 +52,7 @@ use crate::types::callable::PropertyRole;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
+use crate::types::literal::Literal;
 use crate::types::module::ModuleType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
@@ -246,9 +247,6 @@ pub enum NoAccessReason {
     SettingReadOnlyProperty(Class),
     /// A descriptor that only has `__get__` should be treated as read-only on instances.
     SettingReadOnlyDescriptor(Class),
-    /// We do not allow class-level mutation of descriptors (this is conservative,
-    /// it is unspecified whether monkey-patching descriptors should be permitted).
-    SettingDescriptorOnClass(Class),
     /// Calling a method via `super()` when no implementation is available (e.g. abstract protocol or abstract base method).
     SuperMethodNeedsImplementation(Class),
 }
@@ -292,12 +290,6 @@ impl NoAccessReason {
                 let class_name = class.name();
                 format!(
                     "Attribute `{attr_name}` of class `{class_name}` is a read-only property and cannot be set"
-                )
-            }
-            NoAccessReason::SettingDescriptorOnClass(class) => {
-                let class_name = class.name();
-                format!(
-                    "Attribute `{attr_name}` of class `{class_name}` is a descriptor, which may not be overwritten"
                 )
             }
             NoAccessReason::SettingReadOnlyDescriptor(class) => {
@@ -1088,10 +1080,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             })
         {
+            // `as_attribute_base` promotes literals, so we should promote here too
+            // In the future, we should refactor `get_protocol_attribute` to reuse the `AttributeBase`, to ensure the logic is identical
+            let got = got.clone().promote_implicit_literals(self.stdlib);
             if (!got_attrs.is_empty())
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
-                let got_type_display = self.for_display(got.clone());
                 for (got_attr, _) in got_attrs.iter() {
                     self.is_attribute_subset(got_attr, &want, &mut |got, want| {
                         is_subset(got, want)
@@ -1099,7 +1093,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .map_err(|err| {
                         SubsetError::IncompatibleAttribute(Box::new((
                             protocol.name().clone(),
-                            got_type_display.clone(),
+                            self.for_display(got.clone()),
                             attr_name.clone(),
                             err,
                         )))
@@ -1218,7 +1212,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let builtins_type_classtype = self.stdlib.builtins_type();
         self.get_instance_attribute(builtins_type_classtype, attr_name)
-            .and_then(|attr| attr.as_instance_method())
+            .and_then(|attr| match attr {
+                ClassAttribute::Property(getter, _, _) => {
+                    let error_swallower = self.error_swallower();
+                    let fake_range = TextRange::default();
+                    let ty = self.call_property_getter(getter, fake_range, &error_swallower, None);
+                    if error_swallower.is_empty() {
+                        Some(ty)
+                    } else {
+                        // Should not happen here, but just in case
+                        None
+                    }
+                }
+                _ => attr.as_instance_method(),
+            })
             .unwrap_or_else(fallback)
     }
 
@@ -1240,7 +1247,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AttributeBase1::Never => acc.found_type(Type::never(), base),
             AttributeBase1::EnumLiteral(e) if matches!(attr_name.as_str(), "name" | "_name_") => {
-                acc.found_type(Type::Literal(Lit::Str(e.member.as_str().into())), base)
+                acc.found_type(Lit::Str(e.member.as_str().into()).to_implicit_type(), base)
             }
             AttributeBase1::LiteralString => match self.get_literal_string_attribute(attr_name) {
                 Some(attr) => acc.found_class_attribute(attr, base),
@@ -1750,12 +1757,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
             }
-            Type::LiteralString | Type::Literal(Lit::Str(_)) => {
-                acc.push(AttributeBase1::LiteralString)
-            }
-            Type::Literal(Lit::Enum(lit_enum)) => acc.push(AttributeBase1::EnumLiteral(*lit_enum)),
+            Type::LiteralString(_)
+            | Type::Literal(box Literal {
+                value: Lit::Str(_), ..
+            }) => acc.push(AttributeBase1::LiteralString),
+            Type::Type(box Type::LiteralString(_)) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(self.stdlib.str().clone()),
+            )),
+            Type::Type(box Type::Literal(lit)) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(lit.value.general_class_type(self.stdlib).clone()),
+            )),
+            Type::Literal(box Literal {
+                value: Lit::Enum(lit_enum),
+                ..
+            }) => acc.push(AttributeBase1::EnumLiteral(*lit_enum)),
             Type::Literal(lit) => acc.push(AttributeBase1::ClassInstance(
-                lit.general_class_type(self.stdlib).clone(),
+                lit.value.general_class_type(self.stdlib).clone(),
             )),
             Type::TypeGuard(_) | Type::TypeIs(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.bool().clone()))
@@ -1968,6 +1985,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for ty in members {
                     self.as_attribute_base1(Type::type_form(ty), acc)
                 }
+            }
+            Type::Type(box Type::Intersect(box (_, fallback))) => {
+                // TODO(rechen): implement attribute access on `type[A & B]`
+                self.as_attribute_base1(Type::type_form(fallback), acc)
             }
             Type::Quantified(quantified) => match quantified.restriction() {
                 Restriction::Bound(ty) => {

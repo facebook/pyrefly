@@ -200,7 +200,7 @@ pub fn will_rename_files(
 
         let config = state
             .config_finder()
-            .python_file(old_module_name, &module_path);
+            .python_file(old_handle.module_kind(), &module_path);
         let new_module_name = ModuleName::from_path(
             &new_path,
             config.search_path().chain(

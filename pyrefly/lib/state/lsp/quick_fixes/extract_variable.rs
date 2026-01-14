@@ -16,6 +16,9 @@ use ruff_text_size::TextSize;
 
 use crate::state::lsp::Transaction;
 use crate::state::lsp::quick_fixes::extract_function::LocalRefactorCodeAction;
+use crate::state::lsp::quick_fixes::extract_shared::is_exact_expression;
+use crate::state::lsp::quick_fixes::extract_shared::line_indent_and_start;
+use crate::state::lsp::quick_fixes::extract_shared::split_selection;
 
 const DEFAULT_VARIABLE_PREFIX: &str = "extracted_value";
 
@@ -64,40 +67,6 @@ pub(crate) fn extract_variable_code_actions(
     Some(vec![action])
 }
 
-fn split_selection<'a>(
-    selection_text: &'a str,
-    selection_range: TextRange,
-) -> Option<(&'a str, &'a str, &'a str, TextRange)> {
-    let trimmed_start = selection_text.trim_start_matches(char::is_whitespace);
-    let leading_len = selection_text.len() - trimmed_start.len();
-    let trimmed = trimmed_start.trim_end_matches(char::is_whitespace);
-    let trailing_len = trimmed_start.len() - trimmed.len();
-    if trimmed.is_empty() || trimmed.contains('\n') {
-        return None;
-    }
-    let leading_ws = &selection_text[..leading_len];
-    let trailing_ws = &selection_text[selection_text.len() - trailing_len..];
-    let leading_size = TextSize::try_from(leading_len).ok()?;
-    let trailing_size = TextSize::try_from(trailing_len).ok()?;
-    let expr_start = selection_range.start() + leading_size;
-    let expr_end = selection_range.end() - trailing_size;
-    if expr_start >= expr_end {
-        return None;
-    }
-    Some((
-        leading_ws,
-        trimmed,
-        trailing_ws,
-        TextRange::new(expr_start, expr_end),
-    ))
-}
-
-fn is_exact_expression(ast: &ModModule, selection: TextRange) -> bool {
-    Ast::locate_node(ast, selection.start())
-        .into_iter()
-        .any(|node| node.as_expr_ref().is_some() && node.range() == selection)
-}
-
 fn find_enclosing_statement_range(ast: &ModModule, selection: TextRange) -> Option<TextRange> {
     let covering_nodes = Ast::locate_node(ast, selection.start());
     for node in covering_nodes {
@@ -108,23 +77,6 @@ fn find_enclosing_statement_range(ast: &ModModule, selection: TextRange) -> Opti
         }
     }
     None
-}
-
-fn line_indent_and_start(source: &str, position: TextSize) -> Option<(String, TextSize)> {
-    let mut idx = position.to_usize();
-    if idx > source.len() {
-        idx = source.len();
-    }
-    let line_start = source[..idx]
-        .rfind('\n')
-        .map(|start| start + 1)
-        .unwrap_or(0);
-    let indent = source[line_start..idx]
-        .chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect();
-    let insert_position = TextSize::try_from(line_start).ok()?;
-    Some((indent, insert_position))
 }
 
 fn generate_variable_name(source: &str) -> String {

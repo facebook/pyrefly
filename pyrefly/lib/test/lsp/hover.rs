@@ -89,6 +89,29 @@ from lib import foo_renamed
 }
 
 #[test]
+fn hover_on_module_function_shows_function() {
+    let lib = r#"
+def foo() -> None: ...
+"#;
+    let code = r#"
+import lib
+
+lib.foo()
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert!(
+        report.contains("(function) foo"),
+        "Expected function label, got: {report}"
+    );
+    assert!(
+        !report.contains("(method) foo"),
+        "Did not expect method label, got: {report}"
+    );
+}
+
+#[test]
 fn hover_shows_unpacked_kwargs_fields() {
     let code = r#"
 from typing import TypedDict, Unpack
@@ -652,4 +675,269 @@ greeter.attr
         report.contains("variable") || report.contains("parameter") || report.contains("Greeter")
     );
     assert!(!report.contains("__call__"));
+}
+
+#[test]
+fn hover_on_import_same_name_alias_first_token_test() {
+    let lib = r#"
+def func() -> None: ...
+"#;
+    let code = r#"
+from lib import func as func
+#                ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import func as func
+                     ^
+```python
+(function) func: def func() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_import_same_name_alias_second_token_test() {
+    let lib = r#"
+def func() -> None: ...
+"#;
+    let code = r#"
+from lib import func as func
+#                        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import func as func
+                             ^
+```python
+(function) func: def func() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_import_different_name_alias_first_token_test() {
+    let lib = r#"
+def bar() -> None: ...
+"#;
+    let code = r#"
+from lib import bar as baz
+#                ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import bar as baz
+                     ^
+```python
+(function) bar: def bar() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_import_different_name_alias_second_token_test() {
+    let lib = r#"
+def bar() -> None: ...
+"#;
+    let code = r#"
+from lib import bar as baz
+#                       ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import bar as baz
+                            ^
+```python
+(function) bar: def bar() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_first_component_of_multi_part_import() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("(module) mymod:"),
+        "Expected hover to show 'mymod', got: {report}"
+    );
+    assert!(
+        !report.contains("(module) mymod.submod:"),
+        "Hover should not show 'mymod.submod' when hovering over 'mymod', got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_middle_component_of_multi_part_import() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let mymod_submod_deep_init = r#"# mymod/submod/deep/__init__.py
+class Bar: ...
+"#;
+    let code = r#"
+from mymod.submod.deep import Bar
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+            ("mymod.submod.deep", mymod_submod_deep_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("(module) mymod.submod:"),
+        "Expected hover to show 'mymod.submod', got: {report}"
+    );
+    assert!(
+        !report.contains("(module) mymod.submod.deep:"),
+        "Hover should not show 'mymod.submod.deep' when hovering over 'submod', got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_first_component_when_intermediate_module_missing() {
+    // Only mymod.submod exists, not mymod itself
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("mymod.submod", mymod_submod_init)],
+        get_test_report,
+    );
+    // When clicking on 'mymod' in 'mymod.submod', hover shows the full identifier
+    // 'mymod.submod' even though mymod itself doesn't exist
+    assert!(
+        report.contains("mymod.submod: Module[mymod]"),
+        "Expected hover to show full module name 'mymod.submod', got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_middle_component_when_intermediate_module_missing() {
+    // Only mymod and mymod.submod.deep exist, not mymod.submod
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_deep_init = r#"# mymod/submod/deep/__init__.py
+class Bar: ...
+"#;
+    let code = r#"
+from mymod.submod.deep import Bar
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod.deep", mymod_submod_deep_init),
+        ],
+        get_test_report,
+    );
+    // When clicking on 'submod' in 'mymod.submod.deep', hover shows the full identifier
+    // 'mymod.submod.deep' even though mymod.submod itself doesn't exist
+    assert!(
+        report.contains("mymod.submod.deep: Module[mymod]"),
+        "Expected hover to show full module name 'mymod.submod.deep', got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_operator_shows_contains_dunder() {
+    let code = r#"
+class Container:
+    def __contains__(self, item: int) -> bool: ...
+
+c = Container()
+1 in c
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The hover should show the __contains__ method signature
+    assert!(
+        report.contains("__contains__") && report.contains("self: Container"),
+        "Expected hover to show __contains__ method signature, got: {report}"
+    );
+}
+
+/// Test for the exact example from issue #1926: [x for x in x if x in [1]]
+/// For the membership `in`, hover shows __contains__ method.
+/// Note: Hover over iteration `in` (for loops/comprehensions) doesn't show __iter__ because
+/// keywords don't have types, but goto-definition works. See the definition.rs tests.
+#[test]
+fn hover_over_in_keyword_issue_1926_membership() {
+    // The membership `in` shows __contains__ method
+    let code_membership = r#"
+x = [1, 2, 3]
+result = [x for x in x if x in [1]]
+#                           ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code_membership)], get_test_report);
+    // For membership test, we expect to see __contains__
+    assert!(
+        report.contains("__contains__"),
+        "Membership 'in' should show __contains__ hover, got: {report}"
+    );
 }

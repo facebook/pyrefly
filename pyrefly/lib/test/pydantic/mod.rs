@@ -9,6 +9,7 @@
 mod aliases;
 mod base_settings;
 mod config;
+mod dataclasses;
 mod extra;
 mod field;
 mod root_model;

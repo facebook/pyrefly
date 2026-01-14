@@ -18,6 +18,7 @@ use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -274,7 +275,7 @@ impl SourceDatabase for QuerySourceDatabase {
             //    case we can return immediately. The build system will complain if
             //    multiple reachable targets have files that write to the same output
             //    location, so we don't need to check for/handle that.
-            // 3. a result that's a package file, which might refer to mulitple directories.
+            // 3. a result that's a package file, which might refer to multiple directories.
             //    In this case, we collect all possible results, and deterministically
             //    return one of them.
             for target in package_targets {
@@ -329,18 +330,28 @@ impl SourceDatabase for QuerySourceDatabase {
         ))
     }
 
-    fn query_source_db(&self, files: SmallSet<ModulePathBuf>, force: bool) -> anyhow::Result<bool> {
-        let new_includes = files.into_iter().map(Include::path).collect();
-        let mut includes = self.includes.lock();
-        if *includes == new_includes && !force {
-            debug!("Not querying Buck source DB, since no inputs have changed");
-            return Ok(false);
-        }
-        *includes = new_includes;
-        info!("Querying Buck for source DB");
-        let raw_db = self.querier.query_source_db(&includes, &self.cwd)?;
-        info!("Finished querying Buck for source DB");
-        Ok(self.update_with_target_manifest(raw_db))
+    fn query_source_db(
+        &self,
+        files: SmallSet<ModulePathBuf>,
+        force: bool,
+    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
+        let mut stats = TelemetrySourceDbRebuildInstanceStats::default();
+        let run = || {
+            let new_includes = files.into_iter().map(Include::path).collect();
+            let mut includes = self.includes.lock();
+            if *includes == new_includes && !force {
+                debug!("Not querying Buck source DB, since no inputs have changed");
+                return Ok(false);
+            }
+            *includes = new_includes;
+            info!("Querying Buck for source DB");
+            let (raw_db, build_id) = self.querier.query_source_db(&includes, &self.cwd);
+            stats.build_id = build_id;
+            let raw_db = raw_db?;
+            info!("Finished querying Buck for source DB");
+            Ok(self.update_with_target_manifest(raw_db))
+        };
+        (run(), stats)
     }
 
     fn get_paths_to_watch<'a>(&'a self) -> SmallSet<WatchPattern<'a>> {
@@ -441,11 +452,11 @@ mod tests {
             &self,
             _: &SmallSet<Include>,
             _: &Path,
-        ) -> anyhow::Result<TargetManifestDatabase> {
-            Ok(TargetManifestDatabase::get_test_database())
+        ) -> (anyhow::Result<TargetManifestDatabase>, Option<String>) {
+            (Ok(TargetManifestDatabase::get_test_database()), None)
         }
 
-        fn construct_command(&self) -> std::process::Command {
+        fn construct_command(&self, _: Option<&Path>) -> std::process::Command {
             panic!("We shouldn't be calling this...");
         }
     }

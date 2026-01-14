@@ -15,6 +15,7 @@ use std::mem;
 
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
+use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -43,6 +44,7 @@ use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;
 use crate::types::callable::Params;
+use crate::types::class::Class;
 use crate::types::module::ModuleType;
 use crate::types::simplify::simplify_tuples;
 use crate::types::simplify::unions;
@@ -67,7 +69,7 @@ enum Variable {
     /// Pyrefly only creates partial types for assignments, and will attempt to
     /// determine the type ("pin" it) using the first use of the name assigned.
     ///
-    /// It will attempt to infer the type from the first downsteam use; if the
+    /// It will attempt to infer the type from the first downstream use; if the
     /// type cannot be determined it becomes `Any`.
     PartialContained,
     /// A "partial type" (see above) representing a type variable that was not
@@ -1095,6 +1097,7 @@ impl Solver {
             type_order,
             gas: INITIAL_GAS,
             recursive_assumptions: SmallSet::new(),
+            class_protocol_assumptions: SmallSet::new(),
         }
     }
 }
@@ -1249,6 +1252,8 @@ pub enum SubsetError {
     InternalError(String),
     /// Protocol class names cannot be assigned to `type[P]` when `P` is a protocol
     TypeOfProtocolNeedsConcreteClass(Name),
+    /// A `type` cannot accept special forms like `Callable`
+    TypeCannotAcceptSpecialForms(SpecialForm),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -1279,6 +1284,10 @@ impl SubsetError {
             SubsetError::TypeOfProtocolNeedsConcreteClass(want) => Some(format!(
                 "Only concrete classes may be assigned to `type[{want}]` because `{want}` is a protocol"
             )),
+            SubsetError::TypeCannotAcceptSpecialForms(form) => Some(format!(
+                "`type` cannot accept special form `{}` as an argument",
+                form
+            )),
             SubsetError::Other => None,
         }
     }
@@ -1293,6 +1302,12 @@ pub struct Subset<'a, Ans: LookupAnswer> {
     /// Recursive assumptions of pairs of types that is_subset_eq returns true for.
     /// Used for structural typechecking of protocols.
     pub recursive_assumptions: SmallSet<(Type, Type)>,
+    /// Class-level recursive assumptions for protocol checks.
+    /// When checking `got <: protocol` where got's type arguments contain Vars
+    /// (indicating we're in a recursive pattern), we track (got_class, protocol_class)
+    /// pairs to detect cycles. This enables coinductive reasoning for recursive protocols
+    /// like Functor/Maybe without falsely assuming success for unrelated protocol checks.
+    pub class_protocol_assumptions: SmallSet<(Class, Class)>,
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
@@ -1480,7 +1495,21 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Err(e) => Err(e),
                         }
                     }
-                    Variable::PartialContained | Variable::Unwrap | Variable::Recursive => {
+                    Variable::PartialContained => {
+                        // Promote LiteralStr to str when pinning a partial type.
+                        // TODO(stroxler): should we be promoting other literal types here?
+                        // See: https://github.com/facebook/pyrefly/issues/2068
+                        let t2_p = match t2 {
+                            Type::LiteralString(_) => {
+                                self.type_order.stdlib().str().clone().to_type()
+                            }
+                            _ => t2.clone(),
+                        };
+                        drop(v1_ref);
+                        variables.update(*v1, Variable::Answer(t2_p));
+                        Ok(())
+                    }
+                    Variable::Unwrap | Variable::Recursive => {
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         Ok(())
@@ -1511,7 +1540,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         self.is_subset_eq(t1, &t2)
                     }
                     Variable::Quantified(q) | Variable::PartialQuantified(q) => {
-                        let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
+                        let t1_p = t1
+                            .clone()
+                            .promote_implicit_literals(self.type_order.stdlib());
                         let name = q.name.clone();
                         let bound = q.restriction().as_type(self.type_order.stdlib());
                         drop(v2_ref);
@@ -1544,7 +1575,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         Ok(())
                     }
                     Variable::PartialContained => {
-                        let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
+                        let t1_p = t1
+                            .clone()
+                            .promote_implicit_literals(self.type_order.stdlib());
                         drop(v2_ref);
                         variables.update(*v2, Variable::Answer(t1_p));
                         Ok(())

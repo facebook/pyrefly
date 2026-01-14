@@ -36,7 +36,7 @@ const KEY_TO_DEFINITION_INITIAL_GAS: Gas = Gas::new(100);
 pub enum IntermediateDefinition {
     Local(Export),
     NamedImport(TextRange, ModuleName, Name, Option<TextRange>),
-    Module(ModuleName),
+    Module(TextRange, ModuleName),
 }
 
 pub fn key_to_intermediate_definition(
@@ -78,7 +78,9 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             | Binding::LoopPhi(k, ..) => {
                 current_idx = *k;
             }
-            Binding::Phi(_, ks) if !ks.is_empty() => current_idx = *ks.iter().next().unwrap(),
+            Binding::Phi(_, branches) if !branches.is_empty() => {
+                current_idx = branches[0].value_key
+            }
             Binding::PossibleLegacyTParam(k, _) => {
                 let binding = bindings.get(*k);
                 current_idx = binding.idx();
@@ -127,6 +129,16 @@ fn create_intermediate_definition_from(
                     *original_name_range,
                 ));
             }
+            Binding::ImportViaGetattr(m, _name) => {
+                // For __getattr__ imports, the name doesn't exist directly in the module,
+                // so we point to __getattr__ instead.
+                return Some(IntermediateDefinition::NamedImport(
+                    def_key.range(),
+                    *m,
+                    pyrefly_python::dunder::GETATTR.clone(),
+                    None,
+                ));
+            }
             Binding::Module(name, path, ..) => {
                 let imported_module_name = if path.len() == 1 {
                     // This corresponds to the case for `import x.y` -- the corresponding key would
@@ -139,7 +151,10 @@ fn create_intermediate_definition_from(
                     // actual module that corresponds to the key must be `x.y`.
                     name.dupe()
                 };
-                return Some(IntermediateDefinition::Module(imported_module_name));
+                return Some(IntermediateDefinition::Module(
+                    def_key.range(),
+                    imported_module_name,
+                ));
             }
             Binding::Function(idx, ..) => {
                 let func = bindings.get(*idx);
@@ -276,7 +291,7 @@ fn handle_require_absolute_import(config_finder: &ConfigFinder, handle: &Handle)
     ) {
         return true;
     }
-    let config = config_finder.python_file(handle.module(), handle.path());
+    let config = config_finder.python_file(handle.module_kind(), handle.path());
     config
         .search_path()
         .any(|search_path| handle.path().as_path().starts_with(search_path))

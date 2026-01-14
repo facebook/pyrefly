@@ -65,9 +65,20 @@ let docsSidebar = [
         label: 'Third-Party Extensions',
         items: [
             {
-                type: 'doc' as const,
-                id: 'pydantic',
+                type: 'category' as const,
                 label: 'Pydantic Support',
+                items: [
+                    {
+                        type: 'doc' as const,
+                        id: 'pydantic',
+                        label: 'Overview',
+                    },
+                    {
+                        type: 'doc' as const,
+                        id: 'pydantic-lax-conversions',
+                        label: 'Lax Mode Type Conversions',
+                    },
+                ],
             },
             {
                 type: 'doc' as const,

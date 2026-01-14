@@ -676,3 +676,240 @@ assert_type(a2, A[A[Any]])
 assert_type(a2.f(), A[Any])
     "#,
 );
+
+testcase!(
+    test_typevar_default_referencing_typevar,
+    r#"
+from typing import TypeAlias, Any, assert_type
+from typing_extensions import Generic, TypeVar
+
+class NBitBase:
+    pass
+
+class _32Bit(NBitBase):
+    pass
+
+_NBit1 = TypeVar("_NBit1", bound=NBitBase, default=Any)
+_NBit2 = TypeVar("_NBit2", bound=NBitBase, default=_NBit1)
+
+class complexfloating(Generic[_NBit1, _NBit2]): ...
+complex64: TypeAlias = complexfloating[_32Bit]
+
+def f(z: complex64):
+    assert_type(z, complexfloating[_32Bit, _32Bit])
+"#,
+);
+
+// PEP 696 validation tests for TypeVar defaults when default is another TypeVar
+testcase!(
+    test_typevar_default_bound_validation,
+    r#"
+from typing import TypeVar
+
+class A: ...
+class B(A): ...
+class C(B): ...
+
+# When default is a TypeVar, T1's bound must be a subtype of T2's bound
+
+# Valid: default TypeVar's bound (B) is subtype of outer bound (A)
+T1 = TypeVar("T1", bound=B)
+T2 = TypeVar("T2", bound=A, default=T1)
+
+# Valid: same bound is OK
+T3 = TypeVar("T3", bound=A)
+T4 = TypeVar("T4", bound=A, default=T3)
+
+# Invalid: default TypeVar's bound (A) is NOT a subtype of outer bound (B)
+T5 = TypeVar("T5", bound=A)
+T6 = TypeVar("T6", bound=B, default=T5)  # E: Expected default `TypeVar[T5]` of `T6` to be assignable to the upper bound of `B`
+
+# Valid: default TypeVar has narrower bound (C) which is subtype of (A)
+T7 = TypeVar("T7", bound=C)
+T8 = TypeVar("T8", bound=A, default=T7)
+"#,
+);
+
+testcase!(
+    test_typevar_default_constraints_validation,
+    r#"
+from typing import TypeVar
+
+class A: ...
+class B: ...
+class C: ...
+class D: ...
+
+# When default is a TypeVar, the outer constraints must be a superset of default's constraints
+
+# Valid: outer constraints (A, B, C) is superset of default constraints (A, B)
+T1 = TypeVar("T1", A, B)
+T2 = TypeVar("T2", A, B, C, default=T1)
+
+# Valid: same constraints is OK
+T3 = TypeVar("T3", A, B)
+T4 = TypeVar("T4", A, B, default=T3)
+
+# Invalid: outer constraints (A, B) is NOT a superset of default constraints (A, B, C)
+T5 = TypeVar("T5", A, B, C)
+T6 = TypeVar("T6", A, B, default=T5)  # E: Expected default `TypeVar[T5]` of `T6` to be one of the following constraints: `A`, `B`
+
+# Invalid: outer constraints (A,) does not include all of default constraints (A, B)
+T7 = TypeVar("T7", A, B)
+T8 = TypeVar("T8", A, C, default=T7)  # E: Expected default `TypeVar[T7]` of `T8` to be one of the following constraints: `A`, `C`
+"#,
+);
+
+testcase!(
+    test_typevar_default_mixed_restriction_validation,
+    r#"
+from typing import TypeVar
+
+class A: ...
+class B: ...
+class C: ...
+
+# A bounded TypeVar cannot be a valid default for a constrained TypeVar
+T1 = TypeVar("T1", bound=A)
+T2 = TypeVar("T2", A, B, default=T1)  # E: Expected default `TypeVar[T1]` of `T2` to be one of the following constraints: `A`, `B`
+
+# An unrestricted TypeVar cannot be a valid default for a constrained TypeVar
+T3 = TypeVar("T3")
+T4 = TypeVar("T4", A, B, default=T3)  # E: Expected default `TypeVar[T3]` of `T4` to be one of the following constraints: `A`, `B`
+
+# An unrestricted TypeVar can be valid for a bounded TypeVar (unrestricted means bound=object)
+T5 = TypeVar("T5")
+T6 = TypeVar("T6", bound=object, default=T5)  # OK - unrestricted bound is object
+"#,
+);
+
+testcase!(
+    test_typevar_default_typevar_pep695_syntax,
+    r#"
+from typing import assert_type
+
+class A: ...
+class B(A): ...
+class C(B): ...
+
+# Test with PEP 695 syntax (new generic syntax)
+
+# Valid: default TypeVar bound is subtype of outer bound
+class Container1[T1: B, T2: A = T1]: ...
+x1: Container1[C] = Container1()
+assert_type(x1, Container1[C, C])
+
+# Invalid: default TypeVar bound is NOT subtype of outer bound
+class Container2[T1: A, T2: B = T1]: ...  # E: Expected default `T1` of `T2` to be assignable to the upper bound of `B`
+"#,
+);
+
+testcase!(
+    test_typevar_default_typevar_constraints_pep695_syntax,
+    r#"
+class A: ...
+class B: ...
+class C: ...
+
+# Test constrained TypeVar defaults with PEP 695 syntax
+
+# Valid: outer constraints are superset of default constraints
+class Container1[T1: (A, B), T2: (A, B, C) = T1]: ...
+
+# Invalid: outer constraints are NOT superset of default constraints
+class Container2[T1: (A, B, C), T2: (A, B) = T1]: ...  # E: Expected default `T1` of `T2` to be one of the following constraints: `A`, `B`
+"#,
+);
+
+testcase!(
+    test_catch_bad_bound,
+    r#"
+from typing import Generic, TypeVar
+T1 = TypeVar("T1")
+T2 = TypeVar("T2", bound=T1)  # E: bounds and constraints must be concrete
+T3 = TypeVar("T3", bound=list[T1])  # E: bounds and constraints must be concrete
+T4 = TypeVar("T4", bound=list[list[T1]])  # E: bounds and constraints must be concrete
+
+S1 = TypeVar("S1")
+S2 = TypeVar("S2", default=S1)
+class A(Generic[S1, S2]): ...
+T5 = TypeVar("T5", bound=list[A[int]])  # OK
+    "#,
+);
+
+testcase!(
+    test_default_is_typevar_in_bound,
+    r#"
+from typing import Any, Generic, TypeAlias, TypeVar
+
+_NBit1 = TypeVar("_NBit1", default=Any)
+_NBit2 = TypeVar("_NBit2", default=_NBit1)
+
+class complexfloating(Generic[_NBit1, _NBit2]):
+    pass
+
+ComplexFloatingOrFloat: TypeAlias = complexfloating[Any, Any] | float
+
+_Complex_DT = TypeVar("_Complex_DT", bound=complexfloating[Any, Any])
+_ComplexOrFloatT = TypeVar("_ComplexOrFloatT", bound=ComplexFloatingOrFloat)
+    "#,
+);
+
+testcase!(
+    test_default_is_typevar_in_default,
+    r#"
+from typing import Any, Callable, Generic, TypeAlias, TypeVar
+
+_NBit1 = TypeVar("_NBit1", default=Any)
+_NBit2 = TypeVar("_NBit2", default=_NBit1)
+
+class complexfloating(Generic[_NBit1, _NBit2]):
+    pass
+
+ComplexFloatingOrFloat: TypeAlias = complexfloating[Any, Any] | float
+
+T1 = TypeVar("T1", default=complexfloating[Any, complexfloating[Any, Any]])
+T2 = TypeVar("T2", default=ComplexFloatingOrFloat)
+T3 = TypeVar("T3", default=Callable[..., complexfloating[Any, Any]])
+
+class LinearTimeInvariant(Generic[T1, T2, T3]):
+    pass
+    "#,
+);
+
+testcase!(
+    test_typevar_in_classvar,
+    r#"
+from typing import Any, Callable, ClassVar, Generic, TypeAlias, TypeVar
+
+_NBit1 = TypeVar("_NBit1", default=Any)
+_NBit2 = TypeVar("_NBit2", default=_NBit1)
+
+class complexfloating(Generic[_NBit1, _NBit2]):
+    pass
+
+ComplexFloatingOrFloat: TypeAlias = complexfloating[Any, Any] | float
+
+class A:
+    x: ClassVar[complexfloating[Any, complexfloating[Any, Any]]]
+    y: ClassVar[ComplexFloatingOrFloat]
+    z: ClassVar[Callable[..., complexfloating[Any, Any]]]
+    "#,
+);
+
+testcase!(
+    test_typevar_in_typeddict_in_classvar,
+    r#"
+from typing import Any, ClassVar, Generic, TypedDict, TypeVar
+
+_NBit1 = TypeVar("_NBit1", default=Any)
+_NBit2 = TypeVar("_NBit2", default=_NBit1)
+
+class TD(TypedDict, Generic[_NBit1, _NBit2]):
+    pass
+
+class A:
+    x: ClassVar[TD[Any, Any]]
+    y: ClassVar[TD[_NBit1, Any]]  # E: `ClassVar` arguments may not contain any type variables
+    "#,
+);

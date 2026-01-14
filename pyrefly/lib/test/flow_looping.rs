@@ -355,6 +355,28 @@ def test2(match: float) -> float:  # E: Function declared to return `float` but 
 );
 
 testcase!(
+    test_for_else_return_in_body_else_reachable,
+    r#"
+def foo(x: list[int]) -> int:
+    for _ in x:
+        return 1
+    else:
+        return 2  # No error - reachable when x is empty
+"#,
+);
+
+testcase!(
+    test_for_definitely_runs_return_else_unreachable,
+    r#"
+def foo() -> int:
+    for _ in range(3):
+        return 1
+    else:
+        return 2  # E: This `return` statement is unreachable
+"#,
+);
+
+testcase!(
     test_for_with_reassign,
     r#"
 from typing import assert_type, Literal

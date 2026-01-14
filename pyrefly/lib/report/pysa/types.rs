@@ -252,7 +252,7 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
 /// Apply normalization to a type before exporting it to Pysa.
 pub fn preprocess_type(type_: &Type, context: &ModuleContext) -> Type {
     // Promote `Literal[..]` into `str` or `int`.
-    let type_ = type_.clone().promote_literals(&context.stdlib);
+    let type_ = type_.clone().promote_implicit_literals(&context.stdlib);
     strip_self_type(type_)
 }
 

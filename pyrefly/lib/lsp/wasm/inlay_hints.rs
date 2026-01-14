@@ -13,6 +13,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::LitEnum;
+use pyrefly_types::literal::Literal;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -103,7 +104,11 @@ impl<'a> Transaction<'a> {
                     }
                     Expr::Attribute(ExprAttribute {
                         box value, attr, ..
-                    }) if let Type::Literal(Lit::Enum(box LitEnum { class, member, .. })) = ty => {
+                    }) if let Type::Literal(box Literal {
+                        value: Lit::Enum(box LitEnum { class, member, .. }),
+                        ..
+                    }) = ty =>
+                    {
                         // Exclude enum literals
                         match value {
                             Expr::Name(object) => {
@@ -119,6 +124,7 @@ impl<'a> Transaction<'a> {
                 }
         };
         let bindings = self.get_bindings(handle)?;
+        let stdlib = self.get_stdlib(handle);
         let mut res = Vec::new();
         for idx in bindings.keys::<Key>() {
             match bindings.idx_to_key(idx) {
@@ -140,7 +146,7 @@ impl<'a> Transaction<'a> {
                                         ty = return_ty;
                                     }
                                     // Use get_types_with_locations to get type parts with location info
-                                    let type_parts = ty.get_types_with_locations();
+                                    let type_parts = ty.get_types_with_locations(Some(&stdlib));
                                     let label_parts = once((" -> ".to_owned(), None))
                                         .chain(
                                             type_parts
@@ -182,7 +188,7 @@ impl<'a> Transaction<'a> {
                         && is_interesting(e, &ty, class_name)
                     {
                         // Use get_types_with_locations to get type parts with location info
-                        let type_parts = ty.get_types_with_locations();
+                        let type_parts = ty.get_types_with_locations(Some(&stdlib));
                         let label_parts = once((": ".to_owned(), None))
                             .chain(
                                 type_parts

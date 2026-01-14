@@ -151,15 +151,17 @@ impl<'a> ArgsExpander<'a> {
     fn expand_type<Ans: LookupAnswer>(ty: Type, solver: &AnswersSolver<Ans>) -> Vec<Type> {
         match ty {
             Type::Union(box Union { members: ts, .. }) => ts,
-            Type::ClassType(cls) if cls.is_builtin("bool") => vec![
-                Type::Literal(Lit::Bool(true)),
-                Type::Literal(Lit::Bool(false)),
-            ],
+            Type::ClassType(cls) if cls.is_builtin("bool") => {
+                vec![
+                    Lit::Bool(true).to_implicit_type(),
+                    Lit::Bool(false).to_implicit_type(),
+                ]
+            }
             Type::ClassType(cls) if solver.get_metadata_for_class(cls.class_object()).is_enum() => {
                 solver
                     .get_enum_members(cls.class_object())
                     .into_iter()
-                    .map(Type::Literal)
+                    .map(Lit::to_implicit_type)
                     .collect()
             }
             Type::Type(box Type::Union(box Union { members: ts, .. })) => {

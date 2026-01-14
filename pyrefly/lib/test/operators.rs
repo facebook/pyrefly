@@ -287,6 +287,27 @@ assert_type(~c, Literal[100])
 );
 
 testcase!(
+    test_unary_dunders_typevar_bound,
+    r#"
+from typing import Self
+
+class Foo:
+    def __neg__(self) -> Self:
+        return self
+    def __pos__(self) -> Self:
+        return self
+    def __invert__(self) -> Self:
+        return self
+
+def test[F: Foo](foo: F) -> F:
+    a: F = -foo
+    b: F = +foo
+    c: F = ~foo
+    return c
+    "#,
+);
+
+testcase!(
     test_unary_error,
     r#"
 +None  # E: Unary `+` is not supported on `None`
@@ -492,7 +513,7 @@ assert_type(Truthy() or int(), Truthy)
 assert_type(int() if Truthy() else str(), int)
 assert_type(int() if Falsey() else str(), str)
 
-# Test the use of a non-boolean-convertable type in boolean operators.
+# Test the use of a non-boolean-convertible type in boolean operators.
 #
 # The runtime only uses truthiness in short-circuiting here, so it is actually
 # legal to use a non-boolable value as the rightmost entry of a bool op.

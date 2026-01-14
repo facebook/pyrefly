@@ -14,7 +14,9 @@ use itertools::Itertools;
 use itertools::izip;
 use pyrefly_python::dunder;
 use pyrefly_types::literal::Lit;
+use pyrefly_types::literal::Literal;
 use pyrefly_types::read_only::ReadOnlyReason;
+use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -407,13 +409,42 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
+        // First check exact (Type, Type) recursive assumptions
         let recursive_check = (got.clone(), Type::ClassType(protocol.clone()));
         if !self.recursive_assumptions.insert(recursive_check.clone()) {
             // Assume recursive checks are true
             return Ok(());
         }
+
+        // For class-level coinductive reasoning: if the `got` type's type arguments
+        // contain Vars, we're likely in a recursive pattern (e.g., checking method return
+        // types that reference the same classes). Use (Class, Class) matching to detect
+        // cycles that would otherwise be missed due to fresh Var creation.
+        let class_check = if let Type::ClassType(got_class) = &got
+            && got.may_contain_quantified_var()
+        {
+            let key = (
+                got_class.class_object().clone(),
+                protocol.class_object().clone(),
+            );
+            if !self.class_protocol_assumptions.insert(key.clone()) {
+                // Coinductive: assume this recursive class-level check succeeds
+                self.recursive_assumptions.shift_remove(&recursive_check);
+                return Ok(());
+            }
+            Some(key)
+        } else {
+            None
+        };
+
         let res = self.is_subset_protocol_inner(got, protocol);
+
+        // Clean up assumptions
         self.recursive_assumptions.shift_remove(&recursive_check);
+        if let Some(key) = class_check {
+            self.class_protocol_assumptions.shift_remove(&key);
+        }
+
         res
     }
 
@@ -969,11 +1000,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (l, Type::Union(box Union { members: us, .. })) => {
                 // Check var and non-var elements separately, so that if we match a non-var, we
                 // don't pin the vars.
-                let (vars, nonvars): (Vec<_>, Vec<_>) = us.iter().partition(|u| {
-                    let mut contains_var = false;
-                    u.universe(&mut |t| contains_var |= matches!(t, Type::Var(_)));
-                    contains_var
-                });
+                let (vars, nonvars): (Vec<_>, Vec<_>) =
+                    us.iter().partition(|u| u.may_contain_quantified_var());
                 any(nonvars.iter(), |u| self.is_subset_eq(l, u))
                     .or_else(|_| any(vars.iter(), |u| self.is_subset_eq(l, u)))
             }
@@ -1046,6 +1074,18 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_params(&l.params, &u.params)?;
                 self.is_subset_eq(&l.ret, &u.ret)
             }
+
+            // Callable is not allowed as an argument to type.
+            // https://typing.python.org/en/latest/spec/special-types.html#type
+            (Type::Type(box Type::Callable(_)), Type::ClassType(cls)) if cls.is_builtin("type") => {
+                Err(SubsetError::TypeCannotAcceptSpecialForms(
+                    SpecialForm::Callable,
+                ))
+            }
+            (Type::Type(box Type::Callable(_)), Type::Type(_)) => Err(
+                SubsetError::TypeCannotAcceptSpecialForms(SpecialForm::Callable),
+            ),
+
             (Type::TypedDict(got), Type::TypedDict(want)) => self.is_subset_typed_dict(got, want),
             (Type::TypedDict(got), Type::PartialTypedDict(want)) => {
                 self.is_subset_partial_typed_dict(got, want)
@@ -1056,7 +1096,31 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 // Allow substituting a TypedDict for Self when we call methods
                 Ok(())
             }
-            (Type::TypedDict(td), _) => {
+            (Type::TypedDict(td @ TypedDict::Anonymous(_)), _) => {
+                let stdlib = self.type_order.stdlib();
+                self.is_subset_eq(
+                    &stdlib
+                        .dict(
+                            stdlib.str().clone().to_type(),
+                            self.type_order.get_typed_dict_value_type(td),
+                        )
+                        .to_type(),
+                    want,
+                )
+            }
+            (_, Type::TypedDict(td @ TypedDict::Anonymous(_))) => {
+                let stdlib = self.type_order.stdlib();
+                self.is_subset_eq(
+                    got,
+                    &stdlib
+                        .dict(
+                            stdlib.str().clone().to_type(),
+                            self.type_order.get_typed_dict_value_type(td),
+                        )
+                        .to_type(),
+                )
+            }
+            (Type::TypedDict(td @ TypedDict::TypedDict(_)), _) => {
                 let stdlib = self.type_order.stdlib();
                 if let Some(value_type) = self
                     .type_order
@@ -1065,16 +1129,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     self.is_subset_eq(
                         &stdlib
                             .dict(stdlib.str().clone().to_type(), value_type)
-                            .to_type(),
-                        want,
-                    )
-                } else if matches!(td, TypedDict::Anonymous(_)) {
-                    self.is_subset_eq(
-                        &stdlib
-                            .dict(
-                                stdlib.str().clone().to_type(),
-                                self.type_order.get_typed_dict_value_type(td),
-                            )
                             .to_type(),
                         want,
                     )
@@ -1147,8 +1201,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     _ => Err(SubsetError::Other),
                 }
             }
-            (Type::LiteralString | Type::Literal(Lit::Str(_)), Type::ClassType(want))
-                if want.has_qname("typing", "Container") =>
+            (
+                Type::LiteralString(_)
+                | Type::Literal(box Literal {
+                    value: Lit::Str(_), ..
+                }),
+                Type::ClassType(want),
+            ) if want.has_qname("typing", "Container")
+                || want.has_qname("typing", "Collection") =>
             {
                 // The signature of `typing.Container.__contains__` is weird.
                 // `str` matches it by direct inheritance, but we cannot convert `LiteralString` to `str`
@@ -1273,23 +1333,36 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_eq(middle, want)?;
                 Ok(())
             }
-            (Type::Literal(lit), Type::LiteralString) => ok_or(lit.is_string(), SubsetError::Other),
+            (Type::Literal(lit), Type::LiteralString(_)) => {
+                ok_or(lit.value.is_string(), SubsetError::Other)
+            }
             (Type::Literal(lit), t @ Type::ClassType(_)) => self.is_subset_eq(
-                &lit.general_class_type(self.type_order.stdlib())
+                &lit.value
+                    .general_class_type(self.type_order.stdlib())
                     .clone()
                     .to_type(),
                 t,
             ),
             (Type::Literal(l_lit), Type::Literal(u_lit)) => {
-                ok_or(l_lit == u_lit, SubsetError::Other)
+                ok_or(l_lit.value == u_lit.value, SubsetError::Other)
             }
             (_, Type::SelfType(cls))
                 if got.is_literal_string() && cls == self.type_order.stdlib().str() =>
             {
                 Ok(())
             }
-            (Type::LiteralString, _) => {
+            (Type::LiteralString(_), Type::LiteralString(_)) => Ok(()),
+            (Type::LiteralString(_), _) => {
                 self.is_subset_eq(&self.type_order.stdlib().str().clone().to_type(), want)
+            }
+
+            (Type::Type(box Type::SpecialForm(special_form)), Type::ClassType(cls))
+                if cls.is_builtin("type") =>
+            {
+                Err(SubsetError::TypeCannotAcceptSpecialForms(*special_form))
+            }
+            (Type::Type(box Type::SpecialForm(special_form)), Type::Type(_)) => {
+                Err(SubsetError::TypeCannotAcceptSpecialForms(*special_form))
             }
             (Type::Type(l), Type::Type(u)) => self.is_subset_eq(l, u),
             (Type::Type(_), _) => self.is_subset_eq(

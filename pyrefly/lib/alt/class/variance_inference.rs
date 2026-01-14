@@ -267,10 +267,10 @@ fn initial_inference_map(tparams: &[TParam]) -> InferenceMap {
 
 fn pre_to_post_variance(pre_variance: PreInferenceVariance) -> Variance {
     match pre_variance {
-        PreInferenceVariance::PCovariant => Variance::Covariant,
-        PreInferenceVariance::PContravariant => Variance::Contravariant,
-        PreInferenceVariance::PInvariant => Variance::Invariant,
-        PreInferenceVariance::PUndefined => Variance::Bivariant,
+        PreInferenceVariance::Covariant => Variance::Covariant,
+        PreInferenceVariance::Contravariant => Variance::Contravariant,
+        PreInferenceVariance::Invariant => Variance::Invariant,
+        PreInferenceVariance::Undefined => Variance::Bivariant,
     }
 }
 

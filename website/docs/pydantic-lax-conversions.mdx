@@ -1,0 +1,64 @@
+---
+title: Pydantic Lax Mode Type Conversions
+description: Complete reference of how Pyrefly converts types in Pydantic lax mode.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Pydantic Lax Mode Type Conversions
+
+This page provides a complete reference for how Pyrefly converts types when working with Pydantic models in **lax mode** (the default). For background on how lax mode works, see the [main Pydantic documentation](../pydantic).
+
+**Note:** Types without a specific conversion rule (e.g., `Callable`, `Any`, custom classes) are converted to `Any`.
+
+---
+
+## Atomic Type Conversions
+
+Named unions are used for atomic types to keep type signatures concise.
+
+| Input Type | Named Union | Expanded Type |
+|------------|-------------|---------------|
+| `int` | `LaxInt` | `int \| bool \| float \| str \| bytes \| Decimal` |
+| `float` | `LaxFloat` | `int \| bool \| float \| str \| bytes \| Decimal` |
+| `bool` | `LaxBool` | `bool \| int \| float \| str \| Decimal` |
+| `Decimal` | `LaxDecimal` | `Decimal \| int \| float \| str` |
+| `str` | `LaxStr` | `str \| bytes \| bytearray` |
+| `bytes` | `LaxBytes` | `str \| bytes \| bytearray` |
+| `date` | `LaxDate` | `date \| datetime \| int \| float \| str \| bytes \| Decimal` |
+| `datetime` | `LaxDatetime` | `date \| datetime \| int \| float \| str \| bytes \| Decimal` |
+| `time` | `LaxTime` | `time \| int \| float \| str \| bytes \| Decimal` |
+| `timedelta` | `LaxTimedelta` | `timedelta \| int \| float \| str \| bytes \| Decimal` |
+| `Path` | `LaxPath` | `Path \| str` |
+| `UUID` | `LaxUuid` | `UUID \| str` |
+| `None` | (no conversion) | `None` |
+
+---
+
+## Compositional Type Conversions
+
+**Notation:**
+- `T_converted` means the type `T` is recursively converted using lax mode rules (e.g., `int` → `LaxInt`)
+- `T_flattened` means the type `T` is converted and expanded (e.g., `int` → `int | bool | float | str | bytes | Decimal`)
+
+| Input Type/Container | Output Type/Container |
+|----------------------|-----------------------|
+| `type[T]` | `type[T_converted]` |
+| `T1 \| T2 \| ...` | `T1_flattened \| T2_flattened \| ...` |
+| `list[T]`, `set[T]`, `frozenset[T]`,<br/>`Sequence[T]`, `Iterable[T]`, `deque[T]`,<br/>`tuple[T, ...]` | `Iterable[T_converted]` |
+| `tuple[T1, T2, ...]` | `Iterable[T1_flattened \| T2_flattened \| ...]` |
+| `dict[K, V]` | `Mapping[K, V_converted]` |
+
+**Examples:**
+
+- **Type wrapper:** `type[int]` → `type[LaxInt]`
+- **Union types:** Each member is converted and flattened. `int | bool` → `int | bool | float | str | bytes | Decimal`
+- **Single-element containers and unbounded tuples:** Named unions are preserved. `list[int]` → `Iterable[LaxInt]`
+- **Concrete tuples:** Element types are expanded and flattened. `tuple[int, str]` → `Iterable[int | bool | float | str | bytes | bytearray | Decimal]`
+- **Dictionaries:** Only values are converted; keys remain unchanged. `dict[str, int]` → `Mapping[str, LaxInt]`
+

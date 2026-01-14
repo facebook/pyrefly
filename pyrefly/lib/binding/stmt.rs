@@ -7,6 +7,7 @@
 
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -140,7 +141,7 @@ impl<'a> BindingsBuilder<'a> {
             &Usage::Narrowing(None),
         );
         if let Some(false) = static_test {
-            self.scopes.mark_flow_termination();
+            self.scopes.mark_flow_termination(true);
         }
     }
 
@@ -333,7 +334,10 @@ impl<'a> BindingsBuilder<'a> {
         }
         let mut ret = self.declare_current_idx(Key::ReturnExplicit(x.range()));
         self.ensure_expr_opt(x.value.as_deref_mut(), ret.usage());
-        if let Err((ret, oops_top_level)) = self.scopes.record_or_reject_return(ret, x) {
+        if let Err((ret, oops_top_level)) =
+            self.scopes
+                .record_or_reject_return(ret, x, self.scopes.is_definitely_unreachable())
+        {
             match oops_top_level.value {
                 Some(v) => self.insert_binding_current(ret, Binding::Expr(None, *v)),
                 None => self.insert_binding_current(ret, Binding::Type(Type::None)),
@@ -344,7 +348,7 @@ impl<'a> BindingsBuilder<'a> {
                 "Invalid `return` outside of a function".to_owned(),
             );
         }
-        self.scopes.mark_flow_termination();
+        self.scopes.mark_flow_termination(false);
     }
 
     fn find_error(&self, error: &FindError, range: TextRange) {
@@ -359,6 +363,9 @@ impl<'a> BindingsBuilder<'a> {
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
         self.with_semantic_checker(|semantic, context| semantic.visit_stmt(&x, context));
+
+        // Clear last_stmt_expr at the start - will be set again if this is a StmtExpr
+        self.scopes.set_last_stmt_expr(None);
 
         match x {
             Stmt::FunctionDef(x) => {
@@ -666,6 +673,9 @@ impl<'a> BindingsBuilder<'a> {
                         // We don't track first-usage in this context, since we won't analyze the usage anyway.
                         let mut e = illegal_target.clone();
                         self.ensure_expr(&mut e, &mut Usage::StaticTypeInformation);
+                        // Even though the assignment target is invalid, we still need to analyze the RHS so errors
+                        // (like invalid walrus targets) are reported.
+                        self.ensure_expr(&mut x.value, &mut Usage::StaticTypeInformation);
                     }
                 }
             }
@@ -763,6 +773,7 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
             Stmt::If(x) => {
+                let is_definitely_unreachable = self.scopes.is_definitely_unreachable();
                 let mut exhaustive = false;
                 self.start_fork(x.range);
                 // Type narrowing operations that are carried over from one branch to the next. For example, in:
@@ -773,6 +784,7 @@ impl<'a> BindingsBuilder<'a> {
                 // x is bound to Narrow(x, Is(None)) in the if branch, and the negation, Narrow(x, IsNot(None)),
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
+                let mut contains_static_test_with_no_else = false;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
                     self.bind_narrow_ops(
@@ -782,8 +794,17 @@ impl<'a> BindingsBuilder<'a> {
                     );
                     // If there is no test, it's an `else` clause and `this_branch_chosen` will be true.
                     let this_branch_chosen = match &test {
-                        None => Some(true),
-                        Some(x) => self.sys_info.evaluate_bool(x),
+                        None => {
+                            contains_static_test_with_no_else = false;
+                            Some(true)
+                        }
+                        Some(x) => {
+                            let result = self.sys_info.evaluate_bool(x);
+                            if result.is_some() {
+                                contains_static_test_with_no_else = true;
+                            }
+                            result
+                        }
                     };
                     self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
@@ -819,6 +840,11 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.finish_non_exhaustive_fork(&negated_prev_ops);
                 }
+                // If we have a statically evaluated test like `sys.version_info`, we should set `is_definitely_unreachable` to false
+                // to reduce false positive unreachable errors, since some code paths can still be hit at runtime
+                if contains_static_test_with_no_else && !is_definitely_unreachable {
+                    self.scopes.set_definitely_unreachable(false);
+                }
             }
             Stmt::With(x) => {
                 if x.is_async && !self.scopes.is_in_async_def() {
@@ -847,7 +873,9 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     }
                 }
+                self.scopes.enter_with();
                 self.stmts(x.body, parent);
+                self.scopes.exit_with();
             }
             Stmt::Match(x) => {
                 self.stmt_match(x, parent);
@@ -873,7 +901,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     // If there's no exception raised, don't bother checking the cause.
                 }
-                self.scopes.mark_flow_termination();
+                self.scopes.mark_flow_termination(false);
             }
             Stmt::Try(x) => {
                 self.start_fork_and_branch(x.range);
@@ -956,7 +984,13 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     match x.asname {
                         Some(asname) => {
-                            self.scopes.register_import(&asname);
+                            // `import X as X` is an explicit re-export per Python typing spec.
+                            // Don't flag it as unused.
+                            if asname.id == x.name.id {
+                                self.scopes.register_reexport_import(&asname);
+                            } else {
+                                self.scopes.register_import(&asname);
+                            }
                             self.bind_definition(
                                 &asname,
                                 Binding::Module(m, m.components(), None),
@@ -1057,10 +1091,10 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     None
                 };
-                self.insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
-                if special_export == Some(SpecialExport::PytestNoReturn) {
-                    self.scopes.mark_flow_termination();
-                }
+                let key = self
+                    .insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
+                // Track this StmtExpr as the trailing statement for type-based termination
+                self.scopes.set_last_stmt_expr(Some(key));
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {
@@ -1135,6 +1169,9 @@ impl<'a> BindingsBuilder<'a> {
                     );
                 }
             } else {
+                // `from X import Y as Y` is an explicit re-export per Python typing spec.
+                // Check this before consuming x.asname.
+                let is_reexport = x.asname.as_ref().is_some_and(|a| a.id == x.name.id);
                 let original_name_range = if x.asname.is_some() {
                     Some(x.name.range)
                 } else {
@@ -1161,22 +1198,25 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     Binding::Import(m, x.name.id.clone(), original_name_range)
                 } else {
+                    // Try submodule lookup first, then fall back to __getattr__
                     let x_as_module_name = m.append(&x.name.id);
                     let (finding, error) = match self.lookup.get(x_as_module_name) {
                         FindingOrError::Finding(finding) => (true, finding.error),
                         FindingOrError::Error(error) => (false, Some(error)),
                     };
-                    let error = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
-                    if error {
+                    let is_not_found = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
+                    if finding {
+                        Binding::Module(x_as_module_name, x_as_module_name.components(), None)
+                    } else if exported.contains_key(&dunder::GETATTR) {
+                        // Module has __getattr__, which means any attribute can be accessed.
+                        // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
+                        Binding::ImportViaGetattr(m, x.name.id.clone())
+                    } else if is_not_found {
                         self.error(
                             x.range,
                             ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
                             format!("Could not import `{}` from `{m}`", x.name.id),
                         );
-                    }
-                    if finding {
-                        Binding::Module(x_as_module_name, x_as_module_name.components(), None)
-                    } else if error {
                         Binding::Type(Type::any_error())
                     } else {
                         Binding::Type(Type::any_explicit())
@@ -1184,8 +1224,11 @@ impl<'a> BindingsBuilder<'a> {
                 };
                 // __future__ imports have side effects even if not explicitly used,
                 // so we skip the unused import check for them.
+                // See: https://typing.python.org/en/latest/spec/distributing.html#import-conventions
                 if m == ModuleName::future() {
                     self.scopes.register_future_import(&asname);
+                } else if is_reexport {
+                    self.scopes.register_reexport_import(&asname);
                 } else {
                     self.scopes.register_import(&asname);
                 }

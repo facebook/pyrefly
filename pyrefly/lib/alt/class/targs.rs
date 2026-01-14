@@ -15,7 +15,6 @@ use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -170,17 +169,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let targs = self.create_default_targs(
             self.get_class_tparams(cls),
             Some(&|tparam: &TParam| {
-                errors.add(
+                Self::add_implicit_any_error(
+                    errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
-                    vec1![
-                        format!(
-                            "Cannot determine the type parameter `{}` for generic class `{}`",
-                            tparam.name(),
-                            cls.name(),
-                        ),
-                        "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),
-                    ],
+                    cls.name().as_str(),
+                    Some(tparam.name().as_str()),
                 );
             }),
         );
@@ -248,7 +241,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let quantified = Quantified::type_var_tuple(Name::new_static("Ts"), self.uniques, None);
         let tparams = TParams::new(vec![TParam {
             quantified: quantified.clone(),
-            variance: PreInferenceVariance::PCovariant,
+            variance: PreInferenceVariance::Covariant,
         }]);
         let tuple_ty = Type::Tuple(Tuple::Unpacked(Box::new((
             Vec::new(),

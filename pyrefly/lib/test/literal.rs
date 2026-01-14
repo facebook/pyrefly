@@ -68,7 +68,7 @@ class Foo[T]:
     def __init__(self, x: T) -> None: ...
 
 x: Literal[42] = 42
-assert_type(Foo(x), Foo[int])
+assert_type(Foo(x), Foo[Literal[42]])
 "#,
 );
 
@@ -119,7 +119,7 @@ testcase!(
 from typing import LiteralString, assert_type
 def f(x: LiteralString):
     assert_type(["foo"], list[str])
-    assert_type([x], list[str])
+    assert_type([x], list[LiteralString])
     xs: list[str] = [x]
 "#,
 );
@@ -224,10 +224,10 @@ testcase!(
 testcase!(
     test_promote_literal,
     r#"
-from typing import assert_type, Literal
+from typing import assert_type, LiteralString
 
 x = list("abcdefg")
-assert_type(x, list[str])
+assert_type(x, list[LiteralString])
 "#,
 );
 
@@ -326,11 +326,37 @@ assert_type(result5, str)
 );
 
 testcase!(
-    test_literal_string_as_container,
+    test_literal_string_as_collection,
     r#"
-from typing import Container
-s: str = "foo"
-x1: Container[str] = s
-x2: Container[str] = "foo"
+from collections.abc import Container, Collection, Sequence
+
+a: Container[str] = ""
+b: Collection[str] = ""
+c: Sequence[str] = ""
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2068
+testcase!(
+    test_literal_string_join_loop_inference,
+    r#"
+def test():
+    items = ["a", "b"]
+    lines = []
+    for k in items:
+        lines.append(f"*{k}")
+    return "\n".join(lines)
+"#,
+);
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/2077",
+    test_literal_int_sum_loop_inference,
+    r#"
+def f(x: int):
+    y = []
+    for i in range(10):
+        y.append(x)  # E: `int` is not assignable to parameter `object` with type `Literal
+    sum(y, 0)
     "#,
 );

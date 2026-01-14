@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
-use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
@@ -283,6 +283,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                 }
             }
+            Type::Intersect(intersect) => {
+                // TODO(rechen): implement calling `A & B`
+                let (_, fallback) = *intersect;
+                self.as_call_target_impl(fallback, quantified, dunder_call)
+            }
             Type::Any(style) => CallTargetLookup::Ok(Box::new(CallTarget::Any(style))),
             Type::TypeAlias(ta) => {
                 self.as_call_target_impl(ta.as_value(self.stdlib), quantified, dunder_call)
@@ -324,6 +329,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     cls,
                     ConstructorKind::TypeOfClass,
                 )))
+            }
+            Type::Type(box Type::Intersect(box (_, fallback))) => {
+                // TODO(rechen): implement calling `type[A & B]`
+                self.as_call_target_impl(Type::type_form(fallback), quantified, dunder_call)
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
@@ -367,9 +376,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             },
             Type::KwCall(call) => self.as_call_target_impl(call.return_ty, quantified, dunder_call),
-            Type::Literal(Lit::Enum(enum_)) => {
-                self.as_call_target_impl(enum_.class.to_type(), quantified, dunder_call)
-            }
+            Type::Literal(box Literal {
+                value: Lit::Enum(enum_),
+                ..
+            }) => self.as_call_target_impl(enum_.class.to_type(), quantified, dunder_call),
             _ => CallTargetLookup::Error(vec![]),
         }
     }
@@ -474,6 +484,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             "Expr::call_method",
             true,
         )?;
+        // Record the method type for hover support
+        self.record_resolved_trace(range, callee_ty.clone());
         Some(self.make_call_target_and_call(
             callee_ty,
             method_name,
@@ -568,15 +580,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.solver().generalize_class_targs(cls.targs_mut());
         }
         let hint = None; // discard hint
+        let class_metadata = self.get_metadata_for_class(cls.class_object());
         if let Some(ret) =
             self.call_metaclass(&cls, arguments_range, args, keywords, errors, context, hint)
             && !self.is_compatible_constructor_return(&ret, cls.class_object())
         {
             if let Some(metaclass_dunder_call) = self.get_metaclass_dunder_call(&cls) {
                 if let Some(callee_range) = callee_range
-                    && let Some(metaclass) = self
-                        .get_metadata_for_class(cls.class_object())
-                        .custom_metaclass()
+                    && let Some(metaclass) = class_metadata.custom_metaclass()
                 {
                     self.record_external_attribute_definition_index(
                         &metaclass.clone().to_type(),
@@ -672,6 +683,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
             self.record_resolved_trace(arguments_range, init_method);
+        }
+        if class_metadata.is_pydantic_base_model()
+            && let Some(dataclass) = class_metadata.dataclass_metadata()
+        {
+            self.check_pydantic_argument_range_constraints(
+                cls.class_object(),
+                dataclass,
+                args,
+                keywords,
+                errors,
+            );
         }
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
@@ -879,72 +901,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     signature: callable,
                     metadata,
                 },
-            )) => {
-                // HACK: Special handling for builtins.object.__new__
-                // - When object.__new__(C) is called directly, we want to return C instead of object
-                // - This is a quick fix to unblock the `tqdm` library, see issues
-                //
-                // TODO(stroxler) I think this hack is needed because we aren't handling `Self` in a spec-compliant
-                // way; it is supposed to be treated as a TypeVar with an upper bound, which means the behavior
-                // ought to come from the solver and not require a hack. We should investigate further - our
-                // implementation of `Self` allows more uses than the typevar logic would, but maybe we could
-                // detect situations (primarily unbound method calls) where the type var logic should be applied
-                // and rewrite the signature before calling.
-                if let FunctionKind::Def(func_id) = &metadata.kind
-                    && func_id.name == dunder::NEW
-                    && func_id.module.name() == ModuleName::builtins()
-                    && func_id
-                        .cls
-                        .as_ref()
-                        .is_some_and(|c| c.has_toplevel_qname("builtins", "object"))
-                    && let Some(first_arg_ty) = self.first_arg_type(args, errors)
-                {
-                    // Extract class type from first argument
-                    let result_ty = match &first_arg_ty {
-                        Type::ClassDef(cls) => Some(self.instantiate_fresh_class(cls)),
-                        Type::ClassType(cls) => Some(cls.clone().to_type()),
-                        Type::Type(box Type::ClassType(cls)) => Some(cls.clone().to_type()),
-                        _ => None,
-                    };
-
-                    if let Some(ty) = result_ty {
-                        // Validate all arguments
-                        let _ = self.callable_infer(
-                            callable.clone(),
-                            Some(&metadata.kind),
-                            tparams.as_deref(),
-                            None,
-                            args,
-                            keywords,
-                            range,
-                            errors,
-                            errors,
-                            context,
-                            hint,
-                            ctor_targs,
-                        );
-
-                        // Return the class instance type
-                        return ty;
-                    }
-                }
-
-                // Standard path for all other functions
-                self.callable_infer(
-                    callable,
-                    Some(&metadata.kind),
-                    tparams.as_deref(),
-                    None,
-                    args,
-                    keywords,
-                    range,
-                    errors,
-                    errors,
-                    context,
-                    hint,
-                    ctor_targs,
-                )
-            }
+            )) => self.callable_infer(
+                callable,
+                Some(&metadata.kind),
+                tparams.as_deref(),
+                None,
+                args,
+                keywords,
+                range,
+                errors,
+                errors,
+                context,
+                hint,
+                ctor_targs,
+            ),
             CallTarget::FunctionOverload(overloads, metadata) => {
                 self.call_overloads(
                     overloads, metadata, None, args, keywords, range, errors, context, hint,
@@ -1144,7 +1114,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let call_target =
             self.as_call_target_or_error(getattr_ty, CallStyle::FreeForm, range, errors, context);
-        let attr_name_ty = Type::Literal(Lit::Str(attr_name.as_str().into()));
+        let attr_name_ty = Lit::Str(attr_name.as_str().into()).to_implicit_type();
         self.call_infer(
             call_target,
             &[CallArg::ty(&attr_name_ty, range)],
@@ -1168,7 +1138,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let call_target =
             self.as_call_target_or_error(setattr_ty, CallStyle::FreeForm, range, errors, context);
-        let attr_name_ty = Type::Literal(Lit::Str(attr_name.as_str().into()));
+        let attr_name_ty = Lit::Str(attr_name.as_str().into()).to_implicit_type();
         self.call_infer(
             call_target,
             &[CallArg::ty(&attr_name_ty, range), arg],

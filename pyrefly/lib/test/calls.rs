@@ -49,13 +49,13 @@ class A:
 class B[T](A): ...
 class C[T]: ...
 assert_type(A.__new__(A), A)
-assert_type(A.__new__(B[int]), A)
-assert_type(A.__new__(C[int]), A) # E: Argument `type[C[int]]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+assert_type(A.__new__(B[int]), B[int])
+assert_type(A.__new__(C[int]), C[int]) # E: `C[int]` is not assignable to upper bound `A` of type variable `Self@A`
 
 o = A()
 assert_type(o.__new__(A), A)
-assert_type(o.__new__(B[int]), A)
-assert_type(o.__new__(C[int]), A) # E: Argument `type[C[int]]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+assert_type(o.__new__(B[int]), B[int])
+assert_type(o.__new__(C[int]), C[int]) # E: `C[int]` is not assignable to upper bound `A` of type variable `Self@A`
     "#,
 );
 
@@ -276,6 +276,11 @@ assert_type(x2, B)
 # Works with builtin classes too
 x3 = object.__new__(int)
 assert_type(x3, int)
+
+# Works with `type` annotations too
+def f(cls: type[A]):
+    x4 = object.__new__(cls)
+    assert_type(x4, A)
     "#,
 );
 
@@ -310,5 +315,50 @@ class B:
 
 b = B.__new__(B)
 assert_type(b, B)
+    "#,
+);
+
+testcase!(
+    test_inherit_custom_new,
+    r#"
+from typing import assert_type, Self
+class A:
+    def __new__(cls) -> Self:
+        return super().__new__(cls)
+class B(A):
+    pass
+assert_type(A().__new__(B), B)
+assert_type(A.__new__(B), B)
+    "#,
+);
+
+testcase!(
+    test_inherit_generic_custom_new,
+    r#"
+from typing import assert_type, Self
+class A:
+    def __new__[T](cls, x: T, y: T) -> Self:
+        return super().__new__(cls)
+class B(A):
+    pass
+assert_type(A.__new__(B, 0, 0), B)
+    "#,
+);
+
+testcase!(
+    test_inherit_overloaded_custom_new,
+    r#"
+from typing import assert_type, overload, Self
+class A:
+    @overload
+    def __new__(cls) -> Self: ...
+    @overload
+    def __new__(cls, x) -> Self: ...
+    def __new__(cls, x=None) -> Self:
+        return super().__new__(cls)
+class B(A):
+    pass
+assert_type(A.__new__(B), B)
+assert_type(A.__new__(B, 0), B)
     "#,
 );

@@ -602,3 +602,156 @@ fn test_completion_complete_with_local_completions() {
 
     interaction.shutdown().unwrap();
 }
+
+/// Test that autoimport completions show both the re-exported path and the original path
+/// when a symbol is re-exported from a package's __init__.py.
+///
+/// Given:
+///   - example/main.py defines ExampleClass
+///   - example/__init__.py re-exports ExampleClass
+///
+/// When completing "ExampleClass" in foo.py, both import paths should appear:
+///   - from example import ExampleClass (re-exported path)
+///   - from example.main import ExampleClass (original path)
+#[test]
+fn test_autoimport_completions_show_reexported_paths() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("autoimport_reexport_test");
+
+    let mut interaction =
+        LspInteraction::new_with_indexing_mode(crate::commands::lsp::IndexingMode::LazyBlocking);
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+
+    // Modify the file to trigger completion for ExampleClass
+    interaction.client.did_change(
+        "foo.py",
+        r#"
+class MyClass(ExampleClass):
+    pass
+"#,
+    );
+
+    // Request completion at the position of "ExampleClass" (line 1, after "MyClass(")
+    // Line 1 is "class MyClass(ExampleClass):", column 14 is where "ExampleClass" starts
+    interaction
+        .client
+        .completion("foo.py", 1, 22) // Position at end of "ExampleClass"
+        .expect_completion_response_with(|list| {
+            // Collect all completion items that match ExampleClass
+            let example_class_items: Vec<_> = list
+                .items
+                .iter()
+                .filter(|item| item.label == "ExampleClass")
+                .collect();
+
+            // We should have at least 2 completion items for ExampleClass:
+            // one from the re-exported path and one from the original path
+            let has_reexport = example_class_items.iter().any(|item| {
+                item.detail
+                    .as_ref()
+                    .is_some_and(|d| d.contains("from example import ExampleClass"))
+            });
+
+            let has_original = example_class_items.iter().any(|item| {
+                item.detail
+                    .as_ref()
+                    .is_some_and(|d| d.contains("from example.main import ExampleClass"))
+            });
+
+            if !has_reexport || !has_original {
+                eprintln!(
+                    "Expected both re-exported and original import paths. Found items: {:?}",
+                    example_class_items
+                        .iter()
+                        .map(|item| (&item.label, &item.detail))
+                        .collect::<Vec<_>>()
+                );
+            }
+
+            has_reexport && has_original
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_incomplete_with_local_completions_blocking_autoimport() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("autoimport_common_prefix"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    // Open b.py which has UsersController, and a.py which has UsersManager
+    interaction.client.did_open("b.py");
+    interaction.client.did_open("a.py");
+
+    // Type "Users" (5 characters, above MIN_CHARACTERS_TYPED_AUTOIMPORT = 3)
+    // in b.py. Local completion UsersController exists, so autoimport is skipped.
+    // But is_incomplete should still be true because the local completion might
+    // not match as the user continues typing (e.g., "UsersM" should show UsersManager).
+    interaction
+        .client
+        .did_change("b.py", "class UsersController:\n    pass\n\nUsers");
+
+    interaction
+        .client
+        .completion("b.py", 3, 5)
+        .expect_completion_response_with(|list| {
+            // Should have local completion UsersController
+            let has_users_controller = list
+                .items
+                .iter()
+                .any(|item| item.label == "UsersController");
+            // is_incomplete should be true so client asks again when typing more
+            has_users_controller && list.is_incomplete
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_autoimport_shown_when_local_no_longer_matches() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("autoimport_common_prefix"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    // Open b.py which has UsersController, and a.py which has UsersManager
+    interaction.client.did_open("b.py");
+    interaction.client.did_open("a.py");
+
+    // Type "UsersM" - this should NOT match local "UsersController" (no 'M' in it)
+    // but SHOULD match autoimport "UsersManager" from a.py
+    interaction
+        .client
+        .did_change("b.py", "class UsersController:\n    pass\n\nUsersM");
+
+    interaction
+        .client
+        .completion("b.py", 3, 6)
+        .expect_completion_response_with(|list| {
+            // Should have autoimport completion UsersManager
+            let has_users_manager = list.items.iter().any(|item| item.label == "UsersManager");
+            // Should NOT have UsersController (doesn't match "UsersM")
+            let has_users_controller = list
+                .items
+                .iter()
+                .any(|item| item.label == "UsersController");
+            has_users_manager && !has_users_controller
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}

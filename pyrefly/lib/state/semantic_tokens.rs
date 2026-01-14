@@ -266,8 +266,11 @@ impl SemanticTokenBuilder {
                 // todo(samzhou19815): if the class's base is Enum, it should be ENUM_MEMBER
                 let kind = match get_type_of_attribute(attr.range()) {
                     Some(Type::BoundMethod(_)) => SemanticTokenType::METHOD,
-                    Some(Type::Function(_) | Type::Callable(_)) => SemanticTokenType::FUNCTION,
+                    Some(Type::Function(_) | Type::Callable(_) | Type::Overload(_)) => {
+                        SemanticTokenType::FUNCTION
+                    }
                     Some(Type::ClassDef(_)) => SemanticTokenType::CLASS,
+                    Some(Type::Module(_)) => SemanticTokenType::NAMESPACE,
                     _ => SemanticTokenType::PROPERTY,
                 };
                 self.push_if_in_range(attr.attr.range(), kind, Vec::new());
@@ -338,11 +341,19 @@ impl SemanticTokenBuilder {
                     }
                 }
             }
-            Stmt::ImportFrom(StmtImportFrom {
-                module: Some(module),
-                ..
-            }) => {
-                self.push_if_in_range(module.range, SemanticTokenType::NAMESPACE, vec![]);
+            Stmt::ImportFrom(StmtImportFrom { module, names, .. }) => {
+                if let Some(module) = module {
+                    self.push_if_in_range(module.range, SemanticTokenType::NAMESPACE, vec![]);
+                }
+                for alias in names {
+                    if alias.asname.is_some() {
+                        self.push_if_in_range(
+                            alias.name.range,
+                            SemanticTokenType::NAMESPACE,
+                            vec![],
+                        );
+                    }
+                }
             }
             Stmt::AnnAssign(ann_assign) => {
                 if let Expr::Name(name) = &*ann_assign.target {

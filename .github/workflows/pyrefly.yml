@@ -50,5 +50,5 @@ jobs:
         JQ: jq
         TEST_PY: ${{ github.workspace }}/test.py
         PYREFLY_PY: ${{ github.workspace }}/pyrefly/python
-      run: scrut test test
+      run: env -u GITHUB_ACTIONS scrut test test
       if: ${{ matrix.os != 'windows-latest' }}

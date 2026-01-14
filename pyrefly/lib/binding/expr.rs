@@ -33,15 +33,18 @@ use vec1::vec1;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingDecorator;
+use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
+use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
+use crate::binding::binding::PrivateAttributeAccessCheck;
 use crate::binding::binding::SuperStyle;
 use crate::binding::bindings::AwaitContext;
 use crate::binding::bindings::BindingsBuilder;
@@ -72,6 +75,9 @@ fn is_special_name(name: &str) -> bool {
 #[derive(Debug)]
 pub enum Usage {
     /// I am a usage to create a `Binding`.
+    /// - First entry is the idx we are working on
+    /// - Second entry is all the idxs for which this idx is a first use (used to
+    ///   create `PartialTypeWithUpstreamsCompleted` bindings).
     CurrentIdx(Idx<Key>, SmallSet<Idx<Key>>),
     /// I am a usage that will appear in a narrowing operation (including a
     /// match pattern). We don't allow pinning in this case:
@@ -80,7 +86,7 @@ pub enum Usage {
     ///   to ensure unpinned Vars cannot leak into the binding graph and cause
     ///   nondeterminism.
     ///
-    /// It carries an optional current idx so we could detect mutliple usages to
+    /// It carries an optional current idx so we could detect multiple usages to
     /// the same key within the same binding.
     Narrowing(Option<Idx<Key>>),
     /// I'm a usage in some context (a type variable declaration, an annotation,
@@ -436,10 +442,10 @@ impl<'a> BindingsBuilder<'a> {
         // One example of this is in the standard library, in `_collections_abc.pyi`:
         // https://github.com/python/cpython/blob/965662ee4a986605b60da470d9e7c1e9a6f922b3/Lib/_collections_abc.py#L92
         let (yields_and_returns, _, _, _) = self.scopes.pop_function_scope();
-        for (idx, y) in yields_and_returns.yields {
+        for (idx, y, _) in yields_and_returns.yields {
             self.insert_binding_idx(idx, BindingYield::Invalid(y));
         }
-        for (idx, y) in yields_and_returns.yield_froms {
+        for (idx, y, _) in yields_and_returns.yield_froms {
             self.insert_binding_idx(idx, BindingYieldFrom::Invalid(y));
         }
     }
@@ -485,7 +491,10 @@ impl<'a> BindingsBuilder<'a> {
         let mut yield_link = self.declare_current_idx(Key::YieldLink(x.range));
         let idx = self.idx_for_promise(KeyYield(x.range));
         self.ensure_expr_opt(x.value.as_deref_mut(), yield_link.usage());
-        if let Err(oops_top_level) = self.scopes.record_or_reject_yield(idx, x) {
+        if let Err(oops_top_level) =
+            self.scopes
+                .record_or_reject_yield(idx, x, self.scopes.is_definitely_unreachable())
+        {
             self.insert_binding_idx(idx, BindingYield::Invalid(oops_top_level));
         }
         self.insert_binding_current(yield_link, Binding::UsageLink(LinkedKey::Yield(idx)));
@@ -495,7 +504,10 @@ impl<'a> BindingsBuilder<'a> {
         let mut yield_from_link = self.declare_current_idx(Key::YieldLink(x.range));
         let idx = self.idx_for_promise(KeyYieldFrom(x.range));
         self.ensure_expr(&mut x.value, yield_from_link.usage());
-        if let Err(oops_top_level) = self.scopes.record_or_reject_yield_from(idx, x) {
+        if let Err(oops_top_level) =
+            self.scopes
+                .record_or_reject_yield_from(idx, x, self.scopes.is_definitely_unreachable())
+        {
             self.insert_binding_idx(idx, BindingYieldFrom::Invalid(oops_top_level));
         }
         self.insert_binding_current(
@@ -509,6 +521,10 @@ impl<'a> BindingsBuilder<'a> {
         self.with_semantic_checker(|semantic, context| semantic.visit_expr(x, context));
 
         match x {
+            Expr::Attribute(attr) => {
+                self.check_private_attribute_usage(attr);
+                self.ensure_expr(&mut attr.value, usage);
+            }
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
                 self.start_fork_and_branch(x.range);
@@ -759,7 +775,7 @@ impl<'a> BindingsBuilder<'a> {
             {
                 x.recurse_mut(&mut |x| self.ensure_expr(x, usage));
                 // Control flow doesn't proceed after sys.exit(), exit(), quit(), or os._exit().
-                self.scopes.mark_flow_termination();
+                self.scopes.mark_flow_termination(false);
             }
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
@@ -788,6 +804,21 @@ impl<'a> BindingsBuilder<'a> {
                 x.recurse_mut(&mut |x| self.ensure_expr(x, usage));
             }
         }
+    }
+
+    fn check_private_attribute_usage(&mut self, attr: &ExprAttribute) {
+        if !Ast::is_mangled_attr(&attr.attr.id) {
+            return;
+        }
+        let expect = PrivateAttributeAccessCheck {
+            value: (*attr.value).clone(),
+            attr: attr.attr.clone(),
+            class_idx: self.scopes.current_method_context(),
+        };
+        self.insert_binding(
+            KeyExpect(attr.attr.range()),
+            BindingExpect::PrivateAttributeAccess(expect),
+        );
     }
 
     /// Execute through the expr, ensuring every name has a binding.
@@ -863,7 +894,17 @@ impl<'a> BindingsBuilder<'a> {
             // binding that we crash looking for if we don't do this.
             Expr::Call(_) => self.ensure_expr(x, static_type_usage),
             // Bind walrus so we don't crash when looking up the assigned name later.
-            Expr::Named(_) => self.ensure_expr(x, static_type_usage),
+            // Named expressions are not allowed inside type aliases (PEP 695).
+            Expr::Named(named) => {
+                if self.scopes.in_type_alias() {
+                    self.error(
+                        named.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "Named expression cannot be used within a type alias".to_owned(),
+                    );
+                }
+                self.ensure_expr(x, static_type_usage);
+            }
             // Bind yield and yield from so we don't crash when checking return type later.
             Expr::Yield(_) => {
                 self.ensure_expr(x, static_type_usage);

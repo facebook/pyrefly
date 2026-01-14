@@ -4,6 +4,13 @@ title: IDE Installation
 description: How to add Pyrefly Language Server and Typechecking to your IDE
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Add Pyrefly to your IDE
 Pyrefly seamlessly integrates into IDEs with our [VSCode](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) and [OpenVSX](https://open-vsx.org/extension/meta/pyrefly) extensions. For other editors like vim/emacs, see [other editors](#other-editors).
 
@@ -23,6 +30,7 @@ Want type error squiggles to show up in VS Code? Try setting `python.pyrefly.dis
 :::
 
 ## Customization
+
 By default, Pyrefly should work in the IDE with no configuration necessary. But to ensure your project is set up properly, see [configurations](../configuration).
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
@@ -40,7 +48,49 @@ The following configuration options are IDE-specific and exposed as VSCode setti
 - Control hover tooltip links
   - `python.analysis.showHoverGoToLinks` [boolean: true]: Controls whether hover tooltips include "Go to definition" and "Go to type definition" navigation links. Set to `false` for cleaner tooltips with only type information.
 
+When used with non-VSCode editors, these options can also be configured by sending them via `initializationOptions` in the LSP [initialization](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#initialize) request.
+
+Below is an example of a value that can be passed for `initializationOptions`:
+```json
+{
+  "pythonPath": "/usr/bin/python3",
+  "pyrefly": {
+    "displayTypeErrors": "default",
+    "disableLanguageServices": false,
+    "extraPaths": ["/path/to/extra/modules"],
+    "analysis": {
+      "diagnosticMode": "workspace",
+      "importFormat": "absolute",
+      "inlayHints": {
+        "callArgumentNames": "off",
+        "functionReturnTypes": true,
+        "pytestParameters": false,
+        "variableTypes": true
+      },
+      "showHoverGoToLinks": true
+    },
+    "disabledLanguageServices": {
+      "definition": false,
+      "declaration": false,
+      "typeDefinition": false,
+      "codeAction": false,
+      "completion": false,
+      "documentHighlight": false,
+      "references": false,
+      "rename": false,
+      "signatureHelp": false,
+      "hover": false,
+      "inlayHint": false,
+      "documentSymbol": false,
+      "semanticTokens": false,
+      "implementation": false
+    }
+  }
+}
+```
+
 ## Issues?
+
 If you experience issues with the Pyrefly extension, please create an [issue](https://github.com/facebook/pyrefly/issues) on github.
 
 ## Other Editors
@@ -298,6 +348,10 @@ language-servers = ["pyrefly"]
 ### Sublime
 
 See the documentation [here](https://lsp.sublimetext.io/language_servers/#pyrefly).
+
+## Positron
+
+Positron comes with Pyrefly out of the box. See the documentation [here](https://positron.posit.co/guide-python.html#settings).
 
 ### Jupyter Lab
 

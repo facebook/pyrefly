@@ -275,11 +275,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 self.check_enum_value_annotation(ty, &enum_value_ty, name, range, errors);
             }
-            Some(Type::Literal(Lit::Enum(Box::new(LitEnum {
-                class: enum_.cls.clone(),
-                member: name.clone(),
-                ty: ty.clone(),
-            }))))
+            Some(
+                Lit::Enum(Box::new(LitEnum {
+                    class: enum_.cls.clone(),
+                    member: name.clone(),
+                    ty: ty.clone(),
+                }))
+                .to_implicit_type(),
+            )
         } else {
             None
         }

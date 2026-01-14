@@ -79,7 +79,7 @@ fn recurse_stmt_adding_symbols<'a>(
         Stmt::Assign(stmt_assign) => {
             for target in &stmt_assign.targets {
                 if let Expr::Name(name) = target {
-                    // todo(jvansch): Try to resuse DefinitionMetadata here.
+                    // todo(jvansch): Try to reuse DefinitionMetadata here.
                     symbols.push(DocumentSymbol {
                         name: name.id.to_string(),
                         detail: None, // Todo(jvansch): Could add type info here later

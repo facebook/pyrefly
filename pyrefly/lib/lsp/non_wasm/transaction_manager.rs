@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_util::telemetry::TelemetryEvent;
+
 use crate::state::require::Require;
 use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
@@ -64,7 +66,7 @@ impl<'a> TransactionManager<'a> {
     }
 
     /// This function should be called once we finished using transaction for an LSP request.
-    pub fn save(&mut self, transaction: Transaction<'a>) {
-        self.saved_state = Some(transaction.save())
+    pub fn save(&mut self, transaction: Transaction<'a>, telemetry: &mut TelemetryEvent) {
+        self.saved_state = Some(transaction.save(telemetry))
     }
 }

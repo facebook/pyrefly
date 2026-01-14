@@ -21,6 +21,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::qname::QName;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -31,6 +32,7 @@ use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
+use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_var::Restriction;
@@ -672,11 +674,18 @@ impl<'a> CalleesWithLocation<'a> {
                 TypedDict::TypedDict(inner) => Self::class_info_for_qname(inner.qname(), true),
                 TypedDict::Anonymous(_) => vec![],
             },
-            Type::Literal(Lit::Str(_)) | Type::LiteralString => {
+            Type::Literal(box Literal {
+                value: Lit::Str(_), ..
+            })
+            | Type::LiteralString(_) => {
                 vec![(String::from("builtins.str"), false)]
             }
-            Type::Literal(Lit::Int(_)) => vec![(String::from("builtins.int"), false)],
-            Type::Literal(Lit::Bool(_)) => vec![(String::from("builtins.bool"), false)],
+            Type::Literal(lit) if let Lit::Int(_) = lit.value => {
+                vec![(String::from("builtins.int"), false)]
+            }
+            Type::Literal(lit) if let Lit::Bool(_) = lit.value => {
+                vec![(String::from("builtins.bool"), false)]
+            }
             Type::Quantified(q) => match &q.restriction {
                 // for explicit bound - use name of the type used as bound
                 Restriction::Bound(b) => Self::class_info_from_bound_obj(b),
@@ -924,7 +933,10 @@ impl Query {
     }
 
     fn make_handle(&self, name: ModuleName, path: ModulePath) -> Handle {
-        let config = self.state.config_finder().python_file(name.dupe(), &path);
+        let config = self
+            .state
+            .config_finder()
+            .python_file(ModuleNameWithKind::guaranteed(name.dupe()), &path);
         if config.source_db.is_some() {
             panic!("Pyrefly doesn't support sourcedb-powered queries yet");
         }
@@ -943,7 +955,7 @@ impl Query {
         let new_transaction_mut = transaction.as_mut();
         new_transaction_mut.invalidate_events(events);
         new_transaction_mut.run(&[], Require::Exports);
-        self.state.commit_transaction(transaction);
+        self.state.commit_transaction(transaction, None);
         let all_files = self.files.lock().iter().cloned().collect::<Vec<_>>();
         self.add_files(all_files);
     }
@@ -957,7 +969,7 @@ impl Query {
         let handles = files.into_map(|(name, file)| self.make_handle(name, file));
         transaction.as_mut().run(&handles, Require::Everything);
         let errors = transaction.as_mut().get_errors(&handles);
-        self.state.commit_transaction(transaction);
+        self.state.commit_transaction(transaction, None);
         let project_root = PathBuf::new();
         errors.collect_errors().shown.map(|e| {
             // We deliberately don't have a Display for `Error`, to encourage doing the right thing.
@@ -1093,13 +1105,15 @@ impl Query {
             type_cache: &TypeCache,
         ) {
             let type_string = type_to_string(ty);
+            // Only clone ty if not already in cache
+            type_cache
+                .cache
+                .entry(type_string.clone())
+                .or_insert_with(|| ty.clone());
             res.push((
                 python_ast_range_for_expr(module_info, range, e, parent),
-                type_string.clone(),
+                type_string,
             ));
-
-            // Pre-warm the cache with this type
-            type_cache.insert(type_string, ty.clone());
         }
         fn try_find_key_for_name(name: &ExprName, bindings: &Bindings) -> Option<Key> {
             let key = Key::BoundName(ShortIdentifier::expr_name(name));

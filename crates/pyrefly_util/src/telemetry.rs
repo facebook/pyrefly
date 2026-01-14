@@ -9,63 +9,194 @@ use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Error;
+use lsp_types::Url;
+use serde::Deserialize;
+use serde::Serialize;
+use uuid::Uuid;
 
-pub trait Telemetry {
-    fn record_lsp_event<T>(
-        &self,
-        event: LspEventTelemetry,
-        result: Result<T, Error>,
-    ) -> (Duration, Duration, Result<T, Error>);
+pub trait Telemetry: Send + Sync {
+    fn record_event(&self, event: TelemetryEvent, process: Duration, error: Option<&Error>);
 }
 pub struct NoTelemetry;
 
 impl Telemetry for NoTelemetry {
-    fn record_lsp_event<T>(
-        &self,
-        event: LspEventTelemetry,
-        result: Result<T, Error>,
-    ) -> (Duration, Duration, Result<T, Error>) {
-        event.finish(result)
+    fn record_event(&self, _event: TelemetryEvent, _process: Duration, _error: Option<&Error>) {}
+}
+
+pub enum TelemetryEventKind {
+    LspEvent(String),
+    Invalidate,
+    InvalidateConfig,
+    InvalidateOnClose,
+    PopulateProjectFiles,
+    PopulateWorkspaceFiles,
+    SourceDbRebuild,
+    SourceDbRebuildInstance,
+    FindFromDefinition,
+}
+
+pub struct TelemetryEvent {
+    pub kind: TelemetryEventKind,
+    pub queue: Option<Duration>,
+    pub start: Instant,
+    pub error: Option<Error>,
+    pub invalidate: Option<Duration>,
+    pub validate: Option<Duration>,
+    pub transaction_stats: Option<TelemetryTransactionStats>,
+    pub server_state: TelemetryServerState,
+    pub file_stats: Option<TelemetryFileStats>,
+    pub task_id: Option<TelemetryTaskId>,
+    pub sourcedb_rebuild_stats: Option<TelemetrySourceDbRebuildStats>,
+    pub sourcedb_rebuild_instance_stats: Option<TelemetrySourceDbRebuildInstanceStats>,
+    pub activity_key: Option<ActivityKey>,
+}
+
+pub struct TelemetryFileStats {
+    pub uri: Url,
+    pub config_root: Option<Url>,
+}
+
+pub struct TelemetryServerState {
+    pub has_sourcedb: bool,
+    pub id: Uuid,
+}
+
+#[derive(Default)]
+pub struct TelemetryTransactionStats {
+    pub modules: usize,
+    pub dirty_rdeps: usize,
+    pub cycle_rdeps: usize,
+    pub run_steps: usize,
+    pub run_time: Duration,
+    pub committed: bool,
+}
+
+#[derive(Clone)]
+pub struct TelemetryTaskId {
+    pub queue_name: &'static str,
+    pub id: usize,
+}
+
+impl TelemetryTaskId {
+    pub fn new(queue_name: &'static str, id: usize) -> Self {
+        Self { queue_name, id }
     }
 }
 
-pub struct LspEventTelemetry {
-    pub name: String,
-    pub enqueued_at: Instant,
-    pub dequeued_at: Instant,
-    pub error: Option<Error>,
-    pub validate: Option<Duration>,
-    pub server_has_sourcedb: bool,
+#[derive(Default)]
+pub struct TelemetryCommonSourceDbStats {
+    pub files: usize,
+    pub changed: bool,
 }
 
-impl LspEventTelemetry {
-    pub fn new_dequeued(name: String, enqueued_at: Instant, server_has_sourcedb: bool) -> Self {
+#[derive(Default)]
+pub struct TelemetrySourceDbRebuildStats {
+    pub count: usize,
+    pub had_error: bool,
+    pub common: TelemetryCommonSourceDbStats,
+}
+
+#[derive(Default)]
+pub struct TelemetrySourceDbRebuildInstanceStats {
+    pub common: TelemetryCommonSourceDbStats,
+    pub build_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityKey {
+    pub id: String,
+    pub name: String,
+}
+
+impl TelemetryEvent {
+    pub fn new_dequeued(
+        kind: TelemetryEventKind,
+        enqueued_at: Instant,
+        server_state: TelemetryServerState,
+    ) -> (Self, Duration) {
+        let start = Instant::now();
+        let queue = start - enqueued_at;
+        (
+            Self {
+                kind,
+                queue: Some(queue),
+                start,
+                error: None,
+                invalidate: None,
+                validate: None,
+                transaction_stats: None,
+                server_state,
+                file_stats: None,
+                task_id: None,
+                sourcedb_rebuild_stats: None,
+                sourcedb_rebuild_instance_stats: None,
+                activity_key: None,
+            },
+            queue,
+        )
+    }
+
+    pub fn new_task(
+        kind: TelemetryEventKind,
+        server_state: TelemetryServerState,
+        task_id: Option<TelemetryTaskId>,
+        start: Instant,
+    ) -> Self {
         Self {
-            name,
-            enqueued_at,
-            dequeued_at: Instant::now(),
+            kind,
+            queue: None,
+            start,
             error: None,
+            invalidate: None,
             validate: None,
-            server_has_sourcedb,
+            transaction_stats: None,
+            server_state,
+            file_stats: None,
+            task_id,
+            sourcedb_rebuild_stats: None,
+            sourcedb_rebuild_instance_stats: None,
+            activity_key: None,
         }
+    }
+
+    pub fn set_activity_key(&mut self, activity_key: Option<ActivityKey>) {
+        self.activity_key = activity_key;
+    }
+
+    pub fn set_invalidate_duration(&mut self, duration: Duration) {
+        self.invalidate = Some(duration);
     }
 
     pub fn set_validate_duration(&mut self, duration: Duration) {
         self.validate = Some(duration);
     }
 
-    pub fn finish<T>(&self, result: Result<T, Error>) -> (Duration, Duration, Result<T, Error>) {
-        let finished_at = Instant::now();
-        let queue_duration = self.dequeued_at - self.enqueued_at;
-        let process_duration = finished_at - self.dequeued_at;
-        (queue_duration, process_duration, result)
+    pub fn set_transaction_stats(&mut self, stats: TelemetryTransactionStats) {
+        self.transaction_stats = Some(stats);
     }
 
-    pub fn finish_and_record<T>(
-        self,
-        telemetry: &impl Telemetry,
-        result: Result<T, Error>,
-    ) -> (Duration, Duration, Result<T, Error>) {
-        telemetry.record_lsp_event(self, result)
+    pub fn set_file_stats(&mut self, stats: TelemetryFileStats) {
+        self.file_stats = Some(stats);
+    }
+
+    pub fn set_task_stats(&mut self, stats: TelemetryTaskId) {
+        self.task_id = Some(stats);
+    }
+
+    pub fn set_sourcedb_rebuild_stats(&mut self, stats: TelemetrySourceDbRebuildStats) {
+        self.sourcedb_rebuild_stats = Some(stats);
+    }
+
+    pub fn set_sourcedb_rebuild_instance_stats(
+        &mut self,
+        stats: TelemetrySourceDbRebuildInstanceStats,
+    ) {
+        self.sourcedb_rebuild_instance_stats = Some(stats);
+    }
+
+    pub fn finish_and_record(self, telemetry: &dyn Telemetry, error: Option<&Error>) -> Duration {
+        let process = self.start.elapsed();
+        telemetry.record_event(self, process, error);
+        process
     }
 }

@@ -379,7 +379,7 @@ mod tests {
 
             let tparams = TParams::new(vec![TParam {
                 quantified: q.clone(),
-                variance: PreInferenceVariance::PInvariant,
+                variance: PreInferenceVariance::Invariant,
             }]);
 
             Forallable::Function(Function {

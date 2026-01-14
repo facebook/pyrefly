@@ -829,3 +829,77 @@ calculate(1, 2)
         );
     }
 }
+
+#[test]
+fn function_docstring_for_attribute_call_test() {
+    let lib_code = r#"
+"""module docstring that should not be returned"""
+
+def func(x: int) -> None:
+    """
+    function-specific docstring
+    """
+    pass
+"#;
+
+    let main_code = r#"
+import lib
+
+lib.func(
+#       ^
+"#;
+
+    let files = [("lib", lib_code), ("main", main_code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(main_code)[0];
+
+    let signature = state
+        .transaction()
+        .get_signature_help_at(handle, position)
+        .expect("signature help available");
+    let sig_info = &signature.signatures[0];
+
+    let Documentation::MarkupContent(content) = sig_info
+        .documentation
+        .as_ref()
+        .expect("function-level documentation present")
+    else {
+        panic!("unexpected documentation variant");
+    };
+
+    assert!(
+        content.value.contains("function-specific docstring"),
+        "expected function docstring, got {}",
+        content.value
+    );
+    assert!(
+        !content.value.contains("module docstring"),
+        "module docstring should not be used for attribute call"
+    );
+}
+
+#[test]
+fn typing_cast_shows_all_overloads_test() {
+    let code = r#"
+from typing import cast
+
+cast()
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    // typing.cast has 3 overloads - all should appear as separate signature entries
+    assert_eq!(
+        r#"
+# main.py
+4 | cast()
+         ^
+Signature Help Result: active=0
+- def cast[_T](typ: type[_T], val: Any) -> _T: ...
+- def cast(typ: str, val: Any) -> Any: ..., parameters=[typ: str, val: Any], active parameter = 0
+- def cast(typ: object, val: Any) -> Any: ..., parameters=[typ: object, val: Any], active parameter = 0
+"#
+        .trim(),
+        report.trim(),
+    );
+}

@@ -16,9 +16,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    # Temporarily disabled because it is often not that helpful
-    if: false
-    # if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Download diffs
         uses: actions/github-script@v8

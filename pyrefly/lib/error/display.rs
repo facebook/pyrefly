@@ -58,6 +58,8 @@ impl ErrorContext {
 }
 
 impl TypeCheckKind {
+    /// Note: `got` and `want` should be processed through `AnswersSolver::for_display` before calling this function
+    /// otherwise printed type representations may be non-deterministic due to unsolved vars
     pub fn format_error(&self, got: &Type, want: &Type, current_module: ModuleName) -> String {
         let mut ctx = TypeDisplayContext::new(&[got, want]);
         match self {

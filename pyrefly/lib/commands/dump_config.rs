@@ -105,7 +105,7 @@ fn dump_config(
     handles.sort_by(|a, b| a.path().cmp(b.path()));
     for handle in handles {
         let path = handle.path();
-        let config = config_finder.python_file(handle.module(), path);
+        let config = config_finder.python_file(handle.module_kind(), path);
         configs_to_files
             .entry(config)
             .or_default()

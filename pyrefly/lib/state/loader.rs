@@ -237,6 +237,7 @@ impl LoaderFindCache {
             .ensure(&(module.dupe(), origin.cloned()), || {
                 find_import(&self.config, module, origin)
             })
+            .0
             .dupe()
     }
 }

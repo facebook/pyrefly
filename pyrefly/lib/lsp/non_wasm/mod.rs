@@ -6,10 +6,12 @@
  */
 
 mod build_system;
+pub mod call_hierarchy;
 pub mod document_symbols;
 pub mod folding_ranges;
 pub mod lsp;
 pub mod module_helpers;
+pub mod protocol;
 pub mod queue;
 pub mod server;
 pub mod stdlib;

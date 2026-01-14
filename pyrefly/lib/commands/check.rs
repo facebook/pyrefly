@@ -24,12 +24,16 @@ use anyhow::Context as _;
 use clap::Parser;
 use clap::ValueEnum;
 use dupe::Dupe as _;
+use percent_encoding::AsciiSet;
+use percent_encoding::CONTROLS;
+use percent_encoding::utf8_percent_encode;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::config::ConfigFile;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::finder::ConfigError;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::args::clap_env;
@@ -55,6 +59,7 @@ use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::error::print_error_counts;
 use crate::error::legacy::LegacyErrors;
+use crate::error::legacy::severity_to_str;
 use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
 use crate::module::typeshed::stdlib_search_path;
@@ -119,7 +124,7 @@ async fn run_check(
     }
 }
 
-#[derive(Debug, Clone, ValueEnum, Default)]
+#[derive(Debug, Clone, ValueEnum, Default, PartialEq, Eq)]
 enum OutputFormat {
     /// Minimal text output, one line per error
     MinText,
@@ -128,6 +133,8 @@ enum OutputFormat {
     FullText,
     /// JSON output
     Json,
+    /// Emit GitHub Actions workflow commands
+    Github,
     /// Only show error count, omitting individual errors
     OmitErrors,
 }
@@ -246,8 +253,9 @@ struct OutputArgs {
     )]
     only: Option<Vec<ErrorKind>>,
 
-    /// By default show the number of errors. Pass `--summary` to show information about lines checked and time/memory,
-    /// or `--summary=none` to hide the summary line entirely.
+    /// By default show a progress bar and the number of errors.
+    /// Pass `--summary` to additionally show information about lines checked and time/memory,
+    /// or `--summary=none` to hide the progress bar and summary line entirely.
     #[arg(
         long,
         default_missing_value = "full",
@@ -375,6 +383,7 @@ impl OutputFormat {
             Self::MinText => Self::write_error_text_to_file(path, relative_to, errors, false),
             Self::FullText => Self::write_error_text_to_file(path, relative_to, errors, true),
             Self::Json => Self::write_error_json_to_file(path, relative_to, errors),
+            Self::Github => Self::write_error_github_to_file(path, relative_to, errors),
             Self::OmitErrors => Ok(()),
         }
     }
@@ -384,9 +393,111 @@ impl OutputFormat {
             Self::MinText => Self::write_error_text_to_console(relative_to, errors, false),
             Self::FullText => Self::write_error_text_to_console(relative_to, errors, true),
             Self::Json => Self::write_error_json_to_console(relative_to, errors),
+            Self::Github => Self::write_error_github_to_console(relative_to, errors),
             Self::OmitErrors => Ok(()),
         }
     }
+
+    fn write_error_github(
+        writer: &mut impl Write,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
+        for error in errors {
+            if let Some(command) = github_actions_command(error, relative_to) {
+                writeln!(writer, "{command}")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn buffered_write_error_github(
+        writer: impl Write,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
+        let mut writer = BufWriter::new(writer);
+        Self::write_error_github(&mut writer, relative_to, errors)?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    fn write_error_github_to_file(
+        path: &Path,
+        relative_to: &Path,
+        errors: &[Error],
+    ) -> anyhow::Result<()> {
+        let file = File::create(path)?;
+        Self::buffered_write_error_github(file, relative_to, errors)
+    }
+
+    fn write_error_github_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+        Self::buffered_write_error_github(stdout(), relative_to, errors)
+    }
+}
+
+fn should_emit_github_errors() -> bool {
+    matches!(
+        std::env::var("GITHUB_ACTIONS"),
+        Ok(value) if value.eq_ignore_ascii_case("true")
+    )
+}
+
+fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
+    let normalized = severity_to_str(severity);
+    match normalized.as_str() {
+        "ignore" => None,
+        "warn" => Some("warning"),
+        "info" => Some("notice"),
+        "error" => Some("error"),
+        _ => None,
+    }
+}
+
+fn github_actions_command(error: &Error, relative_to: &Path) -> Option<String> {
+    let command = severity_to_github_command(error.severity())?;
+    let range = error.display_range();
+    let file = github_actions_path(error.path().as_path(), relative_to);
+    let params = format!(
+        "file={},line={},col={},endLine={},endColumn={},title={}",
+        escape_workflow_property(&file),
+        range.start.line_within_file().get(),
+        range.start.column().get(),
+        range.end.line_within_file().get(),
+        range.end.column().get(),
+        escape_workflow_property(&format!("Pyrefly {}", error.error_kind().to_name())),
+    );
+    let message = escape_workflow_data(&error.msg());
+    Some(format!("::{command} {params}::{message}"))
+}
+
+const WORKFLOW_DATA_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'%');
+const WORKFLOW_PROPERTY_ENCODE_SET: &AsciiSet = &WORKFLOW_DATA_ENCODE_SET.add(b':').add(b',');
+
+fn github_actions_path(path: &Path, relative_to: &Path) -> String {
+    let relative = if relative_to.as_os_str().is_empty() {
+        path
+    } else {
+        path.strip_prefix(relative_to).unwrap_or(path)
+    };
+    let candidate = if relative.as_os_str().is_empty() {
+        path
+    } else {
+        relative
+    };
+    let mut path_str = candidate.to_string_lossy().into_owned();
+    if std::path::MAIN_SEPARATOR != '/' {
+        path_str = path_str.replace(std::path::MAIN_SEPARATOR, "/");
+    }
+    path_str
+}
+
+fn escape_workflow_data(value: &str) -> String {
+    utf8_percent_encode(value, WORKFLOW_DATA_ENCODE_SET).to_string()
+}
+
+fn escape_workflow_property(value: &str) -> String {
+    utf8_percent_encode(value, WORKFLOW_PROPERTY_ENCODE_SET).to_string()
 }
 
 /// A data structure to facilitate the creation of handles for all the files we want to check.
@@ -415,13 +526,13 @@ impl Handles {
         for path in &self.path_data {
             let unknown = ModuleName::unknown();
             configs
-                .entry(config_finder.python_file(unknown, path))
+                .entry(config_finder.python_file(ModuleNameWithKind::guaranteed(unknown), path))
                 .or_insert_with(SmallSet::new)
                 .insert(path.dupe());
         }
 
         // TODO(connernilsen): wire in force logic
-        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false);
+        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false).0;
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
@@ -591,7 +702,7 @@ impl CheckArgs {
         let sys_info = holder
             .as_ref()
             .config_finder()
-            .python_file(module_name, &module_path)
+            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path)
             .get_sys_info();
         let handle = Handle::new(module_name, module_path.clone(), sys_info);
 
@@ -644,7 +755,7 @@ impl CheckArgs {
                 sourcedb_errors,
                 require_levels.specified,
             );
-            state.commit_transaction(transaction);
+            state.commit_transaction(transaction, None);
             if let Err(e) = res {
                 eprintln!("{e:#}");
             }
@@ -697,9 +808,13 @@ impl CheckArgs {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         let type_check_start = Instant::now();
-        transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+        if self.output.summary != Summary::None {
+            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+        }
         transaction.run(handles, require);
-        transaction.set_subscriber(None);
+        if self.output.summary != Summary::None {
+            transaction.set_subscriber(None);
+        }
 
         let loads = if self.behavior.check_all {
             transaction.get_all_errors()
@@ -768,6 +883,9 @@ impl CheckArgs {
             self.output
                 .output_format
                 .write_errors_to_console(relative_to.as_path(), &shown_errors)?;
+        }
+        if should_emit_github_errors() && self.output.output_format != OutputFormat::Github {
+            OutputFormat::Github.write_errors_to_console(relative_to.as_path(), &shown_errors)?;
         }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
@@ -860,5 +978,91 @@ impl CheckArgs {
         } else {
             Ok((CommandExitStatus::Success, shown_errors))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+    use vec1::Vec1;
+    use vec1::vec1;
+
+    use super::*;
+
+    fn sample_error(msg: Vec1<String>) -> Error {
+        let module = Module::new(
+            ModuleName::from_str("sample"),
+            ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
+            Arc::new("x = 1\n".to_owned()),
+        );
+        Error::new(
+            module,
+            TextRange::new(TextSize::from(0), TextSize::from(1)),
+            msg,
+            ErrorKind::BadAssignment,
+        )
+    }
+
+    #[test]
+    fn github_actions_command_includes_relative_path_and_metadata() {
+        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]), Path::new("/repo"))
+            .expect("should emit command");
+        assert!(cmd.starts_with("::error "), "{cmd}");
+        assert!(
+            cmd.contains("file=foo.py"),
+            "relative path expected, got {cmd}"
+        );
+        assert!(
+            cmd.contains("title=Pyrefly bad-assignment"),
+            "title missing, got {cmd}"
+        );
+        assert!(cmd.ends_with("::bad"));
+    }
+
+    #[test]
+    fn github_actions_command_respects_severity_mapping() {
+        let warning = sample_error(vec1!["bad".into()]).with_severity(Severity::Warn);
+        let notice = sample_error(vec1!["bad".into()]).with_severity(Severity::Info);
+        let ignored = sample_error(vec1!["bad".into()]).with_severity(Severity::Ignore);
+        assert!(
+            github_actions_command(&warning, Path::new(""))
+                .unwrap()
+                .starts_with("::warning "),
+            "warning severity not mapped"
+        );
+        assert!(
+            github_actions_command(&notice, Path::new(""))
+                .unwrap()
+                .starts_with("::notice "),
+            "info severity not mapped"
+        );
+        assert!(github_actions_command(&ignored, Path::new("")).is_none());
+    }
+
+    #[test]
+    fn escape_helpers_follow_workflow_spec() {
+        assert_eq!(
+            escape_workflow_data("line1\nline2\r% done"),
+            "line1%0Aline2%0D%25 done"
+        );
+        assert_eq!(escape_workflow_property("file:name,py"), "file%3Aname%2Cpy");
+    }
+
+    #[test]
+    fn github_output_format_writes_commands() {
+        let errors = vec![sample_error(vec1!["bad".into()])];
+        let mut buf = Vec::new();
+        OutputFormat::write_error_github(&mut buf, Path::new("/repo"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("::error file=foo.py"));
+        assert!(output.ends_with("::bad\n"));
     }
 }
