@@ -4,6 +4,83 @@
   "title": "Pyrefly Configuration",
   "description": "Configuration file for Pyrefly, a fast Python language server and type checker",
   "type": "object",
+  "$defs": {
+    "configBase": {
+      "type": "object",
+      "properties": {
+        "errors": {
+          "description": "Configure the severity for each kind of error that Pyrefly emits. Set error code to true to enable, false to disable.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "properties": {
+            "bad-assignment": {"type": "boolean"},
+            "bad-return": {"type": "boolean"},
+            "missing-import": {"type": "boolean"},
+            "invalid-argument": {"type": "boolean"},
+            "assert-type": {"type": "boolean"},
+            "bad-override": {"type": "boolean"},
+            "incompatible-type": {"type": "boolean"},
+            "unused-import": {"type": "boolean"},
+            "undefined-variable": {"type": "boolean"}
+          },
+          "default": {}
+        },
+        "disable-type-errors-in-ide": {
+          "description": "Disables type errors from showing up when running Pyrefly in an IDE. This is primarily used when Pyrefly is acting in a language-server-only mode.",
+          "type": "boolean",
+          "default": false
+        },
+        "replace-imports-with-any": {
+          "description": "Instruct Pyrefly to unconditionally replace the given module globs with typing.Any and ignore import errors for the module.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "ignore-missing-imports": {
+          "description": "Instruct Pyrefly to replace the given module globs with typing.Any and ignore import errors for the module only when the module can't be found.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "ignore-errors-in-generated-code": {
+          "description": "Whether to ignore type errors in generated code. If enabled, generated files will be treated as if they are included in project-excludes. The generated code status is determined by checking if the file contents contain the substring '@generated'.",
+          "type": "boolean",
+          "default": false
+        },
+        "infer-with-first-use": {
+          "description": "Whether to infer type variables not determined by a call or constructor based on their first usage. This includes empty containers like [] and {}. Default behavior is similar to Mypy.",
+          "type": "boolean",
+          "default": true
+        },
+        "untyped-def-behavior": {
+          "description": "How should Pyrefly treat function definitions with no parameter or return type annotations?",
+          "type": "string",
+          "enum": ["check-and-infer-return-type", "check-and-infer-return-any", "skip-and-infer-return-any"],
+          "default": "check-and-infer-return-type"
+        },
+        "permissive-ignores": {
+          "description": "Should Pyrefly ignore errors based on annotations from other tools, e.g. # pyre-ignore or # mypy: ignore? By default, respects # pyrefly: ignore and # type: ignore.",
+          "type": "boolean",
+          "default": false
+        },
+        "enabled-ignores": {
+          "description": "What set of tools should Pyrefly respect ignore directives from?",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["type", "pyrefly", "mypy", "pyright", "pyre"]
+          },
+          "default": ["type", "pyrefly"]
+        }
+      }
+    }
+  },
   "properties": {
     "project-includes": {
       "description": "The glob patterns used to describe which files to type check, typically understood as user-space files. This does not specify import resolution priority.",
@@ -136,6 +213,20 @@
       "enum": ["check-and-infer-return-type", "check-and-infer-return-any", "skip-and-infer-return-any"],
       "default": "check-and-infer-return-type"
     },
+    "permissive-ignores": {
+      "description": "Should Pyrefly ignore errors based on annotations from other tools, e.g. # pyre-ignore or # mypy: ignore? By default, respects # pyrefly: ignore and # type: ignore.",
+      "type": "boolean",
+      "default": false
+    },
+    "enabled-ignores": {
+      "description": "What set of tools should Pyrefly respect ignore directives from?",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["type", "pyrefly", "mypy", "pyright", "pyre"]
+      },
+      "default": ["type", "pyrefly"]
+    },
     "use-ignore-files": {
       "description": "Whether to allow Pyrefly to use ignore files in your project and automatically add excluded files and directories to your project-excludes.",
       "type": "boolean",
@@ -155,27 +246,27 @@
           "type": "string",
           "enum": ["buck", "custom"]
         },
+        "repo_root": {
+          "description": "Path to the root of the repository.",
+          "type": "string"
+        },
         "isolation-dir": {
-          "description": "(Buck2 only) The isolation dir for Buck2 to use.",
+          "description": "The isolation dir for Buck2 to use.",
           "type": "string"
         },
         "extras": {
-          "description": "(Buck2 only) Extra flags passed to Buck2.",
+          "description": "Extra flags passed to Buck2.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "command": {
-          "description": "(Custom only) The command executed to query the build system about available targets.",
+          "description": "The command executed to query the build system about available targets.",
           "type": "array",
           "items": {
             "type": "string"
           }
-        },
-        "repo_root": {
-          "description": "(Custom only) Path to the root of the repository.",
-          "type": "string"
         }
       },
       "required": ["type"],
@@ -187,9 +278,8 @@
             }
           },
           "then": {
-            "properties": {
-              "isolation-dir": true,
-              "extras": true
+            "not": {
+              "required": ["command"]
             }
           }
         },
@@ -201,63 +291,35 @@
           },
           "then": {
             "required": ["command"],
-            "properties": {
-              "command": true,
-              "repo_root": true
+            "not": {
+              "anyOf": [
+                {"required": ["isolation-dir"]},
+                {"required": ["extras"]}
+              ]
             }
           }
         }
       ]
     },
-    "permissive-ignores": {
-      "description": "Should Pyrefly ignore errors based on annotations from other tools, e.g. # pyre-ignore or # mypy: ignore? By default, respects # pyrefly: ignore and # type: ignore.",
-      "type": "boolean",
-      "default": false
-    },
-    "enabled-ignores": {
-      "description": "What set of tools should Pyrefly respect ignore directives from?",
-      "type": "array",
-      "items": {
-        "type": "string",
-        "enum": ["type", "pyrefly", "mypy", "pyright", "pyre"]
-      },
-      "default": ["type", "pyrefly"]
-    },
     "sub-config": {
       "description": "Override specific config values for matched paths in your project. SubConfigs allow fine-grained configuration based on filepath glob matching.",
       "type": "array",
       "items": {
-        "type": "object",
-        "required": ["matches"],
-        "properties": {
-          "matches": {
-            "description": "A filesystem glob pattern detailing which files the config applies to.",
-            "type": "string"
+        "allOf": [
+          {
+            "$ref": "#/$defs/configBase"
           },
-          "errors": {
-            "description": "Error configuration overrides for matched files.",
+          {
             "type": "object",
-            "additionalProperties": {
-              "type": "boolean"
+            "required": ["matches"],
+            "properties": {
+              "matches": {
+                "description": "A filesystem glob pattern detailing which files the config applies to.",
+                "type": "string"
+              }
             }
-          },
-          "replace-imports-with-any": {
-            "description": "Module glob patterns to replace with typing.Any for matched files.",
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "untyped-def-behavior": {
-            "description": "Override untyped function behavior for matched files.",
-            "type": "string",
-            "enum": ["check-and-infer-return-type", "check-and-infer-return-any", "skip-and-infer-return-any"]
-          },
-          "ignore-errors-in-generated-code": {
-            "description": "Override generated code error handling for matched files.",
-            "type": "boolean"
           }
-        }
+        ]
       },
       "default": []
     }
