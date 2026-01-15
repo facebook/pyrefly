@@ -94,6 +94,30 @@ class Reporter(models.Model):
     env
 }
 
+fn django_env_with_cross_module_fk() -> TestEnv {
+    let mut env = django_env();
+    env.add(
+        "author",
+        r#"
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=70)
+"#,
+    );
+    env.add(
+        "book",
+        r#"
+from django.db import models
+from author import Author
+
+class Book(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+"#,
+    );
+    env
+}
+
 testcase!(
     test_foreign_key_string_literal_imported,
     django_env_with_model_import(),
@@ -111,6 +135,20 @@ article = Article()
 assert_type(article.reporter, Reporter)
 assert_type(article.reporter.full_name, str)
 assert_type(article.reporter_id, int)
+"#,
+);
+
+testcase!(
+    test_foreign_key_reverse_cross_module,
+    django_env_with_cross_module_fk(),
+    r#"
+from typing import assert_type
+from django.db.models.fields.related_descriptors import RelatedManager
+from author import Author
+from book import Book
+
+author = Author()
+assert_type(author.book_set, RelatedManager[Book])
 "#,
 );
 

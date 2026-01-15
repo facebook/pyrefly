@@ -1731,6 +1731,22 @@ impl<'a> LookupExport for TransactionHandle<'a> {
 }
 
 impl<'a> LookupAnswer for TransactionHandle<'a> {
+    fn modules(&self) -> SmallSet<ModuleName> {
+        let mut res = self
+            .transaction
+            .data
+            .updated_modules
+            .iter_unordered()
+            .map(|x| x.0.module())
+            .collect::<SmallSet<_>>();
+        for handle in self.transaction.readable.modules.keys() {
+            if self.transaction.data.updated_modules.get(handle).is_none() {
+                res.insert(handle.module());
+            }
+        }
+        res
+    }
+
     fn get<K: Solve<Self> + Exported>(
         &self,
         module: ModuleName,

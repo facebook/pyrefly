@@ -95,7 +95,6 @@ person.person_set
 );
 
 testcase!(
-    bug = "Cross-module reverse relations not supported",
     test_foreign_key_reverse_cross_module,
     django_env_with_separate_models(),
     r#"
@@ -107,7 +106,7 @@ class Book(models.Model):
 
 # Author is defined in a different module, so reverse relation won't be synthesized
 author = Author()
-author.book_set  # E: `Author` has no attribute `book_set`
+author.book_set
 "#,
 );
 

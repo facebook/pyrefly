@@ -37,7 +37,6 @@ use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
-use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExport;
 use crate::error::collector::ErrorCollector;
 use crate::types::simplify::unions;
@@ -624,8 +623,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
     ) -> Option<ClassSynthesizedFields> {
-        let idx = self.bindings().key_to_idx(&KeyDjangoRelations);
-        let index = self.get_idx(idx);
+        let index = self.django_reverse_relations_index();
         index.get(cls).cloned()
     }
 

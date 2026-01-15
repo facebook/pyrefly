@@ -481,6 +481,10 @@ impl DjangoReverseRelationIndex {
     pub fn get(&self, cls: &Class) -> Option<&ClassSynthesizedFields> {
         self.0.get(cls)
     }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Class, &ClassSynthesizedFields)> {
+        self.0.iter()
+    }
 }
 
 impl Display for DjangoReverseRelationIndex {
