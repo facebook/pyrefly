@@ -474,8 +474,6 @@ fn test_inlay_hint_typevar_has_location() {
     interaction.shutdown().unwrap();
 }
 
-/// TODO(jvansch): Figure out why this is timing out on Windows
-#[cfg(not(windows))]
 #[test]
 fn test_inlay_hint_typevartuple_has_location() {
     let root = get_test_files_root();
@@ -641,8 +639,6 @@ fn test_inlay_hint_anonymous_typed_dict_has_location() {
     interaction.shutdown().unwrap();
 }
 
-// TODO(jvansch): re-enable on windows
-#[cfg(not(windows))]
 #[test]
 fn test_inlay_hint_literal_string_has_location() {
     let root = get_test_files_root();
