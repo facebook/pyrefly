@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::Arc;
+
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
@@ -31,10 +33,13 @@ use crate::alt::class::class_field::ClassField;
 use crate::alt::class::enums::VALUE_PROP;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
+use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
-use crate::binding::binding::KeyClassField;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExport;
+use crate::error::collector::ErrorCollector;
 use crate::types::simplify::unions;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
@@ -613,10 +618,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
     ) -> Option<ClassSynthesizedFields> {
-        let mut fields = SmallMap::new();
+        let idx = self.bindings().key_to_idx(&KeyDjangoRelations);
+        let index = self.get_idx(idx);
+        index.get(cls).cloned()
+    }
 
-        for field_idx in self.bindings().keys::<KeyClassField>() {
-            let binding = self.bindings().get(field_idx);
+    pub fn solve_django_reverse_relations(
+        &self,
+        binding: &BindingDjangoRelations,
+        _errors: &ErrorCollector,
+    ) -> Arc<DjangoReverseRelationIndex> {
+        let mut per_class = SmallMap::new();
+
+        for field_idx in binding.fields.iter() {
+            let binding = self.bindings().get(*field_idx);
             let Some(source_class) = &self.get_idx(binding.class_idx).0 else {
                 continue;
             };
@@ -631,14 +646,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } => expr,
                 _ => continue,
             };
-            let call_expr = match expr.as_call_expr() {
-                Some(call_expr) => call_expr,
-                None => continue,
+            let Some(call_expr) = expr.as_call_expr() else {
+                continue;
             };
 
-            let relation_kind = match self.django_relation_kind(expr) {
-                Some(kind) => kind,
-                None => continue,
+            let Some(relation_kind) = self.django_relation_kind(expr) else {
+                continue;
             };
 
             let Some(to_expr) = call_expr.arguments.args.first() else {
@@ -652,28 +665,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::ClassDef(class_def) => class_def,
                 _ => continue,
             };
-            if target_class != cls {
-                continue;
-            }
 
-            let related_name =
-                match self.django_related_name(call_expr, source_class, relation_kind) {
-                    Some(name) => name,
-                    None => continue,
-                };
-            let related_type = match self.django_reverse_field_type(relation_kind, source_class) {
-                Some(ty) => ty,
-                None => continue,
+            let Some(related_name) =
+                self.django_related_name(call_expr, source_class, relation_kind)
+            else {
+                continue;
+            };
+            let Some(related_type) = self.django_reverse_field_type(relation_kind, source_class)
+            else {
+                continue;
             };
 
-            fields.insert(related_name, ClassSynthesizedField::new(related_type));
+            per_class
+                .entry(target_class.clone())
+                .or_insert_with(SmallMap::new)
+                .insert(related_name, ClassSynthesizedField::new(related_type));
         }
 
-        if fields.is_empty() {
-            None
-        } else {
-            Some(ClassSynthesizedFields::new(fields))
+        let mut reverse_relations = SmallMap::new();
+        for (class, fields) in per_class.into_iter_hashed() {
+            reverse_relations.insert_hashed(class, ClassSynthesizedFields::new(fields));
         }
+
+        Arc::new(DjangoReverseRelationIndex::new(reverse_relations))
     }
 
     fn django_relation_kind(&self, expr: &Expr) -> Option<DjangoRelationKind> {

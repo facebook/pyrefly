@@ -470,6 +470,33 @@ pub struct DjangoModelMetadata {
     pub custom_primary_key_field: Option<Name>,
 }
 
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
+pub struct DjangoReverseRelationIndex(SmallMap<Class, ClassSynthesizedFields>);
+
+impl DjangoReverseRelationIndex {
+    pub fn new(map: SmallMap<Class, ClassSynthesizedFields>) -> Self {
+        Self(map)
+    }
+
+    pub fn get(&self, cls: &Class) -> Option<&ClassSynthesizedFields> {
+        self.0.get(cls)
+    }
+}
+
+impl Display for DjangoReverseRelationIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "DjangoReverseRelationIndex(len={})", self.0.len())
+    }
+}
+
+impl VisitMut<Type> for DjangoReverseRelationIndex {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        for (_, fields) in self.0.iter_mut() {
+            fields.recurse_mut(f);
+        }
+    }
+}
+
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ProtocolMetadata {
     /// All members of the protocol, excluding ones defined on `object` and not overridden in a subclass.
