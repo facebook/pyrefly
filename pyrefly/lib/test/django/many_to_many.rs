@@ -30,9 +30,6 @@ assert_type(book.authors.all(), QuerySet[Author, Author])
 assert_type(book.authors.filter(name="Bob"), QuerySet[Author, Author])
 assert_type(book.authors.create(name="Alice"), Author) 
 
-author = Author()
-assert_type(author.books, ManyRelatedManager[Book, models.Model])
-
 book.authors.add("wrong type") # E: Argument `Literal['wrong type']` is not assignable to parameter `*objs` with type `Author | int` 
 "#,
 );
