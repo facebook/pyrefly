@@ -58,6 +58,7 @@ const CHAR_FIELD: Name = Name::new_static("CharField");
 const MANY_TO_MANY_FIELD: Name = Name::new_static("ManyToManyField");
 const MODEL: Name = Name::new_static("Model");
 const MANYRELATEDMANAGER: Name = Name::new_static("ManyRelatedManager");
+const SYMMETRICAL: Name = Name::new_static("symmetrical");
 
 /// Find a keyword argument by name and return its value expression.
 fn find_keyword<'a>(call_expr: &'a ExprCall, name: &Name) -> Option<&'a Expr> {
@@ -73,6 +74,11 @@ fn find_keyword<'a>(call_expr: &'a ExprCall, name: &Name) -> Option<&'a Expr> {
 fn has_keyword_true(call_expr: &ExprCall, name: &Name) -> bool {
     find_keyword(call_expr, name)
         .is_some_and(|v| matches!(v, Expr::BooleanLiteral(lit) if lit.value))
+}
+
+fn has_keyword_false(call_expr: &ExprCall, name: &Name) -> bool {
+    find_keyword(call_expr, name)
+        .is_some_and(|v| matches!(v, Expr::BooleanLiteral(lit) if !lit.value))
 }
 
 const ONE_TO_ONE_FIELD: Name = Name::new_static("OneToOneField");
@@ -665,6 +671,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::ClassDef(class_def) => class_def,
                 _ => continue,
             };
+            if relation_kind == DjangoRelationKind::ManyToMany
+                && self.is_symmetrical_self_m2m(call_expr, source_class, target_class)
+            {
+                continue;
+            }
 
             let Some(related_name) =
                 self.django_related_name(call_expr, source_class, relation_kind)
@@ -794,5 +805,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         Some(Name::new(substituted))
+    }
+
+    fn is_symmetrical_self_m2m(
+        &self,
+        call_expr: &ExprCall,
+        source_class: &Class,
+        target_class: &Class,
+    ) -> bool {
+        if source_class != target_class {
+            return false;
+        }
+        if has_keyword_false(call_expr, &SYMMETRICAL) {
+            return false;
+        }
+        match find_keyword(call_expr, &SYMMETRICAL) {
+            None => true,
+            Some(Expr::NoneLiteral(_)) => true,
+            Some(Expr::BooleanLiteral(lit)) => lit.value,
+            _ => true,
+        }
     }
 }
