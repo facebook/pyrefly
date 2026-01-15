@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::iter;
 use std::mem;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -32,36 +33,58 @@ use crate::config::ConfigFile;
 use crate::config::ConfigSource;
 use crate::error_kind::Severity;
 
+#[derive(Clone)]
 pub struct ConfigError {
     severity: Severity,
-    msg: anyhow::Error,
+    msg: String,
+    file_path: Option<PathBuf>,
 }
 
 impl ConfigError {
     pub fn error(msg: anyhow::Error) -> Self {
         Self {
             severity: Severity::Error,
-            msg,
+            msg: format!("{:#}", msg),
+            file_path: None,
         }
     }
 
     pub fn warn(msg: anyhow::Error) -> Self {
         Self {
             severity: Severity::Warn,
-            msg,
+            msg: format!("{:#}", msg),
+            file_path: None,
+        }
+    }
+
+    /// Create an error with an associated file path
+    pub fn error_with_path(msg: anyhow::Error, file_path: PathBuf) -> Self {
+        Self {
+            severity: Severity::Error,
+            msg: format!("{:#}", msg),
+            file_path: Some(file_path),
+        }
+    }
+
+    /// Create a warning with an associated file path
+    pub fn warn_with_path(msg: anyhow::Error, file_path: PathBuf) -> Self {
+        Self {
+            severity: Severity::Warn,
+            msg: format!("{:#}", msg),
+            file_path: Some(file_path),
         }
     }
 
     pub fn print(&self) {
         match self.severity {
             Severity::Error => {
-                error!("{:#}", self.msg);
+                error!("{}", self.msg);
             }
             Severity::Warn => {
-                warn!("{:#}", self.msg);
+                warn!("{}", self.msg);
             }
             Severity::Info => {
-                info!("{:#}", self.msg);
+                info!("{}", self.msg);
             }
             Severity::Ignore => {}
         }
@@ -70,7 +93,8 @@ impl ConfigError {
     pub fn context(self, context: String) -> Self {
         ConfigError {
             severity: self.severity,
-            msg: self.msg.context(context),
+            msg: format!("{}: {}", context, self.msg),
+            file_path: self.file_path,
         }
     }
 
@@ -79,7 +103,11 @@ impl ConfigError {
     }
 
     pub fn get_message(&self) -> String {
-        self.msg.to_string()
+        self.msg.clone()
+    }
+
+    pub fn file_path(&self) -> Option<&Path> {
+        self.file_path.as_deref()
     }
 }
 
