@@ -903,7 +903,12 @@ fn function_last_expressions<'a>(
     sys_info: &SysInfo,
     constrained_typevars: Option<&ConstrainedTypeVarParams>,
 ) -> Option<Vec<(LastStmt, &'a Expr)>> {
-    fn f<'a>(sys_info: &SysInfo, x: &'a [Stmt], res: &mut Vec<(LastStmt, &'a Expr)>) -> Option<()> {
+    fn f<'a>(
+        sys_info: &SysInfo,
+        x: &'a [Stmt],
+        res: &mut Vec<(LastStmt, &'a Expr)>,
+        constrained_typevars: Option<&ConstrainedTypeVarParams>,
+    ) -> Option<()> {
         fn loop_body_has_break_statement(statement: &Stmt, has_break: &mut bool) {
             match statement {
                 Stmt::Break(_) => {
@@ -915,13 +920,6 @@ fn function_last_expressions<'a>(
             }
         }
 
-    fn f<'a>(sys_info: &SysInfo, x: &'a [Stmt], res: &mut Vec<(LastStmt, &'a Expr)>) -> Option<()> {
-    fn f<'a>(
-        sys_info: &SysInfo,
-        x: &'a [Stmt],
-        res: &mut Vec<(LastStmt, &'a Expr)>,
-        constrained_typevars: Option<&ConstrainedTypeVarParams>,
-    ) -> Option<()> {
         match x.last()? {
             Stmt::Expr(x) => res.push((LastStmt::Expr, &x.value)),
             Stmt::Return(_) | Stmt::Raise(_) => {}
@@ -952,7 +950,7 @@ fn function_last_expressions<'a>(
                 if has_break || x.orelse.is_empty() {
                     return None;
                 }
-                f(sys_info, &x.orelse, res)?;
+                f(sys_info, &x.orelse, res, constrained_typevars)?;
             }
             Stmt::If(x) => {
                 let mut last_test = None;
