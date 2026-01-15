@@ -723,6 +723,7 @@ impl Exported for KeyClassMetadata {
     }
 }
 impl Keyed for KeyDjangoRelations {
+    const EXPORTED: bool = true;
     type Value = BindingDjangoRelations;
     type Answer = DjangoReverseRelationIndex;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
@@ -735,6 +736,7 @@ impl Keyed for KeyDjangoRelations {
         TextRange::default()
     }
 }
+impl Exported for KeyDjangoRelations {}
 impl Keyed for KeyClassMro {
     const EXPORTED: bool = true;
     type Value = BindingClassMro;
