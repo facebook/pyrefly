@@ -33,10 +33,13 @@ use crate::alt::class::enums::VALUE_PROP;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
+use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
-use crate::binding::binding::KeyClassField;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExport;
+use crate::error::collector::ErrorCollector;
 use crate::types::simplify::unions;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
@@ -95,8 +98,6 @@ fn has_keyword_true(call_expr: &ExprCall, name: &Name) -> bool {
     find_keyword(call_expr, name)
         .is_some_and(|v| matches!(v, Expr::BooleanLiteral(lit) if lit.value))
 }
-
-const ONE_TO_ONE_FIELD: Name = Name::new_static("OneToOneField");
 
 const RELATED_NAME: Name = Name::new_static("related_name");
 
@@ -270,10 +271,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Get RelatedManager class from django stubs
     fn get_related_manager_type(&self, target_model_type: Type) -> Option<Type> {
         let django_related_module = ModuleName::django_models_fields_related_descriptors();
-        let django_related_module_exports = self.exports.get(django_related_module).finding()?;
-        if !django_related_module_exports
-            .exports(self.exports)
-            .contains_key(&RELATED_MANAGER)
+        if !self
+            .exports
+            .export_exists(django_related_module, &RELATED_MANAGER)
         {
             return None;
         }
@@ -642,10 +642,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
     ) -> Option<ClassSynthesizedFields> {
-        let mut fields = SmallMap::new();
+        let idx = self.bindings().key_to_idx(&KeyDjangoRelations);
+        let index = self.get_idx(idx);
+        index.get(cls).cloned()
+    }
 
-        for field_idx in self.bindings().keys::<KeyClassField>() {
-            let binding = self.bindings().get(field_idx);
+    pub fn solve_django_reverse_relations(
+        &self,
+        binding: &BindingDjangoRelations,
+        _errors: &ErrorCollector,
+    ) -> Arc<DjangoReverseRelationIndex> {
+        let mut per_class = SmallMap::new();
+
+        for field_idx in binding.fields.iter() {
+            let binding = self.bindings().get(*field_idx);
             let Some(source_class) = &self.get_idx(binding.class_idx).0 else {
                 continue;
             };
@@ -655,19 +665,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             let expr = match &binding.definition {
                 ClassFieldDefinition::AssignedInBody {
-                    value: ExprOrBinding::Expr(expr),
+                    value,
                     ..
-                } => expr,
+                } => match value.as_ref() {
+                    ExprOrBinding::Expr(expr) => expr,
+                    ExprOrBinding::Binding(_) => continue,
+                },
                 _ => continue,
             };
-            let call_expr = match expr.as_call_expr() {
-                Some(call_expr) => call_expr,
-                None => continue,
+            let Some(call_expr) = expr.as_call_expr() else {
+                continue;
             };
 
-            let relation_kind = match self.django_relation_kind(expr) {
-                Some(kind) => kind,
-                None => continue,
+            let Some(relation_kind) = self.django_relation_kind(expr) else {
+                continue;
             };
 
             let Some(to_expr) = call_expr.arguments.args.first() else {
@@ -681,28 +692,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::ClassDef(class_def) => class_def,
                 _ => continue,
             };
-            if target_class != cls {
-                continue;
-            }
 
-            let related_name =
-                match self.django_related_name(call_expr, source_class, relation_kind) {
-                    Some(name) => name,
-                    None => continue,
-                };
-            let related_type = match self.django_reverse_field_type(relation_kind, source_class) {
-                Some(ty) => ty,
-                None => continue,
+            let Some(related_name) =
+                self.django_related_name(call_expr, source_class, relation_kind)
+            else {
+                continue;
+            };
+            let Some(related_type) = self.django_reverse_field_type(relation_kind, source_class)
+            else {
+                continue;
             };
 
-            fields.insert(related_name, ClassSynthesizedField::new(related_type));
+            per_class
+                .entry(target_class.clone())
+                .or_insert_with(SmallMap::new)
+                .insert(related_name, ClassSynthesizedField::new(related_type));
         }
 
-        if fields.is_empty() {
-            None
-        } else {
-            Some(ClassSynthesizedFields::new(fields))
+        let mut reverse_relations = SmallMap::new();
+        for (class, fields) in per_class.into_iter_hashed() {
+            reverse_relations.insert_hashed(class, ClassSynthesizedFields::new(fields));
         }
+
+        Arc::new(DjangoReverseRelationIndex::new(reverse_relations))
     }
 
     fn django_relation_kind(&self, expr: &Expr) -> Option<DjangoRelationKind> {
@@ -717,7 +729,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(DjangoRelationKind::OneToOne)
         } else if self.is_many_to_many_field(field_class) {
             Some(DjangoRelationKind::ManyToMany)
-        } else if self.is_foreign_key_field(field_class) {
+        } else if self.is_foreign_key_like_field(field_class) {
             Some(DjangoRelationKind::ForeignKey)
         } else {
             None

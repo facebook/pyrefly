@@ -59,6 +59,7 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -103,6 +104,7 @@ assert_words!(KeyClassField, 4);
 assert_bytes!(KeyClassSynthesizedFields, 4);
 assert_bytes!(KeyAnnotation, 12);
 assert_bytes!(KeyClassMetadata, 4);
+assert_bytes!(KeyDjangoRelations, 0);
 assert_bytes!(KeyClassMro, 4);
 assert_bytes!(KeyAbstractClassCheck, 4);
 assert_bytes!(KeyClassSubscriptSymmetry, 4);
@@ -121,6 +123,7 @@ assert_words!(BindingClass, 11);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 14);
+assert_words!(BindingDjangoRelations, 2);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_bytes!(BindingClassSubscriptSymmetry, 4);
@@ -153,6 +156,7 @@ pub enum AnyIdx {
     KeyUndecoratedFunctionRange(Idx<KeyUndecoratedFunctionRange>),
     KeyAnnotation(Idx<KeyAnnotation>),
     KeyClassMetadata(Idx<KeyClassMetadata>),
+    KeyDjangoRelations(Idx<KeyDjangoRelations>),
     KeyClassMro(Idx<KeyClassMro>),
     KeyAbstractClassCheck(Idx<KeyAbstractClassCheck>),
     KeyClassSubscriptSymmetry(Idx<KeyClassSubscriptSymmetry>),
@@ -224,6 +228,9 @@ macro_rules! dispatch_anyidx {
             }
             AnyIdx::KeyClassMetadata(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMetadata>(*idx)
+            }
+            AnyIdx::KeyDjangoRelations(idx) => {
+                $self.$method::<$crate::binding::binding::KeyDjangoRelations>(*idx)
             }
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx)
@@ -298,6 +305,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyClassMetadata(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMetadata>(*idx, $($args),+)
             }
+            AnyIdx::KeyDjangoRelations(idx) => {
+                $self.$method::<$crate::binding::binding::KeyDjangoRelations>(*idx, $($args),+)
+            }
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx, $($args),+)
             }
@@ -344,6 +354,7 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::KeyUndecoratedFunctionRange(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAnnotation(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMetadata(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyDjangoRelations(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMro(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAbstractClassCheck(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassSubscriptSymmetry(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -709,6 +720,19 @@ impl Keyed for KeyClassMetadata {
 impl Exported for KeyClassMetadata {
     fn to_anykey(&self) -> AnyExportedKey {
         AnyExportedKey::KeyClassMetadata(self.clone())
+    }
+}
+impl Keyed for KeyDjangoRelations {
+    type Value = BindingDjangoRelations;
+    type Answer = DjangoReverseRelationIndex;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyDjangoRelations(idx)
+    }
+    fn range_with(_idx: Idx<Self>, _bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        TextRange::default()
     }
 }
 impl Keyed for KeyClassMro {
@@ -1613,6 +1637,22 @@ pub struct KeyClassMetadata(pub ClassDefIndex);
 impl DisplayWith<ModuleInfo> for KeyClassMetadata {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyClassMetadata(class{})", self.0)
+    }
+}
+
+/// Key for Django reverse relationship metadata within a module.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyDjangoRelations;
+
+impl Ranged for KeyDjangoRelations {
+    fn range(&self) -> TextRange {
+        TextRange::default()
+    }
+}
+
+impl DisplayWith<ModuleInfo> for KeyDjangoRelations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyDjangoRelations")
     }
 }
 
@@ -3197,6 +3237,18 @@ impl DisplayWith<Bindings> for BindingClassMetadata {
             "BindingClassMetadata({}, ..)",
             ctx.display(self.class_idx)
         )
+    }
+}
+
+/// Binding for Django relations in a module, used to synthesize reverse relationships.
+#[derive(Clone, Debug)]
+pub struct BindingDjangoRelations {
+    pub fields: Box<[Idx<KeyClassField>]>,
+}
+
+impl DisplayWith<Bindings> for BindingDjangoRelations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &Bindings) -> fmt::Result {
+        write!(f, "BindingDjangoRelations(len={})", self.fields.len())
     }
 }
 
