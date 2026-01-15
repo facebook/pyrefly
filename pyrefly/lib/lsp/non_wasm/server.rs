@@ -8,8 +8,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
-use std::ffi::OsStr;
-use std::fs;
 use std::iter::once;
 use std::path::Path;
 use std::path::PathBuf;
@@ -43,8 +41,6 @@ use lsp_types::CompletionResponse;
 use lsp_types::ConfigurationItem;
 use lsp_types::ConfigurationParams;
 use lsp_types::DeclarationCapability;
-use lsp_types::DeleteFile;
-use lsp_types::DeleteFileOptions;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticSeverity;
 use lsp_types::DiagnosticTag;
@@ -54,8 +50,6 @@ use lsp_types::DidChangeWatchedFilesClientCapabilities;
 use lsp_types::DidChangeWatchedFilesParams;
 use lsp_types::DidChangeWatchedFilesRegistrationOptions;
 use lsp_types::DidChangeWorkspaceFoldersParams;
-use lsp_types::DocumentChangeOperation;
-use lsp_types::DocumentChanges;
 use lsp_types::DocumentDiagnosticParams;
 use lsp_types::DocumentDiagnosticReport;
 use lsp_types::DocumentHighlight;
@@ -98,12 +92,9 @@ use lsp_types::Registration;
 use lsp_types::RegistrationParams;
 use lsp_types::RelatedFullDocumentDiagnosticReport;
 use lsp_types::RelativePattern;
-use lsp_types::RenameFile;
 use lsp_types::RenameFilesParams;
 use lsp_types::RenameOptions;
 use lsp_types::RenameParams;
-use lsp_types::ResourceOp;
-use lsp_types::ResourceOperationKind;
 use lsp_types::SemanticTokens;
 use lsp_types::SemanticTokensFullOptions;
 use lsp_types::SemanticTokensOptions;
@@ -229,6 +220,7 @@ use crate::lsp::non_wasm::call_hierarchy::find_function_at_position_in_ast;
 use crate::lsp::non_wasm::call_hierarchy::prepare_call_hierarchy_item;
 use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
+use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
 use crate::lsp::non_wasm::lsp::apply_change_events;
 use crate::lsp::non_wasm::lsp::as_notification;
 use crate::lsp::non_wasm::lsp::as_request;
@@ -2852,170 +2844,6 @@ impl Server {
         }))
     }
 
-    fn supports_workspace_edit_document_changes(&self) -> bool {
-        self.initialize_params
-            .capabilities
-            .workspace
-            .as_ref()
-            .and_then(|workspace| workspace.workspace_edit.as_ref())
-            .and_then(|workspace_edit| workspace_edit.document_changes)
-            .unwrap_or(false)
-    }
-
-    fn supports_workspace_edit_resource_ops(&self, required: &[ResourceOperationKind]) -> bool {
-        let supported = self
-            .initialize_params
-            .capabilities
-            .workspace
-            .as_ref()
-            .and_then(|workspace| workspace.workspace_edit.as_ref())
-            .and_then(|workspace_edit| workspace_edit.resource_operations.as_ref());
-        required
-            .iter()
-            .all(|kind| supported.is_some_and(|ops| ops.contains(kind)))
-    }
-
-    fn package_dir_is_empty(dir: &Path, init_file: &OsStr) -> bool {
-        let entries = match fs::read_dir(dir) {
-            Ok(entries) => entries,
-            Err(_) => return false,
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            if name == init_file || name == OsStr::new("__pycache__") {
-                continue;
-            }
-            return false;
-        }
-        true
-    }
-
-    fn convert_module_package_code_actions(&self, uri: &Url) -> Vec<CodeActionOrCommand> {
-        if !self.supports_workspace_edit_document_changes() {
-            return Vec::new();
-        }
-        let path = match uri.to_file_path() {
-            Ok(path) => path,
-            Err(_) => return Vec::new(),
-        };
-        let extension = match path.extension().and_then(|ext| ext.to_str()) {
-            Some(ext @ "py") | Some(ext @ "pyi") => ext,
-            _ => return Vec::new(),
-        };
-        if !path.is_file() {
-            return Vec::new();
-        }
-        let Some(file_stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            return Vec::new();
-        };
-        let mut actions = Vec::new();
-        if file_stem == "__init__" {
-            if !self.supports_workspace_edit_resource_ops(&[
-                ResourceOperationKind::Rename,
-                ResourceOperationKind::Delete,
-            ]) {
-                return actions;
-            }
-            let Some(package_dir) = path.parent() else {
-                return actions;
-            };
-            let Some(package_name) = package_dir.file_name().and_then(|name| name.to_str()) else {
-                return actions;
-            };
-            let Some(parent_dir) = package_dir.parent() else {
-                return actions;
-            };
-            let new_path = parent_dir.join(format!("{package_name}.{extension}"));
-            if new_path.exists() {
-                return actions;
-            }
-            let Some(init_name) = path.file_name() else {
-                return actions;
-            };
-            if !Self::package_dir_is_empty(package_dir, init_name) {
-                return actions;
-            }
-            let old_uri = match Url::from_file_path(&path) {
-                Ok(uri) => uri,
-                Err(_) => return actions,
-            };
-            let new_uri = match Url::from_file_path(&new_path) {
-                Ok(uri) => uri,
-                Err(_) => return actions,
-            };
-            let package_uri = match Url::from_file_path(package_dir) {
-                Ok(uri) => uri,
-                Err(_) => return actions,
-            };
-            let operations = vec![
-                DocumentChangeOperation::Op(ResourceOp::Rename(RenameFile {
-                    old_uri,
-                    new_uri,
-                    options: None,
-                    annotation_id: None,
-                })),
-                DocumentChangeOperation::Op(ResourceOp::Delete(DeleteFile {
-                    uri: package_uri,
-                    options: Some(DeleteFileOptions {
-                        recursive: Some(true),
-                        ignore_if_not_exists: Some(true),
-                        annotation_id: None,
-                    }),
-                })),
-            ];
-            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                title: "Convert package to module".to_owned(),
-                kind: Some(CodeActionKind::new("refactor.move")),
-                edit: Some(WorkspaceEdit {
-                    document_changes: Some(DocumentChanges::Operations(operations)),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }));
-        } else {
-            if !self.supports_workspace_edit_resource_ops(&[ResourceOperationKind::Rename]) {
-                return actions;
-            }
-            let Some(parent_dir) = path.parent() else {
-                return actions;
-            };
-            let package_dir = parent_dir.join(file_stem);
-            if package_dir.exists() {
-                return actions;
-            }
-            let new_path = package_dir.join(format!("__init__.{extension}"));
-            if new_path.exists() {
-                return actions;
-            }
-            let old_uri = match Url::from_file_path(&path) {
-                Ok(uri) => uri,
-                Err(_) => return actions,
-            };
-            let new_uri = match Url::from_file_path(&new_path) {
-                Ok(uri) => uri,
-                Err(_) => return actions,
-            };
-            let operations = vec![DocumentChangeOperation::Op(ResourceOp::Rename(
-                RenameFile {
-                    old_uri,
-                    new_uri,
-                    options: None,
-                    annotation_id: None,
-                },
-            ))];
-            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                title: "Convert module to package".to_owned(),
-                kind: Some(CodeActionKind::new("refactor.move")),
-                edit: Some(WorkspaceEdit {
-                    document_changes: Some(DocumentChanges::Operations(operations)),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }));
-        }
-        actions
-    }
-
     fn code_action(
         &self,
         transaction: &Transaction<'_>,
@@ -3111,12 +2939,15 @@ impl Server {
         {
             push_refactor_actions(refactors);
         }
-        actions.extend(self.convert_module_package_code_actions(uri));
+        actions.extend(convert_module_package_code_actions(
+            &self.initialize_params.capabilities,
+            uri,
+        ));
         if actions.is_empty() {
-        None
-    } else {
-        Some(actions)
-    }
+            None
+        } else {
+            Some(actions)
+        }
     }
 
     fn document_highlight(
