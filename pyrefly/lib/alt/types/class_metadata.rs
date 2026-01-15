@@ -725,11 +725,23 @@ impl DjangoReverseRelationIndex {
     pub fn get(&self, cls: &Class) -> Option<&ClassSynthesizedFields> {
         self.0.get(cls)
     }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Class, &ClassSynthesizedFields)> {
+        self.0.iter()
+    }
 }
 
 impl Display for DjangoReverseRelationIndex {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "DjangoReverseRelationIndex(len={})", self.0.len())
+    }
+}
+
+impl VisitTrait<Type> for DjangoReverseRelationIndex {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        for fields in self.0.values() {
+            fields.recurse(f);
+        }
     }
 }
 
