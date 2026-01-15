@@ -1233,3 +1233,18 @@ class A:
 assert_type(f(), int)
     "#,
 );
+
+testcase!(
+    test_preserve_param_default,
+    r#"
+from typing import reveal_type
+
+def f(x: bool = True) -> bool:
+    return x
+
+def g[T](f: T) -> T:
+    return f
+
+reveal_type(g(f))  # E: (x: bool = True) -> bool
+    "#,
+);

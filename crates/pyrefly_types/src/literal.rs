@@ -29,6 +29,20 @@ use crate::types::Type;
 
 assert_words!(Lit, 3);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub struct Literal {
+    pub value: Lit,
+    pub style: LitStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub enum LitStyle {
+    Implicit,
+    Explicit,
+}
+
 /// A literal value.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -85,7 +99,7 @@ impl Lit {
     /// Returns the negated type, or None if literal can't be negated.
     pub fn negate(&self) -> Option<Type> {
         match self {
-            Lit::Int(x) => Some(Lit::Int(x.negate()).to_type()),
+            Lit::Int(x) => Some(Lit::Int(x.negate()).to_implicit_type()),
             _ => None,
         }
     }
@@ -93,9 +107,9 @@ impl Lit {
     /// Returns `+self` if the `+` operation is allowed, None otherwise.
     pub fn positive(&self) -> Option<Type> {
         match self {
-            Lit::Int(_) => Some(self.clone().to_type()),
-            Lit::Bool(true) => Some(Lit::Int(LitInt::new(1)).to_type()),
-            Lit::Bool(false) => Some(Lit::Int(LitInt::new(0)).to_type()),
+            Lit::Int(_) => Some(self.clone().to_implicit_type()),
+            Lit::Bool(true) => Some(LitInt::new(1).to_implicit_type()),
+            Lit::Bool(false) => Some(LitInt::new(0).to_implicit_type()),
             _ => None,
         }
     }
@@ -105,7 +119,7 @@ impl Lit {
         match self {
             Lit::Int(x) => {
                 let x = x.invert();
-                Some(Lit::Int(x).to_type())
+                Some(Lit::Int(x).to_implicit_type())
             }
             _ => None,
         }
@@ -147,9 +161,20 @@ impl Lit {
         Lit::Bool(x.value)
     }
 
-    /// Convert a literal to a `Type::Literal`.
-    pub fn to_type(self) -> Type {
-        Type::Literal(self)
+    /// Convert a literal to an implicit (i.e., inferred) `Type::Literal`.
+    pub fn to_implicit_type(self) -> Type {
+        Type::Literal(Box::new(Literal {
+            value: self,
+            style: LitStyle::Implicit,
+        }))
+    }
+
+    /// Convert a literal to an explicit (i.e., type-annotated) `Type::Literal`.
+    pub fn to_explicit_type(self) -> Type {
+        Type::Literal(Box::new(Literal {
+            value: self,
+            style: LitStyle::Explicit,
+        }))
     }
 
     /// Convert a literal to a `ClassType` that is the general class_type of the literal.

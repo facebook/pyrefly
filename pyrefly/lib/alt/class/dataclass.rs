@@ -88,7 +88,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metadata = self.get_metadata_for_class(cls);
         let dataclass = metadata.dataclass_metadata()?;
         let mut fields = SmallMap::new();
-
+        self.check_dataclass_non_data_descriptors(cls, dataclass, errors);
+        self.check_dataclass_data_descriptor_defaults(cls, dataclass, errors);
         if dataclass.kws.init {
             let init_method = if let Some((root_model_type, has_strict)) =
                 self.get_pydantic_root_model_type_via_mro(cls, &metadata)
@@ -185,6 +186,116 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.get_dataclass_replace(cls, dataclass, errors),
         );
         Some(ClassSynthesizedFields::new(fields))
+    }
+
+    /// Check for non-data descriptors in dataclass fields and emit errors.
+    ///
+    /// Non-data descriptors (having __get__ but no __set__) are unsound in dataclasses
+    /// because the dataclass __init__ writes to the instance dict, shadowing the
+    /// class-level descriptor.
+    ///
+    /// Exception: If the descriptor's __get__ returns Self, then the shadowing is sound
+    /// (the runtime type of the shadow matches the static type of the descriptor call).
+    /// We check for exactly Self rather than using assignability to avoid issues with overloads.
+    fn check_dataclass_non_data_descriptors(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+        errors: &ErrorCollector,
+    ) {
+        for name in dataclass.fields.iter() {
+            if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
+                && let Some((range, descriptor_cls)) = field.value.non_data_descriptor_info()
+            {
+                // Get the __get__ method's return type from the descriptor class.
+                // If all overloads return Self, the type will be SelfType, and
+                // shadowing is sound because the instance dict value has the same type.
+                // We don't use assignability here because overloads could cause issues.
+                let get_return_ty = self
+                    .get_class_member(descriptor_cls.class_object(), &dunder::GET)
+                    .and_then(|get_field| get_field.ty().callable_return_type());
+
+                if let Some(Type::SelfType(_)) = get_return_ty {
+                    continue;
+                }
+
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    format!(
+                        "Non-data descriptor `{name}` in dataclass is unsound. \
+                         The dataclass __init__ writes to the instance dict, \
+                         shadowing the descriptor. Add a __set__ method to make \
+                         it a data descriptor."
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Check that data descriptor defaults are type-safe in dataclass fields.
+    ///
+    /// For a data descriptor (having both __get__ and __set__), the "default" value
+    /// when the field is not provided to __init__ is the class-level descriptor.
+    /// Reading the field returns the `__get__` return type, but setting the field
+    /// expects the `__set__` value parameter type. For the default to be type-safe,
+    /// the `__get__` return type must be assignable to the `__set__` value type.
+    fn check_dataclass_data_descriptor_defaults(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+        errors: &ErrorCollector,
+    ) {
+        for name in dataclass.fields.iter() {
+            if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
+                && let Some((range, descriptor_cls)) = field.value.data_descriptor_info()
+            {
+                // Get the __get__ method's return type from the descriptor class.
+                let get_return_ty = self
+                    .get_class_member(descriptor_cls.class_object(), &dunder::GET)
+                    .and_then(|get_field| get_field.ty().callable_return_type());
+
+                // Get the __set__ method and extract the value parameter type (3rd param).
+                let set_value_ty = self
+                    .get_class_member(descriptor_cls.class_object(), &dunder::SET)
+                    .and_then(|set_field| {
+                        set_field
+                            .ty()
+                            .callable_signatures()
+                            .first()
+                            .and_then(|sig| {
+                                if let Params::List(params) = &sig.params {
+                                    match params.items().get(2) {
+                                        Some(Param::Pos(_, t, _) | Param::PosOnly(_, t, _)) => {
+                                            Some(t.clone())
+                                        }
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                    });
+
+                if let (Some(get_ty), Some(set_ty)) = (get_return_ty, set_value_ty) {
+                    // Check if the __get__ return type is assignable to the __set__ value type.
+                    if !self.is_subset_eq(&get_ty, &set_ty) {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                            format!(
+                                "Data descriptor `{name}` has incompatible default: \
+                                 `__get__` returns `{get_ty}` which is not assignable to \
+                                 `__set__` value type `{set_ty}`. The class-level descriptor \
+                                 value cannot be used as a default."
+                            ),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     pub fn call_dataclasses_replace(
@@ -530,7 +641,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 if alias.is_none() && Some(name) == alias_keyword {
                     self.fill_in_literal(alias, ty, default_ty, |ty| match ty {
-                        Type::Literal(Lit::Str(s)) => Some(Name::new(s)),
+                        Type::Literal(lit) if let Lit::Str(s) = &lit.value => Some(Name::new(s)),
                         _ => None,
                     });
                 }
@@ -750,7 +861,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if field_flags.is_kw_only() || !field_flags.init {
                         None
                     } else {
-                        Some(Type::Literal(Lit::Str(name.as_str().into())))
+                        Some(Lit::Str(name.as_str().into()).to_implicit_type())
                     }
                 })
                 .collect()
@@ -767,7 +878,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let filtered_fields = self.iter_fields(cls, dataclass, false);
         let ts = filtered_fields
             .iter()
-            .map(|(name, _, _)| Type::Literal(Lit::Str(name.as_str().into())))
+            .map(|(name, _, _)| Lit::Str(name.as_str().into()).to_implicit_type())
             .collect();
         let ty = Type::concrete_tuple(ts);
         ClassSynthesizedField::new(ty)

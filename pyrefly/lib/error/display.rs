@@ -50,9 +50,9 @@ impl ErrorContext {
                 format!("Cannot match positional sub-patterns in `{ty}`")
             }
             Self::ImportNotFound(import) => {
-                format!("Could not find import of `{import}`")
+                format!("Cannot find module `{import}`")
             }
-            Self::ImportNotTyped(import) => format!("Missing type stubs for `{import}`"),
+            Self::ImportNotTyped(import) => format!("Cannot find type stubs for module `{import}`"),
         }
     }
 }
@@ -75,7 +75,7 @@ impl TypeCheckKind {
             }
             Self::AugmentedAssignment => {
                 format!(
-                    "Augmented assignment produces a value of type `{}`, which is not assignable to `{}`",
+                    "Augmented assignment result `{}` is not assignable to `{}`",
                     ctx.display(got),
                     ctx.display(want),
                 )
@@ -226,7 +226,7 @@ impl TypeCheckKind {
                 ctx.display(want),
             ),
             Self::YieldFrom => format!(
-                "Cannot yield from a generator of type `{}` because it does not match the declared return type `{}`",
+                "Cannot yield from `{}`, which is not assignable to declared return type `{}`",
                 ctx.display(got),
                 ctx.display(want),
             ),

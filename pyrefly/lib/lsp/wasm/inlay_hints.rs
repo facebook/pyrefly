@@ -13,6 +13,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::LitEnum;
+use pyrefly_types::literal::Literal;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -103,7 +104,11 @@ impl<'a> Transaction<'a> {
                     }
                     Expr::Attribute(ExprAttribute {
                         box value, attr, ..
-                    }) if let Type::Literal(Lit::Enum(box LitEnum { class, member, .. })) = ty => {
+                    }) if let Type::Literal(box Literal {
+                        value: Lit::Enum(box LitEnum { class, member, .. }),
+                        ..
+                    }) = ty =>
+                    {
                         // Exclude enum literals
                         match value {
                             Expr::Name(object) => {

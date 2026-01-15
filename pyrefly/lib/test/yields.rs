@@ -121,11 +121,11 @@ def bar() -> Generator[Y, S2, None]:
     assert_type(r, R)
 
 def baz() -> Generator[Y2, S2, None]:
-    s = yield from bar() # E: Cannot yield from a generator of type `Generator[Y, S2, None]` because it does not match the declared return type `Generator[Y2, S2, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2, None]`, which is not assignable to declared return type `Generator[Y2, S2, Unknown]`
     assert_type(s, None)
 
 def qux() -> Generator[Y, S, None]:
-    s = yield from bar() # E: Cannot yield from a generator of type `Generator[Y, S2, None]` because it does not match the declared return type `Generator[Y, S, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2, None]`, which is not assignable to declared return type `Generator[Y, S, Unknown]`
     assert_type(s, None)
 "#,
 );

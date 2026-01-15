@@ -190,6 +190,7 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::telemetry::SubTaskTelemetry;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
@@ -2140,9 +2141,9 @@ impl Server {
         force: bool,
     ) {
         let run = move |server: &Server,
-                        _telemetry: &dyn Telemetry,
+                        telemetry: &dyn Telemetry,
                         telemetry_event: &mut TelemetryEvent,
-                        _task_stats: Option<&TelemetryTaskId>| {
+                        task_stats: Option<&TelemetryTaskId>| {
             let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> =
                 SmallMap::new();
             let config_finder = server.state.config_finder();
@@ -2159,8 +2160,10 @@ impl Server {
                     .or_default()
                     .insert(handle.path().dupe());
             }
+            let task_telemetry =
+                SubTaskTelemetry::new(telemetry, server.telemetry_state(), task_stats);
             let (new_invalidated_source_dbs, rebuild_stats) =
-                ConfigFile::query_source_db(&configs_to_paths, force);
+                ConfigFile::query_source_db(&configs_to_paths, force, Some(task_telemetry));
             telemetry_event.set_sourcedb_rebuild_stats(rebuild_stats);
             if !new_invalidated_source_dbs.is_empty() {
                 let mut lock = server.invalidated_source_dbs.lock();
@@ -2521,6 +2524,7 @@ impl Server {
                 }
             },
         }
+        drop(open_files);
         self.unsaved_file_tracker.forget_uri_path(&url);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         self.recheck_queue.queue_task(
@@ -2922,6 +2926,16 @@ impl Server {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.push_members_down_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) =
+            transaction.move_module_member_code_actions(&handle, range, import_format)
+        {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) =
+            transaction.make_local_function_top_level_code_actions(&handle, range, import_format)
+        {
             push_refactor_actions(refactors);
         }
         if actions.is_empty() {

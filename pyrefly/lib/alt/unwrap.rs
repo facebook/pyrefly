@@ -161,6 +161,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.is_subset_eq(ty, &coroutine_ty)
     }
 
+    /// Check if a type is a sequence type for pattern matching purposes (PEP 634).
+    ///
+    /// Per PEP 634, sequence patterns match:
+    /// - Builtins with Py_TPFLAGS_SEQUENCE: list, tuple, range, memoryview,
+    ///   collections.deque, array.array
+    /// - Classes that inherit from collections.abc.Sequence
+    /// - Classes registered as collections.abc.Sequence (cannot detect statically)
+    ///
+    /// Explicitly excluded (even though they're sequences in other contexts):
+    /// - str, bytes, bytearray
+    ///
+    /// Warning: this returns `true` if the type is `Any` or a class that extends `Any`
+    pub fn is_sequence_for_pattern(&self, ty: &Type) -> bool {
+        // Handle special exclusions first - str, bytes, bytearray are NOT sequences
+        // for pattern matching per PEP 634
+        match ty {
+            Type::ClassType(cls)
+                if cls.is_builtin("str")
+                    || cls.is_builtin("bytes")
+                    || cls.is_builtin("bytearray") =>
+            {
+                return false;
+            }
+            Type::LiteralString(_) => return false,
+            // Tuples are always sequences for pattern matching
+            Type::Tuple(_) => return true,
+            _ => {}
+        }
+
+        // Check if the type is a subtype of Sequence[T] for some T
+        let var = self.fresh_var();
+        let sequence_ty = self.stdlib.sequence(var.to_type()).to_type();
+        self.is_subset_eq(ty, &sequence_ty)
+    }
+
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_coroutine(&self, ty: &Type) -> Option<(Type, Type, Type)> {
         let yield_ty = self.fresh_var();

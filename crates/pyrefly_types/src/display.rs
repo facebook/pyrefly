@@ -179,6 +179,11 @@ impl<'a> TypeDisplayContext<'a> {
         self.stdlib = Some(stdlib);
     }
 
+    /// Get the QName for a special form, enabling go-to-definition functionality.
+    fn get_special_form_qname(&self, name: &str) -> Option<&QName> {
+        self.stdlib.and_then(|s| s.special_form_qname(name))
+    }
+
     pub fn display(&'a self, t: &'a Type) -> impl Display + 'a {
         Fmt(|f| self.fmt(t, f))
     }
@@ -410,12 +415,22 @@ impl<'a> TypeDisplayContext<'a> {
 
             // Other things
             Type::Literal(lit) => {
-                self.maybe_fmt_with_module("typing", "Literal", output)?;
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let literal_qname = self.get_special_form_qname("Literal");
+                output.write_builtin("Literal", literal_qname)?;
                 output.write_str("[")?;
-                output.write_lit(lit)?;
+                output.write_lit(&lit.value)?;
                 output.write_str("]")
             }
-            Type::LiteralString => self.maybe_fmt_with_module("typing", "LiteralString", output),
+            Type::LiteralString(_) => {
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("LiteralString");
+                output.write_builtin("LiteralString", qname)
+            }
             Type::Callable(box c) => {
                 if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     c.fmt_with_type_with_newlines(output, &|t, o| {
@@ -593,7 +608,7 @@ impl<'a> TypeDisplayContext<'a> {
                                 // placeholder position and output the combined literal instead.
                                 union_members.push(&Type::None);
                             }
-                            literals.push(lit)
+                            literals.push(&lit.value)
                         }
                         Type::Callable(_) | Type::Function(_) | Type::Intersect(_) => {
                             // These types need parentheses in union context
@@ -641,7 +656,11 @@ impl<'a> TypeDisplayContext<'a> {
 
                         if i == idx {
                             // This is where the combined Literal goes
-                            self.maybe_fmt_with_module("typing", "Literal", output)?;
+                            if self.always_display_module_name {
+                                output.write_str("typing.")?;
+                            }
+                            let literal_qname = self.get_special_form_qname("Literal");
+                            output.write_builtin("Literal", literal_qname)?;
                             output.write_str("[")?;
                             for (j, lit) in literals.iter().enumerate() {
                                 if j > 0 {
@@ -977,6 +996,7 @@ pub mod tests {
     use crate::class::ClassType;
     use crate::literal::Lit;
     use crate::literal::LitEnum;
+    use crate::literal::LitStyle;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedKind;
     use crate::tuple::Tuple;
@@ -1246,7 +1266,8 @@ pub mod tests {
         let mut ctx = TypeDisplayContext::new(&[&t]);
         assert_eq!(ctx.display(&t).to_string(), "foo");
         assert_eq!(
-            ctx.display(&Type::LiteralString).to_string(),
+            ctx.display(&Type::LiteralString(LitStyle::Implicit))
+                .to_string(),
             "LiteralString"
         );
         assert_eq!(ctx.display(&Type::any_explicit()).to_string(), "Any");
@@ -1255,7 +1276,8 @@ pub mod tests {
         ctx.always_display_module_name();
         assert_eq!(ctx.display(&t).to_string(), "mod.ule.foo");
         assert_eq!(
-            ctx.display(&Type::LiteralString).to_string(),
+            ctx.display(&Type::LiteralString(LitStyle::Implicit))
+                .to_string(),
             "typing.LiteralString"
         );
         assert_eq!(ctx.display(&Type::any_explicit()).to_string(), "typing.Any");
@@ -1310,26 +1332,29 @@ pub mod tests {
     #[test]
     fn test_display_literal() {
         // Simple literals
-        assert_eq!(Type::Literal(Lit::Bool(true)).to_string(), "Literal[True]");
         assert_eq!(
-            Type::Literal(Lit::Bool(false)).to_string(),
+            Lit::Bool(true).to_implicit_type().to_string(),
+            "Literal[True]"
+        );
+        assert_eq!(
+            Lit::Bool(false).to_implicit_type().to_string(),
             "Literal[False]"
         );
         assert_eq!(
-            Type::Literal(Lit::Bytes(
-                vec![b' ', b'\t', b'\n', b'\r', 0x0b, 0x0c].into_boxed_slice()
-            ))
-            .to_string(),
+            Lit::Bytes(vec![b' ', b'\t', b'\n', b'\r', 0x0b, 0x0c].into_boxed_slice())
+                .to_implicit_type()
+                .to_string(),
             r"Literal[b' \t\n\r\x0b\x0c']"
         );
 
         // Enum literals (not all of these types make sense, we're only providing what's relevant)
         let my_enum = ClassType::new(fake_class("MyEnum", "mod.ule", 5), TArgs::default());
-        let t = Type::Literal(Lit::Enum(Box::new(LitEnum {
+        let t = Lit::Enum(Box::new(LitEnum {
             class: my_enum,
             member: Name::new_static("X"),
             ty: Type::any_implicit(),
-        })));
+        }))
+        .to_implicit_type();
 
         let mut ctx = TypeDisplayContext::new(&[&t]);
         assert_eq!(ctx.display(&t).to_string(), "Literal[MyEnum.X]");
@@ -1343,10 +1368,10 @@ pub mod tests {
 
     #[test]
     fn test_display_union() {
-        let lit1 = Type::Literal(Lit::Bool(true));
-        let lit2 = Type::Literal(Lit::Str("test".into()));
+        let lit1 = Lit::Bool(true).to_implicit_type();
+        let lit2 = Lit::Str("test".into()).to_implicit_type();
         let nonlit1 = Type::None;
-        let nonlit2 = Type::LiteralString;
+        let nonlit2 = Type::LiteralString(LitStyle::Implicit);
 
         assert_eq!(
             Type::union(vec![nonlit1.clone(), nonlit2.clone()]).to_string(),
@@ -1503,7 +1528,7 @@ pub mod tests {
         let param2 = Param::Pos(
             Name::new_static("y"),
             Type::any_explicit(),
-            Required::Optional(Some(Type::Literal(Lit::Bool(true)))),
+            Required::Optional(Some(Lit::Bool(true).to_implicit_type())),
         );
         let param3 = Param::Pos(
             Name::new_static("z"),
@@ -1780,7 +1805,7 @@ def overloaded_func[T](
     #[test]
     fn test_intersection() {
         let x = Type::Intersect(Box::new((
-            vec![Type::LiteralString, Type::None],
+            vec![Type::LiteralString(LitStyle::Implicit), Type::None],
             Type::any_implicit(),
         )));
         let ctx = TypeDisplayContext::new(&[&x]);
@@ -1791,7 +1816,10 @@ def overloaded_func[T](
     fn test_union_of_intersection() {
         let x = Type::union(vec![
             Type::Intersect(Box::new((
-                vec![Type::any_explicit(), Type::LiteralString],
+                vec![
+                    Type::any_explicit(),
+                    Type::LiteralString(LitStyle::Implicit),
+                ],
                 Type::any_implicit(),
             ))),
             Type::None,
@@ -1899,7 +1927,7 @@ def overloaded_func[T](
 
     #[test]
     fn test_get_types_with_location_literal() {
-        let t = Type::Literal(Lit::Bool(true));
+        let t = Lit::Bool(true).to_implicit_type();
         let parts = get_parts(&t);
 
         assert_output_contains(&parts, "Literal");
@@ -1979,7 +2007,7 @@ def overloaded_func[T](
             member: Name::new_static("RED"),
             ty: Type::any_implicit(),
         }));
-        let t = Type::Literal(enum_lit);
+        let t = enum_lit.to_implicit_type();
         let parts = get_parts(&t);
 
         for expected in &["Literal", "Color", "RED"] {

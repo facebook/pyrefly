@@ -752,7 +752,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (Type, Required) {
         // We only want to use self for the first param, so take & replace with None
         let self_type = std::mem::take(self_type);
-        let (ty, required) = match self.bindings().get_function_param(name) {
+        let (ty, mut required) = match self.bindings().get_function_param(name) {
             FunctionParameter::Annotated(idx) => {
                 // If the parameter is annotated, we check the default value against the annotation
                 let param_ty = self.get_idx(*idx).annotation.get_type().clone();
@@ -783,13 +783,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         *var,
                         self.union(
                             Type::any_implicit(),
-                            default_ty.clone().promote_literals(self.stdlib),
+                            default_ty.clone().promote_implicit_literals(self.stdlib),
                         ),
                     );
                 }
                 (self.solver().force_var(*var), required)
             }
         };
+        if let Required::Optional(Some(default)) = required {
+            // Mark literals as explicit so we don't promote them.
+            // This has to happen after the param type has been computed because we do
+            // want to promote literals while inferring the type.
+            required = Required::Optional(Some(default.explicit_literals()));
+        }
         (ty, required)
     }
 

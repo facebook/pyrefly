@@ -361,6 +361,45 @@ fn test_error_clearing_on_dependency() {
         "Expected errors after fixing the dependency"
     );
 }
+
+#[test]
+fn test_error_clearing_on_dependency_star_import() {
+    let mut i = Incremental::new();
+
+    i.set("foo", "def xyz() -> int: ...");
+    i.set(
+        "main",
+        "from foo import *\ny = x # E: Could not find name `x`",
+    );
+    i.check(&["main", "foo"], &["main", "foo"]);
+
+    let main_handle = i.handle("main");
+
+    let errors = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+
+    assert!(
+        !errors.shown.is_empty(),
+        "Expected errors before fixing the dependency"
+    );
+
+    i.set("foo", "def xyz() -> int: ...\nx = 1");
+    i.check_ignoring_expectations(&["main"], &["foo", "main"]);
+
+    let errors_after_fix = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        errors_after_fix.shown.is_empty(),
+        "Expected no errors after fixing the dependency"
+    );
+}
+
 #[test]
 fn test_failed_import_invalidation_via_rdeps() {
     // This tests that when a module's exports change to satisfy a previously-failed import,

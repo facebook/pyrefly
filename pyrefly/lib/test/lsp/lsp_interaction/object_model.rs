@@ -1048,7 +1048,7 @@ impl TestClient {
                     "codeDescription": {
                         "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
                     },
-                    "message": format!("Missing type stubs for `{}`\n  Hint: install the `{}-stubs` package", package_name, package_name),
+                    "message": format!("Cannot find type stubs for module `{}`\n  Hint: install the `{}-stubs` package", package_name, package_name),
                     "range": {
                         "start": {"line": line, "character": start_character},
                         "end": {"line": line, "character": end_character}

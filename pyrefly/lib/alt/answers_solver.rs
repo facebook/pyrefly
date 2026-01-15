@@ -780,7 +780,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.uniques,
                 self.get_idx(*prior_idx)
                     .arc_clone_ty()
-                    .promote_literals(self.stdlib),
+                    .promote_implicit_literals(self.stdlib),
             ),
             _ => self.solver().fresh_recursive(self.uniques),
         }
@@ -941,5 +941,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// operation that may error but never report errors from it.
     pub fn error_swallower(&self) -> ErrorCollector {
         ErrorCollector::new(self.module().dupe(), ErrorStyle::Never)
+    }
+
+    /// Add an implicit-any error for a generic class without explicit type arguments.
+    pub fn add_implicit_any_error(
+        errors: &ErrorCollector,
+        range: TextRange,
+        class_name: &str,
+        tparam_name: Option<&str>,
+    ) {
+        let msg = if let Some(tparam) = tparam_name {
+            format!(
+                "Cannot determine the type parameter `{}` for generic class `{}`",
+                tparam, class_name,
+            )
+        } else {
+            format!(
+                "Cannot determine the type parameter for generic class `{}`",
+                class_name
+            )
+        };
+        errors.add(
+            range,
+            ErrorInfo::Kind(ErrorKind::ImplicitAny),
+            vec1![
+                msg,
+                "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),
+            ],
+        );
     }
 }

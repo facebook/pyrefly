@@ -177,7 +177,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             }) = &**operand =>
             {
-                literals.push(LitInt::from_ast(i).to_type())
+                literals.push(LitInt::from_ast(i).to_explicit_type())
             }
             Expr::UnaryOp(ExprUnaryOp {
                 op: UnaryOp::USub,
@@ -188,14 +188,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             }) = &**operand =>
             {
-                literals.push(LitInt::from_ast(i).negate().to_type())
+                literals.push(LitInt::from_ast(i).negate().to_explicit_type())
             }
             Expr::NumberLiteral(n) if let Number::Int(i) = &n.value => {
-                literals.push(LitInt::from_ast(i).to_type())
+                literals.push(LitInt::from_ast(i).to_explicit_type())
             }
-            Expr::StringLiteral(x) => literals.push(Lit::from_string_literal(x).to_type()),
-            Expr::BytesLiteral(x) => literals.push(Lit::from_bytes_literal(x).to_type()),
-            Expr::BooleanLiteral(x) => literals.push(Lit::from_boolean_literal(x).to_type()),
+            Expr::StringLiteral(x) => literals.push(Lit::from_string_literal(x).to_explicit_type()),
+            Expr::BytesLiteral(x) => literals.push(Lit::from_bytes_literal(x).to_explicit_type()),
+            Expr::BooleanLiteral(x) => {
+                literals.push(Lit::from_boolean_literal(x).to_explicit_type())
+            }
             Expr::NoneLiteral(_) => literals.push(Type::None),
             Expr::Name(_) => {
                 fn is_valid_literal(x: &Type) -> bool {
@@ -232,7 +234,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::ClassDef(c)
                         if let Some(e) = self.get_enum_member(&c, &member_name.id) =>
                     {
-                        literals.push(e.to_type())
+                        literals.push(e.to_explicit_type())
                     }
                     ty @ Type::Any(AnyStyle::Error) => literals.push(ty),
                     _ => {

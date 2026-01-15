@@ -7,7 +7,13 @@
  * @format
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, {
+    useState,
+    useEffect,
+    useRef,
+    useCallback,
+    useLayoutEffect,
+} from 'react';
 import useBaseUrl from '@docusaurus/useBaseUrl';
 import * as docusaurusTheme from '@docusaurus/theme-common';
 import MonacoEditorButton, {
@@ -79,6 +85,10 @@ interface SandboxProps {
     isInViewport?: boolean;
 }
 
+// Minimum heights for editor and results panes (in pixels)
+const MIN_EDITOR_HEIGHT = 100;
+const MIN_RESULTS_HEIGHT = 60;
+
 export default function Sandbox({
     sampleFilename,
     isCodeSnippet = false,
@@ -86,6 +96,7 @@ export default function Sandbox({
     isInViewport = true,
 }: SandboxProps): React.ReactElement {
     const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+    const sandboxContainerRef = useRef<HTMLDivElement | null>(null);
     const [errors, setErrors] =
         useState<ReadonlyArray<PyreflyErrorMessage> | null>([]);
     const [internalError, setInternalError] = useState('');
@@ -106,6 +117,9 @@ export default function Sandbox({
     const [activeTab, setActiveTab] = useState<string>('errors');
     const [isHovered, setIsHovered] = useState(false);
     const [pythonVersion, setPythonVersion] = useState('3.12');
+    // Absolute pixel height for the editor pane (null = not yet initialized)
+    const [editorHeight, setEditorHeight] = useState<number | null>(null);
+    const [isResizing, setIsResizing] = useState(false);
     const model = models.get(activeFileName) || null;
 
     // File management functions
@@ -330,6 +344,96 @@ export default function Sandbox({
         },
         [models, activeFileName, renamingFile]
     );
+
+    // Resize handlers for the draggable splitter
+    const handleResizeStart = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        setIsResizing(true);
+    }, []);
+
+    // Initialize editor height on mount (only for sandbox mode)
+    useLayoutEffect(() => {
+        if (isCodeSnippet) return;
+
+        const container = sandboxContainerRef.current;
+        if (container && editorHeight === null) {
+            // Initialize to 75% of container height
+            const containerHeight = container.clientHeight;
+            if (containerHeight > 0) {
+                setEditorHeight(containerHeight * 0.75);
+            }
+        }
+    });
+
+    // Handle container resize (e.g., window resize) to maintain proportions
+    useEffect(() => {
+        if (isCodeSnippet) return;
+
+        const container = sandboxContainerRef.current;
+        if (!container) return;
+
+        const resizeObserver = new ResizeObserver((entries) => {
+            // Don't adjust during active resize - user is in control
+            if (isResizing) return;
+
+            for (const entry of entries) {
+                const newContainerHeight = entry.contentRect.height;
+                if (newContainerHeight > 0 && editorHeight !== null) {
+                    // Clamp the editor height to stay within valid bounds
+                    const maxEditorHeight =
+                        newContainerHeight - MIN_RESULTS_HEIGHT;
+                    const clampedHeight = Math.max(
+                        MIN_EDITOR_HEIGHT,
+                        Math.min(editorHeight, maxEditorHeight)
+                    );
+                    if (clampedHeight !== editorHeight) {
+                        setEditorHeight(clampedHeight);
+                    }
+                }
+            }
+        });
+
+        resizeObserver.observe(container);
+        return () => resizeObserver.disconnect();
+    }, [isCodeSnippet, isResizing, editorHeight]);
+
+    useEffect(() => {
+        if (!isResizing) return;
+
+        const handleMouseMove = (e: MouseEvent) => {
+            const container = sandboxContainerRef.current;
+            if (!container) return;
+
+            const containerRect = container.getBoundingClientRect();
+            const containerTop = containerRect.top;
+            const containerHeight = containerRect.height;
+
+            // Calculate the new editor height based on mouse position
+            const mouseY = e.clientY;
+            const newEditorHeight = mouseY - containerTop;
+
+            // Enforce minimum heights
+            const maxEditorHeight = containerHeight - MIN_RESULTS_HEIGHT;
+            const clampedEditorHeight = Math.max(
+                MIN_EDITOR_HEIGHT,
+                Math.min(newEditorHeight, maxEditorHeight)
+            );
+
+            setEditorHeight(clampedEditorHeight);
+        };
+
+        const handleMouseUp = () => {
+            setIsResizing(false);
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+
+        return () => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [isResizing]);
 
     const TabBar = () => (
         <div {...stylex.props(styles.tabBar)}>
@@ -738,6 +842,33 @@ export default function Sandbox({
         createNewFile,
         setActiveFileName
     );
+
+    // Calculate heights based on stored editor height (only used in sandbox mode)
+    // Uses stored pixel value to avoid recalculation on every render
+    const getSandboxEditorHeight = () => {
+        if (isCodeSnippet) {
+            return editorHeightforCodeSnippet;
+        }
+        if (editorHeight !== null) {
+            return editorHeight;
+        }
+        // Fallback for initial render before useLayoutEffect runs
+        const screenHeight = window.innerHeight;
+        const navbarElement = document.querySelector(
+            '.navbar'
+        ) as HTMLElement | null;
+        const navbarHeight = navbarElement?.offsetHeight || 0;
+        return ((screenHeight - navbarHeight) * 75) / 100;
+    };
+
+    const getResultsHeight = () => {
+        const container = sandboxContainerRef.current;
+        if (!container || editorHeight === null) {
+            return undefined; // Let SandboxResults use its default
+        }
+        return container.clientHeight - editorHeight;
+    };
+
     return (
         <div
             id="sandbox-editor"
@@ -748,57 +879,75 @@ export default function Sandbox({
         >
             {!isCodeSnippet && <TabBar />}
             <div
-                id="sandbox-code-editor-container"
+                ref={sandboxContainerRef}
                 {...stylex.props(
-                    styles.codeEditorContainer,
-                    isCodeSnippet && styles.codeEditorContainerWithRadius,
-                    !isCodeSnippet && styles.codeEditorContainerWithTabs
+                    styles.sandboxContentContainer,
+                    isResizing && styles.noSelect
                 )}
-                onMouseEnter={() => setIsHovered(true)}
-                onMouseLeave={() => setIsHovered(false)}
             >
-                {getPyreflyEditor(
-                    isCodeSnippet,
-                    activeFileName,
-                    model?.getValue() || codeSample,
-                    forceRecheck,
-                    onEditorMount,
-                    editorHeightforCodeSnippet,
-                    activeFileName,
-                    models
+                <div
+                    id="sandbox-code-editor-container"
+                    {...stylex.props(
+                        styles.codeEditorContainer,
+                        isCodeSnippet && styles.codeEditorContainerWithRadius,
+                        !isCodeSnippet && styles.codeEditorContainerWithTabs
+                    )}
+                    onMouseEnter={() => setIsHovered(true)}
+                    onMouseLeave={() => setIsHovered(false)}
+                >
+                    {getPyreflyEditor(
+                        isCodeSnippet,
+                        activeFileName,
+                        model?.getValue() || codeSample,
+                        forceRecheck,
+                        onEditorMount,
+                        getSandboxEditorHeight(),
+                        activeFileName,
+                        models
+                    )}
+                    {
+                        <div
+                            {...stylex.props(
+                                styles.buttonContainerBase,
+                                isMobile()
+                                    ? isCodeSnippet
+                                        ? styles.mobileButtonContainerCodeSnippet
+                                        : styles.mobileButtonContainerSandbox
+                                    : styles.desktopButtonContainer,
+                                // show button if it's in sandbox or if it's hovered or if it's mobile
+                                // We only want to hide this if it's a code snippet not hovered on mobile
+                                !isCodeSnippet || isHovered || isMobile()
+                                    ? styles.visibleButtonContainer
+                                    : styles.hiddenButtonContainer
+                            )}
+                        >
+                            {buttons}
+                        </div>
+                    }
+                </div>
+                {!isCodeSnippet && (
+                    <>
+                        <div
+                            {...stylex.props(
+                                styles.resizeHandle,
+                                isResizing && styles.resizeHandleActive
+                            )}
+                            onMouseDown={handleResizeStart}
+                        />
+                        <SandboxResults
+                            loading={loading}
+                            goToDef={handleGoToDefFromErrors}
+                            errors={errors}
+                            internalError={internalError}
+                            pythonOutput={pythonOutput}
+                            pyodideStatus={pyodideStatus}
+                            activeTab={activeTab}
+                            setActiveTab={setActiveTab}
+                            height={getResultsHeight()}
+                        />
+                    </>
                 )}
-                {
-                    <div
-                        {...stylex.props(
-                            styles.buttonContainerBase,
-                            isMobile()
-                                ? isCodeSnippet
-                                    ? styles.mobileButtonContainerCodeSnippet
-                                    : styles.mobileButtonContainerSandbox
-                                : styles.desktopButtonContainer,
-                            // show button if it's in sandbox or if it's hovered or if it's mobile
-                            // We only want to hide this if it's a code snippet not hovered on mobile
-                            !isCodeSnippet || isHovered || isMobile()
-                                ? styles.visibleButtonContainer
-                                : styles.hiddenButtonContainer
-                        )}
-                    >
-                        {buttons}
-                    </div>
-                }
             </div>
-            {!isCodeSnippet && (
-                <SandboxResults
-                    loading={loading}
-                    goToDef={handleGoToDefFromErrors}
-                    errors={errors}
-                    internalError={internalError}
-                    pythonOutput={pythonOutput}
-                    pyodideStatus={pyodideStatus}
-                    activeTab={activeTab}
-                    setActiveTab={setActiveTab}
-                />
-            )}
         </div>
     );
 }
@@ -930,7 +1079,7 @@ function getPyreflyEditor(
     codeSample: string,
     forceRecheck: () => void,
     onEditorMount: (editor: editor.IStandaloneCodeEditor) => void,
-    editorHeightforCodeSnippet: number | null,
+    editorHeight: number | null | undefined,
     activeFileName: string,
     models: Map<string, editor.ITextModel>
 ): React.ReactElement {
@@ -947,7 +1096,7 @@ function getPyreflyEditor(
                 onChange={forceRecheck}
                 onMount={onEditorMount}
                 keepCurrentModel={true}
-                height={editorHeightforCodeSnippet}
+                height={editorHeight}
                 options={{
                     readOnly: isMobile(),
                     domReadOnly: isMobile(),
@@ -960,17 +1109,7 @@ function getPyreflyEditor(
             />
         );
     } else {
-        // TODO (T217559369): Instead of manually calculating the sandbox height, we should
-        // use flexbox behavior to make the sandbox height to be 75% of the screen
-        // This doesn't seem to work with the monaco editor currently.
-        const screenHeight = window.innerHeight;
-        const navbarElement = document.querySelector(
-            '.navbar'
-        ) as HTMLElement | null; // Replace with your navbar selector
-        const navbarHeight = navbarElement?.offsetHeight || 0;
-
-        const sandboxHeight = ((screenHeight - navbarHeight) * 75) / 100;
-
+        // Height is now calculated by the parent component based on the resizable split ratio
         return (
             <Editor
                 defaultPath={fileName}
@@ -980,7 +1119,7 @@ function getPyreflyEditor(
                 onChange={forceRecheck}
                 onMount={onEditorMount}
                 keepCurrentModel={true}
-                height={sandboxHeight}
+                height={editorHeight}
                 options={{
                     readOnly: false,
                     domReadOnly: false,
@@ -1469,5 +1608,30 @@ const styles = stylex.create({
         fontSize: '14px',
         fontWeight: 'bold',
         marginLeft: '2px',
+    },
+    // Container for editor + resize handle + results (fills remaining space)
+    sandboxContentContainer: {
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0, // Allow flex children to shrink below content size
+    },
+    // Draggable resize handle between editor and results
+    resizeHandle: {
+        height: '6px',
+        background: 'var(--color-background-secondary)',
+        cursor: 'row-resize',
+        flexShrink: 0,
+        transition: 'background 0.15s ease',
+        ':hover': {
+            background: 'var(--color-primary)',
+        },
+    },
+    resizeHandleActive: {
+        background: 'var(--color-primary)',
+    },
+    // Prevent text selection while resizing
+    noSelect: {
+        userSelect: 'none',
     },
 });

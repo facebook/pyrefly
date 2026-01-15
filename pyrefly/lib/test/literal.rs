@@ -68,7 +68,7 @@ class Foo[T]:
     def __init__(self, x: T) -> None: ...
 
 x: Literal[42] = 42
-assert_type(Foo(x), Foo[int])
+assert_type(Foo(x), Foo[Literal[42]])
 "#,
 );
 
@@ -119,7 +119,7 @@ testcase!(
 from typing import LiteralString, assert_type
 def f(x: LiteralString):
     assert_type(["foo"], list[str])
-    assert_type([x], list[str])
+    assert_type([x], list[LiteralString])
     xs: list[str] = [x]
 "#,
 );
@@ -224,10 +224,10 @@ testcase!(
 testcase!(
     test_promote_literal,
     r#"
-from typing import assert_type, Literal
+from typing import assert_type, LiteralString
 
 x = list("abcdefg")
-assert_type(x, list[str])
+assert_type(x, list[LiteralString])
 "#,
 );
 
@@ -347,4 +347,16 @@ def test():
         lines.append(f"*{k}")
     return "\n".join(lines)
 "#,
+);
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/2077",
+    test_literal_int_sum_loop_inference,
+    r#"
+def f(x: int):
+    y = []
+    for i in range(10):
+        y.append(x)  # E: `int` is not assignable to parameter `object` with type `Literal
+    sum(y, 0)
+    "#,
 );

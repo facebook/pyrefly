@@ -1500,7 +1500,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         // TODO(stroxler): should we be promoting other literal types here?
                         // See: https://github.com/facebook/pyrefly/issues/2068
                         let t2_p = match t2 {
-                            Type::LiteralString => self.type_order.stdlib().str().clone().to_type(),
+                            Type::LiteralString(_) => {
+                                self.type_order.stdlib().str().clone().to_type()
+                            }
                             _ => t2.clone(),
                         };
                         drop(v1_ref);
@@ -1538,7 +1540,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         self.is_subset_eq(t1, &t2)
                     }
                     Variable::Quantified(q) | Variable::PartialQuantified(q) => {
-                        let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
+                        let t1_p = t1
+                            .clone()
+                            .promote_implicit_literals(self.type_order.stdlib());
                         let name = q.name.clone();
                         let bound = q.restriction().as_type(self.type_order.stdlib());
                         drop(v2_ref);
@@ -1571,7 +1575,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         Ok(())
                     }
                     Variable::PartialContained => {
-                        let t1_p = t1.clone().promote_literals(self.type_order.stdlib());
+                        let t1_p = t1
+                            .clone()
+                            .promote_implicit_literals(self.type_order.stdlib());
                         drop(v2_ref);
                         variables.update(*v2, Variable::Answer(t1_p));
                         Ok(())

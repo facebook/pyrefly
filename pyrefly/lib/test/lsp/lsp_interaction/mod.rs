@@ -38,4 +38,5 @@ mod type_definition;
 mod unsaved_file;
 mod util;
 mod will_rename_files;
+mod workspace_folders;
 mod workspace_symbol;

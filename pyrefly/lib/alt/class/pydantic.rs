@@ -60,7 +60,7 @@ use crate::types::types::Type;
 fn int_literal_from_type(ty: &Type) -> Option<&LitInt> {
     // We only currently enforce range constraints for literal ints.
     match ty {
-        Type::Literal(Lit::Int(lit)) => Some(lit),
+        Type::Literal(lit) if let Lit::Int(lit) = &lit.value => Some(lit),
         _ => None,
     }
 }
@@ -334,7 +334,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // for v2.
         let extra = match keywords.iter().find(|(name, _)| name == &EXTRA) {
             Some((_, ann)) => match ann.get_type() {
-                Type::Literal(Lit::Str(s)) => match s.as_str() {
+                Type::Literal(lit) if let Lit::Str(s) = &lit.value => match s.as_str() {
                     "allow" | "ignore" => true,
                     "forbid" => false,
                     _ => {

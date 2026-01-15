@@ -27,6 +27,7 @@ use crate::report::pysa::call_graph::FunctionTrait;
 use crate::report::pysa::call_graph::HigherOrderParameter;
 use crate::report::pysa::call_graph::IdentifierCallees;
 use crate::report::pysa::call_graph::ImplicitReceiver;
+use crate::report::pysa::call_graph::ReturnShimCallees;
 use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::Unresolved;
 use crate::report::pysa::call_graph::UnresolvedReason;
@@ -601,6 +602,14 @@ fn unresolved_format_string_stringify_callees(
     ExpressionCallees::FormatStringStringify(FormatStringStringifyCallees {
         targets: vec![],
         unresolved: Unresolved::True(reason),
+    })
+}
+
+fn return_shim_callees(
+    call_targets: Vec<CallTarget<FunctionRefForTest>>,
+) -> ExpressionCallees<FunctionRefForTest> {
+    ExpressionCallees::Return(ReturnShimCallees {
+        targets: call_targets,
     })
 }
 
@@ -3155,7 +3164,7 @@ def g() -> A:
   return A()
 def id(arg):
   return arg
-def foo(l0: typing.AsyncIterator[int], l1: typing.List[int], l2: typing.AsyncIterable[int]):
+async def foo(l0: typing.AsyncIterator[int], l1: typing.List[int], l2: typing.AsyncIterable[int]):
   x = [x async for x in l0]
   x = [x for x in l1]  # List comprehension
   x = [x async for x in l2]  # List comprehension
@@ -6326,6 +6335,128 @@ def foo(d: dict[str, int], k: str, v: int):
                     ]),
                 ),
             ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_abs,
+    TEST_MODULE_NAME,
+    r#"
+def foo(x: int):
+  return abs(x)
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:10-3:16",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.abs", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+                (
+                    "3:10-3:16|artificial-call|abs-call",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.int.__abs__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.int", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    iter_iter_next,
+    TEST_MODULE_NAME,
+    r#"
+def foo(x: list[int]):
+  return next(iter(x))
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:15-3:22",
+                    regular_call_callees(vec![create_call_target(
+                        "builtins.iter",
+                        TargetType::Function,
+                    )]),
+                ),
+                (
+                    "3:10-3:23",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.next", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+                (
+                    "3:15-3:22|artificial-call|iter-call",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.list.__iter__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.list", context),
+                    ]),
+                ),
+                (
+                    "3:10-3:23|artificial-call|next-call",
+                    regular_call_callees(vec![
+                        create_call_target("typing.Iterator.__next__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("typing.Iterator", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_return_shim_callees,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, Any
+def decorator_1(callable: Callable[[Any], Any]) -> Callable[[Any], Any]:
+  return callable
+def decorator_2(callable: Callable[[Any, int], int]) -> Callable[[Any, int], int]:
+  return callable
+def decorator_3(callable: Callable[[Any, int], int]) -> Callable[[Any, int], int]:
+  return callable
+class Foo:
+  @decorator_2
+  def callee_1(self, x: int) -> int:
+    return x
+  @decorator_2
+  def callee_2(self, x: int) -> int:
+    return x
+  def not_callee_1(self, x: int) -> int:
+    return x
+  @decorator_3
+  def not_callee_2(self, x: int) -> int:
+    return x
+@decorator_1
+def caller(foo: Foo) -> Foo:  # Test return callees
+  return foo
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.caller",
+            vec![(
+                "23:3-23:13",
+                return_shim_callees(vec![
+                    create_call_target("test.Foo.callee_1", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                    create_call_target("test.Foo.callee_2", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                ]),
+            )],
         )]
     }
 );

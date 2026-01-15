@@ -43,7 +43,30 @@ class Person(models.Model):
 p = Person(name="Fred Flintstone", shirt_size="L")
 p.save()
 assert_type(p.shirt_size, str) 
-assert_type(p.get_shirt_size_display(), str) 
+assert_type(p.get_shirt_size_display(), str)
+"#,
+);
+
+django_testcase!(
+    test_charfield_choices_inline_tuple,
+    r#"
+from typing import assert_type, Literal
+
+from django.db import models
+
+class Card(models.Model):
+    suit = models.CharField(
+        max_length=100,
+        choices=(
+            ("CLUBS", "Clubs"),
+            ("SPADES", "Spades"),
+            ("HEARTS", "Hearts"),
+            ("DIAMONDS", "Diamonds"),
+        ),
+    )
+
+card = Card(suit="CLUBS")
+assert_type(card.suit, Literal["CLUBS", "SPADES", "HEARTS", "DIAMONDS"])
 "#,
 );
 

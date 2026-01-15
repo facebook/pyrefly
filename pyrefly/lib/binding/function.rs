@@ -45,6 +45,7 @@ use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
@@ -371,6 +372,8 @@ impl<'a> BindingsBuilder<'a> {
         should_infer_return_type: bool,
         stub_or_impl: FunctionStubOrImpl,
         decorators: Box<[Idx<KeyDecorator>]>,
+        body_is_trivial: bool,
+        class_metadata_key: Option<Idx<KeyClassMetadata>>,
     ) {
         let is_generator =
             !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
@@ -450,6 +453,8 @@ impl<'a> BindingsBuilder<'a> {
                         implicit_return,
                         yields: yield_keys,
                         yield_froms: yield_from_keys,
+                        body_is_trivial,
+                        class_metadata_key,
                     }
                 }
                 (None, _) => {
@@ -525,6 +530,7 @@ impl<'a> BindingsBuilder<'a> {
         parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
+        metadata_key: Option<Idx<KeyClassMetadata>>,
     ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
         let stub_or_impl = if (body.first().is_some_and(is_docstring)
             && decorators.is_abstract_method)
@@ -613,6 +619,8 @@ impl<'a> BindingsBuilder<'a> {
                         false, // this disables return type inference
                         stub_or_impl,
                         decorators.decorators.clone(),
+                        body_is_trivial,
+                        metadata_key,
                     );
                     self_assignments
                 }
@@ -643,6 +651,8 @@ impl<'a> BindingsBuilder<'a> {
                         false, // this disables return type inference
                         stub_or_impl,
                         decorators.decorators.clone(),
+                        body_is_trivial,
+                        metadata_key,
                     );
                     self_assignments
                 }
@@ -673,6 +683,8 @@ impl<'a> BindingsBuilder<'a> {
                         true,
                         stub_or_impl,
                         decorators.decorators.clone(),
+                        body_is_trivial,
+                        metadata_key,
                     );
                     self_assignments
                 }
@@ -716,6 +728,7 @@ impl<'a> BindingsBuilder<'a> {
             parent,
             undecorated_idx,
             class_key,
+            metadata_key,
         );
 
         // Pop the annotation scope to get back to the parent scope, and handle this
@@ -748,7 +761,11 @@ impl<'a> BindingsBuilder<'a> {
             &func_name,
             def_idx,
             Binding::Function(function_idx, pred_idx, metadata_key),
-            FlowStyle::FunctionDef(function_idx, return_ann_with_range.is_some()),
+            FlowStyle::FunctionDef {
+                function_idx,
+                has_return_annotation: return_ann_with_range.is_some(),
+                is_overload: decorators.is_overload,
+            },
         );
     }
 }
@@ -764,6 +781,17 @@ fn function_last_expressions<'a>(
     sys_info: &SysInfo,
 ) -> Option<Vec<(LastStmt, &'a Expr)>> {
     fn f<'a>(sys_info: &SysInfo, x: &'a [Stmt], res: &mut Vec<(LastStmt, &'a Expr)>) -> Option<()> {
+        fn loop_body_has_break_statement(statement: &Stmt, has_break: &mut bool) {
+            match statement {
+                Stmt::Break(_) => {
+                    *has_break = true;
+                }
+                Stmt::While(_) | Stmt::For(_) => {}
+                _ => statement
+                    .recurse(&mut |statement| loop_body_has_break_statement(statement, has_break)),
+            }
+        }
+
         match x.last()? {
             Stmt::Expr(x) => res.push((LastStmt::Expr, &x.value)),
             Stmt::Return(_) | Stmt::Raise(_) => {}
@@ -781,35 +809,20 @@ fn function_last_expressions<'a>(
                     return None;
                 }
                 let mut has_break = false;
-                fn f(stmt: &Stmt, res: &mut bool) {
-                    match stmt {
-                        Stmt::Break(_) => {
-                            *res = true;
-                        }
-                        Stmt::While(_) | Stmt::For(_) => {}
-                        _ => stmt.recurse(&mut |stmt| f(stmt, res)),
-                    }
-                }
-                x.body.visit(&mut |stmt| f(stmt, &mut has_break));
+                x.body
+                    .visit(&mut |stmt| loop_body_has_break_statement(stmt, &mut has_break));
                 if has_break {
                     return None;
                 }
             }
             Stmt::For(x) => {
                 let mut has_break = false;
-                fn f(stmt: &Stmt, res: &mut bool) {
-                    match stmt {
-                        Stmt::Break(_) => {
-                            *res = true;
-                        }
-                        Stmt::While(_) | Stmt::For(_) => {}
-                        _ => stmt.recurse(&mut |stmt| f(stmt, res)),
-                    }
-                }
-                x.body.visit(&mut |stmt| f(stmt, &mut has_break));
-                if has_break {
+                x.body
+                    .visit(&mut |stmt| loop_body_has_break_statement(stmt, &mut has_break));
+                if has_break || x.orelse.is_empty() {
                     return None;
                 }
+                f(sys_info, &x.orelse, res)?;
             }
             Stmt::If(x) => {
                 let mut last_test = None;

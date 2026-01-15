@@ -10,8 +10,9 @@
 Pyrefly is a type checker and language server for Python, which provides
 lightning-fast type checking along with IDE features such as code navigation,
 semantic highlighting, and code completion. It is available as a
-[command-line tool](https://pyrefly.org/en/docs/installation/) and a
-[VSCode extension](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly).
+[command-line tool](https://pyrefly.org/en/docs/installation/), 
+[VSCode extension](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly), and a 
+[Zed extension](https://zed.dev/extensions/pyrefly).
 
 See the [Pyrefly website](https://pyrefly.org) for full documentation and how to
 add Pyrefly to your editor of choice.
@@ -23,8 +24,7 @@ you find bugs.
 
 - Try out pyrefly in your browser: [Sandbox](https://pyrefly.org/sandbox/)
 - Get the command-line tool: `pip install pyrefly`
-- Get the VSCode extension:
-  [Link](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly)
+- Get the IDE Extension: [IDE installation page](https://pyrefly.org/en/docs/IDE/)
 
 ### Key Features:
 

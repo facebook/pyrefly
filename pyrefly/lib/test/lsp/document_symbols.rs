@@ -189,7 +189,7 @@ class MyClass:
     "children": [
       {
         "name": "__init__",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 4,
@@ -214,7 +214,7 @@ class MyClass:
       },
       {
         "name": "method1",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 7,
@@ -239,7 +239,7 @@ class MyClass:
       },
       {
         "name": "method2",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 10,
@@ -396,7 +396,7 @@ result = y.method()
       },
       {
         "name": "method",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 12,
@@ -689,7 +689,7 @@ result = y.method()
       },
       {
         "name": "method",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 12,
@@ -976,7 +976,7 @@ items: List[str] = ["a", "b", "c"]
       },
       {
         "name": "method",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 14,

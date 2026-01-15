@@ -788,6 +788,16 @@ class C:
 "#,
 );
 
+testcase!(
+    test_class_scope_annotation_shadows_function,
+    r#"
+class D:
+    def int(self) -> None:
+        ...
+    y: int = 0  # E: Expected a type form
+"#,
+);
+
 // Nested scopes - except for parameter scopes - cannot see a containing class
 // body. This applies not only to methods but also other scopes like lambda, inner
 // class bodies, and comprehensions. See https://github.com/facebook/pyrefly/issues/264
@@ -856,5 +866,35 @@ class C:
     class Inner:
         def g(self, z = x):  # E: Could not find name `x`
             pass
+    "#,
+);
+
+testcase!(
+    test_global_in_inner_function,
+    r#"
+from typing import assert_type
+
+x: int = 1
+
+def outer():
+    x: str = ""
+
+    def inner():
+        global x
+        assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_global_with_same_name_as_local,
+    r#"
+from typing import assert_type, Literal
+
+x = 42
+
+def f():
+    global x
+    assert_type(x, Literal[42])
+    x = "foo"
     "#,
 );

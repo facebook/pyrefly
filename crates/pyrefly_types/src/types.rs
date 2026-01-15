@@ -47,6 +47,8 @@ use crate::class::ClassType;
 use crate::keywords::DataclassTransformMetadata;
 use crate::keywords::KwCall;
 use crate::literal::Lit;
+use crate::literal::LitStyle;
+use crate::literal::Literal;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
@@ -646,8 +648,8 @@ impl VisitMut<Type> for Union {
 // optimisations in `unions_with_literals`.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 pub enum Type {
-    Literal(Lit),
-    LiteralString,
+    Literal(Box<Literal>),
+    LiteralString(LitStyle),
     /// typing.Callable
     Callable(Box<Callable>),
     /// A function declared using the `def` keyword.
@@ -757,7 +759,7 @@ impl Visit for Type {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Self)) {
         match self {
             Type::Literal(x) => x.visit(f),
-            Type::LiteralString => {}
+            Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit(f),
             Type::Function(x) => x.visit(f),
             Type::BoundMethod(x) => x.visit(f),
@@ -805,7 +807,7 @@ impl VisitMut for Type {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Self)) {
         match self {
             Type::Literal(x) => x.visit_mut(f),
-            Type::LiteralString => {}
+            Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit_mut(f),
             Type::Function(x) => x.visit_mut(f),
             Type::BoundMethod(x) => x.visit_mut(f),
@@ -885,14 +887,18 @@ impl Type {
         matches!(self, Type::Never(_))
     }
 
-    pub fn is_literal(&self) -> bool {
-        matches!(self, Type::Literal(_))
+    pub fn is_implicit_literal(&self) -> bool {
+        matches!(
+            self,
+            Type::Literal(box Literal { style: LitStyle::Implicit, ..}) |
+            Type::LiteralString(LitStyle::Implicit)
+        )
     }
 
     pub fn is_literal_string(&self) -> bool {
         match self {
-            Type::LiteralString => true,
-            Type::Literal(l) if l.is_string() => true,
+            Type::LiteralString(_) => true,
+            Type::Literal(l) if l.value.is_string() => true,
             _ => false,
         }
     }
@@ -1481,25 +1487,16 @@ impl Type {
         sigs
     }
 
-    pub fn promote_literals(mut self, stdlib: &Stdlib) -> Type {
+    pub fn promote_implicit_literals(mut self, stdlib: &Stdlib) -> Type {
         fn g(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
-            // This isn't quite right: we should decide whether to promote a literal based on
-            // whether it is inferred or annotated. But we don't have an easy way to track that
-            // right now, and promoting literals in callable signatures is always wrong, so let's
-            // special-case callables for now.
-            if !ty.is_toplevel_callable() {
-                ty.recurse_mut(&mut |ty| g(ty, f));
-                f(ty);
-            }
+            ty.recurse_mut(&mut |ty| g(ty, f));
+            f(ty);
         }
         g(&mut self, &mut |ty| match &ty {
-            Type::Literal(lit) => *ty = lit.general_class_type(stdlib).clone().to_type(),
-            Type::LiteralString => *ty = stdlib.str().clone().to_type(),
-            Type::TypedDict(TypedDict::Anonymous(inner)) => {
-                *ty = stdlib
-                    .dict(stdlib.str().clone().to_type(), inner.value_type.clone())
-                    .to_type()
+            Type::Literal(lit) if lit.style == LitStyle::Implicit => {
+                *ty = lit.value.general_class_type(stdlib).clone().to_type()
             }
+            Type::LiteralString(LitStyle::Implicit) => *ty = stdlib.str().clone().to_type(),
             _ => {}
         });
         self
@@ -1529,6 +1526,16 @@ impl Type {
         self.transform(&mut |ty| {
             if let Type::Any(style) = ty {
                 *style = AnyStyle::Explicit;
+            }
+        })
+    }
+
+    pub fn explicit_literals(self) -> Self {
+        self.transform(&mut |ty| {
+            if let Type::Literal(lit) = ty {
+                lit.style = LitStyle::Explicit;
+            } else if let Type::LiteralString(style) = ty {
+                *style = LitStyle::Explicit;
             }
         })
     }
@@ -1694,7 +1701,7 @@ impl Type {
             Type::TypeVarTuple(t) => Some(t.qname()),
             Type::ParamSpec(t) => Some(t.qname()),
             Type::SelfType(cls) => Some(cls.qname()),
-            Type::Literal(Lit::Enum(e)) => Some(e.class.qname()),
+            Type::Literal(lit) if let Lit::Enum(e) = &lit.value => Some(e.class.qname()),
             _ => None,
         }
     }
@@ -1702,10 +1709,10 @@ impl Type {
     // The result of calling bool() on a value of this type if we can get a definitive answer, None otherwise.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
-            Type::Literal(Lit::Bool(x)) => Some(*x),
-            Type::Literal(Lit::Int(x)) => Some(x.as_bool()),
-            Type::Literal(Lit::Bytes(x)) => Some(!x.is_empty()),
-            Type::Literal(Lit::Str(x)) => Some(!x.is_empty()),
+            Type::Literal(lit) if let Lit::Bool(x) = &lit.value => Some(*x),
+            Type::Literal(lit) if let Lit::Int(x) = &lit.value => Some(x.as_bool()),
+            Type::Literal(lit) if let Lit::Bytes(x) = &lit.value => Some(!x.is_empty()),
+            Type::Literal(lit) if let Lit::Str(x) = &lit.value => Some(!x.is_empty()),
             Type::None => Some(false),
             Type::Tuple(Tuple::Concrete(elements)) => Some(!elements.is_empty()),
             Type::Union(box Union { members, .. }) => {
@@ -1800,14 +1807,15 @@ impl<'a> TypeVariable<'a> {
 #[cfg(test)]
 mod tests {
     use crate::literal::Lit;
+    use crate::literal::LitStyle;
     use crate::types::Type;
 
     #[test]
     fn test_as_bool() {
-        let true_lit = Type::Literal(Lit::Bool(true));
-        let false_lit = Type::Literal(Lit::Bool(false));
+        let true_lit = Lit::Bool(true).to_implicit_type();
+        let false_lit = Lit::Bool(false).to_implicit_type();
         let none = Type::None;
-        let s = Type::LiteralString;
+        let s = Type::LiteralString(LitStyle::Implicit);
 
         assert_eq!(true_lit.as_bool(), Some(true));
         assert_eq!(false_lit.as_bool(), Some(false));
@@ -1817,8 +1825,8 @@ mod tests {
 
     #[test]
     fn test_as_bool_union() {
-        let s = Type::LiteralString;
-        let false_lit = Type::Literal(Lit::Bool(false));
+        let s = Type::LiteralString(LitStyle::Implicit);
+        let false_lit = Lit::Bool(false).to_implicit_type();
         let none = Type::None;
 
         let str_opt = Type::union(vec![s, none.clone()]);

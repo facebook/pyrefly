@@ -21,6 +21,7 @@ use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
+use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::read_only::IsFinalVariableInitialized;
 use pyrefly_types::simplify::unions;
@@ -957,6 +958,39 @@ impl ClassField {
         }
     }
 
+    /// Check if this field is a non-data descriptor (has __get__ but no __set__).
+    /// Used for detecting possible soundness problems in dataclasses.
+    pub fn is_non_data_descriptor(&self) -> bool {
+        matches!(
+            &self.0,
+            ClassFieldInner::Descriptor { descriptor, .. } if !descriptor.setter
+        )
+    }
+
+    /// For a `__get__`-only descriptor, get the descriptor range and type. Used for
+    /// dataclass validation, where we typically disallow non-data descriptors but certain
+    /// edge cases (where instance shadows are assignable to the `__get__` return type) are ok.
+    pub fn non_data_descriptor_info(&self) -> Option<(TextRange, ClassType)> {
+        match &self.0 {
+            ClassFieldInner::Descriptor { descriptor, .. } if !descriptor.setter => {
+                Some((descriptor.range, descriptor.cls.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// For a data descriptor (has both `__get__` and `__set__`), get the descriptor range
+    /// and class type. Used for dataclass validation to check that the class-level `__get__`
+    /// return type is compatible with `__set__`.
+    pub fn data_descriptor_info(&self) -> Option<(TextRange, ClassType)> {
+        match &self.0 {
+            ClassFieldInner::Descriptor { descriptor, .. } if descriptor.setter => {
+                Some((descriptor.range, descriptor.cls.clone()))
+            }
+            _ => None,
+        }
+    }
+
     pub fn has_explicit_annotation(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { .. } => false,
@@ -985,7 +1019,15 @@ impl ClassField {
     fn dataclass_flags_of(&self) -> DataclassFieldKeywords {
         match &self.0 {
             ClassFieldInner::Property { .. } => DataclassFieldKeywords::new(),
-            ClassFieldInner::Descriptor { .. } => DataclassFieldKeywords::new(),
+            // Descriptors are always initialized in the class body (otherwise they wouldn't
+            // be detected as descriptors), so they have a default value (the descriptor instance).
+            // For data descriptors, this is sound because assignments go through __set__.
+            // For non-data descriptors, we separately emit an error in check_dataclass_non_data_descriptors.
+            ClassFieldInner::Descriptor { .. } => {
+                let mut kws = DataclassFieldKeywords::new();
+                kws.default = Some(Type::any_implicit());
+                kws
+            }
             ClassFieldInner::Method { .. } => DataclassFieldKeywords::new(),
             ClassFieldInner::NestedClass { .. } => DataclassFieldKeywords::new(),
             ClassFieldInner::ClassAttribute { initialization, .. } => match initialization {
@@ -1113,7 +1155,7 @@ impl<'a> Instance<'a> {
             }
             InstanceKind::Protocol(self_type) => self_type.clone(),
             InstanceKind::Metaclass(cls) => cls.clone().to_type(),
-            InstanceKind::LiteralString => Type::LiteralString,
+            InstanceKind::LiteralString => Type::LiteralString(LitStyle::Implicit),
         }
     }
 
@@ -1352,6 +1394,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ) = match field_definition {
             ClassFieldDefinition::DeclaredByAnnotation { annotation: annot } => {
                 let direct_annotation = Some(self.get_idx(*annot).annotation.clone());
+
+                // Check if there's an inherited descriptor from a parent class.
+                // If the child has an annotation-only field with a compatible type, inherit the
+                // parent's descriptor so that descriptor semantics are preserved.
+                if !Ast::is_mangled_attr(name)
+                    && let Some(parent_field) = self.get_field_from_ancestors(
+                        class,
+                        self.get_mro_for_class(class).ancestors(self.stdlib),
+                        name,
+                        &|cls, name| self.get_field_from_current_class_only(cls, name),
+                    )
+                    && let ClassField(
+                        ClassFieldInner::Descriptor {
+                            descriptor:
+                                Descriptor {
+                                    cls: parent_cls, ..
+                                },
+                            ..
+                        },
+                        ..,
+                    ) = &*parent_field.value
+                    && let Some(child_ty) = direct_annotation.as_ref().and_then(|a| a.ty.as_ref())
+                    && self.is_subset_eq(child_ty, &Type::ClassType(parent_cls.clone()))
+                {
+                    // Check if the child's annotation type is compatible with the parent's
+                    // descriptor type. We inherit if:
+                    // 1. The types are the same, or
+                    // 2. The child type is a subtype (though the parent's initial value
+                    //    won't match - see TODO below)
+                    //
+                    // TODO(stroxler): If the child annotation is a strict subtype of the
+                    // parent descriptor type, we silently inherit the parent's descriptor.
+                    // This may not be fully sound since the parent's initial value doesn't
+                    // match the child's declared type. Consider whether we should warn or
+                    // error in this case.
+                    return Arc::unwrap_or_clone(parent_field.value);
+                }
+
                 let initialization = if class.module_path().is_interface()
                     || direct_annotation
                         .as_ref()
@@ -1423,8 +1503,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
-                // Check if there's an inherited property field from a parent class
-                // If so, we should just use the parent's property instead of creating a new field
+                // Check if there's an inherited property or descriptor field from a parent class.
+                // If so, use the parent's field instead of creating a new field.
                 if !Ast::is_mangled_attr(name) {
                     // Use get_field_from_ancestors to only look at parent classes, not the current class
                     if let Some(parent_field) = self.get_field_from_ancestors(
@@ -1434,9 +1514,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &|cls, name| self.get_field_from_current_class_only(cls, name),
                     ) {
                         match &*parent_field.value {
-                            ClassField(ClassFieldInner::Property { .. }, ..) => {
-                                // If we found a property in the parent, just return the parent's field
-                                // This ensures the property with its setter is properly inherited
+                            ClassField(
+                                ClassFieldInner::Property { .. }
+                                | ClassFieldInner::Descriptor { .. },
+                                ..,
+                            ) => {
+                                // If we found a property or descriptor in the parent, return the parent's field.
+                                // This ensures setters are properly inherited.
                                 return Arc::unwrap_or_clone(parent_field.value);
                             }
                             _ => {
@@ -1554,46 +1638,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.determine_read_only_reason(name, annotation.as_ref(), &metadata, field_definition);
 
         // Determine the final type, promoting literals when appropriate.
+        let mut has_implicit_literal = value_ty.is_implicit_literal();
+        if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method) {
+            value_ty.universe(&mut |current_type_node| {
+                has_implicit_literal |= current_type_node.is_implicit_literal();
+            });
+        }
         let ty = if annotation
             .as_ref()
             .and_then(|ann| ann.ty.as_ref())
             .is_none()
             && matches!(read_only_reason, None | Some(ReadOnlyReason::NamedTuple))
-            && value_ty.is_literal()
+            && has_implicit_literal
         {
-            value_ty.promote_literals(self.stdlib)
+            value_ty.promote_implicit_literals(self.stdlib)
         } else {
             value_ty
         };
 
         // Identify whether this is a descriptor
         let mut descriptor = None;
-        match &ty {
-            // TODO(stroxler): This works for simple descriptors. There three known gaps, there may be others:
-            // - If the field is instance-only, descriptor dispatching won't occur, an instance-only attribute
-            //   that happens to be a descriptor just behaves like a normal instance-only attribute.
-            // - Gracefully handle instance-only `__get__`/`__set__`. Descriptors only seem to be detected
-            //   when the descriptor attribute is initialized on the class body of the descriptor.
-            // - Do we care about distributing descriptor behavior over unions? If so, what about the case when
-            //   the raw class field is a union of a descriptor and a non-descriptor? Do we want to allow this?
-            Type::ClassType(cls) => {
-                let getter = self
-                    .get_class_member(cls.class_object(), &dunder::GET)
-                    .is_some();
-                let setter = self
-                    .get_class_member(cls.class_object(), &dunder::SET)
-                    .is_some();
-                if getter || setter {
-                    descriptor = Some(Descriptor {
-                        range,
-                        cls: cls.clone(),
-                        getter,
-                        setter,
-                    })
+        // Descriptor semantics apply when:
+        // 1. The field is initialized in the class body (class-level attribute), or
+        // 2. The field is annotated with ClassVar (explicitly class-level, even without initialization)
+        let is_classvar = direct_annotation
+            .as_ref()
+            .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar));
+        if matches!(initialization, ClassFieldInitialization::ClassBody(_)) || is_classvar {
+            match &ty {
+                // TODO(stroxler): This works for simple descriptors. There are known gaps:
+                // - Gracefully handle instance-only `__get__`/`__set__`. Descriptors only seem to be detected
+                //   when the descriptor attribute is initialized on the class body of the descriptor.
+                // - Do we care about distributing descriptor behavior over unions? If so, what about the case when
+                //   the raw class field is a union of a descriptor and a non-descriptor? Do we want to allow this?
+                // - Child classes with annotation-only overrides should inherit parent descriptor behavior
+                Type::ClassType(cls) => {
+                    let getter = self
+                        .get_class_member(cls.class_object(), &dunder::GET)
+                        .is_some();
+                    let setter = self
+                        .get_class_member(cls.class_object(), &dunder::SET)
+                        .is_some();
+                    if getter || setter {
+                        descriptor = Some(Descriptor {
+                            range,
+                            cls: cls.clone(),
+                            getter,
+                            setter,
+                        })
+                    }
                 }
-            }
-            _ => {}
-        };
+                _ => {}
+            };
+        }
         // Check if this is a Django ForeignKey field
         let is_foreign_key = metadata.is_django_model()
             && matches!(&ty, Type::ClassType(cls) if self.is_foreign_key_field(cls.class_object()));
@@ -2355,7 +2452,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // If the field is a dunder or ClassVar[Callable] & the assigned value is a callable, we replace it with a named function
                 // so that it gets treated as a bound method.
                 //
-                // Both of these are heuristics that aren't guaranteed to be correct, but the dunder heuristic has useability benefits
+                // Both of these are heuristics that aren't guaranteed to be correct, but the dunder heuristic has usability benefits
                 // and the ClassVar heuristic aligns us with existing type checkers.
                 if let Type::Callable(box callable) = ty {
                     let module = self.module();
@@ -2540,11 +2637,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ClassFieldInner::ClassAttribute {
                 ty: Type::Literal(mut lit),
                 ..
-            } if matches!(&lit, Lit::Enum(lit_enum) if lit_enum.class.class_object() == enum_cls) =>
+            } if matches!(&lit.value, Lit::Enum(lit_enum) if lit_enum.class.class_object() == enum_cls) =>
             {
                 let replacement = self.instantiate(enum_cls);
-                lit.visit_mut(&mut |ty| ty.subst_self_type_mut(&replacement));
-                Some(lit)
+                lit.value
+                    .visit_mut(&mut |ty| ty.subst_self_type_mut(&replacement));
+                Some(lit.value)
             }
             _ => None,
         }
@@ -3765,13 +3863,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             e.to_error_msg(attr_name),
                         );
                     }
-                    DescriptorBase::ClassDef(class) => {
-                        let e = NoAccessReason::SettingDescriptorOnClass(class.dupe());
-                        self.error(
-                            errors,
+                    DescriptorBase::ClassDef(_) => {
+                        // Class-level assignment bypasses the descriptor protocol.
+                        // __set__ only intercepts instance assignments, so we check
+                        // that the value is assignable to the descriptor type.
+                        let attr_ty = x.cls.to_type();
+                        self.check_set_read_write_and_infer_narrow(
+                            attr_ty,
+                            attr_name,
+                            got,
                             range,
-                            ErrorInfo::new(ErrorKind::NoAccess, context),
-                            e.to_error_msg(attr_name),
+                            errors,
+                            context,
+                            false,
+                            narrowed_types,
                         );
                     }
                 };

@@ -52,6 +52,7 @@ use crate::types::callable::PropertyRole;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
+use crate::types::literal::Literal;
 use crate::types::module::ModuleType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
@@ -246,9 +247,6 @@ pub enum NoAccessReason {
     SettingReadOnlyProperty(Class),
     /// A descriptor that only has `__get__` should be treated as read-only on instances.
     SettingReadOnlyDescriptor(Class),
-    /// We do not allow class-level mutation of descriptors (this is conservative,
-    /// it is unspecified whether monkey-patching descriptors should be permitted).
-    SettingDescriptorOnClass(Class),
     /// Calling a method via `super()` when no implementation is available (e.g. abstract protocol or abstract base method).
     SuperMethodNeedsImplementation(Class),
 }
@@ -292,12 +290,6 @@ impl NoAccessReason {
                 let class_name = class.name();
                 format!(
                     "Attribute `{attr_name}` of class `{class_name}` is a read-only property and cannot be set"
-                )
-            }
-            NoAccessReason::SettingDescriptorOnClass(class) => {
-                let class_name = class.name();
-                format!(
-                    "Attribute `{attr_name}` of class `{class_name}` is a descriptor, which may not be overwritten"
                 )
             }
             NoAccessReason::SettingReadOnlyDescriptor(class) => {
@@ -1090,7 +1082,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             // `as_attribute_base` promotes literals, so we should promote here too
             // In the future, we should refactor `get_protocol_attribute` to reuse the `AttributeBase`, to ensure the logic is identical
-            let got = got.clone().promote_literals(self.stdlib);
+            let got = got.clone().promote_implicit_literals(self.stdlib);
             if (!got_attrs.is_empty())
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
@@ -1255,7 +1247,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AttributeBase1::Never => acc.found_type(Type::never(), base),
             AttributeBase1::EnumLiteral(e) if matches!(attr_name.as_str(), "name" | "_name_") => {
-                acc.found_type(Type::Literal(Lit::Str(e.member.as_str().into())), base)
+                acc.found_type(Lit::Str(e.member.as_str().into()).to_implicit_type(), base)
             }
             AttributeBase1::LiteralString => match self.get_literal_string_attribute(attr_name) {
                 Some(attr) => acc.found_class_attribute(attr, base),
@@ -1765,12 +1757,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
             }
-            Type::LiteralString | Type::Literal(Lit::Str(_)) => {
-                acc.push(AttributeBase1::LiteralString)
-            }
-            Type::Literal(Lit::Enum(lit_enum)) => acc.push(AttributeBase1::EnumLiteral(*lit_enum)),
+            Type::LiteralString(_)
+            | Type::Literal(box Literal {
+                value: Lit::Str(_), ..
+            }) => acc.push(AttributeBase1::LiteralString),
+            Type::Type(box Type::LiteralString(_)) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(self.stdlib.str().clone()),
+            )),
+            Type::Type(box Type::Literal(lit)) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(lit.value.general_class_type(self.stdlib).clone()),
+            )),
+            Type::Literal(box Literal {
+                value: Lit::Enum(lit_enum),
+                ..
+            }) => acc.push(AttributeBase1::EnumLiteral(*lit_enum)),
             Type::Literal(lit) => acc.push(AttributeBase1::ClassInstance(
-                lit.general_class_type(self.stdlib).clone(),
+                lit.value.general_class_type(self.stdlib).clone(),
             )),
             Type::TypeGuard(_) | Type::TypeIs(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.bool().clone()))

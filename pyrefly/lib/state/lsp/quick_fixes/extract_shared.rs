@@ -9,6 +9,7 @@ use pyrefly_python::ast::Ast;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameters;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -91,5 +92,54 @@ pub(super) fn decorator_matches_name(decorator: &Expr, expected: &str) -> bool {
         Expr::Attribute(attribute) => attribute.attr.as_str() == expected,
         Expr::Call(call) => decorator_matches_name(call.func.as_ref(), expected),
         _ => false,
+    }
+}
+
+/// Given a selection range, returns the first non-whitespace position within it.
+/// If the selection is empty, returns the start position.
+pub(super) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
+    if selection.is_empty() {
+        return selection.start();
+    }
+    let start = selection.start().to_usize().min(source.len());
+    let end = selection.end().to_usize().min(source.len());
+    if start >= end {
+        return selection.start();
+    }
+    if let Some(offset) = source[start..end]
+        .char_indices()
+        .find(|(_, ch)| !matches!(ch, ' ' | '\t' | '\n' | '\r'))
+        .map(|(idx, _)| idx)
+    {
+        TextSize::try_from(start + offset).unwrap_or(selection.start())
+    } else {
+        selection.start()
+    }
+}
+
+/// Extracts the name from a statement that defines a named symbol.
+/// Returns `None` for statements that don't define a single named symbol.
+pub(super) fn member_name_from_stmt(stmt: &Stmt) -> Option<String> {
+    match stmt {
+        Stmt::FunctionDef(func_def) => Some(func_def.name.id.to_string()),
+        Stmt::ClassDef(class_def) => Some(class_def.name.id.to_string()),
+        Stmt::Assign(assign) => {
+            if assign.targets.len() != 1 {
+                return None;
+            }
+            if let Expr::Name(name) = &assign.targets[0] {
+                Some(name.id.to_string())
+            } else {
+                None
+            }
+        }
+        Stmt::AnnAssign(assign) => {
+            if let Expr::Name(name) = assign.target.as_ref() {
+                Some(name.id.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }

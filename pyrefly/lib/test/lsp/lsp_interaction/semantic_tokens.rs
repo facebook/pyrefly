@@ -20,7 +20,7 @@ use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 #[test]
 fn semantic_tokens_import_submodule_alias() {
     let root = get_test_files_root();
-    let root_path = root.path().join("semantic_tokens_imports");
+    let root_path = root.path().join("nested_package_imports");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction

@@ -124,11 +124,12 @@ pub const MAGIC_METHOD_NAMES: &[&str] = &[
     "__xor__",
 ];
 
+pub const ABS: Name = Name::new_static("__abs__");
 pub const AENTER: Name = Name::new_static("__aenter__");
 pub const AEXIT: Name = Name::new_static("__aexit__");
 pub const AITER: Name = Name::new_static("__aiter__");
-pub const ANEXT: Name = Name::new_static("__anext__");
 pub const ALL: Name = Name::new_static("__all__");
+pub const ANEXT: Name = Name::new_static("__anext__");
 pub const ASCII: Name = Name::new_static("__ascii__");
 pub const BOOL: Name = Name::new_static("__bool__");
 pub const CALL: Name = Name::new_static("__call__");

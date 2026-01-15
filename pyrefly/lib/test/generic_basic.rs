@@ -265,7 +265,7 @@ class A[*Ps, *Qs = *Ps]: # E: may not have more than one TypeVarTuple
 testcase!(
     test_specialize_error,
     r#"
-from nowhere import BrokenGeneric, BrokenTypeVar # E: Could not find import of `nowhere`
+from nowhere import BrokenGeneric, BrokenTypeVar # E: Cannot find module `nowhere`
 
 class MyClass(BrokenGeneric[BrokenTypeVar]):
     pass
@@ -531,5 +531,28 @@ def _to_list[T](
     return kind(to_type(val, Any) for val in value)
 
 def to_type[T](value: Any, kind: TypeForm[T]) -> T: ...
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1970
+testcase!(
+    test_implicit_any_for_special_forms,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Callable, Type
+
+def f(
+    x: list,      # E: Cannot determine the type parameter `_T` for generic class `list`
+    y: tuple,     # E: Cannot determine the type parameter for generic class `tuple`
+    z: Callable,  # E: Cannot determine the type parameter for generic class `Callable`
+    w: Type,      # E: Cannot determine the type parameter for generic class `type`
+):
+    pass
+
+# Note: bare builtin `type` annotation doesn't trigger implicit-any yet because
+# the `type` class is not defined as generic in typeshed. `typing.Type` works
+# because it's handled as a special form.
+def g(t: type):
+    pass
     "#,
 );

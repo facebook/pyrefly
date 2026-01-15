@@ -1758,14 +1758,14 @@ Definition Result:
 }
 
 #[test]
-fn goto_def_on_import_different_name_alias_first_token_test() {
+fn goto_def_on_import_different_name_alias_test() {
     let lib = r#"
 def bar():
     pass
 "#;
     let code = r#"
 from lib import bar as baz
-#                ^
+#                ^      ^
 "#;
     let report =
         get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
@@ -1778,29 +1778,6 @@ Definition Result:
 2 | def bar():
         ^^^
 
-
-# lib.py
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
-fn goto_def_on_import_different_name_alias_second_token_test() {
-    let lib = r#"
-def bar():
-    pass
-"#;
-    let code = r#"
-from lib import bar as baz
-#                       ^
-"#;
-    let report =
-        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
-    assert_eq!(
-        r#"
-# main.py
 2 | from lib import bar as baz
                             ^
 Definition Result:
