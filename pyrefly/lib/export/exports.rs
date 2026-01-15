@@ -161,6 +161,24 @@ impl Exports {
             .contains(name)
     }
 
+    /// Return an iterator with entries in `__all__` that are user-defined or None if `__all__` was not present.
+    pub fn get_explicit_dunder_all_names_iter(&self) -> Option<impl Iterator<Item = &Name>> {
+        match self.0.definitions.dunder_all.kind {
+            DunderAllKind::Specified => Some(
+                self.0
+                    .definitions
+                    .dunder_all
+                    .entries
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        DunderAllEntry::Name(_, name) => Some(name),
+                        _ => None,
+                    }),
+            ),
+            _ => None,
+        }
+    }
+
     /// Returns entries in `__all__` that don't exist in the module's definitions.
     /// Only validates explicitly user-defined `__all__` entries, not synthesized ones.
     /// Returns a vector of (range, name) tuples for invalid entries.
