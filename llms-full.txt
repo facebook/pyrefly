@@ -676,6 +676,38 @@ Positron comes with Pyrefly out of the box. See the documentation [here](https:/
 
 Pyrefly may be used in Jupyter Lab through the [jupyterlab-lsp](https://jupyterlab-lsp.readthedocs.io/en/latest/Installation.html) extension.
 
+### Zed
+
+Zed users can install the Pyrefly extension from [here](https://zed.dev/extensions/pyrefly) or by visiting the extensions marketplace:
+
+<video 
+  src="/videos/zed.mov" 
+  width="720" 
+  muted 
+  loop 
+  autoPlay 
+  playsInline 
+  preload="metadata" 
+/>
+
+```json
+{
+  "lsp": {
+    "pyrefly": {
+      "binary": {
+        "path": ".venv/bin/pyrefly",
+        "arguments": ["lsp"]
+      }
+    }
+  },
+  "languages": {
+    "Python": {
+      "language_servers": ["pyrefly"],
+    }
+  }
+}
+```
+
 
 ---
 
