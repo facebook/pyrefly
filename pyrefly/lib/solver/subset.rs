@@ -991,7 +991,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (t1, Type::Quantified(q)) => match q.restriction() {
                 // This only works for constraints and not bounds, because a TypeVar must resolve to exactly one of its constraints.
-                Restriction::Constraints(constraints) => all(constraints.iter(), |constraint| {
+                Restriction::Constraints(constraints) => any(constraints.iter(), |constraint| {
                     self.is_subset_eq(t1, constraint)
                 }),
                 _ => Err(SubsetError::Other),

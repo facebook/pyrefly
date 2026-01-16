@@ -5039,17 +5039,6 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`",
-      "description": "Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`",
-      "line": 34,
-      "name": "bad-return",
-      "severity": "error",
-      "stop_column": 17,
-      "stop_line": 34
-    },
-    {
-      "code": -2,
       "column": 15,
       "concise_description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
       "description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
