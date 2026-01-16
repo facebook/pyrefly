@@ -2541,8 +2541,6 @@ impl<'a> Transaction<'a> {
             && let Some(ast) = self.get_ast(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
-            let mut autoimport_candidates = Vec::new();
-            let mut names_with_public = OrderedSet::new();
             for (handle_to_import_from, name, export) in
                 self.search_exports_fuzzy(identifier.as_str())
             {
@@ -2552,7 +2550,6 @@ impl<'a> Transaction<'a> {
                 {
                     continue;
                 }
-                let depth = handle_to_import_from.module().components().len();
                 let module_description = handle_to_import_from.module().as_str().to_owned();
                 let (insert_text, additional_text_edits, imported_module) = {
                     let (position, insert_text, module_name) = insert_import_edit(
@@ -2576,42 +2573,30 @@ impl<'a> Transaction<'a> {
                     .components()
                     .last()
                     .is_some_and(|component| component.as_str().starts_with('_'));
-                if !is_private_import {
-                    names_with_public.insert(name.clone());
-                }
-                autoimport_candidates.push((
-                    CompletionItem {
-                        label: name,
-                        detail: Some(insert_text),
-                        kind: export
-                            .symbol_kind
-                            .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                                Some(k.to_lsp_completion_item_kind())
-                            }),
-                        additional_text_edits,
-                        label_details: supports_completion_item_details.then_some(
-                            CompletionItemLabelDetails {
-                                detail: Some(auto_import_label_detail),
-                                description: Some(module_description),
-                            },
-                        ),
-                        tags: if export.deprecation.is_some() {
-                            Some(vec![CompletionItemTag::DEPRECATED])
-                        } else {
-                            None
+                let private_rank = if is_private_import { "1" } else { "0" };
+                completions.push(CompletionItem {
+                    label: name.clone(),
+                    detail: Some(insert_text),
+                    kind: export
+                        .symbol_kind
+                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
+                            Some(k.to_lsp_completion_item_kind())
+                        }),
+                    additional_text_edits,
+                    label_details: supports_completion_item_details.then_some(
+                        CompletionItemLabelDetails {
+                            detail: Some(auto_import_label_detail),
+                            description: Some(module_description),
                         },
-                        sort_text: Some(format!("4{}", depth)),
-                        ..Default::default()
+                    ),
+                    tags: if export.deprecation.is_some() {
+                        Some(vec![CompletionItemTag::DEPRECATED])
+                    } else {
+                        None
                     },
-                    is_private_import,
-                ));
-            }
-
-            for (mut item, is_private_import) in autoimport_candidates {
-                if is_private_import && names_with_public.contains(&item.label) {
-                    item.sort_text = Some("b".to_owned());
-                }
-                completions.push(item);
+                    sort_text: Some(format!("{name}:{private_rank}")),
+                    ..Default::default()
+                });
             }
 
             for module_name in self.search_modules_fuzzy(identifier.as_str()) {
@@ -2633,6 +2618,11 @@ impl<'a> Transaction<'a> {
                     };
                     let auto_import_label_detail = format!(" (import {module_name_str})");
 
+                    let is_private_import = module_name
+                        .components()
+                        .last()
+                        .is_some_and(|component| component.as_str().starts_with('_'));
+                    let private_rank = if is_private_import { "1" } else { "0" };
                     completions.push(CompletionItem {
                         label: module_name_str.clone(),
                         detail: Some(insert_text),
@@ -2641,9 +2631,10 @@ impl<'a> Transaction<'a> {
                         label_details: supports_completion_item_details.then_some(
                             CompletionItemLabelDetails {
                                 detail: Some(auto_import_label_detail),
-                                description: Some(module_name_str),
+                                description: Some(module_name_str.clone()),
                             },
                         ),
+                        sort_text: Some(format!("{module_name_str}:{private_rank}")),
                         ..Default::default()
                     });
                 }
