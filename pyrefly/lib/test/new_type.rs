@@ -131,7 +131,7 @@ testcase!(
     r#"
 from typing import Any, NewType
 Foo = NewType("Foo", int)
-x: type = Foo  # E: `type[Foo]` is not assignable to `type`
+x: type = Foo  # E: `type[Foo]` is not assignable to `type[Any]`
 y: type[Any] = Foo  # E: `type[Foo]` is not assignable to `type[Any]`
     "#,
 );

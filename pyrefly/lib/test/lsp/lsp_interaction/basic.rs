@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
@@ -14,6 +12,8 @@ use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::request::DocumentDiagnosticRequest;
 use serde_json::json;
 
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Request;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -244,6 +244,7 @@ fn test_unknown_request() {
         id: RequestId::from(1),
         method: "fake-method".to_owned(),
         params: json!(null),
+        activity_key: None,
     }));
     interaction
         .client

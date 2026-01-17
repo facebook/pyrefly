@@ -15,17 +15,16 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
+use std::thread::JoinHandle;
 use std::time::Instant;
 
+use crossbeam_channel::Receiver;
+use crossbeam_channel::Sender;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
 use itertools::Itertools;
-use lsp_server::Connection;
 use lsp_server::ErrorCode;
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_server::ResponseError;
 use lsp_types::CallHierarchyServerCapability;
 use lsp_types::CodeAction;
@@ -191,6 +190,7 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::telemetry::SubTaskTelemetry;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
@@ -229,6 +229,11 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
+use crate::lsp::non_wasm::protocol::read_lsp_message;
+use crate::lsp::non_wasm::protocol::write_lsp_message;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
@@ -318,6 +323,80 @@ pub trait TspInterface: Send + Sync {
     ) -> anyhow::Result<ProcessEvent>;
 
     fn telemetry_state(&self) -> TelemetryServerState;
+}
+
+pub struct Connection {
+    pub sender: Sender<Message>,
+    pub receiver: Receiver<Message>,
+}
+
+pub struct IoThreads {
+    reader: JoinHandle<std::io::Result<()>>,
+    writer: JoinHandle<std::io::Result<()>>,
+}
+
+impl IoThreads {
+    pub fn join(self) -> std::io::Result<()> {
+        let reader_result = match self.reader.join() {
+            Ok(result) => result,
+            Err(e) => std::panic::panic_any(e),
+        };
+        let writer_result = match self.writer.join() {
+            Ok(result) => result,
+            Err(e) => std::panic::panic_any(e),
+        };
+        reader_result.and(writer_result)
+    }
+}
+
+impl Connection {
+    pub fn stdio() -> (Self, IoThreads) {
+        let (reader_sender, reader_receiver) = crossbeam_channel::unbounded();
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
+        let reader = std::thread::spawn(move || {
+            let mut stdin = std::io::stdin().lock();
+            while let Some(msg) = read_lsp_message(&mut stdin)? {
+                let is_exit = match &msg {
+                    Message::Notification(x) => x.method == Exit::METHOD,
+                    _ => false,
+                };
+                if reader_sender.send(msg).is_err() || is_exit {
+                    break;
+                }
+            }
+            Ok(())
+        });
+        let writer = std::thread::spawn(move || {
+            let mut stdout = std::io::stdout().lock();
+            while let Ok(msg) = writer_receiver.recv() {
+                write_lsp_message(&mut stdout, msg)?
+            }
+            Ok(())
+        });
+        (
+            Self {
+                sender: writer_sender,
+                receiver: reader_receiver,
+            },
+            IoThreads { reader, writer },
+        )
+    }
+
+    #[cfg(test)]
+    pub fn memory() -> (Self, Self) {
+        let (s1, r1) = crossbeam_channel::unbounded();
+        let (s2, r2) = crossbeam_channel::unbounded();
+        (
+            Self {
+                sender: s1,
+                receiver: r2,
+            },
+            Self {
+                sender: s2,
+                receiver: r1,
+            },
+        )
+    }
 }
 
 struct ServerConnection(Connection);
@@ -623,6 +702,16 @@ pub fn capabilities(
         .and_then(|c| c.semantic_tokens.as_ref())
         .and_then(|c| c.augments_syntax_tokens)
         .unwrap_or(false);
+
+    // Parse syncNotebooks from initialization options, defaults to true
+    let sync_notebooks = initialization_params
+        .initialization_options
+        .as_ref()
+        .and_then(|opts| opts.get("pyrefly"))
+        .and_then(|pyrefly| pyrefly.get("syncNotebooks"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
     ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -714,15 +803,19 @@ pub fn capabilities(
                 ..Default::default()
             }),
         }),
-        notebook_document_sync: Some(OneOf::Left(NotebookDocumentSyncOptions {
-            notebook_selector: vec![NotebookSelector::ByCells {
-                notebook: None,
-                cells: vec![NotebookCellSelector {
-                    language: "python".into(),
+        notebook_document_sync: if sync_notebooks {
+            Some(OneOf::Left(NotebookDocumentSyncOptions {
+                notebook_selector: vec![NotebookSelector::ByCells {
+                    notebook: None,
+                    cells: vec![NotebookCellSelector {
+                        language: "python".into(),
+                    }],
                 }],
-            }],
-            save: None,
-        })),
+                save: None,
+            }))
+        } else {
+            None
+        },
         ..Default::default()
     }
 }
@@ -1005,7 +1098,9 @@ impl Server {
                     info!("Response for unknown request: {x:?}");
                 }
             }
-            LspEvent::LspRequest(x) => {
+            LspEvent::LspRequest(mut x) => {
+                telemetry_event.set_activity_key(std::mem::take(&mut x.activity_key));
+
                 // These are messages where VS Code will use results from previous document versions,
                 // we really don't want to implicitly cancel those.
                 const ONLY_ONCE: &[&str] = &[
@@ -1595,6 +1690,7 @@ impl Server {
             id: id.clone(),
             method: T::METHOD.to_owned(),
             params: serde_json::to_value(params).unwrap(),
+            activity_key: None,
         };
         self.connection.send(Message::Request(request.clone()));
         self.outgoing_requests.lock().insert(id, request);
@@ -2059,9 +2155,9 @@ impl Server {
         force: bool,
     ) {
         let run = move |server: &Server,
-                        _telemetry: &dyn Telemetry,
+                        telemetry: &dyn Telemetry,
                         telemetry_event: &mut TelemetryEvent,
-                        _task_stats: Option<&TelemetryTaskId>| {
+                        task_stats: Option<&TelemetryTaskId>| {
             let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> =
                 SmallMap::new();
             let config_finder = server.state.config_finder();
@@ -2078,8 +2174,10 @@ impl Server {
                     .or_default()
                     .insert(handle.path().dupe());
             }
+            let task_telemetry =
+                SubTaskTelemetry::new(telemetry, server.telemetry_state(), task_stats);
             let (new_invalidated_source_dbs, rebuild_stats) =
-                ConfigFile::query_source_db(&configs_to_paths, force);
+                ConfigFile::query_source_db(&configs_to_paths, force, Some(task_telemetry));
             telemetry_event.set_sourcedb_rebuild_stats(rebuild_stats);
             if !new_invalidated_source_dbs.is_empty() {
                 let mut lock = server.invalidated_source_dbs.lock();
@@ -2440,6 +2538,7 @@ impl Server {
                 }
             },
         }
+        drop(open_files);
         self.unsaved_file_tracker.forget_uri_path(&url);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         self.recheck_queue.queue_task(
@@ -2841,6 +2940,16 @@ impl Server {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.push_members_down_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) =
+            transaction.move_module_member_code_actions(&handle, range, import_format)
+        {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) =
+            transaction.make_local_function_top_level_code_actions(&handle, range, import_format)
+        {
             push_refactor_actions(refactors);
         }
         if actions.is_empty() {

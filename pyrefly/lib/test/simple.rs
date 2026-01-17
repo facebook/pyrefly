@@ -845,12 +845,29 @@ c2: type[C, C] = C  # E: Expected 1 type argument for `type`, got 2
 );
 
 testcase!(
+    test_type_without_argument_is_equivalent_to_type_any,
+    r#"
+from typing import assert_type, Any
+def f(x: type) -> None:
+    g(x)
+    assert_type(x, type[Any])
+def g(x: type[Any]) -> None:
+    f(x)
+    assert_type(x, type)
+"#,
+);
+
+testcase!(
     test_annotated,
     r#"
 from typing import Annotated, assert_type
 def f(x: Annotated[int, "test"], y: Annotated[int, "test", "test"]):
     assert_type(x, int)
     assert_type(y, int)
+def g(x: Annotated[int]): # E: `Annotated` needs at least one piece of metadata in addition to the type
+    pass
+X = Annotated[int, "meta"]
+Y = Annotated[int] # E: `Annotated` needs at least one piece of metadata in addition to the type
     "#,
 );
 
@@ -1400,14 +1417,14 @@ def f(x: Type) -> None: ...
 def g(x: type) -> None: ...
 
 f(int)
-f(Type)
+f(Type)  # E: not assignable to parameter `x` with type `type[Any]`
 f(type)
 f(42)  # E: not assignable to parameter `x` with type `type[Any]`
 
 g(int)
-g(Type)
+g(Type)  # E: not assignable to parameter `x` with type `type[Any]`
 g(type)
-g(42)  # E: not assignable to parameter `x` with type `type`
+g(42)  # E: not assignable to parameter `x` with type `type[Any]`
 "#,
 );
 
@@ -1609,6 +1626,14 @@ testcase!(
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/1903
 (:=).:  # E: Type cannot be declared in assignment to non-self attribute `:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Parse error: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_incomplete_walrus,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/2093
+(:=  # E: Parse error: Expected an expression # E: Parse error: Expected an expression
 "#,
 );
 
@@ -2026,8 +2051,8 @@ def takes_type(x: type): ...
 def takes_Type(x: Type): ...
 def takes_type_any(x: type[Any]): ...
 def takes_Type_any(x: Type[Any]): ...
-takes_type(Callable) # E: is not assignable to parameter `x` with type `type` in function
-takes_type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type` in function
+takes_type(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
+takes_type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
 takes_Type(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
 takes_Type(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
 takes_type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function

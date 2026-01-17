@@ -5,14 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::io::Write;
+
 use clap::Parser;
 use clap::ValueEnum;
-use lsp_server::Connection;
 use lsp_types::InitializeParams;
 use lsp_types::ServerInfo;
 use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::util::CommandExitStatus;
+use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::server::initialize_finish;
 use crate::lsp::non_wasm::server::initialize_start;
@@ -96,7 +98,7 @@ impl LspArgs {
         version: &str,
         telemetry: &impl Telemetry,
     ) -> anyhow::Result<CommandExitStatus> {
-        // Note that  we must have our logging only write out to stderr.
+        // Note that we must have our logging only write out to stderr.
         eprintln!("starting generic LSP server");
 
         // Create the transport. Includes the stdio (stdin and stdout) versions but this could
@@ -111,7 +113,10 @@ impl LspArgs {
         run_lsp(connection, self, Some(server_info), telemetry)?;
         io_threads.join()?;
         // We have shut down gracefully.
-        eprintln!("shutting down server");
+        // Use writeln! instead of eprintln! to avoid panicking if stderr is closed.
+        // This can happen, for example, when stderr is connected to an LSP client which
+        // closes the connection before Pyrefly language server exits.
+        let _ = writeln!(std::io::stderr(), "shutting down server");
         Ok(CommandExitStatus::Success)
     }
 }

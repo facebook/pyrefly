@@ -195,7 +195,7 @@ fn hint_to_string(
     stdlib: &Stdlib,
     enum_members: &dyn Fn(&Class) -> Option<usize>,
 ) -> String {
-    let hint = hint.promote_literals(stdlib);
+    let hint = hint.promote_implicit_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
     let hint = match hint {
         Type::Union(box Union { members: types, .. }) => {

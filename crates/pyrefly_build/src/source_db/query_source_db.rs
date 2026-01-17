@@ -10,6 +10,8 @@ use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
@@ -29,6 +31,7 @@ use vec1::Vec1;
 use crate::handle::Handle;
 use crate::query::Include;
 use crate::query::PythonLibraryManifest;
+use crate::query::QueryResult;
 use crate::query::SourceDbQuerier;
 use crate::query::TargetManifestDatabase;
 use crate::source_db::ModulePathCache;
@@ -116,12 +119,13 @@ impl QuerySourceDatabase {
         }
     }
 
-    fn update_with_target_manifest(&self, raw_db: TargetManifestDatabase) -> bool {
+    fn update_with_target_manifest(&self, raw_db: TargetManifestDatabase) -> (bool, Duration) {
+        let start = Instant::now();
         let new_db = raw_db.produce_map();
         let read = self.inner.read();
         if new_db == read.db {
             debug!("No source DB changes from Buck query");
-            return false;
+            return (false, start.elapsed());
         }
         drop(read);
         let mut path_lookup: SmallMap<ModulePathBuf, Target> = SmallMap::new();
@@ -161,7 +165,7 @@ impl QuerySourceDatabase {
         let _old_known_modules = mem::replace(&mut write.known_modules, known_modules);
         drop(write);
         debug!("Finished updating source DB with Buck response");
-        true
+        (true, start.elapsed())
     }
 
     /// Attempts to search in the given [`PythonLibraryManifest`] for the import,
@@ -336,6 +340,8 @@ impl SourceDatabase for QuerySourceDatabase {
         force: bool,
     ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
         let mut stats = TelemetrySourceDbRebuildInstanceStats::default();
+        stats.common.forced = force;
+        stats.common.files = files.len();
         let run = || {
             let new_includes = files.into_iter().map(Include::path).collect();
             let mut includes = self.includes.lock();
@@ -345,11 +351,23 @@ impl SourceDatabase for QuerySourceDatabase {
             }
             *includes = new_includes;
             info!("Querying Buck for source DB");
-            let (raw_db, build_id) = self.querier.query_source_db(&includes, &self.cwd);
+            let QueryResult {
+                db: raw_db,
+                build_id,
+                build_duration,
+                parse_duration,
+                stdout_size,
+            } = self.querier.query_source_db(&includes, &self.cwd);
             stats.build_id = build_id;
+            stats.build_time = build_duration;
+            stats.parse_time = parse_duration;
+            stats.raw_size = stdout_size;
             let raw_db = raw_db?;
             info!("Finished querying Buck for source DB");
-            Ok(self.update_with_target_manifest(raw_db))
+            let (changed, process_duration) = self.update_with_target_manifest(raw_db);
+            stats.common.changed = changed;
+            stats.process_time = Some(process_duration);
+            Ok(changed)
         };
         (run(), stats)
     }
@@ -433,6 +451,7 @@ impl SourceDatabase for QuerySourceDatabase {
 
 #[cfg(test)]
 mod tests {
+
     use pretty_assertions::assert_eq;
     use pyrefly_python::sys_info::PythonPlatform;
     use pyrefly_python::sys_info::PythonVersion;
@@ -448,12 +467,14 @@ mod tests {
     struct DummyQuerier {}
 
     impl SourceDbQuerier for DummyQuerier {
-        fn query_source_db(
-            &self,
-            _: &SmallSet<Include>,
-            _: &Path,
-        ) -> (anyhow::Result<TargetManifestDatabase>, Option<String>) {
-            (Ok(TargetManifestDatabase::get_test_database()), None)
+        fn query_source_db(&self, _: &SmallSet<Include>, _: &Path) -> QueryResult {
+            QueryResult {
+                db: Ok(TargetManifestDatabase::get_test_database()),
+                build_id: None,
+                build_duration: None,
+                parse_duration: None,
+                stdout_size: None,
+            }
         }
 
         fn construct_command(&self, _: Option<&Path>) -> std::process::Command {
@@ -815,7 +836,7 @@ mod tests {
         let (db, root) = get_db();
         let manifest = TargetManifestDatabase::get_test_database();
 
-        assert!(!db.update_with_target_manifest(manifest));
+        assert!(!db.update_with_target_manifest(manifest).0);
 
         let manifest = TargetManifestDatabase::new(
             smallmap! {
@@ -875,7 +896,7 @@ mod tests {
             root.clone(),
         );
         let manifest_db = manifest.clone().produce_map();
-        assert!(db.update_with_target_manifest(manifest));
+        assert!(db.update_with_target_manifest(manifest).0);
         let inner = db.inner.read();
         assert_eq!(inner.db, manifest_db);
         let expected_path_lookup = smallmap! {

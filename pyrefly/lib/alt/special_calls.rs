@@ -66,6 +66,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                     .promote_typevar_values(self.stdlib)
                     .explicit_any()
+                    .explicit_literals()
                     .noreturn_to_never()
                     .anon_callables()
                     .anon_typed_dicts(self.stdlib)
@@ -427,6 +428,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.for_display(ty)
                     ),
                 );
+            } else if let Type::Type(box Type::SpecialForm(special_form)) = &ty {
+                if !special_form.isinstance_safe() {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        format!("Expected class object, got special form `{}`", special_form),
+                    );
+                }
             } else if self.unwrap_class_object_silently(&ty).is_none() {
                 self.error(
                     errors,
@@ -434,8 +444,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ErrorInfo::Kind(ErrorKind::InvalidArgument),
                     format!("Expected class object, got `{}`", self.for_display(ty)),
                 );
-            } else if let Type::Type(box Type::SpecialForm(SpecialForm::Callable)) = &ty {
-                // Callable is a special form that is not a `type` but can be used in `isinstance` checks
             } else {
                 self.check_type(
                     &ty,

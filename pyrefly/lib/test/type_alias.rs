@@ -979,3 +979,34 @@ y: Alias[str] = Second("hello")
 assert_type(y, First[str] | Second[str])
     "#,
 );
+
+testcase!(
+    test_type_alias_subscript_forward_ref,
+    r#"
+from typing import TypeVar, Generic, Iterator
+
+T = TypeVar("T")
+E = TypeVar("E")
+
+class Ok(Generic[T]):
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+class Err(Generic[E]):
+    def __init__(self, error: E) -> None:
+        self.error = error
+
+Result = Ok[T] | Err[E]
+
+class CannotTransform(Exception):
+    pass
+
+TResult = Result[T, CannotTransform]
+
+class Line:
+    pass
+
+def type_alias_subscript() -> Iterator["TResult[Line]"]:
+    yield Ok(Line())
+    "#,
+);

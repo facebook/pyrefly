@@ -1,3 +1,8 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
@@ -105,7 +110,7 @@ def convert_json_to_model(tsp_json: Dict[str, Any]) -> model.LSPModel:
             values = []
             value_list = type_def.get("value", [])
             value_docs = type_def.get("valueDocumentation", {})
-            for i, val in enumerate(value_list):
+            for val in value_list:
                 # Convert value to a valid Rust identifier
                 # e.g., "0.1.0" -> "V010", "current" -> "Current"
                 rust_name = value_to_rust_identifier(val)

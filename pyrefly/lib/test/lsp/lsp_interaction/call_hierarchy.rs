@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::SymbolKind;
 use lsp_types::Url;
@@ -16,6 +14,8 @@ use lsp_types::request::CallHierarchyOutgoingCalls;
 use lsp_types::request::CallHierarchyPrepare;
 use serde_json::json;
 
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Request;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -60,6 +60,7 @@ fn test_prepare_call_hierarchy_on_function() {
                 "character": 5
             }
         }),
+        activity_key: None,
     }));
 
     // Expect a successful response with a CallHierarchyItem for the function
@@ -129,6 +130,7 @@ fn test_prepare_call_hierarchy_on_call_site() {
                 "character": 6  // On "my_function"
             }
         }),
+        activity_key: None,
     }));
 
     // Should return the CallHierarchyItem for the function definition in callee.py

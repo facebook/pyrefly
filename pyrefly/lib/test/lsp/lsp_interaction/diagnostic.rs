@@ -5,13 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Notification;
 use lsp_types::DocumentDiagnosticReportResult;
 use lsp_types::Url;
 use pyrefly_config::environment::environment::PythonEnvironment;
 use serde_json::json;
 
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Notification;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -811,13 +811,16 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
     let create_version_validator = |expected_version: i64| {
         let actual_uri = uri.as_str();
         move |msg: Message| match msg {
-            Message::Notification(Notification { method, params })
-                if let Some((expected_uri, actual_version)) = params
-                    .get("uri")
-                    .and_then(|uri| uri.as_str())
-                    .zip(params.get("version").and_then(|version| version.as_i64()))
-                    && expected_uri == actual_uri
-                    && method == "textDocument/publishDiagnostics" =>
+            Message::Notification(Notification {
+                method,
+                params,
+                activity_key: None,
+            }) if let Some((expected_uri, actual_version)) = params
+                .get("uri")
+                .and_then(|uri| uri.as_str())
+                .zip(params.get("version").and_then(|version| version.as_i64()))
+                && expected_uri == actual_uri
+                && method == "textDocument/publishDiagnostics" =>
             {
                 assert!(
                     actual_version == expected_version,
@@ -825,7 +828,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
                     expected_version,
                     actual_version
                 );
-                (actual_version == expected_version).then_some(())
+                (actual_version == expected_version).then_some(Ok(()))
             }
             _ => None,
         }
@@ -872,6 +875,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
                     "version": 3
                 },
             }),
+            activity_key: None,
         }));
 
     let version = 3;
@@ -975,7 +979,7 @@ fn test_missing_source_with_config_diagnostic_has_errors() {
                     ))
                     && item
                         .message
-                        .starts_with("Could not find import of `whatthepatch`")
+                        .starts_with("Cannot find module `whatthepatch`")
                     && item.range.start.line == 5
                     && item.range.start.character == 7
                     && item.range.end.line == 5
@@ -1022,7 +1026,7 @@ fn test_untyped_import_diagnostic() {
                     "codeDescription": {
                         "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
                     },
-                    "message": "Missing type stubs for `boto3`\n  Hint: install the `boto3-stubs` package",
+                    "message": "Cannot find type stubs for module `boto3`\n  Hint: install the `boto3-stubs` package",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 12}

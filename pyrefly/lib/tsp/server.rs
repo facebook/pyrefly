@@ -9,7 +9,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
 use lsp_types::ServerCapabilities;
@@ -21,6 +20,8 @@ use tsp_types::TSPRequests;
 
 use crate::commands::lsp::IndexingMode;
 use crate::lsp::non_wasm::lsp::new_response;
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::server::ProcessEvent;
 use crate::lsp::non_wasm::server::TspInterface;
@@ -70,7 +71,7 @@ impl<T: TspInterface> TspServer<T> {
                 return Ok(ProcessEvent::Continue);
             }
             // If it's not a TSP request, let the LSP server reject it since TSP server shouldn't handle LSP requests
-            self.inner.send_response(lsp_server::Response::new_err(
+            self.inner.send_response(Response::new_err(
                 request.id.clone(),
                 lsp_server::ErrorCode::MethodNotFound as i32,
                 format!("TSP server does not support LSP method: {}", request.method),

@@ -10,6 +10,8 @@ use std::time::Instant;
 
 use anyhow::Error;
 use lsp_types::Url;
+use serde::Deserialize;
+use serde::Serialize;
 use uuid::Uuid;
 
 pub trait Telemetry: Send + Sync {
@@ -46,6 +48,7 @@ pub struct TelemetryEvent {
     pub task_id: Option<TelemetryTaskId>,
     pub sourcedb_rebuild_stats: Option<TelemetrySourceDbRebuildStats>,
     pub sourcedb_rebuild_instance_stats: Option<TelemetrySourceDbRebuildInstanceStats>,
+    pub activity_key: Option<ActivityKey>,
 }
 
 pub struct TelemetryFileStats {
@@ -53,6 +56,7 @@ pub struct TelemetryFileStats {
     pub config_root: Option<Url>,
 }
 
+#[derive(Clone)]
 pub struct TelemetryServerState {
     pub has_sourcedb: bool,
     pub id: Uuid,
@@ -84,6 +88,7 @@ impl TelemetryTaskId {
 pub struct TelemetryCommonSourceDbStats {
     pub files: usize,
     pub changed: bool,
+    pub forced: bool,
 }
 
 #[derive(Default)]
@@ -97,6 +102,16 @@ pub struct TelemetrySourceDbRebuildStats {
 pub struct TelemetrySourceDbRebuildInstanceStats {
     pub common: TelemetryCommonSourceDbStats,
     pub build_id: Option<String>,
+    pub build_time: Option<Duration>,
+    pub parse_time: Option<Duration>,
+    pub process_time: Option<Duration>,
+    pub raw_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityKey {
+    pub id: String,
+    pub name: String,
 }
 
 impl TelemetryEvent {
@@ -121,6 +136,7 @@ impl TelemetryEvent {
                 task_id: None,
                 sourcedb_rebuild_stats: None,
                 sourcedb_rebuild_instance_stats: None,
+                activity_key: None,
             },
             queue,
         )
@@ -145,7 +161,12 @@ impl TelemetryEvent {
             task_id,
             sourcedb_rebuild_stats: None,
             sourcedb_rebuild_instance_stats: None,
+            activity_key: None,
         }
+    }
+
+    pub fn set_activity_key(&mut self, activity_key: Option<ActivityKey>) {
+        self.activity_key = activity_key;
     }
 
     pub fn set_invalidate_duration(&mut self, duration: Duration) {
@@ -183,5 +204,38 @@ impl TelemetryEvent {
         let process = self.start.elapsed();
         telemetry.record_event(self, process, error);
         process
+    }
+}
+
+pub struct SubTaskTelemetry<'a> {
+    telemetry: &'a dyn Telemetry,
+    server_state: TelemetryServerState,
+    task_stats: Option<&'a TelemetryTaskId>,
+}
+
+impl<'a> SubTaskTelemetry<'a> {
+    pub fn new(
+        telemetry: &'a dyn Telemetry,
+        server_state: TelemetryServerState,
+        task_stats: Option<&'a TelemetryTaskId>,
+    ) -> Self {
+        Self {
+            telemetry,
+            server_state,
+            task_stats,
+        }
+    }
+
+    pub fn new_task(&self, kind: TelemetryEventKind, start: Instant) -> TelemetryEvent {
+        TelemetryEvent::new_task(
+            kind,
+            self.server_state.clone(),
+            self.task_stats.cloned(),
+            start,
+        )
+    }
+
+    pub fn finish_task(&self, telemetry_event: TelemetryEvent, error: Option<&Error>) {
+        telemetry_event.finish_and_record(self.telemetry, error);
     }
 }

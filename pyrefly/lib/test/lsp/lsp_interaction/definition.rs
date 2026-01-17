@@ -7,8 +7,6 @@
 
 use std::path::PathBuf;
 
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Location;
@@ -16,6 +14,8 @@ use lsp_types::Url;
 use serde_json::json;
 use tempfile::TempDir;
 
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Request;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
@@ -278,6 +278,7 @@ fn malformed_missing_position() {
                 "uri": Url::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string()
             },
         }),
+        activity_key: None,
     }));
     interaction
         .client
@@ -534,4 +535,21 @@ fn goto_def_on_none_goes_to_builtins_stub() {
             _ => false,
         })
         .unwrap();
+}
+
+#[test]
+fn test_goto_def_imported_submodule_with_alias() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("nested_package_imports");
+    test_go_to_def(
+        root_path,
+        None,
+        "main.py",
+        vec![
+            // `from pkg import sub as sub` -> first `sub`
+            (5, 16, "pkg/sub.py", 0, 0, 0, 0),
+            // `from pkg import sub as sub` -> second `sub`
+            (5, 23, "pkg/sub.py", 0, 0, 0, 0),
+        ],
+    );
 }

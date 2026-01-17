@@ -458,7 +458,7 @@ testcase!(
     r#"
 x: list[int] = []
 x += [1]
-x += ["foo"]  # E: Augmented assignment produces a value of type `list[int | str]`, which is not assignable to `list[int]`
+x += ["foo"]  # E: Augmented assignment result `list[int | str]` is not assignable to `list[int]`
 "#,
 );
 
@@ -514,10 +514,10 @@ testcase!(
     r#"
 def foo(y: list[int]) -> None:
     y += [1]
-    y += ["foo"]  # E: Augmented assignment produces a value of type `list[int | str]`, which is not assignable to `list[int]`
+    y += ["foo"]  # E: Augmented assignment result `list[int | str]` is not assignable to `list[int]`
     z: list[int] = []
     z += [1]
-    z += ["foo"]  # E: Augmented assignment produces a value of type `list[int | str]`, which is not assignable to `list[int]`
+    z += ["foo"]  # E: Augmented assignment result `list[int | str]` is not assignable to `list[int]`
 "#,
 );
 
@@ -555,7 +555,7 @@ testcase!(
 x: list[list[int]] = []
 x += [[1]]
 x[0] += [1]
-x += [1]  # E: Augmented assignment produces a value of type `list[int | list[int]]`, which is not assignable to `list[list[int]]`
+x += [1]  # E: Augmented assignment result `list[int | list[int]]` is not assignable to `list[list[int]]`
 "#,
 );
 

@@ -14,9 +14,7 @@ use crossbeam_channel::RecvError;
 use crossbeam_channel::Select;
 use crossbeam_channel::SendError;
 use crossbeam_channel::Sender;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::DidChangeConfigurationParams;
 use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::DidChangeWatchedFilesParams;
@@ -31,6 +29,8 @@ use pyrefly_util::telemetry::TelemetryTaskId;
 use tracing::debug;
 use tracing::info;
 
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Server;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocumentParams;

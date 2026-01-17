@@ -684,7 +684,7 @@ mod tests {
         state.set_active_file("main.py");
 
         let expected_headers = &[
-            "Could not find import of `t`",
+            "Cannot find module `t`",
             "Parse error: Expected `import`, found newline",
         ];
         let expected_details = &[

@@ -19,13 +19,13 @@ A(x=0)
 );
 
 pydantic_testcase!(
-    bug = "We should accept this because pydantic coerces '0' to 0 at runtime",
-    test_lax_mode,
+    test_lax_mode_default,
     r#"
 from pydantic.dataclasses import dataclass
 @dataclass
 class A:
     x: int
-A(x='0')  # E: `Literal['0']` is not assignable to parameter `x` with type `int`
+# Pydantic dataclasses default to strict=False (lax mode), so coercion is allowed
+A(x='0')
     "#,
 );

@@ -1019,6 +1019,29 @@ def f(x: int):
 );
 
 testcase!(
+    test_issubclass_bare_type,
+    r#"
+from typing import assert_type, Any
+
+class Foo: ...
+
+def test_bare_type(x: type) -> None:
+    # `type` is equivalent to `type[Any]`, so issubclass can narrow it
+    if issubclass(x, Foo):
+        assert_type(x, type[Foo])
+
+def test_type_any(x: type[Any]) -> None:
+    if issubclass(x, Foo):
+        assert_type(x, type[Foo])
+
+def test_isinstance_then_issubclass(x: object) -> None:
+    # Common pattern: check if x is a class, then check if it's a subclass of Foo
+    if isinstance(x, type) and issubclass(x, Foo):
+        assert_type(x, type[Foo])
+    "#,
+);
+
+testcase!(
     test_issubclass_typevar_object,
     r#"
 from typing import TypeVar
@@ -1583,6 +1606,19 @@ def test(x: tuple[int, int], y: tuple[int, *tuple[int, ...], int], z: tuple[int,
     else:
         assert_type(u, tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...])
 "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1616
+testcase!(
+    test_dict_literal_key_isinstance_narrowing,
+    r#"
+from typing import Literal, reveal_type
+def get_value(x: dict[Literal["value"], int] | int) -> int | None:
+    if isinstance(x, dict):
+        return x.get("value")
+    reveal_type(x) # E: revealed type: int
+    return x
+    "#,
 );
 
 testcase!(
@@ -2314,5 +2350,39 @@ class X:
     # No "Type guard functions must accept at least one positional argument" error expected.
     def has_int(self):
         return is_int(self.param)
+    "#,
+);
+
+testcase!(
+    test_isinstance_invalid_special_form,
+    r#"
+from typing import Final
+
+def f(x: object):
+    isinstance(x, Final)  # E: Expected class object, got special form `Final`
+    "#,
+);
+
+testcase!(
+    test_isinstance_valid_special_form,
+    r#"
+from typing import Protocol
+
+def f(x: object):
+    if isinstance(x, Protocol):
+        pass  # No error - Protocol is valid for isinstance
+    "#,
+);
+
+testcase!(
+    test_narrow_to_unknown_name,
+    r#"
+class C:
+    # expected error, leading to Unknown type
+    x: XXX | None  # E: Could not find name `XXX`
+
+def f(o: C):
+    if o.x is not None:
+        o.x.foo
     "#,
 );

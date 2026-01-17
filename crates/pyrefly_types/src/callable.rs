@@ -704,7 +704,7 @@ impl Callable {
 impl Param {
     fn fmt_default(&self, default: &Option<Type>) -> String {
         match default {
-            Some(Type::Literal(lit)) => format!("{lit}"),
+            Some(Type::Literal(lit)) => format!("{}", lit.value),
             Some(Type::None) => "None".to_owned(),
             _ => "...".to_owned(),
         }

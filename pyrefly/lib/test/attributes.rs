@@ -1937,7 +1937,7 @@ def get_type_t[T]() -> type[T]:
     return cast(type[T], 0)
 def foo[T](x: type[T]):
     # mypy reveals the same thing we do (the type of `type.__new__`), while pyright reveals `Unknown`.
-    reveal_type(get_type_t().__new__)  # E: Overload[\n  [Self@type](cls: type[Self@type], o: object, /) -> type\n  [Self](cls: type[Self], name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwds: Any) -> Self\n]
+    reveal_type(get_type_t().__new__)  # E: Overload[\n  [Self@type](cls: type[Self@type], o: object, /) -> type[Any]\n  [Self](cls: type[Self], name: str, bases: tuple[type[Any], ...], namespace: dict[str, Any], /, **kwds: Any) -> Self\n]
     "#,
 );
 
@@ -2000,7 +2000,7 @@ testcase!(
     r#"
 from typing import Never, assert_type, reveal_type
 def f() -> type[Never]: ...
-reveal_type(f().mro) # E: BoundMethod[type, (self: type) -> list[type]]
+reveal_type(f().mro) # E: BoundMethod[type, (self: type) -> list[type[Any]]]
 assert_type(f().wut, Never)
     "#,
 );
@@ -2143,5 +2143,100 @@ class A:
 def f(a: A):
     assert_type(a.x, Any | None)
     assert_type(a.y, None)
+    "#,
+);
+
+testcase!(
+    test_do_not_promote_explicit_literal_param,
+    r#"
+from typing import Literal, assert_type
+class A:
+    def __init__(self, answer: Literal[42]):
+        self.answer = answer
+def f(a: A):
+    assert_type(a.answer, Literal[42])
+    "#,
+);
+
+testcase!(
+    test_do_not_promote_explicit_literal_union,
+    r#"
+from typing import Literal, assert_type
+class File:
+    def __init__(self, mode: Literal["read", "write"]):
+        self.mode = mode
+def f(fi: File):
+    assert_type(fi.mode, Literal["read", "write"])
+    "#,
+);
+
+testcase!(
+    test_unannotated_attribute_tuple_literal_promotion,
+    r#"
+from typing import assert_type
+class A:
+    def __init__(self):
+        self.x = (42, 42)
+def f(a: A):
+    assert_type(a.x, tuple[int, int])
+    a.x = (0, 0)
+    "#,
+);
+
+testcase!(
+    test_always_promote_inferred_literalstring,
+    r#"
+from typing import assert_type
+class A:
+    def __init__(self):
+        greeting = "hello"
+        self.x = f"{greeting} world"
+        self.y = f"{greeting} world" if greeting == "hello" else 42
+def f(a: A):
+    assert_type(a.x, str)
+    assert_type(a.y, int | str)
+    "#,
+);
+
+testcase!(
+    test_top_level_anonymous_typeddict,
+    r#"
+from typing import NotRequired, TypedDict
+class TD(TypedDict):
+    x: NotRequired[int]
+class A:
+    def __init__(self, check: bool):
+        self.x = {"x": 0}
+        self.y = {"x": 0} if check else 42
+def f(a: A):
+    x: TD = a.x
+    y: TD | int = a.y
+    "#,
+);
+
+testcase!(
+    test_nested_anonymous_typeddict,
+    r#"
+from typing import Any
+
+def f() -> list[dict[str, Any]]:
+    pets = [{"name": "Carmen", "age": 3}]
+    return pets
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1341
+testcase!(
+    test_optional_type_truthiness,
+    r#"
+class A[T]:
+    def __init__(self):
+        self.foo: T | None = None
+
+class B(A[None]):
+    def m(self, x: int | None):
+        foo = self.foo
+        if not foo:
+            pass
     "#,
 );

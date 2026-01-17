@@ -27,6 +27,26 @@ assert_type(x, dict[Any, Any])
 );
 
 testcase!(
+    test_empty_container_inference_via_generic_function,
+    TestEnv::new_with_infer_with_first_use(false),
+    r#"
+from typing import assert_type
+
+def pair[T](a: T, b: T) -> tuple[T, T]:
+    return (a, b)
+
+# The empty list [] comes first, but it gets unified with list[int] from
+# the second argument through the generic function's type variable T.
+result = pair([], [1, 2, 3])
+assert_type(result, tuple[list[int], list[int]])
+
+# Same pattern with dict
+dict_result = pair({}, {"a": 1})
+assert_type(dict_result, tuple[dict[str, int], dict[str, int]])
+"#,
+);
+
+testcase!(
     test_implicit_any_no_inference,
     TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::SkipAndInferReturnAny)
         .enable_unannotated_return_error()
@@ -76,8 +96,20 @@ testcase!(
     TestEnv::new_with_infer_with_first_use(false).enable_implicit_any_error(),
     r#"
 from typing import Iterable, Mapping
-x1 = [] # E: This expression is implicitly inferred to be `list[Any]`.
-x2 = {} # E: This expression is implicitly inferred to be `dict[Any, Any]`.
+x1 = [] # E: Cannot infer type of empty container
+x2 = {} # E: Cannot infer type of empty container
+x3: Iterable[int] = {} # ok
+x4: Mapping[str, str] = {} # ok
+"#,
+);
+
+testcase!(
+    test_implicit_any_empty_containers_with_partial_inference,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Iterable, Mapping
+x1 = [] # E: Cannot infer type of empty container
+x2 = {} # E: Cannot infer type of empty container
 x3: Iterable[int] = {} # ok
 x4: Mapping[str, str] = {} # ok
 "#,

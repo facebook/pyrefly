@@ -10,3 +10,4 @@ pub(crate) mod extract_function;
 mod extract_shared;
 pub(crate) mod extract_variable;
 pub(crate) mod move_members;
+pub(crate) mod move_module;

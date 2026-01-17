@@ -61,6 +61,14 @@ fn recurse_stmt_adding_symbols<'a>(
         Stmt::ClassDef(stmt_class_def) => {
             let mut children = Vec::new();
             children.append(&mut recursed_symbols);
+
+            // Functions defined inside a class are methods.
+            for child in &mut children {
+                if child.kind == lsp_types::SymbolKind::FUNCTION {
+                    child.kind = lsp_types::SymbolKind::METHOD;
+                }
+            }
+
             let name = match stmt_class_def.name.as_str() {
                 "" => "unknown".to_owned(),
                 name => name.to_owned(),

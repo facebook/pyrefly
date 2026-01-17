@@ -6,5 +6,6 @@
  */
 
 #![cfg(test)]
+mod attributes;
 mod fields;
 mod util;

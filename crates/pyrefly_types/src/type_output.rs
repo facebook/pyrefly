@@ -27,6 +27,7 @@ pub trait TypeOutput {
     fn write_lit(&mut self, lit: &Lit) -> fmt::Result;
     fn write_targs(&mut self, targs: &TArgs) -> fmt::Result;
     fn write_type(&mut self, ty: &Type) -> fmt::Result;
+    fn write_builtin(&mut self, name: &str, qname: Option<&QName>) -> fmt::Result;
 }
 
 /// Implementation of `TypeOutput` that writes formatted types to plain text.
@@ -67,6 +68,10 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
 
     fn write_type(&mut self, ty: &Type) -> fmt::Result {
         write!(self.formatter, "{}", self.context.display(ty))
+    }
+
+    fn write_builtin(&mut self, name: &str, _qname: Option<&QName>) -> fmt::Result {
+        self.formatter.write_str(name)
     }
 }
 
@@ -153,6 +158,19 @@ impl TypeOutput for OutputWithLocations<'_> {
         // Format the type and extract location if it has a qname
         self.context.fmt_helper_generic(ty, false, self)
     }
+
+    fn write_builtin(&mut self, name: &str, qname: Option<&QName>) -> fmt::Result {
+        match qname {
+            Some(q) => {
+                let location = TextRangeWithModule::new(q.module().clone(), q.range());
+                self.parts.push((name.to_owned(), Some(location)));
+            }
+            None => {
+                self.parts.push((name.to_owned(), None));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -174,8 +192,8 @@ mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
-    use crate::lit_int::LitInt;
     use crate::literal::LitEnum;
+    use crate::literal::LitStyle;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedKind;
     use crate::tuple::Tuple;
@@ -338,7 +356,11 @@ mod tests {
         let tparams = Arc::new(TParams::new(vec![tparam1, tparam2, tparam3]));
         let targs = TArgs::new(
             tparams,
-            vec![Type::None, Type::LiteralString, Type::any_explicit()],
+            vec![
+                Type::None,
+                Type::LiteralString(LitStyle::Implicit),
+                Type::any_explicit(),
+            ],
         );
 
         output.write_targs(&targs).unwrap();
@@ -379,7 +401,9 @@ mod tests {
         assert_eq!(output.parts()[0].0, "None");
         assert!(output.parts()[0].1.is_none());
 
-        output.write_type(&Type::LiteralString).unwrap();
+        output
+            .write_type(&Type::LiteralString(LitStyle::Implicit))
+            .unwrap();
         assert_eq!(output.parts().len(), 2);
         assert_eq!(output.parts()[1].0, "LiteralString");
         assert!(output.parts()[1].1.is_none());
@@ -495,9 +519,9 @@ mod tests {
 
     #[test]
     fn test_output_with_locations_tuple_base_not_clickable() {
-        // TODO(jvansch): When implementing clickable support for the base type in generics like tuple[int],
-        // update this test to verify that "tuple" has a location and is clickable.
-        // Expected future behavior: [("tuple", Some(location)), ("[", None), ("int", Some(location)), ("]", None)]
+        // NOTE: Clickable support for the base type in generics like tuple[int] is now available
+        // when Stdlib is provided via TypeDisplayContext::set_stdlib(). Without Stdlib, the tuple
+        // keyword still displays without a location (not clickable), as tested here.
 
         // Create tuple[int] type
         let int_class = fake_class("int", "builtins", 10);
@@ -513,7 +537,7 @@ mod tests {
         let parts_str: String = output.parts().iter().map(|(s, _)| s.as_str()).collect();
         assert_eq!(parts_str, "tuple[int]");
 
-        // Current behavior: The "tuple" part is NOT clickable
+        // Without stdlib: The "tuple" part is NOT clickable
         // Expected parts: [("tuple", None), ("[", None), ("int", Some(location)), ("]", None)]
         let parts = output.parts();
         assert_eq!(parts.len(), 4, "Should have 4 parts");
@@ -522,7 +546,7 @@ mod tests {
         assert_eq!(parts[0].0, "tuple");
         assert!(
             parts[0].1.is_none(),
-            "tuple[ should not have location (not clickable)"
+            "tuple should not have location without stdlib"
         );
 
         assert_eq!(parts[1].0, "[");
@@ -530,46 +554,6 @@ mod tests {
 
         assert_eq!(parts[2].0, "int");
         assert!(parts[2].1.is_some(), "int should have location (clickable)");
-
-        assert_eq!(parts[3].0, "]");
-        assert!(parts[3].1.is_none(), "] should not have location");
-    }
-
-    #[test]
-    fn test_output_with_locations_literal_base_not_clickable() {
-        // TODO(jvansch): When implementing clickable support for the base type in special forms like Literal[1],
-        // update this test to verify that "Literal" has a location and is clickable.
-        // Expected future behavior: [("Literal", Some(location)), ("[", None), ("1", None), ("]", None)]
-
-        // Create Literal[1] type
-        let literal_type = Type::Literal(Lit::Int(LitInt::new(1)));
-
-        let ctx = TypeDisplayContext::new(&[&literal_type]);
-        let mut output = OutputWithLocations::new(&ctx);
-
-        ctx.fmt_helper_generic(&literal_type, false, &mut output)
-            .unwrap();
-
-        let parts_str: String = output.parts().iter().map(|(s, _)| s.as_str()).collect();
-        assert_eq!(parts_str, "Literal[1]");
-
-        // Current behavior: The "Literal" part is NOT clickable
-        // Expected parts: [("Literal", None), ("[", None), ("1", None), ("]", None)]
-        let parts = output.parts();
-        assert_eq!(parts.len(), 4, "Should have 4 parts");
-
-        // Verify each part
-        assert_eq!(parts[0].0, "Literal");
-        assert!(
-            parts[0].1.is_none(),
-            "Literal should not have location (not clickable)"
-        );
-
-        assert_eq!(parts[1].0, "[");
-        assert!(parts[1].1.is_none(), "[ should not have location");
-
-        assert_eq!(parts[2].0, "1");
-        assert!(parts[2].1.is_none(), "1 should not have location");
 
         assert_eq!(parts[3].0, "]");
         assert!(parts[3].1.is_none(), "] should not have location");

@@ -74,7 +74,7 @@ $ mkdir $TMPDIR/site_package_missing_stubs && \
 > touch $TMPDIR/site_package_missing_stubs/django/forms/__init__.py && \
 > echo "from django import forms; from typing import reveal_type; reveal_type(forms)" > $TMPDIR/foo.py && \
 > $PYREFLY check $TMPDIR/foo.py --error untyped-import --ignore missing-module-attribute --site-package-path $TMPDIR/site_package_missing_stubs --output-format=min-text
-ERROR * Missing type stubs for `django` * (glob)
+ERROR * Cannot find type stubs for module `django` * (glob)
  INFO * revealed type: Module[django.forms] * (glob)
 [1]
 ```

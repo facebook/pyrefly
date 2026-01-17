@@ -255,6 +255,11 @@ impl ModuleName {
         Self::from_str("pydantic.root_model")
     }
 
+    #[allow(dead_code)]
+    pub fn pydantic_dataclasses() -> Self {
+        Self::from_str("pydantic.dataclasses")
+    }
+
     pub fn django_models_enums() -> Self {
         Self::from_str("django.db.models.enums")
     }
@@ -277,6 +282,10 @@ impl ModuleName {
 
     pub fn django_utils_functional() -> Self {
         Self::from_str("django.utils.functional")
+    }
+
+    pub fn marshmallow_schema() -> Self {
+        Self::from_str("marshmallow.schema")
     }
 
     pub fn pydantic_types() -> Self {

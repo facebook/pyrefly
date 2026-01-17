@@ -15,6 +15,7 @@ use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
@@ -31,6 +32,7 @@ use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::visit::Visit;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -104,7 +106,7 @@ impl HoverValue {
         match self.kind {
             Some(SymbolKind::Attribute) if self.type_.is_toplevel_callable() => self
                 .type_
-                .check_toplevel_func_metadata(&|meta| match &meta.kind {
+                .visit_toplevel_func_metadata(&|meta| match &meta.kind {
                     FunctionKind::Def(func) if func.cls.is_some() => Some(SymbolKind::Method),
                     _ => Some(SymbolKind::Function),
                 })
@@ -279,11 +281,9 @@ fn position_is_in_docstring(
 /// type metadata knows about the callable. This primarily handles third-party stubs
 /// where we only have typeshed information.
 fn fallback_hover_name_from_type(type_: &Type) -> Option<String> {
-    let name = type_.check_toplevel_func_metadata(&|meta| {
-        Some(meta.kind.function_name().into_owned().to_string())
-    });
-    if name.is_some() {
-        return name;
+    let name = type_.visit_toplevel_func_metadata(&|meta| Some(meta.kind.function_name()));
+    if let Some(name) = name {
+        return Some(name.to_string());
     }
     // Recurse through Type wrapper
     if let Type::Type(inner) = type_ {
@@ -421,6 +421,31 @@ fn parameter_definition_documentation(
     docs.get(key).cloned().map(|doc| (key.to_owned(), doc))
 }
 
+/// Check if the cursor position is on the `in` keyword within a for loop or comprehension.
+/// Returns Some(iterable_range) if found, None otherwise.
+fn in_keyword_in_iteration_at(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<TextRange> {
+    let ast = transaction.get_ast(handle)?;
+
+    for node in Ast::locate_node(&ast, position) {
+        // Extract target end and iter range from for statements and comprehensions.
+        // In valid Python syntax, the region between target and iter contains only
+        // whitespace and the `in` keyword, so a position check is sufficient.
+        let (target_end, iter_range) = match node {
+            AnyNodeRef::StmtFor(s) => (s.target.range().end(), s.iter.range()),
+            AnyNodeRef::Comprehension(c) => (c.target.range().end(), c.iter.range()),
+            _ => continue,
+        };
+        if position >= target_end && position < iter_range.start() {
+            return Some(iter_range);
+        }
+    }
+    None
+}
+
 pub fn get_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -459,6 +484,23 @@ pub fn get_hover(
 
     if position_is_in_docstring(transaction, handle, position) {
         return None;
+    }
+
+    // Check if hovering over `in` keyword in for loop or comprehension. These `in`s are different
+    // from using `in` as a binary comparison operator and therefore needs some special handling.
+    if let Some(iterable_range) = in_keyword_in_iteration_at(transaction, handle, position)
+        && let Some(iterable_type) = transaction.get_type_at(handle, iterable_range.start())
+    {
+        return Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: format!(
+                    "```python\n(keyword) in\n```\n---\nIteration over `{}`",
+                    iterable_type
+                ),
+            }),
+            range: None,
+        });
     }
 
     // Otherwise, fall through to the existing type hover logic
@@ -565,7 +607,7 @@ pub fn get_hover(
             } else if let Some(name) = display_name.clone() {
                 Some(name)
             } else {
-                fallback_name_from_type.clone()
+                fallback_name_from_type
             }
         };
         (kind, name, docstring_range, Some(module))

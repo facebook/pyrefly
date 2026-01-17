@@ -4,6 +4,13 @@ title: IDE Installation
 description: How to add Pyrefly Language Server and Typechecking to your IDE
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Add Pyrefly to your IDE
 Pyrefly seamlessly integrates into IDEs with our [VSCode](https://marketplace.visualstudio.com/items?itemName=meta.pyrefly) and [OpenVSX](https://open-vsx.org/extension/meta/pyrefly) extensions. For other editors like vim/emacs, see [other editors](#other-editors).
 
@@ -342,10 +349,44 @@ language-servers = ["pyrefly"]
 
 See the documentation [here](https://lsp.sublimetext.io/language_servers/#pyrefly).
 
-## Positron
+### Positron
 
 Positron comes with Pyrefly out of the box. See the documentation [here](https://positron.posit.co/guide-python.html#settings).
 
 ### Jupyter Lab
 
 Pyrefly may be used in Jupyter Lab through the [jupyterlab-lsp](https://jupyterlab-lsp.readthedocs.io/en/latest/Installation.html) extension.
+
+### Zed
+
+Zed users can install the Pyrefly extension from [here](https://zed.dev/extensions/pyrefly) or by visiting the extensions marketplace:
+
+<video
+  src="/videos/zed.mov"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Here's an example of a Zed config with Pyrefly integration:
+
+```json
+{
+  "lsp": {
+    "pyrefly": {
+      "binary": {
+        "path": ".venv/bin/pyrefly",
+        "arguments": ["lsp"]
+      }
+    }
+  },
+  "languages": {
+    "Python": {
+      "language_servers": ["pyrefly"],
+    }
+  }
+}
+```
