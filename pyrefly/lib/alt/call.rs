@@ -867,54 +867,253 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         metadata,
                     },
                 ),
-            ) => self.callable_infer(
-                signature,
-                Some(&metadata.kind),
-                tparams.as_deref(),
-                Some(obj),
-                args,
-                keywords,
-                range,
-                errors,
-                errors,
-                context,
-                hint,
-                ctor_targs,
-            ),
-            CallTarget::Callable(TargetWithTParams(tparams, callable)) => self.callable_infer(
-                callable,
-                None,
-                tparams.as_deref(),
-                None,
-                args,
-                keywords,
-                range,
-                errors,
-                errors,
-                context,
-                hint,
-                ctor_targs,
-            ),
+            ) => {
+                // If we have a hint and type parameters, try with hint first.
+                // If there are call errors (but NOT BadSpecialization errors which indicate
+                // legitimate bound violations), retry without hint.
+                // This prevents outer context hints from causing argument type errors.
+                if tparams.is_some() && hint.is_some() {
+                    let call_errors = self.error_collector();
+                    let res = self.callable_infer(
+                        signature.clone(),
+                        Some(&metadata.kind),
+                        tparams.as_deref(),
+                        Some(obj.clone()),
+                        args,
+                        keywords,
+                        range,
+                        errors,
+                        &call_errors,
+                        context,
+                        hint,
+                        None, // Don't pass ctor_targs in trial call
+                    );
+                    // Only fall back if there are errors that are NOT BadSpecialization.
+                    // BadSpecialization errors indicate legitimate type variable bound violations
+                    // that should be preserved, not worked around.
+                    let should_fallback = !call_errors.is_empty()
+                        && !call_errors.has_error_kind(ErrorKind::BadSpecialization);
+                    if call_errors.is_empty() {
+                        // First try succeeded, but we need to redo with ctor_targs if present
+                        if ctor_targs.is_some() {
+                            self.callable_infer(
+                                signature,
+                                Some(&metadata.kind),
+                                tparams.as_deref(),
+                                Some(obj),
+                                args,
+                                keywords,
+                                range,
+                                errors,
+                                errors,
+                                context,
+                                hint,
+                                ctor_targs,
+                            )
+                        } else {
+                            errors.extend(call_errors);
+                            res
+                        }
+                    } else if should_fallback {
+                        // Retry without hint - errors are hint-induced, not bound violations
+                        self.callable_infer(
+                            signature,
+                            Some(&metadata.kind),
+                            tparams.as_deref(),
+                            Some(obj),
+                            args,
+                            keywords,
+                            range,
+                            errors,
+                            errors,
+                            context,
+                            None,
+                            ctor_targs,
+                        )
+                    } else {
+                        // Keep the errors (including bound violations)
+                        errors.extend(call_errors);
+                        res
+                    }
+                } else {
+                    self.callable_infer(
+                        signature,
+                        Some(&metadata.kind),
+                        tparams.as_deref(),
+                        Some(obj),
+                        args,
+                        keywords,
+                        range,
+                        errors,
+                        errors,
+                        context,
+                        hint,
+                        ctor_targs,
+                    )
+                }
+            }
+            CallTarget::Callable(TargetWithTParams(tparams, callable)) => {
+                if tparams.is_some() && hint.is_some() {
+                    let call_errors = self.error_collector();
+                    let res = self.callable_infer(
+                        callable.clone(),
+                        None,
+                        tparams.as_deref(),
+                        None,
+                        args,
+                        keywords,
+                        range,
+                        errors,
+                        &call_errors,
+                        context,
+                        hint,
+                        None,
+                    );
+                    // Only fall back if there are errors that are NOT BadSpecialization.
+                    let should_fallback = !call_errors.is_empty()
+                        && !call_errors.has_error_kind(ErrorKind::BadSpecialization);
+                    if call_errors.is_empty() {
+                        if ctor_targs.is_some() {
+                            self.callable_infer(
+                                callable,
+                                None,
+                                tparams.as_deref(),
+                                None,
+                                args,
+                                keywords,
+                                range,
+                                errors,
+                                errors,
+                                context,
+                                hint,
+                                ctor_targs,
+                            )
+                        } else {
+                            errors.extend(call_errors);
+                            res
+                        }
+                    } else if should_fallback {
+                        // Retry without hint - errors are hint-induced, not bound violations
+                        self.callable_infer(
+                            callable,
+                            None,
+                            tparams.as_deref(),
+                            None,
+                            args,
+                            keywords,
+                            range,
+                            errors,
+                            errors,
+                            context,
+                            None,
+                            ctor_targs,
+                        )
+                    } else {
+                        // Keep the errors (including bound violations)
+                        errors.extend(call_errors);
+                        res
+                    }
+                } else {
+                    self.callable_infer(
+                        callable,
+                        None,
+                        tparams.as_deref(),
+                        None,
+                        args,
+                        keywords,
+                        range,
+                        errors,
+                        errors,
+                        context,
+                        hint,
+                        ctor_targs,
+                    )
+                }
+            }
             CallTarget::Function(TargetWithTParams(
                 tparams,
                 Function {
                     signature: callable,
                     metadata,
                 },
-            )) => self.callable_infer(
-                callable,
-                Some(&metadata.kind),
-                tparams.as_deref(),
-                None,
-                args,
-                keywords,
-                range,
-                errors,
-                errors,
-                context,
-                hint,
-                ctor_targs,
-            ),
+            )) => {
+                if tparams.is_some() && hint.is_some() {
+                    let call_errors = self.error_collector();
+                    let res = self.callable_infer(
+                        callable.clone(),
+                        Some(&metadata.kind),
+                        tparams.as_deref(),
+                        None,
+                        args,
+                        keywords,
+                        range,
+                        errors,
+                        &call_errors,
+                        context,
+                        hint,
+                        None,
+                    );
+                    // Only fall back if there are errors that are NOT BadSpecialization.
+                    let should_fallback = !call_errors.is_empty()
+                        && !call_errors.has_error_kind(ErrorKind::BadSpecialization);
+                    if call_errors.is_empty() {
+                        if ctor_targs.is_some() {
+                            self.callable_infer(
+                                callable,
+                                Some(&metadata.kind),
+                                tparams.as_deref(),
+                                None,
+                                args,
+                                keywords,
+                                range,
+                                errors,
+                                errors,
+                                context,
+                                hint,
+                                ctor_targs,
+                            )
+                        } else {
+                            errors.extend(call_errors);
+                            res
+                        }
+                    } else if should_fallback {
+                        // Retry without hint - errors are hint-induced, not bound violations
+                        self.callable_infer(
+                            callable,
+                            Some(&metadata.kind),
+                            tparams.as_deref(),
+                            None,
+                            args,
+                            keywords,
+                            range,
+                            errors,
+                            errors,
+                            context,
+                            None,
+                            ctor_targs,
+                        )
+                    } else {
+                        // Keep the errors (including bound violations)
+                        errors.extend(call_errors);
+                        res
+                    }
+                } else {
+                    self.callable_infer(
+                        callable,
+                        Some(&metadata.kind),
+                        tparams.as_deref(),
+                        None,
+                        args,
+                        keywords,
+                        range,
+                        errors,
+                        errors,
+                        context,
+                        hint,
+                        ctor_targs,
+                    )
+                }
+            }
             CallTarget::FunctionOverload(overloads, metadata) => {
                 self.call_overloads(
                     overloads, metadata, None, args, keywords, range, errors, context, hint,
