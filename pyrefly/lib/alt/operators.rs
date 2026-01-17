@@ -201,6 +201,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Returns true if the expression is a "fresh" list-producing construct
+    /// (list literal or list comprehension) that can safely be inferred under
+    /// a contextual list type hint.
+    fn is_fresh_list_expr(expr: &Expr) -> bool {
+        matches!(expr, Expr::List(_) | Expr::ListComp(_))
+    }
+
     pub fn binop_infer(
         &self,
         x: &ExprBinOp,
@@ -235,6 +242,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 lhs = self.expr_infer(&x.left, errors);
             }
+        } else if x.op == Operator::Add
+            && hint.is_some()
+            && hint
+                .as_ref()
+                .map(|h| self.decompose_list(*h).is_some())
+                .unwrap_or(false)
+            && Self::is_fresh_list_expr(&x.left)
+            && Self::is_fresh_list_expr(&x.right)
+        {
+            // If we have a list[T] contextual hint and BOTH operands are fresh
+            // list-producing expressions (list literal or list comprehension), pass the
+            // hint to both operands so that e.g. `[A()] + [B()]` in a `list[Base]` context
+            // is inferred as `list[Base]` instead of `list[A | B]`.
+            //
+            // We require both operands to be fresh to avoid unsoundness: if one operand
+            // is a variable like `xs: list[A]`, we should not coerce the result to
+            // `list[Base]` because that would hide invariance violations.
+            lhs = self.expr_infer_with_hint(&x.left, hint, errors);
+            rhs = self.expr_infer_with_hint(&x.right, hint, errors);
         } else {
             lhs = self.expr_infer(&x.left, errors);
             rhs = self.expr_infer(&x.right, errors);
