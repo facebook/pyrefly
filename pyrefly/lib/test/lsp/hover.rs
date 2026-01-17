@@ -922,6 +922,10 @@ Person()
     assert!(
         !report.contains("-> None"),
         "Constructor hover should not show -> None, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_operator_shows_contains_dunder() {
     let code = r#"
 class Container:
@@ -952,6 +956,10 @@ Person("Alice", 25)
     assert!(
         report.contains("-> Person"),
         "Expected constructor hover to show -> Person, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_keyword_in_for_loop() {
     let code = r#"
 for x in [1, 2, 3]:
@@ -984,6 +992,10 @@ Person.__init__(p, "Alice")
     assert!(
         !report.contains("-> Person") || report.contains("__init__"),
         "Direct __init__ call should show -> None, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_keyword_in_list_comprehension() {
     let code = r#"
 result = [x for x in [1, 2, 3] if x in [1]]
@@ -1053,6 +1065,10 @@ Box[str]("hello")
     assert!(
         report.contains("Box[str]"),
         "Expected generic constructor to show Box[str], got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_keyword_for_membership_in_comprehension() {
     let code = r#"
 result = [x for x in [1, 2, 3] if x in [1]]
