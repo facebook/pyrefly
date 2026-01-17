@@ -52,6 +52,7 @@ use crate::types::callable::PropertyRole;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::literal::Lit;
+use crate::types::literal::Literal;
 use crate::types::module::ModuleType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
@@ -384,14 +385,21 @@ impl NotFoundOn {
 }
 
 impl InternalError {
-    pub fn to_error_msg(self, attr_name: &Name, todo_ctx: &str) -> String {
-        match self {
+    pub fn add_to(
+        self,
+        errors: &ErrorCollector,
+        range: TextRange,
+        attr_name: &Name,
+        todo_ctx: &str,
+    ) {
+        let msg = match self {
             InternalError::AttributeBaseUndefined(ty) => format!(
                 "TODO: {todo_ctx} attribute base undefined for type: {} (trying to access {})",
                 ty.deterministic_printing(),
                 attr_name
             ),
-        }
+        };
+        errors.internal_error(range, vec1![msg]);
     }
 }
 
@@ -535,25 +543,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         let mut types = Vec::new();
         let mut error_messages = Vec::new();
+        let mut success = true;
         let (found, not_found, error) = lookup_result.decompose();
         for (attr, _) in found {
             match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
-                Err(err) => error_messages.push(err.to_error_msg(attr_name)),
+                Err(err) => {
+                    error_messages.push(err.to_error_msg(attr_name));
+                    success = false;
+                }
             }
         }
         for err in not_found {
-            error_messages.push(err.to_error_msg(attr_name))
+            error_messages.push(err.to_error_msg(attr_name));
+            success = false;
         }
         for err in error {
-            error_messages.push(err.to_error_msg(attr_name, todo_ctx))
+            err.add_to(errors, range, attr_name, todo_ctx);
+            success = false;
         }
 
         // Both types and error messages can be duplicated if elements in `attr_base` gets duplicated (can happen with
         // if base type contain vars). Make sure that dedup logic applies to both branches.
-        if error_messages.is_empty() {
+        if success {
             self.unions(types)
-        } else {
+        } else if !error_messages.is_empty() {
             error_messages.sort();
             error_messages.dedup();
             let mut msg = vec1![error_messages.join("\n")];
@@ -569,6 +583,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 msg,
             );
             Type::any_error()
+        } else {
+            Type::any_error() // we've encountered internal errors (already logged above)
         }
     }
 
@@ -697,12 +713,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             not_found = true;
         }
         for internal_error in lookup_result.internal_error {
-            attr_tys.push(self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                internal_error.to_error_msg(attr_name, todo_ctx),
-            ))
+            internal_error.add_to(errors, range, attr_name, todo_ctx);
+            attr_tys.push(Type::any_error());
         }
         if not_found {
             return None;
@@ -854,25 +866,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut should_narrow = true;
         let mut narrowed_types = Vec::new();
         let Some(attr_base) = self.as_attribute_base(base.clone()) else {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                InternalError::AttributeBaseUndefined(base.clone())
-                    .to_error_msg(attr_name, todo_ctx),
-            );
+            InternalError::AttributeBaseUndefined(base.clone())
+                .add_to(errors, range, attr_name, todo_ctx);
             return None;
         };
         let (lookup_found, lookup_not_found, lookup_error) = self
             .lookup_attr_from_base(attr_base.clone(), attr_name)
             .decompose();
         for e in lookup_error {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                e.to_error_msg(attr_name, todo_ctx),
-            );
+            e.add_to(errors, range, attr_name, todo_ctx);
             should_narrow = false;
         }
         for not_found in lookup_not_found {
@@ -993,13 +995,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         todo_ctx: &str,
     ) {
         let Some(attr_base) = self.as_attribute_base(base.clone()) else {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                InternalError::AttributeBaseUndefined(base.clone())
-                    .to_error_msg(attr_name, todo_ctx),
-            );
+            InternalError::AttributeBaseUndefined(base.clone())
+                .add_to(errors, range, attr_name, todo_ctx);
             return;
         };
         let (lookup_found, lookup_not_found, lookup_error) = self
@@ -1016,12 +1013,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         for error in lookup_error {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                error.to_error_msg(attr_name, todo_ctx),
-            );
+            error.add_to(errors, range, attr_name, todo_ctx);
         }
         for (attr, _) in lookup_found {
             match attr {
@@ -1081,7 +1073,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             // `as_attribute_base` promotes literals, so we should promote here too
             // In the future, we should refactor `get_protocol_attribute` to reuse the `AttributeBase`, to ensure the logic is identical
-            let got = got.clone().promote_literals(self.stdlib);
+            let got = got.clone().promote_implicit_literals(self.stdlib);
             if (!got_attrs.is_empty())
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
@@ -1246,7 +1238,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AttributeBase1::Never => acc.found_type(Type::never(), base),
             AttributeBase1::EnumLiteral(e) if matches!(attr_name.as_str(), "name" | "_name_") => {
-                acc.found_type(Type::Literal(Lit::Str(e.member.as_str().into())), base)
+                acc.found_type(Lit::Str(e.member.as_str().into()).to_implicit_type(), base)
             }
             AttributeBase1::LiteralString => match self.get_literal_string_attribute(attr_name) {
                 Some(attr) => acc.found_class_attribute(attr, base),
@@ -1756,12 +1748,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Tuple(tuple) => {
                 acc.push(AttributeBase1::ClassInstance(self.erase_tuple_type(tuple)))
             }
-            Type::LiteralString | Type::Literal(Lit::Str(_)) => {
-                acc.push(AttributeBase1::LiteralString)
-            }
-            Type::Literal(Lit::Enum(lit_enum)) => acc.push(AttributeBase1::EnumLiteral(*lit_enum)),
+            Type::LiteralString(_)
+            | Type::Literal(box Literal {
+                value: Lit::Str(_), ..
+            }) => acc.push(AttributeBase1::LiteralString),
+            Type::Type(box Type::LiteralString(_)) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(self.stdlib.str().clone()),
+            )),
+            Type::Type(box Type::Literal(lit)) => acc.push(AttributeBase1::ClassObject(
+                ClassBase::ClassType(lit.value.general_class_type(self.stdlib).clone()),
+            )),
+            Type::Literal(box Literal {
+                value: Lit::Enum(lit_enum),
+                ..
+            }) => acc.push(AttributeBase1::EnumLiteral(*lit_enum)),
             Type::Literal(lit) => acc.push(AttributeBase1::ClassInstance(
-                lit.general_class_type(self.stdlib).clone(),
+                lit.value.general_class_type(self.stdlib).clone(),
             )),
             Type::TypeGuard(_) | Type::TypeIs(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.bool().clone()))

@@ -721,6 +721,20 @@ foo(
     }
 
     #[test]
+    fn test_remove_first_unused_ignore_only() {
+        // Regression test for https://github.com/facebook/pyrefly/issues/1310
+        let input = r#""""Test."""
+x = 1 + 1  # pyrefly: ignore
+y = 1 + "oops"  # pyrefly: ignore
+"#;
+        let want = r#""""Test."""
+x = 1 + 1
+y = 1 + "oops"  # pyrefly: ignore
+"#;
+        assert_remove_ignores(input, want, false, 1);
+    }
+
+    #[test]
     fn test_no_remove_suppression_generated() {
         let input = format!(
             r#"

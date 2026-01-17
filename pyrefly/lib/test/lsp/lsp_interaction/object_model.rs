@@ -81,6 +81,7 @@ use crate::test::util::init_test;
 pub enum LspMessageError {
     Timeout { description: String },
     Disconnected { description: String },
+    Custom { description: String },
 }
 
 impl std::fmt::Display for LspMessageError {
@@ -94,6 +95,9 @@ impl std::fmt::Display for LspMessageError {
                     f,
                     "Channel disconnected while waiting for message: {description}"
                 )
+            }
+            LspMessageError::Custom { description } => {
+                write!(f, "{description}")
             }
         }
     }
@@ -673,10 +677,14 @@ impl TestClient {
         params
     }
 
+    /// The matcher returns behave as follows:
+    /// - Some(Ok(_)) indicates a successful match
+    /// - Some(Err(_)) indicates a failed match that should error
+    /// - None indicates a failed match that should continue waiting
     pub fn expect_message<T>(
         &self,
         description: &str,
-        matcher: impl Fn(Message) -> Option<T>,
+        matcher: impl Fn(Message) -> Option<Result<T, LspMessageError>>,
     ) -> Result<T, LspMessageError> {
         loop {
             match self.recv_timeout() {
@@ -686,7 +694,7 @@ impl TestClient {
                         serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
                     );
                     if let Some(actual) = matcher(msg) {
-                        return Ok(actual);
+                        return actual;
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
@@ -716,7 +724,7 @@ impl TestClient {
                 assert_eq!(x.method, R::METHOD);
                 let actual: R::Params = serde_json::from_value(x.params.clone()).unwrap();
                 assert_eq!(json!(expected), json!(actual));
-                Some(x.id)
+                Some(Ok(x.id))
             } else {
                 None
             }
@@ -740,7 +748,7 @@ impl TestClient {
                 if let Message::Response(x) = msg
                     && x.id == id
                 {
-                    Some(serde_json::from_value(x.result.unwrap()).unwrap())
+                    Some(Ok(serde_json::from_value(x.result.unwrap()).unwrap()))
                 } else {
                     None
                 }
@@ -759,7 +767,7 @@ impl TestClient {
             if let Message::Response(x) = msg
                 && x.id == id
             {
-                Some(x.error.unwrap())
+                Some(Ok(x.error.unwrap()))
             } else {
                 None
             }
@@ -780,7 +788,7 @@ impl TestClient {
                     && x.id == id
                     && matcher(serde_json::from_value::<R::Result>(x.result.unwrap()).unwrap())
                 {
-                    Some(())
+                    Some(Ok(()))
                 } else {
                     None
                 }
@@ -820,7 +828,7 @@ impl TestClient {
     }
 
     /// Wait for a publishDiagnostics notification, then check if it contains the message
-    pub fn expect_publish_diagnostics_message_contains(
+    pub fn expect_publish_diagnostics_eventual_message_contains(
         &self,
         path: PathBuf,
         message: &str,
@@ -842,7 +850,7 @@ impl TestClient {
                             .iter()
                             .any(|d| d.message.contains(message))
                     {
-                        Some(())
+                        Some(Ok(()))
                     } else {
                         None
                     }
@@ -854,8 +862,8 @@ impl TestClient {
         Ok(())
     }
 
-    /// Wait for a publishDiagnostics notification, then check if it has the correct path and count
-    pub fn expect_publish_diagnostics_error_count(
+    /// Wait for a publishDiagnostics notification that has the correct path and count
+    pub fn expect_publish_diagnostics_eventual_error_count(
         &self,
         path: PathBuf,
         count: usize,
@@ -874,7 +882,47 @@ impl TestClient {
                     if params.uri.to_file_path().unwrap() == path
                         && params.diagnostics.len() == count
                     {
-                        Some(())
+                        Some(Ok(()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+        )?;
+        Ok(())
+    }
+
+    /// The next publishDiagnostics for that path should have the expected count, otherwise error
+    pub fn expect_publish_diagnostics_must_have_error_count(
+        &self,
+        path: PathBuf,
+        count: usize,
+    ) -> Result<(), LspMessageError> {
+        self.expect_message(
+            &format!(
+                "Next publishDiagnostics notification for file {} should have {count} errors",
+                path.display()
+            ),
+            |msg| {
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    let params =
+                        serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
+                    if params.uri.to_file_path().unwrap() == path {
+                        if params.diagnostics.len() == count {
+                            Some(Ok(()))
+                        } else {
+                            Some(Err(LspMessageError::Custom {
+                                description: format!(
+                                    "Expected next publish diagnostics for file {} to have {count} errors, but got {}",
+                                    path.display(),
+                                    params.diagnostics.len()
+                                ),
+                            }))
+                        }
                     } else {
                         None
                     }
@@ -900,7 +948,7 @@ impl TestClient {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(x.params).unwrap();
                     if params.uri == *uri && params.diagnostics.len() == count {
-                        Some(())
+                        Some(Ok(()))
                     } else {
                         None
                     }
@@ -1000,7 +1048,7 @@ impl TestClient {
                 if let Message::Request(x) = msg
                     && x.method == RegisterCapability::METHOD
                 {
-                    Some(serde_json::from_value(x.params).unwrap())
+                    Some(Ok(serde_json::from_value(x.params).unwrap()))
                 } else {
                     None
                 }
@@ -1018,7 +1066,7 @@ impl TestClient {
                 if let Message::Request(x) = msg
                     && x.method == UnregisterCapability::METHOD
                 {
-                    Some(serde_json::from_value(x.params).unwrap())
+                    Some(Ok(serde_json::from_value(x.params).unwrap()))
                 } else {
                     None
                 }
@@ -1048,7 +1096,7 @@ impl TestClient {
                     "codeDescription": {
                         "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
                     },
-                    "message": format!("Missing type stubs for `{}`\n  Hint: install the `{}-stubs` package", package_name, package_name),
+                    "message": format!("Cannot find type stubs for module `{}`\n  Hint: install the `{}-stubs` package", package_name, package_name),
                     "range": {
                         "start": {"line": line, "character": start_character},
                         "end": {"line": line, "character": end_character}

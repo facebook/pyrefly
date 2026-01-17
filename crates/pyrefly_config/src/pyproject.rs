@@ -28,6 +28,20 @@ pub struct PyProject {
     tool: Option<Tool>,
 }
 
+/// Recursively finds the maximum position among a table and all its nested sub-tables.
+/// This is needed because pyproject.toml files often have deeply nested tool sections
+/// like `[tool.ruff.lint.pydocstyle]`, and we need to find the position of the last
+/// nested section to insert `[tool.pyrefly]` after all of them.
+fn max_position_recursive(table: &toml_edit::Table) -> isize {
+    let own_pos = table.position().unwrap_or(0);
+    let child_max = table
+        .iter()
+        .filter_map(|(_, v)| v.as_table().map(max_position_recursive))
+        .max()
+        .unwrap_or(0);
+    own_pos.max(child_max)
+}
+
 impl PyProject {
     /// Wrap the given ConfigFile in a `PyProject { Tool { ... }}`
     pub fn new(cfg: ConfigFile) -> Self {
@@ -68,9 +82,11 @@ impl PyProject {
                         tool_table_mut.set_implicit(true);
                     }
                     tool_table_mut.remove("pyrefly");
+                    // Use recursive position finding to account for deeply nested
+                    // tool sections like [tool.ruff.lint.pydocstyle]
                     let max_tool_pos = tool_table_mut
                         .iter()
-                        .filter_map(|(_, v)| v.as_table().and_then(|t| t.position()))
+                        .filter_map(|(_, v)| v.as_table().map(max_position_recursive))
                         .max()
                         .unwrap_or(0);
                     tool_table_mut.insert("pyrefly", pyrefly_table.clone());
@@ -173,6 +189,8 @@ line-length = 88
 
     #[test]
     fn test_pyrefly_section_ordering() -> anyhow::Result<()> {
+        // This test verifies that [tool.pyrefly] is placed after ALL tool sections,
+        // including deeply nested ones like [tool.ruff.lint.pydocstyle].
         let tmp = tempfile::tempdir()?;
         let ordering_path = tmp.path().join("ordering_test.toml");
         let existing_content = r#"[project]
@@ -191,6 +209,12 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 88
+
+[tool.ruff.lint]
+select = ["C4", "LOG"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [build-system]
 requires = ["setuptools"]
@@ -223,6 +247,12 @@ build-backend = "setuptools.build_meta"
             "\n",
             "[tool.ruff]\n",
             "line-length = 88\n",
+            "\n",
+            "[tool.ruff.lint]\n",
+            "select = [\"C4\", \"LOG\"]\n",
+            "\n",
+            "[tool.ruff.lint.pydocstyle]\n",
+            "convention = \"google\"\n",
             "\n",
             "[tool.pyrefly]\n",
             "project-includes = [\"ordering_test.py\"]\n",

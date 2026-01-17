@@ -10,7 +10,6 @@ use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::lit_int::LitInt;
-use pyrefly_types::literal::Lit;
 use pyrefly_types::simplify::unions;
 use pyrefly_types::types::Type;
 
@@ -298,7 +297,7 @@ class C:
             ClassNamesFromType::from_class(context.stdlib.int().class_object(), &context),
         )
         .with_is_int(true),
-        PysaType::from_type(&Type::Literal(Lit::Int(LitInt::new(0))), &context),
+        PysaType::from_type(&LitInt::new(0).to_implicit_type(), &context),
     );
 
     // Strip self type

@@ -523,7 +523,7 @@ testcase!(
     test_add_with_constraints,
     r#"
 def add[T: (int, str)](x: T, y: T) -> T:
-    return x + y # E: `+` is not supported # E: `+` is not supported # E: `int | Unknown` is not assignable to declared return type `T`
+    return x + y # E: `+` is not supported between `T` and `T` # E: `+` is not supported between `T` and `T`
     "#,
 );
 
@@ -911,5 +911,59 @@ class TD(TypedDict, Generic[_NBit1, _NBit2]):
 class A:
     x: ClassVar[TD[Any, Any]]
     y: ClassVar[TD[_NBit1, Any]]  # E: `ClassVar` arguments may not contain any type variables
+    "#,
+);
+
+testcase!(
+    test_nested_call_preserves_bound,
+    r#"
+# Tests for preserving type variable bounds when unifying quantified variables.
+# There are 4 cases based on which variables have restrictions:
+# 1. Neither has restriction - should unify without issues
+# 2. Only the first (got) has restriction - preserve it
+# 3. Only the second (want) has restriction - preserve it
+# 4. Both have restrictions - preserve the stricter one, or error if incompatible
+
+# Helper functions for testing
+def unbounded[T, U](a: T, b: U) -> T:
+    return a
+
+def bounded_str[T: str](x: T) -> T:
+    return x
+
+def bounded_int[T: int](x: T) -> T:
+    return x
+
+def apply_both_bounded[T: str, U: int](f: T, g: U) -> T:
+    return f
+
+def go() -> None:
+    # Case 1: Neither has restriction (T and U both unbounded)
+    # No error expected - both are unbounded
+    unbounded("1", unbounded("2", "3"))
+
+    # Case 2: Only got (first) has restriction
+    # bounded_str returns T: str, matched against unbounded U from outer unbounded()
+    bounded_str(1)  # E: `int` is not assignable to upper bound `str` of type variable `T`
+    unbounded("1", bounded_str(1))  # E: `int` is not assignable to upper bound `str` of type variable `T`
+
+    # Case 3: Only want (second) has restriction
+    # unbounded returns unbounded T, but when passed to bounded_str, must satisfy str bound
+    bounded_str(unbounded(1, 2))  # E: `int` is not assignable to upper bound `str` of type variable `T`
+
+    # Case 4a: Both have restrictions, compatible (int <: object, str <: object)
+    # When bounded_str's T: str is unified with bounded_int's T: int in a context,
+    # the stricter bound should be preserved
+    bounded_str("ok")  # No error - str satisfies str bound
+    bounded_int(1)  # No error - int satisfies int bound
+
+    # Case 4b: Both have restrictions, one is stricter
+    # bool <: int, so when we pass a bool to bounded_int, it should work
+    bounded_int(True)  # No error - bool is subtype of int
+
+    # Case 4c: Both have restrictions, incompatible (str and int are not subtypes of each other)
+    # bounded_str returns T: str, which must match U: int from apply_both_bounded
+    # The bounds str and int are incompatible, so hint matching fails and error is reported
+    apply_both_bounded("a", bounded_str("ok"))  # E: `str` is not assignable to upper bound `int` of type variable `U`
     "#,
 );

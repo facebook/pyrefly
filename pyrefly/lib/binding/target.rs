@@ -465,7 +465,15 @@ impl<'a> BindingsBuilder<'a> {
         }
         let identifier = ShortIdentifier::new(name);
         let mut current = self.declare_current_idx(Key::Definition(identifier));
-        let pinned_idx = self.idx_for_promise(Key::CompletedPartialType(identifier));
+        // Only create partial type bindings when infer_with_first_use is enabled.
+        // When disabled, we bind directly to the definition idx and skip the
+        // CompletedPartialType/PartialTypeWithUpstreamsCompleted indirection.
+        let pinned_idx = if self.infer_with_first_use() {
+            Some(self.idx_for_promise(Key::CompletedPartialType(identifier)))
+        } else {
+            None
+        };
+        let scope_idx = pinned_idx.unwrap_or_else(|| current.idx());
         let is_definitely_type_alias = if let Some((e, _)) = direct_ann
             && self.as_special_export(e) == Some(SpecialExport::TypeAlias)
         {
@@ -491,7 +499,7 @@ impl<'a> BindingsBuilder<'a> {
             self.scopes.register_variable(name);
             FlowStyle::Other
         };
-        let canonical_ann = self.bind_name(&name.id, pinned_idx, style);
+        let canonical_ann = self.bind_name(&name.id, scope_idx, style);
         let ann = match direct_ann {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
             None => canonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
@@ -504,25 +512,22 @@ impl<'a> BindingsBuilder<'a> {
             is_in_function_scope: self.scopes.in_function_scope(),
         };
         // Record the raw assignment
-        let (def_idx, first_use_of) = current.decompose();
+        let def_idx = current.into_idx();
         let def_idx = self.insert_binding_idx(def_idx, binding);
-        // If this is a first use, add a binding that will eliminate any placeholder types coming from upstream.
-        let unpinned_idx = if first_use_of.is_empty() {
-            def_idx
-        } else {
-            self.insert_binding(
+        // Create partial type bindings (when infer_with_first_use is enabled)
+        if let Some(pinned_idx) = pinned_idx {
+            // Create PartialTypeWithUpstreamsCompleted with an empty first_uses list.
+            // Deferred binding processing will populate the first_uses list after AST traversal.
+            let unpinned_idx = self.insert_binding(
                 Key::PartialTypeWithUpstreamsCompleted(identifier),
-                Binding::PartialTypeWithUpstreamsCompleted(
-                    def_idx,
-                    first_use_of.into_iter().collect(),
-                ),
-            )
-        };
-        // Insert the Pin binding that will pin any types, potentially after evaluating the first downstream use.
-        self.insert_binding_idx(
-            pinned_idx,
-            Binding::CompletedPartialType(unpinned_idx, FirstUse::Undetermined),
-        );
+                Binding::PartialTypeWithUpstreamsCompleted(def_idx, Box::new([])),
+            );
+            // Insert the Pin binding that will pin any types, potentially after evaluating the first downstream use.
+            self.insert_binding_idx(
+                pinned_idx,
+                Binding::CompletedPartialType(unpinned_idx, FirstUse::Undetermined),
+            );
+        }
         canonical_ann
     }
 

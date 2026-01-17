@@ -28,7 +28,6 @@ use ruff_python_ast::Identifier;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
-use starlark_map::small_set::SmallSet;
 use vec1::vec1;
 
 use crate::binding::binding::Binding;
@@ -72,44 +71,41 @@ fn is_special_name(name: &str) -> bool {
 /// There are some cases - particularly in type declaration contexts like annotations,
 /// type variable declarations, and match patterns - that we want to skip for usage
 /// tracking.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Usage {
-    /// I am a usage to create a `Binding`.
-    /// - First entry is the idx we are working on
-    /// - Second entry is all the idxs for which this idx is a first use (used to
-    ///   create `PartialTypeWithUpstreamsCompleted` bindings).
-    CurrentIdx(Idx<Key>, SmallSet<Idx<Key>>),
-    /// I am a usage that will appear in a narrowing operation (including a
-    /// match pattern). We don't allow pinning in this case:
-    /// - It is generally not useful (narrowing operations don't usually pin types)
-    /// - Because narrowing introduces duplicate expressions, it is difficult
-    ///   to ensure unpinned Vars cannot leak into the binding graph and cause
-    ///   nondeterminism.
-    ///
-    /// It carries an optional current idx so we could detect multiple usages to
-    /// the same key within the same binding.
+    /// Normal usage context that may pin partial types.
+    /// The idx is the current binding being computed.
+    CurrentIdx(Idx<Key>),
+    /// Narrowing context that should not pin partial types.
+    /// The idx (if present) is used for secondary-read detection.
     Narrowing(Option<Idx<Key>>),
-    /// I'm a usage in some context (a type variable declaration, an annotation,
-    /// a cast, etc) where we are dealing with static types. I will not pin
-    /// any placeholder types.
+    /// Static type context that should not pin partial types.
     StaticTypeInformation,
 }
 
 impl Usage {
+    /// Create a narrowing usage from another usage context.
     pub fn narrowing_from(other: &Self) -> Self {
         match other {
-            Self::CurrentIdx(idx, _) => Self::Narrowing(Some(*idx)),
+            Self::CurrentIdx(idx) => Self::Narrowing(Some(*idx)),
             Self::Narrowing(idx) => Self::Narrowing(*idx),
             Self::StaticTypeInformation => Self::Narrowing(None),
         }
     }
 
+    /// Get the current binding idx, if any.
     pub fn current_idx(&self) -> Option<Idx<Key>> {
         match self {
-            Self::CurrentIdx(idx, _) => Some(*idx),
-            Self::Narrowing(idx) => *idx,
-            Self::StaticTypeInformation => None,
+            Usage::CurrentIdx(idx) => Some(*idx),
+            Usage::Narrowing(idx) => *idx,
+            Usage::StaticTypeInformation => None,
         }
+    }
+
+    /// Whether this usage context may pin partial types.
+    #[allow(dead_code)] // Will be used in Phase 5 of deferred BoundName implementation
+    pub fn may_pin_partial_type(&self) -> bool {
+        matches!(self, Usage::CurrentIdx(_))
     }
 }
 
@@ -332,7 +328,7 @@ impl<'a> BindingsBuilder<'a> {
             };
         match lookup_result {
             NameLookupResult::Found {
-                idx: value,
+                idx: lookup_result_idx,
                 initialized: is_initialized,
             } => {
                 // Uninitialized local errors are only reported when we are neither in a stub
@@ -347,7 +343,15 @@ impl<'a> BindingsBuilder<'a> {
                         error_message,
                     );
                 }
-                self.insert_binding(key, Binding::Forward(value))
+
+                // For static type context, create binding immediately since it
+                // doesn't participate in partial type pinning anyway and legacy tparam handling
+                // needs this; otherwise, defer creating a bound name.
+                if used_in_static_type {
+                    self.insert_binding(key, Binding::Forward(lookup_result_idx))
+                } else {
+                    self.defer_bound_name(key, lookup_result_idx, usage)
+                }
             }
             NameLookupResult::NotFound => {
                 let suggestion = self

@@ -28,7 +28,9 @@ use crate::report::pysa::function::export_function_definitions;
 use crate::report::pysa::module::ModuleIds;
 use crate::report::pysa::override_graph::build_reversed_override_graph;
 use crate::report::pysa::scope::ScopeParent;
+use crate::report::pysa::types::ClassNamesFromType;
 use crate::report::pysa::types::PysaType;
+use crate::report::pysa::types::TypeModifier;
 use crate::test::pysa::utils::create_location;
 use crate::test::pysa::utils::create_state;
 use crate::test::pysa::utils::get_class;
@@ -1240,6 +1242,118 @@ class B(A):
                 "__replace__",
                 context,
             )),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_namedtuple_methods,
+    r#"
+import collections
+
+MyTuple = collections.namedtuple("MyTuple", "x y")
+"#,
+    &|context: &ModuleContext| {
+        vec![
+            create_function_definition(
+                "__init__",
+                ScopeParent::Class {
+                    location: create_location(4, 1, 4, 8),
+                },
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::Pos {
+                            name: "self".into(),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "MyTuple", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "x".into(),
+                            annotation: PysaType::any_implicit(),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "y".into(),
+                            annotation: PysaType::any_implicit(),
+                            required: true,
+                        },
+                    ],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "MyTuple", context))
+            .with_overridden_base_method(get_method_ref(
+                "_typeshed._type_checker_internals",
+                "NamedTupleFallback",
+                "__init__",
+                context,
+            )),
+            create_function_definition(
+                "__iter__",
+                ScopeParent::Class {
+                    location: create_location(4, 1, 4, 8),
+                },
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(
+                            &get_class("test", "MyTuple", context),
+                            context,
+                        ),
+                        required: true,
+                    }],
+                    PysaType::new(
+                        "typing.Iterable[Unknown]".to_owned(),
+                        ClassNamesFromType::from_classes(
+                            vec![get_class_ref("typing", "Iterable", context)],
+                            true,
+                        ),
+                    ),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "MyTuple", context))
+            .with_overridden_base_method(get_method_ref("builtins", "tuple", "__iter__", context)),
+            create_function_definition(
+                "__new__",
+                ScopeParent::Class {
+                    location: create_location(4, 1, 4, 8),
+                },
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::Pos {
+                            name: "cls".into(),
+                            annotation: PysaType::new(
+                                "type[test.MyTuple]".to_owned(),
+                                ClassNamesFromType::from_class(
+                                    &get_class("test", "MyTuple", context),
+                                    context,
+                                )
+                                .prepend_modifier(TypeModifier::Type),
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "x".into(),
+                            annotation: PysaType::any_implicit(),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "y".into(),
+                            annotation: PysaType::any_implicit(),
+                            required: true,
+                        },
+                    ],
+                    PysaType::from_class(&get_class("test", "MyTuple", context), context),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "MyTuple", context))
+            .with_overridden_base_method(get_method_ref("builtins", "tuple", "__new__", context)),
         ]
     },
 );

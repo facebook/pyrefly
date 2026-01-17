@@ -318,7 +318,7 @@ class D(MixinC, B):
 testcase!(
     test_super_with_error_base,
     r#"
-from nowhere import bob  # E: Could not find import
+from nowhere import bob  # E: Cannot find module
 class Foo(bob):
     def __init__(self):
         super().__init__(1)

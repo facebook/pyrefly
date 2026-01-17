@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -503,5 +504,93 @@ C.d = D()
 
 # Wrong type should still error as a type mismatch
 C.d = "wrong"  # E: `Literal['wrong']` is not assignable to attribute `d` with type `D`
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1792
+testcase!(
+    test_descriptor_in_dataclass_transform,
+    r#"
+from typing import Any, dataclass_transform
+
+class Mapped[T]:
+    def __get__(self, obj, classobj) -> T: ...
+    def __set__(self, obj, value: T) -> None: ...
+
+def mapped_column(*args: Any, **kw: Any) -> Any: ...
+
+@dataclass_transform(
+    field_specifiers=(mapped_column,),
+)
+class DCTransformDeclarative(type):
+    """metaclass that includes @dataclass_transforms"""
+
+class MappedAsDataclass(metaclass=DCTransformDeclarative):
+    pass
+
+class DatasetMetadata(MappedAsDataclass):
+    id: Mapped[str] = mapped_column(init=False)
+
+DatasetMetadata()
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1803
+testcase!(
+    test_set_instance_attribute,
+    r#"
+from typing import assert_type
+
+class MyDescriptor:
+    def __get__(self, instance, owner=None):
+        return 42
+
+class A:
+    def __init__(self):
+        self.a = MyDescriptor()
+
+assert_type(A().a, MyDescriptor)
+    "#,
+);
+
+fn sqlalchemy_mapped_env() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add(
+        "sqlalchemy.orm.base",
+        r#"
+class Mapped[T]:
+    def __get__(self, instance, owner) -> T: ...
+    def __set__(self, instance, value: T) -> None: ...
+    def __delete__(self, instance) -> None: ...
+    "#,
+    );
+    env.add_with_path(
+        "sqlalchemy.orm.decl_api",
+        "sqlalchemy/orm/decl_api.py",
+        "class DeclarativeBase: ...",
+    );
+    env.add_with_path(
+        "sqlalchemy.orm",
+        "sqlalchemy/orm/__init__.py",
+        r#"
+from .base import Mapped as Mapped
+from .decl_api import DeclarativeBase as DeclarativeBase
+    "#,
+    );
+    env.add_with_path("sqlalchemy", "sqlalchemy/__init__.py", "");
+    env
+}
+
+testcase!(
+    test_sqlalchemy_mapped_is_always_descriptor,
+    sqlalchemy_mapped_env(),
+    r#"
+from sqlalchemy.orm import DeclarativeBase, Mapped
+class Base(DeclarativeBase):
+    pass
+class User(Base):
+    name: Mapped[str]
+    def __init__(self, name: str):
+        self.name = name
     "#,
 );

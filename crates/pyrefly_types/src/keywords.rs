@@ -35,7 +35,7 @@ impl TypeMap {
 
     pub fn get_string(&self, name: &Name) -> Option<&str> {
         self.0.get(name).and_then(|t| match t {
-            Type::Literal(Lit::Str(s)) => Some(&**s),
+            Type::Literal(lit) if let Lit::Str(s) = &lit.value => Some(&**s),
             _ => None,
         })
     }

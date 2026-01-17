@@ -56,7 +56,7 @@ class A(foo=True): pass
     );
     assert_eq!(
         get_class_keywords("A", "foo", &handle, &state),
-        vec![Type::Literal(Lit::Bool(true))],
+        vec![Lit::Bool(true).to_implicit_type()],
     );
     assert_eq!(get_class_keywords("A", "bar", &handle, &state), vec![]);
 }

@@ -95,7 +95,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.get_pydantic_root_model_type_via_mro(cls, &metadata)
             {
                 self.get_pydantic_root_model_init(cls, root_model_type, has_strict)
-            } else if metadata.is_pydantic_base_model() {
+            } else if metadata.is_pydantic_model() {
                 // Pydantic models with RootModel fields need type expansion
                 let transform_type: &dyn Fn(Type) -> Type = &|ty: Type| {
                     if let Some(root_type) = self.extract_root_model_inner_type(&ty) {
@@ -641,7 +641,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 if alias.is_none() && Some(name) == alias_keyword {
                     self.fill_in_literal(alias, ty, default_ty, |ty| match ty {
-                        Type::Literal(Lit::Str(s)) => Some(Name::new(s)),
+                        Type::Literal(lit) if let Lit::Str(s) = &lit.value => Some(Name::new(s)),
                         _ => None,
                     });
                 }
@@ -861,7 +861,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if field_flags.is_kw_only() || !field_flags.init {
                         None
                     } else {
-                        Some(Type::Literal(Lit::Str(name.as_str().into())))
+                        Some(Lit::Str(name.as_str().into()).to_implicit_type())
                     }
                 })
                 .collect()
@@ -878,7 +878,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let filtered_fields = self.iter_fields(cls, dataclass, false);
         let ts = filtered_fields
             .iter()
-            .map(|(name, _, _)| Type::Literal(Lit::Str(name.as_str().into())))
+            .map(|(name, _, _)| Lit::Str(name.as_str().into()).to_implicit_type())
             .collect();
         let ty = Type::concrete_tuple(ts);
         ClassSynthesizedField::new(ty)

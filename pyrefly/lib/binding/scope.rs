@@ -607,8 +607,13 @@ pub enum FlowStyle {
     /// would get `foo.bar` here.
     ImportAs(ModuleName),
     /// Am I a function definition? Used to chain overload definitions.
-    /// If so, does my return type have an explicit annotation?
-    FunctionDef(Idx<KeyDecoratedFunction>, bool),
+    /// Track whether the return type has an explicit annotation and whether this
+    /// definition is marked as an overload.
+    FunctionDef {
+        function_idx: Idx<KeyDecoratedFunction>,
+        has_return_annotation: bool,
+        is_overload: bool,
+    },
     /// Am I a class definition?
     ClassDef,
     /// The name is possibly uninitialized (perhaps due to merging branches)
@@ -1267,7 +1272,9 @@ impl Scopes {
         name: &Name,
     ) -> Option<(Idx<Key>, Idx<KeyDecoratedFunction>)> {
         if let Some(value) = self.current().flow.get_value(name)
-            && let FlowStyle::FunctionDef(fidx, _) = value.style
+            && let FlowStyle::FunctionDef {
+                function_idx: fidx, ..
+            } = value.style
         {
             return Some((value.idx, fidx));
         }
@@ -2103,7 +2110,10 @@ impl Scopes {
                 // Mutable captures are not actually owned by the class scope, and do not become attributes.
             } else if let Some(value) = class_body.flow.get_info_hashed(name).and_then(|flow| flow.value()) {
                 let definition = match &value.style {
-                    FlowStyle::FunctionDef(_, has_return_annotation) => ClassFieldDefinition::MethodLike {
+                    FlowStyle::FunctionDef {
+                        has_return_annotation,
+                        ..
+                    } => ClassFieldDefinition::MethodLike {
                         definition: value.idx,
                         has_return_annotation: *has_return_annotation,
                     },
@@ -2281,12 +2291,58 @@ impl Scopes {
     /// Look up the information needed to create a `Usage` binding for a read of a name
     /// in the current scope stack.
     pub fn look_up_name_for_read(&self, name: Hashed<&Name>) -> NameReadInfo {
+        self.look_up_name_for_read_impl(name, false)
+    }
+
+    /// Look up a name for a static type context (annotations, type aliases, etc).
+    ///
+    /// Skips class-scope overload definitions so that annotations in overload signatures are not
+    /// accidentally resolved to other overloads. That is, in:
+    ///     class A: ...
+    ///     class B: ...
+    ///         @overload
+    ///         def A(self) -> A: ...
+    ///         @overload
+    ///         def A(self) -> A: ...
+    ///         def A(self): ...
+    /// we want the `A` return annotation in the second overload signature to resolve to class `A`,
+    /// not the first overload.
+    ///
+    /// Note that this is intentionally divergent from the runtime and different from how name
+    /// lookup usually works. In all other cases, if the name of a type is locally shadowed by a
+    /// non-type definition, we error if it is then used in an annotation.
+    pub fn look_up_name_for_read_in_static_type_context(
+        &self,
+        name: Hashed<&Name>,
+    ) -> NameReadInfo {
+        self.look_up_name_for_read_impl(name, true)
+    }
+
+    fn look_up_name_for_read_impl(
+        &self,
+        name: Hashed<&Name>,
+        skip_class_overload_function_definitions: bool,
+    ) -> NameReadInfo {
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
             if let Some(flow_info) = scope.flow.get_info_hashed(name)
                 && flow_barrier < FlowBarrier::BlockFlow
             {
+                if skip_class_overload_function_definitions
+                    && is_class
+                    && flow_info.value().is_some_and(|value| {
+                        matches!(
+                            value.style,
+                            FlowStyle::FunctionDef {
+                                is_overload: true,
+                                ..
+                            }
+                        )
+                    })
+                {
+                    return None;
+                }
                 let initialized = if flow_barrier == FlowBarrier::AllowFlowUnchecked {
                     // Just assume the name is initialized without checking.
                     InitializedInFlow::Yes
@@ -2507,6 +2563,7 @@ struct MergeBranch {
     flow_info: FlowInfo,
     /// The last StmtExpr in the flow this branch came from, if any.
     /// Used for type-based termination checking at solve time.
+    #[expect(dead_code)]
     termination_key: Option<Idx<Key>>,
 }
 
@@ -2602,16 +2659,16 @@ impl<'a> BindingsBuilder<'a> {
         phi_idx: Idx<Key>,
         merge_style: MergeStyle,
         n_branches: usize,
-        n_branches_with_termination_key: usize,
     ) -> FlowInfo {
         let base_idx = merge_item.base.as_ref().map(|base| base.idx());
         let mut merge_branches = merge_item.branches;
+        // Track the number of branch values before adding base (for LoopDefinitelyRuns)
+        let n_branch_flow_infos = merge_branches.len();
         // Track if base has a value for this name (for LoopDefinitelyRuns init check)
         let base_has_value = merge_item.base.as_ref().is_some_and(|b| b.value.is_some());
         // If this is a loop, we want to use the current default in any phis we produce,
         // and the base flow is part of the merge for type inference purposes.
-        // Track whether we added base so we can correctly count total branches later.
-        let (loop_prior, added_base_to_merge) = if merge_style.is_loop()
+        let loop_prior = if merge_style.is_loop()
             && let Some(base) = merge_item.base
         {
             let loop_prior = base.loop_prior;
@@ -2619,9 +2676,9 @@ impl<'a> BindingsBuilder<'a> {
                 flow_info: base,
                 termination_key: None,
             });
-            (Some(loop_prior), true)
+            Some(loop_prior)
         } else {
-            (None, false)
+            None
         };
         let merged_loop_prior = {
             let contained_in_loop = self.scopes.loop_depth() > 0;
@@ -2651,24 +2708,11 @@ impl<'a> BindingsBuilder<'a> {
         // a narrow only when all the value idxs are the same.
         let mut value_idxs = SmallSet::with_capacity(merge_branches.len());
         let mut branch_idxs = SmallSet::with_capacity(merge_branches.len());
-        let mut branch_infos = Vec::with_capacity(merge_branches.len());
         let mut styles = Vec::with_capacity(merge_branches.len());
         let mut n_values = 0;
         for merge_branch in merge_branches.into_iter() {
             let flow_info = merge_branch.flow_info;
             let branch_idx = flow_info.idx();
-
-            // The BranchInfo always sees the branch_idx, which will will be
-            // a narrow if one exists, otherwise the value. Each branch may have a
-            // terminiation key, which potentially causes us to ignore it in the Phi based
-            // on Never/NoReturn type information.
-            if branch_idx != phi_idx {
-                branch_infos.push(BranchInfo {
-                    value_key: branch_idx,
-                    termination_key: merge_branch.termination_key,
-                });
-            }
-
             if let Some(v) = flow_info.value {
                 n_values += 1;
                 if v.idx == phi_idx {
@@ -2682,35 +2726,23 @@ impl<'a> BindingsBuilder<'a> {
             }
             branch_idxs.insert(branch_idx);
         }
+        // Build branch_infos from branch_idxs (matching old behavior).
+        // For now, termination_key is always None - the next commit will
+        // wire this up properly once we're ready to use it.
+        let branch_infos: Vec<BranchInfo> = branch_idxs
+            .iter()
+            .map(|&value_key| BranchInfo {
+                value_key,
+                termination_key: None,
+            })
+            .collect();
         // For LoopDefinitelyRuns, a name is always defined if:
         // - It was defined before the loop (base_has_value), OR
         // - It's defined in all loop body branches (since the loop definitely runs at least once)
-        //
-        // For regular loops and other merges, a name is always defined if it's in all
-        // non-terminating branches; in the presence of branches with last statements
-        // (termination keys), we prefer false negatives to false positives by treating
-        // the branch as terminating for the purpose of uninitialized local checks only.
-        //
-        // TODO(stroxler): to allow both `Never` / `NoReturn` last statement handing and
-        // uninitialized local checks without false negatives, we have to rewrite uninitialized
-        // local logic completely - it has to be a solve-time only concept, because it is not
-        // possible for binding time to know whether a branch terminates in general.
-        //
-        // n_total_branches is the actual number of branches we iterated over, which includes
-        // the base flow for loops (since base is added to merge_branches for type inference).
-        let n_total_branches = if added_base_to_merge {
-            n_branches + 1
-        } else {
-            n_branches
-        };
-        let n_missing_branches = n_total_branches - n_values;
+        // For regular loops and other merges, a name is always defined if it's in all branches.
         let this_name_always_defined = match merge_style {
-            MergeStyle::LoopDefinitelyRuns => {
-                base_has_value
-                    || n_values == n_branches
-                    || n_missing_branches <= n_branches_with_termination_key
-            }
-            _ => n_values == n_branches || n_missing_branches <= n_branches_with_termination_key,
+            MergeStyle::LoopDefinitelyRuns => base_has_value || n_branch_flow_infos == n_branches,
+            _ => n_values == n_branches,
         };
         match value_idxs.len() {
             // If there are no values, then this name isn't assigned at all
@@ -2840,10 +2872,6 @@ impl<'a> BindingsBuilder<'a> {
                 0
             };
 
-        // Count how many branches have a last_stmt_expr (potential type-based termination)
-        let n_branches_with_termination_key =
-            flows.iter().filter(|f| f.last_stmt_expr.is_some()).count();
-
         // Collect all the branches into a `MergeItem` per name we need to merge
         let mut merge_items = MergeItems::new(flows.first().unwrap_or(&base).info.len());
         for (name, info) in base.info.into_iter_hashed() {
@@ -2862,13 +2890,7 @@ impl<'a> BindingsBuilder<'a> {
             let phi_idx = self.idx_for_promise(Key::Phi(name.key().clone(), range));
             merged_flow_infos.insert_hashed(
                 name,
-                self.merged_flow_info(
-                    merge_item,
-                    phi_idx,
-                    merge_style,
-                    n_branches,
-                    n_branches_with_termination_key,
-                ),
+                self.merged_flow_info(merge_item, phi_idx, merge_style, n_branches),
             );
         }
 

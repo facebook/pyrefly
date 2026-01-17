@@ -3,10 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing_extensions import TypeVarTuple
-
-Ts = TypeVarTuple("Ts")
+from typing_extensions import LiteralString
 
 
-def identity():
-    return TypeVarTuple("Ts")
+def get_literal_string(x: LiteralString):
+    return x

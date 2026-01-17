@@ -204,6 +204,17 @@ fn on_class(
             Type::Tuple(t) => {
                 handle_tuple_type(t, variance, inj, on_edge, on_var);
             }
+            Type::Forall(forall) => {
+                // Methods with type parameters are wrapped in Forall. We need to visit
+                // the body to find class-level type variables used within.
+                on_type(
+                    variance,
+                    inj,
+                    &forall.body.clone().as_type(),
+                    on_edge,
+                    on_var,
+                );
+            }
 
             _ => {}
         }
@@ -345,8 +356,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if let Some(old_status) = new_params.get_mut(name) {
                             let new_inferred_variance =
                                 variance.union(old_status.inferred_variance);
-                            let new_has_variance_inferred =
-                                old_status.has_variance_inferred || has_inferred;
+                            // Mark as inferred if:
+                            // 1. It was already marked as inferred, OR
+                            // 2. The caller says this is an injective (reliable) constraint, OR
+                            // 3. The inferred variance is no longer Bivariant (we found a constraint)
+                            // Case 3 fixes self-referential types where `has_inferred` is always false
+                            // but we still discover variance constraints through the fixpoint iteration.
+                            let new_has_variance_inferred = old_status.has_variance_inferred
+                                || has_inferred
+                                || new_inferred_variance != Variance::Bivariant;
                             if new_inferred_variance != old_status.inferred_variance
                                 || new_has_variance_inferred != old_status.has_variance_inferred
                             {

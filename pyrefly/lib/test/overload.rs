@@ -113,6 +113,27 @@ def test(o: C):
 );
 
 testcase!(
+    test_overload_method_name_matches_class,
+    r#"
+from typing import assert_type, overload
+
+class A:
+    @overload
+    def B(self, x: int) -> B: ...
+    @overload
+    def B(self, x: str) -> B: ...
+    def B(self, x):
+        return B()
+
+class B:
+    x: int
+
+assert_type(A().B(0).x, int)
+assert_type(A().B("1").x, int)
+    "#,
+);
+
+testcase!(
     test_overload_arg_errors,
     r#"
 from typing import overload, assert_type
@@ -1243,5 +1264,39 @@ class Foo[T]:
     @overload
     def test(self, obj: T, cls: type[T]) -> int: ...
     def test(self, obj: T | None, cls: type[T]) -> str | int: ...
+    "#,
+);
+
+testcase!(
+    test_literal_selection,
+    r#"
+import contextlib
+import os
+from typing import AnyStr, IO, Iterator, Literal, assert_type, overload
+
+@overload
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: Literal["wb", "w+b"] = ..., **kwargs
+) -> Iterator[IO[bytes]]: ...
+@overload
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: Literal["w", "w+", "wt", "w+t"], **kwargs
+) -> Iterator[IO[str]]: ...
+@overload
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: str, **kwargs
+) -> Iterator[IO[AnyStr]]: ...
+
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: str = "w+b", **kwargs
+) -> Iterator[IO]:
+    ...
+
+with atomic_file("foo", "w") as f:
+    assert_type(f, IO[str])
     "#,
 );

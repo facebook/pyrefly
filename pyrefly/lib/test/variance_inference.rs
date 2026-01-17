@@ -287,3 +287,21 @@ y = b.f(3)
 z = b.f(3.0) # E:
 "#,
 );
+
+testcase!(
+    test_self_referential_covariance,
+    r#"
+class FooInferred[Node]:
+    def __init__(self, *options: FooInferred[Node]) -> None: ...
+    def __or__[OtherNode](self, other: FooInferred[OtherNode]) -> FooInferred[Node | OtherNode]:
+        # Node should be inferred as covariant since it only appears in covariant positions
+        # (the return type of __or__, and __init__ is skipped for variance inference)
+        return FooInferred[Node | OtherNode](self, other)
+
+# If FooInferred is covariant, this should work:
+# FooInferred[int] <: FooInferred[int | str] because int <: int | str
+foo_int: FooInferred[int] = FooInferred[int]()
+foo_str: FooInferred[str] = FooInferred[str]()
+foo_union: FooInferred[int | str] = foo_int | foo_str
+"#,
+);

@@ -470,8 +470,8 @@
     {
       "code": -2,
       "column": 11,
-      "concise_description": "`type[UserId]` is not assignable to `type`",
-      "description": "`type[UserId]` is not assignable to `type`",
+      "concise_description": "`type[UserId]` is not assignable to `type[Any]`",
+      "description": "`type[UserId]` is not assignable to `type[Any]`",
       "line": 18,
       "name": "bad-assignment",
       "severity": "error",
@@ -1339,8 +1339,8 @@
     {
       "code": -2,
       "column": 15,
-      "concise_description": "Type of yielded value `Literal[3]` is not assignable to declared return type `A`",
-      "description": "Type of yielded value `Literal[3]` is not assignable to declared return type `A`",
+      "concise_description": "Yielded type `Literal[3]` is not assignable to declared yield type `A`",
+      "description": "Yielded type `Literal[3]` is not assignable to declared yield type `A`",
       "line": 57,
       "name": "invalid-yield",
       "severity": "error",
@@ -1350,8 +1350,8 @@
     {
       "code": -2,
       "column": 15,
-      "concise_description": "Type of yielded value `Literal[3]` is not assignable to declared return type `A`",
-      "description": "Type of yielded value `Literal[3]` is not assignable to declared return type `A`",
+      "concise_description": "Yielded type `Literal[3]` is not assignable to declared yield type `A`",
+      "description": "Yielded type `Literal[3]` is not assignable to declared yield type `A`",
       "line": 66,
       "name": "invalid-yield",
       "severity": "error",
@@ -1372,8 +1372,8 @@
     {
       "code": -2,
       "column": 11,
-      "concise_description": "Type of yielded value `B` is not assignable to declared return type `A`",
-      "description": "Type of yielded value `B` is not assignable to declared return type `A`",
+      "concise_description": "Yielded type `B` is not assignable to declared yield type `A`",
+      "description": "Yielded type `B` is not assignable to declared yield type `A`",
       "line": 75,
       "name": "invalid-yield",
       "severity": "error",
@@ -1405,8 +1405,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot yield from a generator of type `Generator[A, None, None]` because it does not match the declared return type `Generator[B, None, Unknown]`",
-      "description": "Cannot yield from a generator of type `Generator[A, None, None]` because it does not match the declared return type `Generator[B, None, Unknown]`",
+      "concise_description": "Cannot yield from `Generator[A, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
+      "description": "Cannot yield from `Generator[A, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
       "line": 118,
       "name": "invalid-yield",
       "severity": "error",
@@ -1416,8 +1416,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot yield from a generator of type `Generator[int, None, None]` because it does not match the declared return type `Generator[B, None, Unknown]`",
-      "description": "Cannot yield from a generator of type `Generator[int, None, None]` because it does not match the declared return type `Generator[B, None, Unknown]`",
+      "concise_description": "Cannot yield from `Generator[int, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
+      "description": "Cannot yield from `Generator[int, None, None]`, which is not assignable to declared return type `Generator[B, None, Unknown]`",
       "line": 119,
       "name": "invalid-yield",
       "severity": "error",
@@ -1427,8 +1427,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Cannot yield from a generator of type `Generator[None, int, None]` because it does not match the declared return type `Generator[None, str, Unknown]`",
-      "description": "Cannot yield from a generator of type `Generator[None, int, None]` because it does not match the declared return type `Generator[None, str, Unknown]`",
+      "concise_description": "Cannot yield from `Generator[None, int, None]`, which is not assignable to declared return type `Generator[None, str, Unknown]`",
+      "description": "Cannot yield from `Generator[None, int, None]`, which is not assignable to declared return type `Generator[None, str, Unknown]`",
       "line": 135,
       "name": "invalid-yield",
       "severity": "error",
@@ -5039,17 +5039,6 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`",
-      "description": "Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`",
-      "line": 34,
-      "name": "bad-return",
-      "severity": "error",
-      "stop_column": 17,
-      "stop_line": 34
-    },
-    {
-      "code": -2,
       "column": 15,
       "concise_description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
       "description": "Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`",
@@ -7348,28 +7337,6 @@
       "severity": "error",
       "stop_column": 9,
       "stop_line": 18
-    },
-    {
-      "code": -2,
-      "column": 9,
-      "concise_description": "`@` is not supported between `Matrix[Literal[2], Literal[3]]` and `Matrix[Literal[3], Literal[7]]`",
-      "description": "`@` is not supported between `Matrix[Literal[2], Literal[3]]` and `Matrix[Literal[3], Literal[7]]`\n  Argument `Matrix[Literal[3], Literal[7]]` is not assignable to parameter `other` with type `Matrix[Literal[3], int]` in function `Matrix.__matmul__`",
-      "line": 71,
-      "name": "unsupported-operation",
-      "severity": "error",
-      "stop_column": 14,
-      "stop_line": 71
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(Matrix[Literal[2], int], Matrix[Literal[2], Literal[7]]) failed",
-      "description": "assert_type(Matrix[Literal[2], int], Matrix[Literal[2], Literal[7]]) failed",
-      "line": 72,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 51,
-      "stop_line": 72
     }
   ],
   "literals_literalstring.py": [
@@ -7699,8 +7666,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Augmented assignment produces a value of type `int`, which is not assignable to `Literal[3, 4, 5]`",
-      "description": "Augmented assignment produces a value of type `int`, which is not assignable to `Literal[3, 4, 5]`",
+      "concise_description": "Augmented assignment result `int` is not assignable to `Literal[3, 4, 5]`",
+      "description": "Augmented assignment result `int` is not assignable to `Literal[3, 4, 5]`",
       "line": 33,
       "name": "bad-assignment",
       "severity": "error",
@@ -9930,39 +9897,6 @@
     },
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(type, type[Any]) failed",
-      "description": "assert_type(type, type[Any]) failed",
-      "line": 84,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 84
-    },
-    {
-      "code": -2,
-      "column": 17,
-      "concise_description": "Object of class `type` has no attribute `unknown`",
-      "description": "Object of class `type` has no attribute `unknown`",
-      "line": 99,
-      "name": "missing-attribute",
-      "severity": "error",
-      "stop_column": 26,
-      "stop_line": 99
-    },
-    {
-      "code": -2,
-      "column": 17,
-      "concise_description": "Object of class `type` has no attribute `unknown`",
-      "description": "Object of class `type` has no attribute `unknown`",
-      "line": 100,
-      "name": "missing-attribute",
-      "severity": "error",
-      "stop_column": 26,
-      "stop_line": 100
-    },
-    {
-      "code": -2,
       "column": 5,
       "concise_description": "Class `object` has no class attribute `unknown`",
       "description": "Class `object` has no class attribute `unknown`",
@@ -9985,22 +9919,11 @@
     },
     {
       "code": -2,
-      "column": 16,
-      "concise_description": "assert_type(type, type[Any]) failed",
-      "description": "assert_type(type, type[Any]) failed",
-      "line": 139,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 139
-    },
-    {
-      "code": -2,
       "column": 1,
       "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA1, type[type[Any]]] (trying to access unknown)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA1, type[type[Any]]] (trying to access unknown)",
+      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA1, type[type[Any]]] (trying to access unknown)\n  Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself\n  Please report the bug at https://fb.workplace.com/groups/pyreqa",
       "line": 143,
-      "name": "missing-attribute",
+      "name": "internal-error",
       "severity": "error",
       "stop_column": 12,
       "stop_line": 143
@@ -10009,9 +9932,9 @@
       "code": -2,
       "column": 1,
       "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA2, type[type[Any]]] (trying to access unknown)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA2, type[type[Any]]] (trying to access unknown)",
+      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA2, type[type[Any]]] (trying to access unknown)\n  Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself\n  Please report the bug at https://fb.workplace.com/groups/pyreqa",
       "line": 144,
-      "name": "missing-attribute",
+      "name": "internal-error",
       "severity": "error",
       "stop_column": 12,
       "stop_line": 144
@@ -10019,10 +9942,10 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "Class `type` has no class attribute `unknown`",
-      "description": "Class `type` has no class attribute `unknown`",
+      "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA3, type[type[Any]]] (trying to access unknown)",
+      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA3, type[type[Any]]] (trying to access unknown)\n  Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself\n  Please report the bug at https://fb.workplace.com/groups/pyreqa",
       "line": 145,
-      "name": "missing-attribute",
+      "name": "internal-error",
       "severity": "error",
       "stop_column": 12,
       "stop_line": 145
@@ -10031,9 +9954,9 @@
       "code": -2,
       "column": 1,
       "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA4, type[type[Any]]] (trying to access unknown)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA4, type[type[Any]]] (trying to access unknown)",
+      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA4, type[type[Any]]] (trying to access unknown)\n  Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself\n  Please report the bug at https://fb.workplace.com/groups/pyreqa",
       "line": 146,
-      "name": "missing-attribute",
+      "name": "internal-error",
       "severity": "error",
       "stop_column": 12,
       "stop_line": 146
@@ -10645,8 +10568,8 @@
     {
       "code": -2,
       "column": 7,
-      "concise_description": "Typed dictionary definitions may not specify a metaclass",
-      "description": "Typed dictionary definitions may not specify a metaclass",
+      "concise_description": "Metaclass of `BadTypedDict2` has type `type[Any]` that is not a simple class type",
+      "description": "Metaclass of `BadTypedDict2` has type `type[Any]` that is not a simple class type",
       "line": 44,
       "name": "invalid-inheritance",
       "severity": "error",

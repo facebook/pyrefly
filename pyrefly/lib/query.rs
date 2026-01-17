@@ -32,6 +32,7 @@ use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
+use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_var::Restriction;
@@ -673,11 +674,18 @@ impl<'a> CalleesWithLocation<'a> {
                 TypedDict::TypedDict(inner) => Self::class_info_for_qname(inner.qname(), true),
                 TypedDict::Anonymous(_) => vec![],
             },
-            Type::Literal(Lit::Str(_)) | Type::LiteralString => {
+            Type::Literal(box Literal {
+                value: Lit::Str(_), ..
+            })
+            | Type::LiteralString(_) => {
                 vec![(String::from("builtins.str"), false)]
             }
-            Type::Literal(Lit::Int(_)) => vec![(String::from("builtins.int"), false)],
-            Type::Literal(Lit::Bool(_)) => vec![(String::from("builtins.bool"), false)],
+            Type::Literal(lit) if let Lit::Int(_) = lit.value => {
+                vec![(String::from("builtins.int"), false)]
+            }
+            Type::Literal(lit) if let Lit::Bool(_) = lit.value => {
+                vec![(String::from("builtins.bool"), false)]
+            }
             Type::Quantified(q) => match &q.restriction {
                 // for explicit bound - use name of the type used as bound
                 Restriction::Bound(b) => Self::class_info_from_bound_obj(b),

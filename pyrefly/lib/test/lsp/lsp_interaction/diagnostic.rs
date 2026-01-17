@@ -828,7 +828,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
                     expected_version,
                     actual_version
                 );
-                (actual_version == expected_version).then_some(())
+                (actual_version == expected_version).then_some(Ok(()))
             }
             _ => None,
         }
@@ -979,7 +979,7 @@ fn test_missing_source_with_config_diagnostic_has_errors() {
                     ))
                     && item
                         .message
-                        .starts_with("Could not find import of `whatthepatch`")
+                        .starts_with("Cannot find module `whatthepatch`")
                     && item.range.start.line == 5
                     && item.range.start.character == 7
                     && item.range.end.line == 5
@@ -1026,7 +1026,7 @@ fn test_untyped_import_diagnostic() {
                     "codeDescription": {
                         "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
                     },
-                    "message": "Missing type stubs for `boto3`\n  Hint: install the `boto3-stubs` package",
+                    "message": "Cannot find type stubs for module `boto3`\n  Hint: install the `boto3-stubs` package",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 12}

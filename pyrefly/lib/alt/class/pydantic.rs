@@ -37,6 +37,7 @@ use crate::alt::solve::TypeFormContext;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::DataclassMetadata;
+use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::pydantic::PydanticConfig;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::alt::types::pydantic::PydanticModelKind::RootModel;
@@ -60,7 +61,7 @@ use crate::types::types::Type;
 fn int_literal_from_type(ty: &Type) -> Option<&LitInt> {
     // We only currently enforce range constraints for literal ints.
     match ty {
-        Type::Literal(Lit::Int(lit)) => Some(lit),
+        Type::Literal(lit) if let Lit::Int(lit) = &lit.value => Some(lit),
         _ => None,
     }
 }
@@ -245,6 +246,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         pydantic_config_dict: &PydanticConfigDict,
         keywords: &[(Name, Annotation)],
+        _decorators: &[(Arc<Decorator>, TextRange)],
         errors: &ErrorCollector,
         range: TextRange,
     ) -> Option<PydanticConfig> {
@@ -259,12 +261,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .has_toplevel_qname(ModuleName::pydantic_settings().as_str(), "BaseSettings")
             });
 
-        let is_pydantic_base_model = has_pydantic_base_model_base_class
+        let is_pydantic_model = has_pydantic_base_model_base_class
             || bases_with_metadata
                 .iter()
-                .any(|(_, metadata)| metadata.is_pydantic_base_model());
+                .any(|(_, metadata)| metadata.is_pydantic_model());
 
-        if !is_pydantic_base_model {
+        if !is_pydantic_model {
             return None;
         }
 
@@ -334,7 +336,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // for v2.
         let extra = match keywords.iter().find(|(name, _)| name == &EXTRA) {
             Some((_, ann)) => match ann.get_type() {
-                Type::Literal(Lit::Str(s)) => match s.as_str() {
+                Type::Literal(lit) if let Lit::Str(s) = &lit.value => match s.as_str() {
                     "allow" | "ignore" => true,
                     "forbid" => false,
                     _ => {
@@ -391,10 +393,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
 
         Some(PydanticConfig {
-            frozen,
+            frozen: Some(frozen),
             validation_flags,
-            extra,
-            strict,
+            extra: Some(extra),
+            strict: Some(strict),
             pydantic_model_kind,
         })
     }
@@ -521,7 +523,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         metadata: &ClassMetadata,
     ) -> Option<DataclassFieldKeywords> {
         let dm = metadata.dataclass_metadata()?;
-        if !metadata.is_pydantic_base_model() {
+        if !metadata.is_pydantic_model() {
             return None;
         }
         if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _) = self.bindings().get(annot) {

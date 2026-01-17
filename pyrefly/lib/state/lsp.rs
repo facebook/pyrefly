@@ -1990,6 +1990,34 @@ impl<'a> Transaction<'a> {
         quick_fixes::move_members::push_members_down_code_actions(self, handle, selection)
     }
 
+    pub fn move_module_member_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+        import_format: ImportFormat,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_module::move_module_member_code_actions(
+            self,
+            handle,
+            selection,
+            import_format,
+        )
+    }
+
+    pub fn make_local_function_top_level_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+        import_format: ImportFormat,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_module::make_local_function_top_level_code_actions(
+            self,
+            handle,
+            selection,
+            import_format,
+        )
+    }
+
     /// Determines whether a module is a third-party package.
     ///
     /// Checks if the module's path is located within any of the configured
@@ -2764,9 +2792,9 @@ impl<'a> Transaction<'a> {
         match param_type {
             Type::Literal(lit) => {
                 // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
-                let label = lit.to_string_escaped(true);
+                let label = lit.value.to_string_escaped(true);
                 let insert_text = if in_string_literal {
-                    if let Lit::Str(s) = lit {
+                    if let Lit::Str(s) = &lit.value {
                         s.to_string()
                     } else {
                         label.clone()

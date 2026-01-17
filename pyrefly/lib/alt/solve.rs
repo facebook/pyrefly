@@ -1572,11 +1572,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let mut type_info = self.binding_to_type_info(binding, errors);
         type_info.visit_mut(&mut |ty| {
-            if !matches!(
-                binding,
-                Binding::NameAssign { .. } | Binding::PartialTypeWithUpstreamsCompleted(..)
-            ) {
-                self.pin_all_placeholder_types(ty);
+            // Skip pinning for NameAssign and PartialTypeWithUpstreamsCompleted bindings
+            // when infer_with_first_use is enabled, as these bindings can contain placeholder
+            // types that should be pinned by first use. When infer_with_first_use is disabled,
+            // we pin immediately since there's no first-use inference mechanism.
+            let skip_pinning = self.solver().infer_with_first_use
+                && matches!(
+                    binding,
+                    Binding::NameAssign { .. } | Binding::PartialTypeWithUpstreamsCompleted(..)
+                );
+            if !skip_pinning {
+                self.pin_all_placeholder_types(ty, Some(errors));
             }
             self.expand_vars_mut(ty);
         });
@@ -1598,12 +1604,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.force_for_narrowing(&forced, range, errors)
                 } else {
                     // Cycle detected - report as internal error
-                    self.error(
-                        errors,
+                    errors.internal_error(
                         range,
-                        ErrorInfo::Kind(ErrorKind::InternalError),
-                        "Type narrowing encountered a cycle in Type::Var".to_owned(),
-                    )
+                        vec1!["Type narrowing encountered a cycle in Type::Var".to_owned()],
+                    );
+                    Type::any_error()
                 }
             }
             _ => ty.clone(),
@@ -2292,40 +2297,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if branches.len() == 1 {
                     self.get_idx(branches[0].value_key).arc_clone()
                 } else {
-                    // Filter branches based on type-based termination (Never/NoReturn)
-                    let live_value_keys: Vec<Idx<Key>> = branches
+                    // TODO(Step 9): Implement termination-based filtering
+                    let type_infos = branches
                         .iter()
                         .filter_map(|branch| {
-                            match branch.termination_key {
-                                None => {
-                                    // No terminal statement, branch is live
-                                    Some(branch.value_key)
-                                }
-                                Some(term_key) => {
-                                    let term_type = self.get_idx(term_key);
-                                    if term_type.ty().is_never() {
-                                        // Branch terminated with Never/NoReturn
-                                        None
-                                    } else {
-                                        // Terminal statement doesn't return Never, branch is live
-                                        Some(branch.value_key)
-                                    }
-                                }
-                            }
-                        })
-                        .collect();
-
-                    // If all branches terminated, use all value keys (consistent with binding-time)
-                    let keys_to_use = if live_value_keys.is_empty() {
-                        branches.iter().map(|b| b.value_key).collect()
-                    } else {
-                        live_value_keys
-                    };
-
-                    let type_infos = keys_to_use
-                        .iter()
-                        .filter_map(|k| {
-                            let t: Arc<TypeInfo> = self.get_idx(*k);
+                            let t: Arc<TypeInfo> = self.get_idx(branch.value_key);
                             // Filter out all `@overload`-decorated types except the one that
                             // accumulates all signatures into a Type::Overload.
                             if matches!(t.ty(), Type::Overload(_)) || !t.ty().is_overload() {
@@ -2335,7 +2311,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         })
                         .collect::<Vec<_>>();
-
                     TypeInfo::join(
                         type_infos,
                         &|ts| self.unions(ts),
@@ -2520,6 +2495,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     BindingLegacyTypeParam::ParamKeyed(_) => TypeInfo::of_ty(ty),
                 }
             }
+            Binding::PartialTypeWithUpstreamsCompleted(raw_idx, first_used_by) => {
+                // Force all of the upstream `Pin`s for which this was the first use.
+                for idx in first_used_by {
+                    self.get_idx(*idx);
+                }
+                // Recursively get the TypeInfo from the raw binding to preserve facets
+                // (e.g., dict literal key completions).
+                self.get_idx(*raw_idx).arc_clone()
+            }
             _ => {
                 // All other Bindings model `Type` level operations where we do not
                 // propagate any attribute narrows.
@@ -2641,7 +2625,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.distribute_over_union(&base, |base| {
             self.distribute_over_union(&slice_ty, |key| {
                 match (base, key) {
-                    (Type::TypedDict(typed_dict), Type::Literal(Lit::Str(field_name))) => {
+                    (Type::TypedDict(typed_dict), Type::Literal(lit))
+                        if let Lit::Str(field_name) = &lit.value =>
+                    {
                         let field_name = Name::new(field_name);
                         self.check_assign_to_typed_dict_literal_subscript(
                             typed_dict,
@@ -2821,7 +2807,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     // Given a type, force all `Vars` that indicate placeholder types
     // (everything that isn't either an answer or a Recursive var).
-    fn pin_all_placeholder_types(&self, ty: &mut Type) {
+    // If an ErrorCollector is provided and a PartialContained variable is pinned
+    // to Any, an ImplicitAny error will be emitted.
+    fn pin_all_placeholder_types(&self, ty: &mut Type, errors: Option<&ErrorCollector>) {
         // Expand the type, in case unexpanded `Vars` are hiding further `Var`s that
         // need to be pinned.
         self.solver().expand_vars_mut(ty);
@@ -2834,9 +2822,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let mut vars = vec![];
         f(ty, &mut vars);
-        // Pin all relevant vars
+        // Pin all relevant vars and collect ranges of PartialContained vars
         for var in vars {
-            self.solver().pin_placeholder_type(var);
+            if let Some(range) = self.solver().pin_placeholder_type(var)
+                && let Some(errors) = errors
+            {
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    vec1![
+                        "Cannot infer type of empty container; it will be treated as containing `Any`".to_owned(),
+                        "Consider adding a type annotation or initializing with a non-empty value".to_owned(),
+                    ],
+                );
+            }
         }
     }
 
@@ -3051,7 +3050,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match match_args {
                     Type::Tuple(Tuple::Concrete(ts)) => {
                         if *idx < ts.len() {
-                            if let Some(Type::Literal(Lit::Str(attr_name))) = ts.get(*idx) {
+                            if let Some(Type::Literal(lit)) = ts.get(*idx)
+                                && let Lit::Str(attr_name) = &lit.value
+                            {
                                 self.attr_infer(
                                     &binding,
                                     &Name::new(attr_name),
@@ -3318,6 +3319,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         implicit_return,
                         yields,
                         yield_froms,
+                        body_is_trivial,
+                        class_metadata_key,
                     } => {
                         let is_generator = !(yields.is_empty() && yield_froms.is_empty());
                         let returns = returns.iter().map(|k| self.get_idx(*k).arc_clone_ty());
@@ -3334,6 +3337,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     .chain(iter::once(implicit_return.arc_clone_ty()))
                                     .collect(),
                             )
+                        };
+                        // If this is a method with a trivial body (e.g., `raise NotImplementedError()`)
+                        // in a class that extends ABC, treat it as an abstract method and return Any
+                        // instead of Never. This handles transitive ABC inheritance.
+                        let is_abstract_method = *body_is_trivial
+                            && return_ty.is_never()
+                            && class_metadata_key
+                                .is_some_and(|key| self.get_idx(key).extends_abc());
+                        let return_ty = if is_abstract_method {
+                            Type::any_implicit()
+                        } else {
+                            return_ty
                         };
                         if is_generator {
                             let yield_ty = self.unions({
@@ -3431,7 +3446,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // https://typing.python.org/en/latest/spec/exceptions.html#context-managers.
                 let context_catch = |x: &Type| -> bool {
                     match x {
-                        Type::Literal(Lit::Bool(b)) => *b,
+                        Type::Literal(lit) if let Lit::Bool(b) = lit.value => b,
                         Type::ClassType(cls) => cls == self.stdlib.bool(),
                         _ => false, // Default to assuming exceptions are not suppressed
                     }
@@ -3862,7 +3877,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn solve_decorator(&self, x: &BindingDecorator, errors: &ErrorCollector) -> Arc<Decorator> {
         let mut ty = self.expr_infer(&x.expr, errors);
-        self.pin_all_placeholder_types(&mut ty);
+        self.pin_all_placeholder_types(&mut ty, Some(errors));
         self.expand_vars_mut(&mut ty);
         let deprecation = parse_deprecation(&x.expr);
         Arc::new(Decorator { ty, deprecation })
@@ -4133,10 +4148,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassType(cls) | Type::SelfType(cls) => {
                 Type::ClassDef(cls.class_object().clone())
             }
-            Type::Literal(lit) => {
-                Type::ClassDef(lit.general_class_type(self.stdlib).class_object().clone())
-            }
-            Type::LiteralString => Type::ClassDef(self.stdlib.str().class_object().clone()),
+            Type::Literal(lit) => Type::ClassDef(
+                lit.value
+                    .general_class_type(self.stdlib)
+                    .class_object()
+                    .clone(),
+            ),
+            Type::LiteralString(_) => Type::ClassDef(self.stdlib.str().class_object().clone()),
             Type::None => Type::ClassDef(self.stdlib.none_type().class_object().clone()),
             Type::Tuple(_) => Type::ClassDef(self.stdlib.tuple_object().clone()),
             Type::TypedDict(_) | Type::PartialTypedDict(_) => {
@@ -4373,7 +4391,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let slice_ty = self.expr_infer(&x.slice, errors);
                 self.map_over_union(&base, |base| {
                     self.map_over_union(&slice_ty, |key| match (base, key) {
-                        (Type::TypedDict(typed_dict), Type::Literal(Lit::Str(field_name))) => {
+                        (Type::TypedDict(typed_dict), Type::Literal(lit))
+                            if let Lit::Str(field_name) = &lit.value =>
+                        {
                             let field_name = Name::new(field_name);
                             self.check_del_typed_dict_literal_key(
                                 typed_dict,

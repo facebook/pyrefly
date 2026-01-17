@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
@@ -375,9 +376,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             },
             Type::KwCall(call) => self.as_call_target_impl(call.return_ty, quantified, dunder_call),
-            Type::Literal(Lit::Enum(enum_)) => {
-                self.as_call_target_impl(enum_.class.to_type(), quantified, dunder_call)
-            }
+            Type::Literal(box Literal {
+                value: Lit::Enum(enum_),
+                ..
+            }) => self.as_call_target_impl(enum_.class.to_type(), quantified, dunder_call),
             _ => CallTargetLookup::Error(vec![]),
         }
     }
@@ -682,7 +684,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             self.record_resolved_trace(arguments_range, init_method);
         }
-        if class_metadata.is_pydantic_base_model()
+        if class_metadata.is_pydantic_model()
             && let Some(dataclass) = class_metadata.dataclass_metadata()
         {
             self.check_pydantic_argument_range_constraints(
@@ -1112,7 +1114,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let call_target =
             self.as_call_target_or_error(getattr_ty, CallStyle::FreeForm, range, errors, context);
-        let attr_name_ty = Type::Literal(Lit::Str(attr_name.as_str().into()));
+        let attr_name_ty = Lit::Str(attr_name.as_str().into()).to_implicit_type();
         self.call_infer(
             call_target,
             &[CallArg::ty(&attr_name_ty, range)],
@@ -1136,7 +1138,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let call_target =
             self.as_call_target_or_error(setattr_ty, CallStyle::FreeForm, range, errors, context);
-        let attr_name_ty = Type::Literal(Lit::Str(attr_name.as_str().into()));
+        let attr_name_ty = Lit::Str(attr_name.as_str().into()).to_implicit_type();
         self.call_infer(
             call_target,
             &[CallArg::ty(&attr_name_ty, range), arg],

@@ -134,7 +134,7 @@
     "Line 98: Expected 1 errors"
   ],
   "generics_basic.py": [
-    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__` called with arguments: (AnyStr)\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]', 'Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`']",
+    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__` called with arguments: (AnyStr)\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]']",
     "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
@@ -214,10 +214,7 @@
   ],
   "generics_variance_inference.py": [],
   "historical_positional.py": [],
-  "literals_interactions.py": [
-    "Line 71: Unexpected errors ['`@` is not supported between `Matrix[Literal[2], Literal[3]]` and `Matrix[Literal[3], Literal[7]]`\\n  Argument `Matrix[Literal[3], Literal[7]]` is not assignable to parameter `other` with type `Matrix[Literal[3], int]` in function `Matrix.__matmul__`']",
-    "Line 72: Unexpected errors ['assert_type(Matrix[Literal[2], int], Matrix[Literal[2], Literal[7]]) failed']"
-  ],
+  "literals_interactions.py": [],
   "literals_literalstring.py": [],
   "literals_parameterizations.py": [],
   "literals_semantics.py": [],
@@ -285,12 +282,7 @@
   ],
   "specialtypes_none.py": [],
   "specialtypes_promotions.py": [],
-  "specialtypes_type.py": [
-    "Line 84: Unexpected errors ['assert_type(type, type[Any]) failed']",
-    "Line 99: Unexpected errors ['Object of class `type` has no attribute `unknown`']",
-    "Line 100: Unexpected errors ['Object of class `type` has no attribute `unknown`']",
-    "Line 139: Unexpected errors ['assert_type(type, type[Any]) failed']"
-  ],
+  "specialtypes_type.py": [],
   "tuples_type_compat.py": [],
   "tuples_type_form.py": [],
   "tuples_unpacked.py": [],

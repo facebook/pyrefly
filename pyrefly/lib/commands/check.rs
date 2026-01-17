@@ -253,8 +253,9 @@ struct OutputArgs {
     )]
     only: Option<Vec<ErrorKind>>,
 
-    /// By default show the number of errors. Pass `--summary` to show information about lines checked and time/memory,
-    /// or `--summary=none` to hide the summary line entirely.
+    /// By default show a progress bar and the number of errors.
+    /// Pass `--summary` to additionally show information about lines checked and time/memory,
+    /// or `--summary=none` to hide the progress bar and summary line entirely.
     #[arg(
         long,
         default_missing_value = "full",
@@ -531,7 +532,7 @@ impl Handles {
         }
 
         // TODO(connernilsen): wire in force logic
-        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false).0;
+        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false, None).0;
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
@@ -807,9 +808,13 @@ impl CheckArgs {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         let type_check_start = Instant::now();
-        transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+        if self.output.summary != Summary::None {
+            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+        }
         transaction.run(handles, require);
-        transaction.set_subscriber(None);
+        if self.output.summary != Summary::None {
+            transaction.set_subscriber(None);
+        }
 
         let loads = if self.behavior.check_all {
             transaction.get_all_errors()

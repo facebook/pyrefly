@@ -1108,6 +1108,31 @@ impl<'a> Transaction<'a> {
         lock.steps.exports.dupe().unwrap()
     }
 
+    /// Look up the location of an exported name in a module.
+    /// Follows re-exports (ExportLocation::OtherModule) to find the original definition.
+    /// Returns the module and text range where the name is defined.
+    fn lookup_export_location(&self, handle: &Handle, name: &Name) -> Option<(Module, TextRange)> {
+        let module_data = self.get_module(handle);
+        let exports = self.lookup_export(&module_data);
+        let export_map = exports.exports(&self.lookup(module_data.dupe()));
+
+        match export_map.get(name)? {
+            ExportLocation::ThisModule(export) => {
+                let load = module_data.state.read().steps.load.dupe()?;
+                Some((load.module_info.dupe(), export.location))
+            }
+            ExportLocation::OtherModule(other_module, alias) => {
+                let actual_name = alias.as_ref().unwrap_or(name);
+                let loader = self.get_cached_loader(&module_data.config.read());
+                let other_path = loader
+                    .find_import(*other_module, Some(handle.path()))
+                    .finding()?;
+                let other_handle = Handle::new(*other_module, other_path, handle.sys_info().dupe());
+                self.lookup_export_location(&other_handle, actual_name)
+            }
+        }
+    }
+
     fn lookup_answer<'b, K: Solve<TransactionHandle<'b>> + Exported>(
         &'b self,
         module_data: ArcId<ModuleDataMut>,
@@ -1184,10 +1209,20 @@ impl<'a> Transaction<'a> {
             self.data
                 .stdlib
                 .insert_hashed(k.to_owned(), Arc::new(Stdlib::for_bootstrapping()));
-            let v = Arc::new(Stdlib::new(k.version(), &|module, name| {
-                let path = loader.find_import(module, None).finding()?;
-                self.lookup_stdlib(&Handle::new(module, path, (*k).dupe()), name, &thread_state)
-            }));
+            let v = Arc::new(Stdlib::new(
+                k.version(),
+                // Existing lookup_class callback
+                &|module, name| {
+                    let path = loader.find_import(module, None).finding()?;
+                    self.lookup_stdlib(&Handle::new(module, path, (*k).dupe()), name, &thread_state)
+                },
+                // New lookup_export_location callback
+                &|module, name| {
+                    let path = loader.find_import(module, None).finding()?;
+                    let handle = Handle::new(module, path, (*k).dupe());
+                    self.lookup_export_location(&handle, name)
+                },
+            ));
             self.data.stdlib.insert_hashed(k, v);
         }
     }

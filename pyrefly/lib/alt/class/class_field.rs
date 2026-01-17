@@ -21,6 +21,7 @@ use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
+use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::read_only::IsFinalVariableInitialized;
 use pyrefly_types::simplify::unions;
@@ -1154,7 +1155,7 @@ impl<'a> Instance<'a> {
             }
             InstanceKind::Protocol(self_type) => self_type.clone(),
             InstanceKind::Metaclass(cls) => cls.clone().to_type(),
-            InstanceKind::LiteralString => Type::LiteralString,
+            InstanceKind::LiteralString => Type::LiteralString(LitStyle::Implicit),
         }
     }
 
@@ -1637,14 +1638,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.determine_read_only_reason(name, annotation.as_ref(), &metadata, field_definition);
 
         // Determine the final type, promoting literals when appropriate.
+        let mut has_implicit_literal = value_ty.is_implicit_literal();
+        if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method) {
+            value_ty.universe(&mut |current_type_node| {
+                has_implicit_literal |= current_type_node.is_implicit_literal();
+            });
+        }
         let ty = if annotation
             .as_ref()
             .and_then(|ann| ann.ty.as_ref())
             .is_none()
             && matches!(read_only_reason, None | Some(ReadOnlyReason::NamedTuple))
-            && value_ty.is_literal()
+            && has_implicit_literal
         {
-            value_ty.promote_literals(self.stdlib)
+            value_ty.promote_implicit_literals(self.stdlib)
         } else {
             value_ty
         };
@@ -1653,11 +1660,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut descriptor = None;
         // Descriptor semantics apply when:
         // 1. The field is initialized in the class body (class-level attribute), or
-        // 2. The field is annotated with ClassVar (explicitly class-level, even without initialization)
+        // 2. The field is annotated with ClassVar (explicitly class-level, even without initialization), or
+        // 3. The field's type is special-case to always be treated like a descriptor.
         let is_classvar = direct_annotation
             .as_ref()
             .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar));
-        if matches!(initialization, ClassFieldInitialization::ClassBody(_)) || is_classvar {
+        let is_special_descriptor_type = direct_annotation.as_ref().is_some_and(|annot| {
+            annot
+                .ty
+                .as_ref()
+                .is_some_and(|ty| self.is_special_descriptor_type(ty))
+        });
+        if matches!(initialization, ClassFieldInitialization::ClassBody(_))
+            || is_classvar
+            || is_special_descriptor_type
+        {
             match &ty {
                 // TODO(stroxler): This works for simple descriptors. There are known gaps:
                 // - Gracefully handle instance-only `__get__`/`__set__`. Descriptors only seem to be detected
@@ -1868,6 +1885,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_field
     }
 
+    /// Is this a type that is special-cased to always have descriptor behavior?
+    fn is_special_descriptor_type(&self, ty: &Type) -> bool {
+        // `sqlalchemy.orm.Mapped` is used in subclasses of `sqlalchemy.orm.DeclarativeBase`,
+        // which does runtime magic to initialize fields annotated as `Mapped`, making them class-level.
+        matches!(ty, Type::ClassType(cls) if cls.has_qname("sqlalchemy.orm.base", "Mapped"))
+    }
+
     /// Helper to infer with an optional annotation as a hint and then expand
     pub fn attribute_expr_infer(
         &self,
@@ -1972,7 +1996,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && dm.kws.frozen
             && dm.fields.contains(name)
         {
-            let reason = if metadata.is_pydantic_base_model() {
+            let reason = if metadata.is_pydantic_model() {
                 ReadOnlyReason::PydanticFrozen
             } else {
                 ReadOnlyReason::FrozenDataclass
@@ -2212,7 +2236,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        if metadata.is_pydantic_base_model()
+        if metadata.is_pydantic_model()
             && let ClassFieldInitialization::ClassBody(Some(kws)) = initialization
         {
             let field_ty = annotation.get_type();
@@ -2630,11 +2654,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ClassFieldInner::ClassAttribute {
                 ty: Type::Literal(mut lit),
                 ..
-            } if matches!(&lit, Lit::Enum(lit_enum) if lit_enum.class.class_object() == enum_cls) =>
+            } if matches!(&lit.value, Lit::Enum(lit_enum) if lit_enum.class.class_object() == enum_cls) =>
             {
                 let replacement = self.instantiate(enum_cls);
-                lit.visit_mut(&mut |ty| ty.subst_self_type_mut(&replacement));
-                Some(lit)
+                lit.value
+                    .visit_mut(&mut |ty| ty.subst_self_type_mut(&replacement));
+                Some(lit.value)
             }
             _ => None,
         }
@@ -3742,7 +3767,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let should_raise_error = if let Some(instance_class) = instance_class {
                     let class = instance_class.class_object();
                     let metadata = self.get_metadata_for_class(class);
-                    !(metadata.is_pydantic_base_model()
+                    !(metadata.is_pydantic_model()
                         && metadata
                             .dataclass_metadata()
                             .is_some_and(|dm| !dm.kws.frozen))

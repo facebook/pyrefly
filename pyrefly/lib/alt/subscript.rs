@@ -76,7 +76,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Type> {
         let idx_type = self.expr_infer(index, errors);
         match &idx_type {
-            Type::Literal(lit) if let Some(idx) = lit.as_index_i64() => match tuple {
+            Type::Literal(lit) if let Some(idx) = lit.value.as_index_i64() => match tuple {
                 Tuple::Concrete(elts) => {
                     self.infer_concrete_index(elts, idx, index.range(), errors)
                 }
@@ -96,7 +96,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(expr) = expr {
             let literal_type = self.expr_infer(expr, &self.error_swallower());
             match &literal_type {
-                Type::Literal(lit) => Ok(lit.as_index_i64()),
+                Type::Literal(lit) => Ok(lit.value.as_index_i64()),
                 _ => Err(()),
             }
         } else {
@@ -285,7 +285,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let literal_index = |expr: &Expr| -> Option<i64> {
             match self.expr_infer(expr, errors) {
-                Type::Literal(ref lit) => lit.as_index_i64(),
+                Type::Literal(ref lit) => lit.value.as_index_i64(),
                 _ => None,
             }
         };
@@ -392,7 +392,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
 
             if slice_length <= 0 {
-                return Type::Literal(Lit::Str("".into()));
+                return Lit::Str("".into()).to_implicit_type();
             }
 
             if slice_length as usize as i64 != slice_length {
@@ -415,18 +415,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
             }
 
-            Type::Literal(Lit::Str(result.into()))
+            Lit::Str(result.into()).to_implicit_type()
         } else {
             let idx_ty = self.expr_infer(index_expr, errors);
             if let Type::Literal(lit) = idx_ty
-                && let Some(idx) = lit.as_index_i64()
+                && let Some(idx) = lit.value.as_index_i64()
             {
                 let normalized = if idx < 0 { len + idx } else { idx };
                 if normalized >= 0 && normalized < len {
                     let ch = chars[normalized as usize];
                     let mut buf = String::new();
                     buf.push(ch);
-                    return Type::Literal(Lit::Str(buf.into()));
+                    return Lit::Str(buf.into()).to_implicit_type();
                 } else {
                     return self.error(
                         errors,
@@ -454,11 +454,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let index_ty = self.expr_infer(index_expr, errors);
         match &index_ty {
             Type::Literal(lit) => {
-                if let Some(idx) = lit.as_index_i64() {
+                if let Some(idx) = lit.value.as_index_i64() {
                     if idx >= 0
                         && let Some(byte) = idx.to_usize().and_then(|idx| bytes.get(idx))
                     {
-                        Type::Literal(Lit::Int(LitInt::new((*byte).into())))
+                        LitInt::new((*byte).into()).to_implicit_type()
                     } else if idx < 0
                         && let Some(byte) = idx
                             .checked_neg()
@@ -466,7 +466,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .and_then(|idx| bytes.len().checked_sub(idx))
                             .and_then(|idx| bytes.get(idx))
                     {
-                        Type::Literal(Lit::Int(LitInt::new((*byte).into())))
+                        LitInt::new((*byte).into()).to_implicit_type()
                     } else {
                         self.error(
                             errors,
