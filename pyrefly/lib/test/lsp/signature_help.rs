@@ -982,3 +982,25 @@ Box[int](42)
         "Expected generic constructor to show Box[int], got: {report}"
     );
 }
+
+#[test]
+fn method_call_signature_unchanged() {
+    let code = r#"
+class Foo:
+    def method(self, x: int) -> str: ...
+
+foo = Foo()
+foo.method()
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    // Method calls should still show their original return type
+    assert!(
+        report.contains("-> str"),
+        "Expected method signature to show -> str, got: {report}"
+    );
+    assert!(
+        report.contains("parameters=[x: int]"),
+        "Expected parameters, got: {report}"
+    );
+}
