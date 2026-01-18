@@ -419,3 +419,38 @@ def test():
     yield from [2, 3] # E: This `yield from` expression is unreachable
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2141
+// List concatenation with contextual return type hint should work
+testcase!(
+    test_return_list_concat_contextual_hint,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self, x: int) -> None: ...
+
+class A(Base):
+    def foo(self, x: int) -> None:
+        print(x)
+
+class B(Base):
+    def foo(self, x: int) -> None:
+        pass
+
+# This should type-check without error: the return type hint list[Base]
+# provides context for inferring [A()] + [B()] as list[Base].
+def return_object(name: str) -> list[Base]:
+    return [A()] + [B()]
+
+# Non-list-returning variant still works (for comparison)
+def return_object_non_list(name: str) -> Base:
+    o = None
+    if name == "a":
+        o = A()
+    else:
+        o = B()
+    return o
+"#,
+);
