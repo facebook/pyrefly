@@ -2952,6 +2952,9 @@ impl Server {
         {
             push_refactor_actions(refactors);
         }
+        if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
         if actions.is_empty() {
             None
         } else {
