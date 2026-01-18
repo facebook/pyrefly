@@ -220,6 +220,7 @@ use crate::lsp::non_wasm::call_hierarchy::find_function_at_position_in_ast;
 use crate::lsp::non_wasm::call_hierarchy::prepare_call_hierarchy_item;
 use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
+use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
 use crate::lsp::non_wasm::lsp::apply_change_events;
 use crate::lsp::non_wasm::lsp::as_notification;
 use crate::lsp::non_wasm::lsp::as_request;
@@ -2952,6 +2953,10 @@ impl Server {
         {
             push_refactor_actions(refactors);
         }
+        actions.extend(convert_module_package_code_actions(
+            &self.initialize_params.capabilities,
+            uri,
+        ));
         if actions.is_empty() {
             None
         } else {

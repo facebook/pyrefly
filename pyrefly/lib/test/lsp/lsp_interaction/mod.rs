@@ -11,6 +11,7 @@ mod basic;
 mod call_hierarchy;
 mod completion;
 mod configuration;
+mod convert_module_package;
 mod definition;
 mod diagnostic;
 mod did_change;
