@@ -2550,14 +2550,13 @@ impl<'a> Transaction<'a> {
                 {
                     continue;
                 }
-                let depth = handle_to_import_from.module().components().len();
                 let module_description = handle_to_import_from.module().as_str().to_owned();
                 let (insert_text, additional_text_edits, imported_module) = {
                     let (position, insert_text, module_name) = insert_import_edit(
                         &ast,
                         self.config_finder(),
                         handle.dupe(),
-                        handle_to_import_from,
+                        handle_to_import_from.clone(),
                         &name,
                         import_format,
                     );
@@ -2569,8 +2568,14 @@ impl<'a> Transaction<'a> {
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
+                let is_private_import = handle_to_import_from
+                    .module()
+                    .components()
+                    .last()
+                    .is_some_and(|component| component.as_str().starts_with('_'));
+                let private_rank = if is_private_import { "1" } else { "0" };
                 completions.push(CompletionItem {
-                    label: name,
+                    label: name.clone(),
                     detail: Some(insert_text),
                     kind: export
                         .symbol_kind
@@ -2589,7 +2594,7 @@ impl<'a> Transaction<'a> {
                     } else {
                         None
                     },
-                    sort_text: Some(format!("4{}", depth)),
+                    sort_text: Some(format!("{name}:{private_rank}")),
                     ..Default::default()
                 });
             }
@@ -2613,6 +2618,11 @@ impl<'a> Transaction<'a> {
                     };
                     let auto_import_label_detail = format!(" (import {module_name_str})");
 
+                    let is_private_import = module_name
+                        .components()
+                        .last()
+                        .is_some_and(|component| component.as_str().starts_with('_'));
+                    let private_rank = if is_private_import { "1" } else { "0" };
                     completions.push(CompletionItem {
                         label: module_name_str.clone(),
                         detail: Some(insert_text),
@@ -2621,9 +2631,10 @@ impl<'a> Transaction<'a> {
                         label_details: supports_completion_item_details.then_some(
                             CompletionItemLabelDetails {
                                 detail: Some(auto_import_label_detail),
-                                description: Some(module_name_str),
+                                description: Some(module_name_str.clone()),
                             },
                         ),
+                        sort_text: Some(format!("{module_name_str}:{private_rank}")),
                         ..Default::default()
                     });
                 }
@@ -3066,20 +3077,23 @@ impl<'a> Transaction<'a> {
                 .as_ref()
                 .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
             {
-                "9"
+                "9".to_owned()
             } else if item.additional_text_edits.is_some() {
-                "4"
+                if let Some(sort_text) = &item.sort_text {
+                    format!("4{sort_text}")
+                } else {
+                    "4".to_owned()
+                }
             } else if item.label.starts_with("__") {
-                "3"
+                "3".to_owned()
             } else if item.label.as_str().starts_with("_") {
-                "2"
+                "2".to_owned()
             } else if let Some(sort_text) = &item.sort_text {
                 // 1 is reserved for re-exports
-                sort_text.as_str()
+                sort_text.clone()
             } else {
-                "0"
-            }
-            .to_owned();
+                "0".to_owned()
+            };
             item.sort_text = Some(sort_text);
         }
         (result, is_incomplete)
@@ -3106,12 +3120,14 @@ impl<'a> Transaction<'a> {
     /// - Handles stdlib patterns where a public module (`io`) re-exports from a
     ///   private implementation module (`_io`).
     fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
-        let canonical_components = canonical.module().components();
+        let canonical_module = canonical.module();
+        let original_module = original.module();
+        let canonical_components = canonical_module.components();
         let canonical_component = canonical_components
             .last()
             .map(|name| name.as_str())
             .unwrap_or("");
-        let original_components = original.module().components();
+        let original_components = original_module.components();
         let original_component = original_components
             .last()
             .map(|name| name.as_str())
@@ -3123,15 +3139,23 @@ impl<'a> Transaction<'a> {
             return true;
         }
 
-        // Include re-export if original is a parent package of canonical
-        if canonical_components.len() > original_components.len() {
-            canonical_components
+        // Include re-export if original is a parent package of canonical.
+        if canonical_components.len() > original_components.len()
+            && canonical_components
                 .iter()
                 .zip(original_components.iter())
                 .all(|(c, o)| c == o)
-        } else {
-            false
+        {
+            return true;
         }
+        // Some stdlib shims encode dotted modules with underscores (e.g. _collections_abc).
+        if canonical_module.as_str().starts_with('_') && original_module.as_str().contains('.') {
+            let canonical_trim = canonical_module.as_str().trim_start_matches('_');
+            if canonical_trim == original_module.as_str().replace('.', "_") {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
