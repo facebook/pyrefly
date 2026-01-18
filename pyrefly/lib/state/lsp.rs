@@ -74,6 +74,12 @@ use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::lsp_attributes::AttributeContext;
+use crate::state::pytest::PytestAliases;
+use crate::state::pytest::collect_pytest_fixture_definitions;
+use crate::state::pytest::collect_pytest_fixture_parameter_ranges;
+use crate::state::pytest::is_pytest_fixture_function;
+use crate::state::pytest::is_pytest_test_class;
+use crate::state::pytest::is_pytest_test_function;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
@@ -1521,6 +1527,61 @@ impl<'a> Transaction<'a> {
             .collect()
     }
 
+    fn pytest_fixture_definitions_for_parameter(
+        &self,
+        handle: &Handle,
+        identifier: &Identifier,
+        covering_nodes: &[AnyNodeRef],
+    ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
+        let mod_module = self.get_ast(handle)?;
+        let aliases = PytestAliases::from_module(mod_module.as_ref());
+        if aliases.is_empty() {
+            return None;
+        }
+
+        let function_def = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::StmtFunctionDef(stmt) => Some(stmt),
+            _ => None,
+        })?;
+        let class_context = covering_nodes
+            .iter()
+            .find_map(|node| match node {
+                AnyNodeRef::StmtClassDef(stmt) => Some(stmt),
+                _ => None,
+            })
+            .map(|class_def| is_pytest_test_class(class_def));
+
+        if !is_pytest_fixture_function(function_def, &aliases)
+            && !is_pytest_test_function(function_def, class_context)
+        {
+            return None;
+        }
+
+        let mut fixtures = Vec::new();
+        collect_pytest_fixture_definitions(&mod_module.body, &aliases, &mut fixtures);
+        let matches: Vec<_> = fixtures
+            .into_iter()
+            .filter(|fixture| fixture.name == *identifier.id())
+            .collect();
+        if matches.is_empty() {
+            return None;
+        }
+
+        let module_info = self.get_module_info(handle)?;
+        Some(
+            matches
+                .into_iter()
+                .map(|fixture| FindDefinitionItemWithDocstring {
+                    metadata: DefinitionMetadata::Variable(Some(SymbolKind::Function)),
+                    definition_range: fixture.range,
+                    module: module_info.clone(),
+                    docstring_range: fixture.docstring_range,
+                    display_name: Some(fixture.name.as_str().to_owned()),
+                })
+                .collect(),
+        )
+    }
+
     /// Find the definition, metadata and optionally the docstring for the given position.
     pub fn find_definition(
         &self,
@@ -1635,17 +1696,26 @@ impl<'a> Transaction<'a> {
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::Parameter,
-            }) => self
-                .find_definition_for_simple_def(handle, &identifier, SymbolKind::Parameter)
-                .map_or(vec![], |item| {
-                    vec![FindDefinitionItemWithDocstring {
-                        metadata: item.metadata,
-                        definition_range: item.definition_range,
-                        module: item.module,
-                        docstring_range: None,
-                        display_name: Some(identifier.id.to_string()),
-                    }]
-                }),
+            }) => {
+                if let Some(pytest_definitions) = self.pytest_fixture_definitions_for_parameter(
+                    handle,
+                    &identifier,
+                    &covering_nodes,
+                ) {
+                    pytest_definitions
+                } else {
+                    self.find_definition_for_simple_def(handle, &identifier, SymbolKind::Parameter)
+                        .map_or(vec![], |item| {
+                            vec![FindDefinitionItemWithDocstring {
+                                metadata: item.metadata,
+                                definition_range: item.definition_range,
+                                module: item.module,
+                                docstring_range: None,
+                                display_name: Some(identifier.id.to_string()),
+                            }]
+                        })
+                }
+            }
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::TypeParameter,
@@ -2176,6 +2246,13 @@ impl<'a> Transaction<'a> {
             ]
             .concat(),
         };
+        if let Some(pytest_references) = self.local_pytest_fixture_parameter_references(
+            handle,
+            definition_range,
+            definition_name,
+        ) {
+            references.extend(pytest_references);
+        }
         references.push(definition_range);
         Some(references)
     }
@@ -2376,6 +2453,38 @@ impl<'a> Transaction<'a> {
             }
         }
 
+        Some(references)
+    }
+
+    fn local_pytest_fixture_parameter_references(
+        &self,
+        handle: &Handle,
+        definition_range: TextRange,
+        expected_name: &Name,
+    ) -> Option<Vec<TextRange>> {
+        let mod_module = self.get_ast(handle)?;
+        let aliases = PytestAliases::from_module(mod_module.as_ref());
+        if aliases.is_empty() {
+            return None;
+        }
+
+        let mut fixtures = Vec::new();
+        collect_pytest_fixture_definitions(&mod_module.body, &aliases, &mut fixtures);
+        if !fixtures
+            .iter()
+            .any(|fixture| fixture.name == *expected_name && fixture.range == definition_range)
+        {
+            return None;
+        }
+
+        let mut references = Vec::new();
+        collect_pytest_fixture_parameter_ranges(
+            &mod_module.body,
+            &aliases,
+            expected_name,
+            &mut references,
+            None,
+        );
         Some(references)
     }
 
