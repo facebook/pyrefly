@@ -42,6 +42,8 @@ use ruff_text_size::TextSize;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::wasm::signature_help::is_constructor_call;
+use crate::lsp::wasm::signature_help::override_constructor_return_type;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
@@ -529,53 +531,13 @@ pub fn get_hover(
         .or_else(find_callee_range_at_position);
 
     if let Some(callee_range) = callee_range_opt {
-        // Determine if this is a constructor call vs direct __init__ call or regular method call
-        let is_constructor_call = transaction
-            .get_module_info(handle)
-            .map(|module| {
-                let contents = module.contents();
-                let start = callee_range.start().to_usize();
-                let end = callee_range.end().to_usize();
-                contents
-                    .get(start..end)
-                    .map(|callee_text| {
-                        if callee_text.ends_with(".__init__") {
-                            return false;
-                        }
-                        if let Some(last_dot_pos) = callee_text.rfind('.') {
-                            let after_dot = &callee_text[last_dot_pos + 1..];
-                            if !after_dot.is_empty()
-                                && after_dot.chars().all(|c| c.is_alphanumeric() || c == '_')
-                                && (after_dot.chars().next().unwrap().is_alphabetic()
-                                    || after_dot.starts_with('_'))
-                            {
-                                return false;
-                            }
-                        }
-                        true
-                    })
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
+        let is_constructor = transaction
+            .get_answers(handle)
+            .and_then(|ans| ans.get_type_trace(callee_range))
+            .is_some_and(is_constructor_call);
 
-        // Override the return type if this is a constructor call
-        if is_constructor_call {
-            if let Some(mut callable) = type_.clone().to_callable()
-                && callable.ret.is_none()
-            {
-                // Check if first parameter is self or cls
-                if let Params::List(ref params_list) = callable.params {
-                    if let Some(
-                        Param::Pos(name, self_type, _) | Param::PosOnly(Some(name), self_type, _),
-                    ) = params_list.items().first()
-                    {
-                        if name.as_str() == "self" || name.as_str() == "cls" {
-                            callable.ret = self_type.clone();
-                            type_ = Type::Callable(Box::new(callable));
-                        }
-                    }
-                }
-            }
+        if is_constructor && let Some(new_type) = override_constructor_return_type(type_.clone()) {
+            type_ = new_type;
         }
     }
 

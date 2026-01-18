@@ -37,6 +37,34 @@ use crate::types::callable::Param;
 use crate::types::callable::Params;
 use crate::types::types::Type;
 
+pub(crate) fn is_constructor_call(callee_type: Type) -> bool {
+    matches!(callee_type, Type::ClassDef(_))
+        || matches!(callee_type, Type::Type(inner) if matches!(inner.as_ref(), Type::ClassType(_) | Type::ClassDef(_)))
+}
+
+pub(crate) fn override_constructor_return_type(type_: Type) -> Option<Type> {
+    let mut callable = type_.clone().to_callable()?;
+    if !callable.ret.is_none() {
+        return None;
+    }
+
+    let mut should_override = false;
+    if let Params::List(ref params_list) = callable.params
+        && let Some(Param::Pos(name, self_type, _) | Param::PosOnly(Some(name), self_type, _)) =
+            params_list.items().first()
+        && (name.as_str() == "self" || name.as_str() == "cls")
+    {
+        callable.ret = self_type.clone();
+        should_override = true;
+    }
+
+    if should_override {
+        Some(Type::Callable(Box::new(callable)))
+    } else {
+        None
+    }
+}
+
 /// The currently active argument in a function call for signature help.
 #[derive(Debug)]
 pub(crate) enum ActiveArgument {
@@ -285,34 +313,8 @@ impl Transaction<'_> {
         let type_ = type_.deterministic_printing();
 
         // Display the return type as the class instance type instead of None
-        let display_type = if is_constructor_call
-            && let Some(mut callable) = type_.clone().to_callable()
-            && callable.ret.is_none()
-        {
-            // Check if first parameter is self or cls
-            let should_override = if let Params::List(ref params_list) = callable.params {
-                if let Some(
-                    Param::Pos(name, self_type, _) | Param::PosOnly(Some(name), self_type, _),
-                ) = params_list.items().first()
-                {
-                    if name.as_str() == "self" || name.as_str() == "cls" {
-                        callable.ret = self_type.clone();
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-
-            if should_override {
-                Type::Callable(Box::new(callable))
-            } else {
-                type_
-            }
+        let display_type = if is_constructor_call {
+            override_constructor_return_type(type_.clone()).unwrap_or(type_)
         } else {
             type_
         };
@@ -371,36 +373,10 @@ impl Transaction<'_> {
                 let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
                 let function_docstring = self.function_docstring_for_callee(handle, callee_range);
 
-                // Determine if this is a constructor call vs direct __init__ call or regular method call
                 let is_constructor_call = self
-                    .get_module_info(handle)
-                    .map(|module| {
-                        let contents = module.contents();
-                        let start = callee_range.start().to_usize();
-                        let end = callee_range.end().to_usize();
-                        contents
-                            .get(start..end)
-                            .map(|callee_text| {
-                                if callee_text.ends_with(".__init__") {
-                                    return false;
-                                }
-                                if let Some(last_dot_pos) = callee_text.rfind('.') {
-                                    let after_dot = &callee_text[last_dot_pos + 1..];
-                                    if !after_dot.is_empty()
-                                        && after_dot
-                                            .chars()
-                                            .all(|c| c.is_alphanumeric() || c == '_')
-                                        && (after_dot.chars().next().unwrap().is_alphabetic()
-                                            || after_dot.starts_with('_'))
-                                    {
-                                        return false;
-                                    }
-                                }
-                                true
-                            })
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false);
+                    .get_answers(handle)
+                    .and_then(|ans| ans.get_type_trace(callee_range))
+                    .is_some_and(is_constructor_call);
 
                 let signatures = callables
                     .into_iter()

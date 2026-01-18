@@ -916,12 +916,9 @@ Person()
 "#;
     let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
     assert!(
-        report.contains("-> Person"),
-        "Expected constructor hover to show -> Person, got: {report}"
-    );
-    assert!(
-        !report.contains("-> None"),
-        "Constructor hover should not show -> None, got: {report}"
+        report
+            .contains("def Person(\n    self: Person,\n    name: str,\n    age: int\n) -> Person"),
+        "Expected constructor hover to show complete signature with -> Person, got: {report}"
     );
 }
 
