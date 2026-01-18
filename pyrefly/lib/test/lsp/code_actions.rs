@@ -16,6 +16,7 @@ use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
@@ -153,6 +154,56 @@ fn apply_first_extract_variable_action(code: &str) -> Option<String> {
     let (module_info, actions, _) = compute_extract_variable_actions(code);
     let edits = actions.first()?;
     Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn cursor_selection(code: &str) -> TextRange {
+    let position = extract_cursors_for_test(code)
+        .first()
+        .copied()
+        .expect("expected cursor marker");
+    TextRange::new(position, position)
+}
+
+fn apply_first_inline_variable_action(code: &str) -> Option<String> {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .inline_variable_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
+fn apply_first_inline_method_action(code: &str) -> Option<String> {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .inline_method_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
+fn apply_first_inline_parameter_action(code: &str) -> Option<String> {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .inline_parameter_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
 }
 
 fn assert_no_extract_variable_action(code: &str) {
@@ -1656,4 +1707,71 @@ def sink(values):
     # EXTRACT-END
 "#;
     assert_no_extract_action(code);
+}
+
+#[test]
+fn inline_variable_basic_refactor() {
+    let code = r#"
+def compute():
+    value = 1 + 2
+    result = value * 3
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = (1 + 2) * 3
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_method_basic_refactor() {
+    let code = r#"
+def add(a, b):
+    return a + b
+
+def compute():
+    total = add(1, 2)
+#           ^
+    return total
+"#;
+    let updated = apply_first_inline_method_action(code).expect("expected inline method action");
+    let expected = r#"
+def add(a, b):
+    return a + b
+
+def compute():
+    total = ((1) + (2))
+#           ^
+    return total
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_parameter_basic_refactor() {
+    let code = r#"
+def add(a, b):
+#          ^
+    return a + b
+
+def compute():
+    return add(1, 2)
+"#;
+    let updated =
+        apply_first_inline_parameter_action(code).expect("expected inline parameter action");
+    let expected = r#"
+def add(a):
+#          ^
+    return a + (2)
+
+def compute():
+    return add(1)
+"#;
+    assert_eq!(expected, updated);
 }
