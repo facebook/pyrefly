@@ -74,6 +74,7 @@ impl CallWithTypes {
             }
             TypeOrExpr::Expr(e) => {
                 let t = solver.expr_infer(e, errors);
+                let t = solver.solver().expand_loop_recursive(t);
                 TypeOrExpr::Type(self.0.push(t), e.range())
             }
             TypeOrExpr::Type(t, r) => TypeOrExpr::Type(t, r),
