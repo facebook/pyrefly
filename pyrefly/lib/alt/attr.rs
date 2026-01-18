@@ -545,6 +545,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut error_messages = Vec::new();
         let mut success = true;
         let (found, not_found, error) = lookup_result.decompose();
+        // Check if we have a partial union failure (attribute exists on some union members
+        // but not others) before consuming the vectors. This helps us decide whether to suggest.
+        let is_partial_union_failure = !found.is_empty() && !not_found.is_empty();
         for (attr, _) in found {
             match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
@@ -571,9 +574,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             error_messages.sort();
             error_messages.dedup();
             let mut msg = vec1![error_messages.join("\n")];
-            if let Some(suggestion) = attr_base
-                .as_ref()
-                .and_then(|attr_base| self.suggest_attribute_name(attr_name, attr_base))
+            // Skip suggestions when we have a partial union failure to avoid suggesting
+            // attributes from the types that have them when the problem is that some types
+            // don't have the attribute at all.
+            if !is_partial_union_failure
+                && let Some(suggestion) = attr_base
+                    .as_ref()
+                    .and_then(|attr_base| self.suggest_attribute_name(attr_name, attr_base))
             {
                 msg.push(format!("Did you mean `{suggestion}`?"));
             }
