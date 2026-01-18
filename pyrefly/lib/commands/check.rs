@@ -650,7 +650,7 @@ impl Timings {
 
 impl CheckArgs {
     pub fn run_once(
-        self,
+        mut self,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
@@ -677,6 +677,18 @@ impl CheckArgs {
             true,
         );
         let (loaded_handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
+
+        // If CLI doesn't provide baseline, get from config
+        if self.output.baseline.is_none() {
+            if let Some(handle) = loaded_handles.first() {
+                let config = holder.as_ref().config_finder().python_file(
+                    ModuleNameWithKind::guaranteed(handle.module()),
+                    handle.path(),
+                );
+                self.output.baseline = config.baseline.clone();
+            }
+        }
+
         self.run_inner(
             timings,
             transaction.as_mut(),
@@ -687,7 +699,7 @@ impl CheckArgs {
     }
 
     pub fn run_once_with_snippet(
-        self,
+        mut self,
         code: String,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
@@ -699,12 +711,17 @@ impl CheckArgs {
         let holder = Forgetter::new(State::new(config_finder), true);
 
         // Create a single handle for the virtual module
-        let sys_info = holder
+        let config = holder
             .as_ref()
             .config_finder()
-            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path)
-            .get_sys_info();
+            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path);
+        let sys_info = config.get_sys_info();
         let handle = Handle::new(module_name, module_path.clone(), sys_info);
+
+        // If CLI doesn't provide baseline, get from config
+        if self.output.baseline.is_none() {
+            self.output.baseline = config.baseline.clone();
+        }
 
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
@@ -730,7 +747,7 @@ impl CheckArgs {
     }
 
     pub async fn run_watch(
-        self,
+        mut self,
         mut watcher: Watcher,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
@@ -741,6 +758,19 @@ impl CheckArgs {
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder);
+
+        // If CLI doesn't provide baseline, get from config
+        if self.output.baseline.is_none() {
+            let (loaded_handles, _, _) = handles.all(state.config_finder());
+            if let Some(handle) = loaded_handles.first() {
+                let config = state.config_finder().python_file(
+                    ModuleNameWithKind::guaranteed(handle.module()),
+                    handle.path(),
+                );
+                self.output.baseline = config.baseline.clone();
+            }
+        }
+
         let mut transaction = state.new_committable_transaction(require_levels.default, None);
         loop {
             let timings = Timings::new();

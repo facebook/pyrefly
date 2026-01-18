@@ -465,6 +465,11 @@ pub struct ConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typeshed_path: Option<PathBuf>,
 
+    /// Path to baseline file for comparing type errors.
+    /// Errors matching the baseline are suppressed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<PathBuf>,
+
     /// Pyrefly's configurations around interpreter querying/finding.
     #[serde(flatten)]
     pub interpreters: Interpreters,
@@ -542,6 +547,7 @@ impl Default for ConfigFile {
             source_db: Default::default(),
             use_ignore_files: true,
             typeshed_path: None,
+            baseline: None,
             skip_lsp_config_indexing: false,
         }
     }
@@ -1175,6 +1181,9 @@ impl ConfigFile {
         if let Some(typeshed_path) = &self.typeshed_path {
             self.typeshed_path = Some(typeshed_path.absolutize_from(config_root));
         }
+        if let Some(baseline) = &self.baseline {
+            self.baseline = Some(baseline.absolutize_from(config_root));
+        }
         self.python_environment
             .site_package_path
             .iter_mut()
@@ -1440,6 +1449,7 @@ mod tests {
                     }
                 }],
                 typeshed_path: None,
+                baseline: None,
                 skip_lsp_config_indexing: false,
             }
         );
@@ -1672,6 +1682,7 @@ mod tests {
                 settings: Default::default(),
             }],
             typeshed_path: Some(PathBuf::from(typeshed)),
+            baseline: Some(PathBuf::from("baseline.json")),
             skip_lsp_config_indexing: false,
         };
 
@@ -1730,6 +1741,7 @@ mod tests {
                 settings: Default::default(),
             }],
             typeshed_path: Some(expected_typeshed),
+            baseline: Some(test_path.join("baseline.json")),
             skip_lsp_config_indexing: false,
         };
         assert_eq!(config, expected_config);
@@ -1755,6 +1767,15 @@ mod tests {
                  "#;
         let err = ConfigFile::parse_config(config_str).unwrap_err();
         assert!(err.to_string().contains("missing field `matches`"));
+    }
+
+    #[test]
+    fn test_baseline_config_parsing() {
+        let config_str = r#"
+baseline = "baseline.json"
+"#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        assert_eq!(config.baseline, Some(PathBuf::from("baseline.json")));
     }
 
     #[test]
