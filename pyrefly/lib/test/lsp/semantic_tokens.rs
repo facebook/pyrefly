@@ -883,7 +883,7 @@ line: 1, column: 5, length: 3, text: lib
 token-type: namespace
 
 line: 1, column: 16, length: 4, text: func
-token-type: namespace
+token-type: function
 
 line: 1, column: 24, length: 4, text: func
 token-type: function
@@ -913,7 +913,7 @@ line: 1, column: 5, length: 3, text: foo
 token-type: namespace
 
 line: 1, column: 16, length: 3, text: bar
-token-type: namespace
+token-type: function
 
 line: 1, column: 23, length: 3, text: baz
 token-type: function

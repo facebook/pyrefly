@@ -223,13 +223,12 @@ impl SemanticTokenBuilder {
             .any(|disabled| disabled.contains_range(range))
     }
 
-    pub fn process_key(
+    fn push_symbol_range(
         &mut self,
-        key: &Key,
+        reference_range: TextRange,
         definition_module: ModuleName,
         symbol_kind: SymbolKind,
     ) {
-        let reference_range = key.range();
         let (token_type, mut token_modifiers) =
             symbol_kind.to_lsp_semantic_token_type_with_modifiers();
         let is_default_library = {
@@ -242,6 +241,24 @@ impl SemanticTokenBuilder {
             token_modifiers.push(SemanticTokenModifier::DEFAULT_LIBRARY);
         }
         self.push_if_in_range(reference_range, token_type, token_modifiers);
+    }
+
+    pub fn process_key(
+        &mut self,
+        key: &Key,
+        definition_module: ModuleName,
+        symbol_kind: SymbolKind,
+    ) {
+        self.push_symbol_range(key.range(), definition_module, symbol_kind);
+    }
+
+    pub fn process_range(
+        &mut self,
+        range: TextRange,
+        definition_module: ModuleName,
+        symbol_kind: SymbolKind,
+    ) {
+        self.push_symbol_range(range, definition_module, symbol_kind);
     }
 
     fn process_arguments(&mut self, args: &Arguments) {
@@ -341,18 +358,9 @@ impl SemanticTokenBuilder {
                     }
                 }
             }
-            Stmt::ImportFrom(StmtImportFrom { module, names, .. }) => {
+            Stmt::ImportFrom(StmtImportFrom { module, .. }) => {
                 if let Some(module) = module {
                     self.push_if_in_range(module.range, SemanticTokenType::NAMESPACE, vec![]);
-                }
-                for alias in names {
-                    if alias.asname.is_some() {
-                        self.push_if_in_range(
-                            alias.name.range,
-                            SemanticTokenType::NAMESPACE,
-                            vec![],
-                        );
-                    }
                 }
             }
             Stmt::AnnAssign(ann_assign) => {
