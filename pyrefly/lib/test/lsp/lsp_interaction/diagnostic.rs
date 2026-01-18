@@ -408,6 +408,32 @@ fn test_unused_from_import_diagnostic() {
 }
 
 #[test]
+fn test_diagnostic_import_used_in_all() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([
+                {"pyrefly": {"displayTypeErrors": "force-on"}}
+            ]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("unused_import_all/__init__.py");
+    interaction
+        .client
+        .diagnostic("unused_import_all/__init__.py")
+        .expect_response(json!({
+            "items": [],
+            "kind": "full"
+        }))
+        .unwrap();
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_unused_variable_diagnostic() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();

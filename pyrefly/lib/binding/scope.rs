@@ -1296,6 +1296,15 @@ impl Scopes {
         ScopeTrace(b)
     }
 
+    pub fn has_import_name(&self, name: &Name) -> bool {
+        let module_scope = self.scopes.first();
+
+        match module_scope.scope.kind {
+            ScopeKind::Module => module_scope.scope.imports.contains_key(name),
+            _ => false,
+        }
+    }
+
     pub fn collect_module_unused_imports(&self) -> Vec<UnusedImport> {
         let module_scope = self.scopes.first();
         if !matches!(module_scope.scope.kind, ScopeKind::Module) {
