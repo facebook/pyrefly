@@ -847,3 +847,33 @@ def test():
     p: TrickyProtocol[int] = t  # E:
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1916
+// Protocol methods with only a docstring should not emit "missing explicit return" errors
+testcase!(
+    test_protocol_method_with_docstring,
+    r#"
+from typing import Protocol
+
+class SortState:
+    pass
+
+class View(Protocol):
+    """A protocol with methods that have docstrings but no body."""
+
+    @property
+    def sort_state(self) -> SortState:
+        """Return the current sorting/grouping settings."""
+
+    def get_value(self) -> int:
+        """Get a value."""
+
+    def method_with_ellipsis(self) -> str:
+        """This one uses ellipsis."""
+        ...
+
+    def method_with_pass(self) -> str:
+        """This one uses pass - should still be allowed in protocol."""
+        pass
+"#,
+);

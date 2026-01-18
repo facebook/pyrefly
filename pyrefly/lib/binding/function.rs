@@ -532,10 +532,33 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
         metadata_key: Option<Idx<KeyClassMetadata>>,
     ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
+        // A method in a Protocol with a stub-like body (docstring-only, docstring + pass,
+        // docstring + ellipsis) is treated as a stub. This matches Python typing spec
+        // behavior where Protocol methods don't need implementations.
+        let is_protocol_stub_body = if self.scopes.is_in_protocol_class() {
+            match body.as_slice() {
+                // Docstring only
+                [stmt] if is_docstring(stmt) => true,
+                // Docstring + pass
+                [first, Stmt::Pass(_)] if is_docstring(first) => true,
+                // Docstring + ellipsis
+                [first, Stmt::Expr(expr_stmt)]
+                    if is_docstring(first)
+                        && matches!(expr_stmt.value.as_ref(), Expr::EllipsisLiteral(_)) =>
+                {
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+
         let stub_or_impl = if (body.first().is_some_and(is_docstring)
             && decorators.is_abstract_method)
             || is_ellipse(&body)
             || (body.first().is_some_and(is_docstring) && decorators.is_overload)
+            || is_protocol_stub_body
         {
             FunctionStubOrImpl::Stub
         } else {
