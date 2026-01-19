@@ -175,7 +175,6 @@ reveal_type(Model10.__init__)  # E: revealed type: (self: Model10, *, u: LaxUUID
 );
 
 pydantic_testcase!(
-    bug = "An error should be raised here",
     test_lax_mode_coercion_literals,
     r#"
 from typing import Literal
@@ -184,7 +183,7 @@ from pydantic import BaseModel
 class Model1(BaseModel):
     status: Literal[1]
 
-m = Model1(status="1")
+m = Model1(status="1")  # E: Argument `Literal['1']` is not assignable to parameter `status` with type `Literal[1]` in function `Model1.__init__`
     "#,
 );
 

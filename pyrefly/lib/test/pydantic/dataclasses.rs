@@ -29,3 +29,18 @@ class A:
 A(x='0')
     "#,
 );
+
+pydantic_testcase!(
+    test_dataclass_literal_strictness,
+    r#"
+from typing import Literal
+from pydantic.dataclasses import dataclass
+
+@dataclass
+class Example:
+    value: Literal["MyLiteral"]
+
+Example(value="MyLiteral")
+Example(value=2)  # E: Argument `Literal[2]` is not assignable to parameter `value` with type `Literal['MyLiteral']` in function `Example.__init__`
+    "#,
+);
