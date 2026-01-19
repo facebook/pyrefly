@@ -221,7 +221,7 @@ class Color(Enum):
     RED = "red"
 
 def describe(color: Color) -> None:
-    match color:
+    match color:  # E: Match on `Color` is not exhaustive
         case Color.RED():  # E: Expected class object, got `Literal[Color.RED]`
             pass
 "#,
