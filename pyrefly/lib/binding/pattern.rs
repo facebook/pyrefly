@@ -242,7 +242,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             Pattern::MatchClass(mut x) => {
                 self.ensure_expr(&mut x.cls, narrowing_usage);
-                let narrow_op = AtomicNarrowOp::IsInstance((*x.cls).clone());
+                let narrow_op = AtomicNarrowOp::IsInstancePattern((*x.cls).clone());
                 // Redefining subject_idx to apply the class level narrowing,
                 // which is used for additional narrowing for attributes below.
                 let subject_idx = self.insert_binding(

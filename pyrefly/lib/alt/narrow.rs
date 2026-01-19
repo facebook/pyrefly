@@ -18,6 +18,7 @@ use pyrefly_types::facet::UnresolvedFacetKind;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
@@ -750,6 +751,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::IsInstance(v) => {
                 let right = self.expr_infer(v, errors);
+                self.narrow_isinstance(ty, &right)
+            }
+            AtomicNarrowOp::IsInstancePattern(v) => {
+                let right = self.expr_infer(v, errors);
+                let mut contains_subscript = false;
+                v.visit(&mut |e| {
+                    if matches!(e, Expr::Subscript(_)) {
+                        contains_subscript = true;
+                    }
+                });
+                self.check_type_is_class_object(
+                    right.clone(),
+                    Some(ty.clone()),
+                    contains_subscript,
+                    v.range(),
+                    &FunctionKind::IsInstance,
+                    errors,
+                    ErrorKind::InvalidPattern,
+                );
                 self.narrow_isinstance(ty, &right)
             }
             AtomicNarrowOp::IsNotInstance(v) => {

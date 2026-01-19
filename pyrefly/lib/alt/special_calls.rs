@@ -298,7 +298,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.stdlib.bool().clone().to_type()
     }
 
-    fn check_type_is_class_object(
+    pub(crate) fn check_type_is_class_object(
         &self,
         ty: Type,
         object_type: Option<Type>,
@@ -306,6 +306,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         func_kind: &FunctionKind,
         errors: &ErrorCollector,
+        error_kind: ErrorKind,
     ) {
         for ty in self.as_class_info(ty) {
             if let Type::ClassDef(cls) = &ty {
@@ -313,7 +314,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorInfo::Kind(error_kind),
                         "Expected class object, got `Any`".to_owned(),
                     );
                 }
@@ -323,7 +324,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorInfo::Kind(error_kind),
                         format!("NewType `{}` not allowed in {}", cls.name(), func_display(),),
                     );
                 }
@@ -332,7 +333,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorInfo::Kind(error_kind),
                         format!(
                             "TypedDict `{}` not allowed as second argument to {}",
                             cls.name(),
@@ -346,7 +347,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            ErrorInfo::Kind(error_kind),
                             format!("Protocol `{}` is not decorated with @runtime_checkable and cannot be used with {}", cls.name(), func_display()),
                         );
                     } else {
@@ -358,7 +359,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                ErrorInfo::Kind(error_kind),
                                 format!("Protocol `{}` has non-method members and cannot be used with issubclass()", cls.name()),
                             );
                         }
@@ -422,7 +423,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorInfo::Kind(error_kind),
                     format!(
                         "Expected class object, got parameterized generic type: `{}`",
                         self.for_display(ty)
@@ -433,7 +434,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorInfo::Kind(error_kind),
                         format!("Expected class object, got special form `{}`", special_form),
                     );
                 }
@@ -441,7 +442,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorInfo::Kind(error_kind),
                     format!("Expected class object, got `{}`", self.for_display(ty)),
                 );
             } else {
@@ -534,6 +535,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             classinfo_expr.range(),
             func_kind,
             errors,
+            ErrorKind::InvalidArgument,
         );
     }
 

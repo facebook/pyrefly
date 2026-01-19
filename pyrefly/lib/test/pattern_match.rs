@@ -213,6 +213,21 @@ def describe_ok(color: Literal["red", "blue"]):
 );
 
 testcase!(
+    test_enum_class_pattern_invalid,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+
+def describe(color: Color) -> None:
+    match color:
+        case Color.RED():  # E: Expected class object, got `Literal[Color.RED]`
+            pass
+"#,
+);
+
+testcase!(
     test_non_exhaustive_enum_match_facet_subject,
     r#"
 from enum import Enum

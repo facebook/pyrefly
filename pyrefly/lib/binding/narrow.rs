@@ -58,6 +58,7 @@ pub enum AtomicNarrowOp {
     Eq(Expr),
     NotEq(Expr),
     IsInstance(Expr),
+    IsInstancePattern(Expr),
     IsNotInstance(Expr),
     IsSubclass(Expr),
     IsNotSubclass(Expr),
@@ -119,6 +120,9 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::Eq(expr) => write!(f, "Eq({})", expr.display_with(ctx)),
             AtomicNarrowOp::NotEq(expr) => write!(f, "NotEq({})", expr.display_with(ctx)),
             AtomicNarrowOp::IsInstance(expr) => write!(f, "IsInstance({})", expr.display_with(ctx)),
+            AtomicNarrowOp::IsInstancePattern(expr) => {
+                write!(f, "IsInstancePattern({})", expr.display_with(ctx))
+            }
             AtomicNarrowOp::IsNotInstance(expr) => {
                 write!(f, "IsNotInstance({})", expr.display_with(ctx))
             }
@@ -220,6 +224,7 @@ impl AtomicNarrowOp {
             Self::Is(v) => Self::IsNot(v.clone()),
             Self::IsNot(v) => Self::Is(v.clone()),
             Self::IsInstance(v) => Self::IsNotInstance(v.clone()),
+            Self::IsInstancePattern(v) => Self::IsNotInstance(v.clone()),
             Self::IsNotInstance(v) => Self::IsInstance(v.clone()),
             Self::IsSubclass(v) => Self::IsNotSubclass(v.clone()),
             Self::IsNotSubclass(v) => Self::IsSubclass(v.clone()),
@@ -875,6 +880,7 @@ impl NarrowOps {
                 // Technically the `__class__` attribute can be mutated, but code that does that
                 // probably isn't statically analyzable anyway.
                 | AtomicNarrowOp::IsInstance(..)
+                | AtomicNarrowOp::IsInstancePattern(..)
                 | AtomicNarrowOp::IsNotInstance(..)
                 | AtomicNarrowOp::IsSubclass(..)
                 | AtomicNarrowOp::IsNotSubclass(..)

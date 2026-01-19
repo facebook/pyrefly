@@ -636,6 +636,23 @@ def f(x, *args: P1.args, **kwargs: P2.kwargs) -> None:
 
 Here, `P1.args` and `P2.kwargs` can't be used together; `*args` and `**kwargs` must come from the same `ParamSpec`.
 
+## invalid-pattern
+
+This error is reported when a pattern is invalid at runtime. For example, enum members are values,
+so they must be matched as value patterns (without `()`), not class patterns:
+
+```python
+from enum import Enum
+
+class Color(Enum):
+  RED = "red"
+
+def describe(color: Color) -> None:
+  match color:
+    case Color.RED():  # Invalid pattern: use `Color.RED` (without parentheses)
+      pass
+```
+
 ## invalid-self-type
 
 This error occurs when `Self` is used in a context Pyrefly does not currently support.
