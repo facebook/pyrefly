@@ -171,6 +171,11 @@ impl ErrorCollector {
         self.errors.lock().len()
     }
 
+    /// Check if any error has the given error kind.
+    pub fn has_error_kind(&self, kind: ErrorKind) -> bool {
+        self.errors.lock().iter().any(|e| e.error_kind() == kind)
+    }
+
     pub fn collect_into(&self, error_config: &ErrorConfig, result: &mut CollectedErrors) {
         let mut errors = self.errors.lock();
         if !(self.module_info.is_generated() && error_config.ignore_errors_in_generated_code) {
