@@ -2116,3 +2116,25 @@ test(other=int, default=5)
 test(other=int, default="") # E: Argument `Literal['']` is not assignable to parameter `default` with type `int | None`
 "#,
 );
+
+testcase!(
+    test_typed_dict_contains_narrowing,
+    r#"
+from typing import TypedDict, reveal_type
+
+class AClient: ...
+class BClient: ...
+class GenericClient: ...
+
+class Clients(TypedDict):
+    a: AClient
+    b: BClient
+
+def main(clients: Clients, name: str):
+    if name in clients:
+        reveal_type(name)  # E: revealed type: Literal['a', 'b']
+        client = clients[name]
+    else:
+        client = GenericClient()
+"#,
+);
