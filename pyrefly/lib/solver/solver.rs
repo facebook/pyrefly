@@ -60,7 +60,11 @@ use crate::types::types::Var;
 /// in the output. The usual cause is that we failed to visit all the necessary `Type` fields.
 const VAR_LEAK: &str = "Internal error: a variable has leaked from one module to another.";
 
-const INITIAL_GAS: Gas = Gas::new(1000);
+/// A number chosen such that all practical types are less than this depth,
+/// but low enough to avoid stack overflow. Rust's default stack size is 8MB,
+/// and each recursive call to is_subset_eq can use several KB of stack space
+/// due to large enums (Type) and lock guards.
+const INITIAL_GAS: Gas = Gas::new(200);
 
 #[derive(Debug)]
 enum Variable {
