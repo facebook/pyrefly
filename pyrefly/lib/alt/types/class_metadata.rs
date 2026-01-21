@@ -174,7 +174,8 @@ impl ClassMetadata {
         self.typed_dict_metadata.is_some()
     }
 
-    pub fn is_pydantic_base_model(&self) -> bool {
+    /// Returns true if this class is a pydantic model (BaseModel, RootModel, or BaseSettings).
+    pub fn is_pydantic_model(&self) -> bool {
         self.pydantic_model_kind.is_some()
     }
 

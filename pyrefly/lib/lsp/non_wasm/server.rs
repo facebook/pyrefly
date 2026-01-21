@@ -59,6 +59,7 @@ use lsp_types::DocumentSymbolParams;
 use lsp_types::DocumentSymbolResponse;
 use lsp_types::FileSystemWatcher;
 use lsp_types::FoldingRange;
+use lsp_types::FoldingRangeKind;
 use lsp_types::FoldingRangeParams;
 use lsp_types::FoldingRangeProviderCapability;
 use lsp_types::FullDocumentDiagnosticReport;
@@ -220,6 +221,7 @@ use crate::lsp::non_wasm::call_hierarchy::find_function_at_position_in_ast;
 use crate::lsp::non_wasm::call_hierarchy::prepare_call_hierarchy_item;
 use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
+use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
 use crate::lsp::non_wasm::lsp::apply_change_events;
 use crate::lsp::non_wasm::lsp::as_notification;
 use crate::lsp::non_wasm::lsp::as_request;
@@ -476,6 +478,9 @@ pub struct Server {
     filewatcher_registered: AtomicBool,
     version_info: Mutex<HashMap<PathBuf, i32>>,
     id: Uuid,
+    /// Whether to include comment section folding ranges (FoldingRangeKind::Region).
+    /// Defaults to false.
+    comment_folding_ranges: bool,
 }
 
 pub fn shutdown_finish(connection: &Connection, id: RequestId) {
@@ -702,6 +707,16 @@ pub fn capabilities(
         .and_then(|c| c.semantic_tokens.as_ref())
         .and_then(|c| c.augments_syntax_tokens)
         .unwrap_or(false);
+
+    // Parse syncNotebooks from initialization options, defaults to true
+    let sync_notebooks = initialization_params
+        .initialization_options
+        .as_ref()
+        .and_then(|opts| opts.get("pyrefly"))
+        .and_then(|pyrefly| pyrefly.get("syncNotebooks"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
     ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -793,15 +808,19 @@ pub fn capabilities(
                 ..Default::default()
             }),
         }),
-        notebook_document_sync: Some(OneOf::Left(NotebookDocumentSyncOptions {
-            notebook_selector: vec![NotebookSelector::ByCells {
-                notebook: None,
-                cells: vec![NotebookCellSelector {
-                    language: "python".into(),
+        notebook_document_sync: if sync_notebooks {
+            Some(OneOf::Left(NotebookDocumentSyncOptions {
+                notebook_selector: vec![NotebookSelector::ByCells {
+                    notebook: None,
+                    cells: vec![NotebookCellSelector {
+                        language: "python".into(),
+                    }],
                 }],
-            }],
-            save: None,
-        })),
+                save: None,
+            }))
+        } else {
+            None
+        },
         ..Default::default()
     }
 }
@@ -854,6 +873,7 @@ pub fn lsp_loop(
                 enqueue_time,
                 server.telemetry_state(),
             );
+            event_telemetry.set_task_stats(TelemetryTaskId::new("lsp_queue", None));
             let event_description = event.describe();
             let result = server.process_event(
                 &mut ide_transaction_manager,
@@ -1593,6 +1613,15 @@ impl Server {
         let workspaces = Arc::new(Workspaces::new(Workspace::default(), &folders));
 
         let config_finder = Workspaces::config_finder(workspaces.dupe());
+
+        // Parse commentFoldingRanges from initialization options, defaults to false
+        let comment_folding_ranges = initialize_params
+            .initialization_options
+            .as_ref()
+            .and_then(|opts| opts.get("commentFoldingRanges"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let s = Self {
             connection: ServerConnection(connection),
             lsp_queue,
@@ -1617,6 +1646,7 @@ impl Server {
             filewatcher_registered: AtomicBool::new(false),
             version_info: Mutex::new(HashMap::new()),
             id: Uuid::new_v4(),
+            comment_folding_ranges,
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -2941,6 +2971,11 @@ impl Server {
         if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
+        if let Some(action) =
+            convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
+        {
+            actions.push(action);
+        }
         if actions.is_empty() {
             None
         } else {
@@ -3503,6 +3538,10 @@ impl Server {
             ranges
                 .into_iter()
                 .filter_map(|(range, kind)| {
+                    // Filter out comment section folding ranges (Region) unless enabled
+                    if !self.comment_folding_ranges && kind == Some(FoldingRangeKind::Region) {
+                        return None;
+                    }
                     let lsp_range = module.to_lsp_range(range);
                     if lsp_range.start.line >= lsp_range.end.line {
                         return None;

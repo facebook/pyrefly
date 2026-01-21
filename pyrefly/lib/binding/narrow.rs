@@ -41,6 +41,7 @@ use vec1::Vec1;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::expr::Usage;
 use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
@@ -846,7 +847,9 @@ impl NarrowOps {
         builder: &'a BindingsBuilder,
         name: &Name,
     ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
-        let name_read_info = builder.scopes.look_up_name_for_read(Hashed::new(name));
+        let name_read_info = builder
+            .scopes
+            .look_up_name_for_read(Hashed::new(name), &Usage::Narrowing(None));
         match name_read_info {
             NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
             _ => None,

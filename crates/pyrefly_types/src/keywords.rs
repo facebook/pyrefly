@@ -218,8 +218,18 @@ impl DataclassKeywords {
     const EQ: Name = Name::new_static("eq");
     const UNSAFE_HASH: Name = Name::new_static("unsafe_hash");
     const SLOTS: Name = Name::new_static("slots");
+    const STRICT: Name = Name::new_static("strict");
 
-    pub fn from_type_map(map: &TypeMap, defaults: &DataclassTransformMetadata) -> Self {
+    /// Creates dataclass keywords from a type map (decorator arguments) and defaults.
+    ///
+    /// `strict_default` controls the default value for `strict` when not explicitly set:
+    /// - `true` for regular dataclasses (strict type checking)
+    /// - `false` for pydantic dataclasses (lax mode by default)
+    pub fn from_type_map(
+        map: &TypeMap,
+        defaults: &DataclassTransformMetadata,
+        strict_default: bool,
+    ) -> Self {
         Self {
             init: map.get_bool(&Self::INIT).unwrap_or(true),
             order: map.get_bool(&Self::ORDER).unwrap_or(defaults.order_default),
@@ -234,11 +244,11 @@ impl DataclassKeywords {
             unsafe_hash: map.get_bool(&Self::UNSAFE_HASH).unwrap_or(false),
             slots: map.get_bool(&Self::SLOTS).unwrap_or(false),
             extra: false,
-            strict: true,
+            strict: map.get_bool(&Self::STRICT).unwrap_or(strict_default),
         }
     }
 
     pub fn new() -> Self {
-        Self::from_type_map(&TypeMap::new(), &DataclassTransformMetadata::new())
+        Self::from_type_map(&TypeMap::new(), &DataclassTransformMetadata::new(), true)
     }
 }

@@ -385,14 +385,21 @@ impl NotFoundOn {
 }
 
 impl InternalError {
-    pub fn to_error_msg(self, attr_name: &Name, todo_ctx: &str) -> String {
-        match self {
+    pub fn add_to(
+        self,
+        errors: &ErrorCollector,
+        range: TextRange,
+        attr_name: &Name,
+        todo_ctx: &str,
+    ) {
+        let msg = match self {
             InternalError::AttributeBaseUndefined(ty) => format!(
                 "TODO: {todo_ctx} attribute base undefined for type: {} (trying to access {})",
                 ty.deterministic_printing(),
                 attr_name
             ),
-        }
+        };
+        errors.internal_error(range, vec1![msg]);
     }
 }
 
@@ -536,25 +543,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         let mut types = Vec::new();
         let mut error_messages = Vec::new();
+        let mut success = true;
         let (found, not_found, error) = lookup_result.decompose();
         for (attr, _) in found {
             match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
-                Err(err) => error_messages.push(err.to_error_msg(attr_name)),
+                Err(err) => {
+                    error_messages.push(err.to_error_msg(attr_name));
+                    success = false;
+                }
             }
         }
         for err in not_found {
-            error_messages.push(err.to_error_msg(attr_name))
+            error_messages.push(err.to_error_msg(attr_name));
+            success = false;
         }
         for err in error {
-            error_messages.push(err.to_error_msg(attr_name, todo_ctx))
+            err.add_to(errors, range, attr_name, todo_ctx);
+            success = false;
         }
 
         // Both types and error messages can be duplicated if elements in `attr_base` gets duplicated (can happen with
         // if base type contain vars). Make sure that dedup logic applies to both branches.
-        if error_messages.is_empty() {
+        if success {
             self.unions(types)
-        } else {
+        } else if !error_messages.is_empty() {
             error_messages.sort();
             error_messages.dedup();
             let mut msg = vec1![error_messages.join("\n")];
@@ -570,6 +583,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 msg,
             );
             Type::any_error()
+        } else {
+            Type::any_error() // we've encountered internal errors (already logged above)
         }
     }
 
@@ -698,12 +713,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             not_found = true;
         }
         for internal_error in lookup_result.internal_error {
-            attr_tys.push(self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                internal_error.to_error_msg(attr_name, todo_ctx),
-            ))
+            internal_error.add_to(errors, range, attr_name, todo_ctx);
+            attr_tys.push(Type::any_error());
         }
         if not_found {
             return None;
@@ -855,25 +866,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut should_narrow = true;
         let mut narrowed_types = Vec::new();
         let Some(attr_base) = self.as_attribute_base(base.clone()) else {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                InternalError::AttributeBaseUndefined(base.clone())
-                    .to_error_msg(attr_name, todo_ctx),
-            );
+            InternalError::AttributeBaseUndefined(base.clone())
+                .add_to(errors, range, attr_name, todo_ctx);
             return None;
         };
         let (lookup_found, lookup_not_found, lookup_error) = self
             .lookup_attr_from_base(attr_base.clone(), attr_name)
             .decompose();
         for e in lookup_error {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                e.to_error_msg(attr_name, todo_ctx),
-            );
+            e.add_to(errors, range, attr_name, todo_ctx);
             should_narrow = false;
         }
         for not_found in lookup_not_found {
@@ -994,13 +995,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         todo_ctx: &str,
     ) {
         let Some(attr_base) = self.as_attribute_base(base.clone()) else {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                InternalError::AttributeBaseUndefined(base.clone())
-                    .to_error_msg(attr_name, todo_ctx),
-            );
+            InternalError::AttributeBaseUndefined(base.clone())
+                .add_to(errors, range, attr_name, todo_ctx);
             return;
         };
         let (lookup_found, lookup_not_found, lookup_error) = self
@@ -1017,12 +1013,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         for error in lookup_error {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                error.to_error_msg(attr_name, todo_ctx),
-            );
+            error.add_to(errors, range, attr_name, todo_ctx);
         }
         for (attr, _) in lookup_found {
             match attr {

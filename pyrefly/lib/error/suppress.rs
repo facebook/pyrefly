@@ -305,9 +305,9 @@ pub fn find_unused_ignores<'a>(
         let errors = suppressed_errors.get(path).unwrap_or(&default_set);
         let mut unused_ignores = SmallSet::new();
         for ignore in ignores {
-            // An ignore is unused if there's no error on that line.
-            // This matches the is_ignored() logic which checks if a suppression
-            // exists on any line within an error's range.
+            // An ignore is unused if no error starts on that line. Suppressions only
+            // apply to errors whose start line matches the suppression's line (see
+            // Ignore::is_ignored which looks up suppressions by start_line only).
             if !errors.contains(&ignore) {
                 unused_ignores.insert(ignore);
             }
@@ -332,17 +332,11 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
         if e.is_ignored(&Tool::default_enabled())
             && let ModulePathDetails::FileSystem(path) = e.path().details()
         {
-            // Insert all lines in the error's range, not just the start line.
-            // This matches the logic in is_ignored() which checks if a suppression
-            // exists on any line within the error's range.
+            // Track only the error's start line, not the entire range. Suppressions
+            // are matched by start line only (see Ignore::is_ignored), so an error
+            // spanning lines 10-20 only "uses" a suppression on line 10.
             let start = e.display_range().start.line_within_file();
-            let end = e.display_range().end.line_within_file();
-            for line_idx in start.to_zero_indexed()..=end.to_zero_indexed() {
-                suppressed_errors
-                    .entry(path)
-                    .or_default()
-                    .insert(LineNumber::from_zero_indexed(line_idx));
-            }
+            suppressed_errors.entry(path).or_default().insert(start);
         }
     }
 
@@ -716,6 +710,50 @@ foo(
         let input = r#"x = 1 + 1  # pyrefly: ignore
 "#;
         let want = r#"x = 1 + 1
+"#;
+        assert_remove_ignores(input, want, false, 1);
+    }
+
+    #[test]
+    fn test_remove_first_unused_ignore_only() {
+        // Regression test for https://github.com/facebook/pyrefly/issues/1310
+        let input = r#""""Test."""
+x = 1 + 1  # pyrefly: ignore
+y = 1 + "oops"  # pyrefly: ignore
+"#;
+        let want = r#""""Test."""
+x = 1 + 1
+y = 1 + "oops"  # pyrefly: ignore
+"#;
+        assert_remove_ignores(input, want, false, 1);
+    }
+
+    #[test]
+    fn test_remove_unused_suppression_within_multiline_error_range() {
+        // Test that an unused suppression within a multi-line error's range is removed.
+        // The bad-argument-type error spans the multi-line argument expression, but only
+        // a suppression at the error's start line is used. An unrelated suppression on a
+        // different line within the error's range should be removed.
+        let input = r#"
+def foo(s: str) -> int:
+    pass
+
+foo(
+    # pyrefly: ignore [bad-argument-type]
+    1 +
+    # pyrefly: ignore [bad-return]
+    2
+)
+"#;
+        let want = r#"
+def foo(s: str) -> int:
+    pass
+
+foo(
+    # pyrefly: ignore [bad-argument-type]
+    1 +
+    2
+)
 "#;
         assert_remove_ignores(input, want, false, 1);
     }

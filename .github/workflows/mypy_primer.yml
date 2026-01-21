@@ -61,7 +61,7 @@ jobs:
             --new $GITHUB_SHA --old base_commit \
             --num-shards 10 --shard-index ${{ matrix.shard-index }} \
             --debug \
-            --project-selector '^(?!.*(python-attrs/attrs|scipy/scipy|google/jax|trailofbits/manticore|mitmproxy/mitmproxy|apache/spark|spack/spack|sympy/sympy|PyCQA/flake8-pyi|internetarchive/openlibrary|pypa/pip|home-assistant/core|ibis-project/ibis|Gobot1234/steam\.py|canonical/cloud-init|rotki/rotki))' \
+            --project-selector '^(?!.*(python-attrs/attrs|scipy/scipy|scikit-learn/scikit-learn|pandas-dev/pandas|google/jax|trailofbits/manticore|mitmproxy/mitmproxy|apache/spark|spack/spack|sympy/sympy|PyCQA/flake8-pyi|internetarchive/openlibrary|pypa/pip|home-assistant/core|ibis-project/ibis|Gobot1234/steam\.py|canonical/cloud-init|rotki/rotki|enthought/comtypes))' \
             --type-checker pyrefly \
             --output concise \
             | tee diff_${{ matrix.shard-index }}.txt

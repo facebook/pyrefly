@@ -729,3 +729,144 @@ nested = {
         report.trim(),
     );
 }
+
+#[test]
+fn folding_ranges_for_comment_sections() {
+    let code = r#"
+# Section 1 ----
+
+def foo():
+    pass
+
+## Section 1.1 ----
+
+def bar():
+    pass
+
+## Section 1.2 ----
+
+x = 1
+y = 2
+
+# Section 2 ----
+
+class MyClass:
+    pass
+"#;
+
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_folding_ranges_report);
+
+    assert_eq!(
+        r#"# main.py
+
+[
+  {
+    "start_line": 1,
+    "end_line": 16,
+    "kind": "region"
+  },
+  {
+    "start_line": 3,
+    "end_line": 4
+  },
+  {
+    "start_line": 6,
+    "end_line": 11,
+    "kind": "region"
+  },
+  {
+    "start_line": 8,
+    "end_line": 9
+  },
+  {
+    "start_line": 11,
+    "end_line": 16,
+    "kind": "region"
+  },
+  {
+    "start_line": 16,
+    "end_line": 20,
+    "kind": "region"
+  },
+  {
+    "start_line": 18,
+    "end_line": 19
+  }
+]"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn folding_ranges_for_nested_comment_sections() {
+    let code = r#"
+# Main Section ----
+
+x = 1
+
+## Subsection 1 ----
+
+def foo():
+    pass
+
+### Sub-subsection ----
+
+y = 2
+
+## Subsection 2 ----
+
+def bar():
+    pass
+
+# Another Main Section ----
+
+z = 3
+"#;
+
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_folding_ranges_report);
+
+    assert_eq!(
+        r#"# main.py
+
+[
+  {
+    "start_line": 1,
+    "end_line": 19,
+    "kind": "region"
+  },
+  {
+    "start_line": 5,
+    "end_line": 14,
+    "kind": "region"
+  },
+  {
+    "start_line": 7,
+    "end_line": 8
+  },
+  {
+    "start_line": 10,
+    "end_line": 14,
+    "kind": "region"
+  },
+  {
+    "start_line": 14,
+    "end_line": 19,
+    "kind": "region"
+  },
+  {
+    "start_line": 16,
+    "end_line": 17
+  },
+  {
+    "start_line": 19,
+    "end_line": 22,
+    "kind": "region"
+  }
+]"#
+        .trim(),
+        report.trim(),
+    );
+}

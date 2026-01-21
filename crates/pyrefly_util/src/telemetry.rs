@@ -75,11 +75,11 @@ pub struct TelemetryTransactionStats {
 #[derive(Clone)]
 pub struct TelemetryTaskId {
     pub queue_name: &'static str,
-    pub id: usize,
+    pub id: Option<usize>,
 }
 
 impl TelemetryTaskId {
-    pub fn new(queue_name: &'static str, id: usize) -> Self {
+    pub fn new(queue_name: &'static str, id: Option<usize>) -> Self {
         Self { queue_name, id }
     }
 }

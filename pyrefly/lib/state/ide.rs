@@ -20,6 +20,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::Hashed;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingClass;
@@ -51,7 +52,7 @@ pub fn key_to_intermediate_definition(
 /// Otherwise, follow the use-def chain in bindings, and return non-None if we could reach a definition.
 fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<&'a Key> {
     let mut gas = KEY_TO_DEFINITION_INITIAL_GAS;
-    let mut current_idx = bindings.key_to_idx(key);
+    let mut current_idx = bindings.key_to_idx_hashed_opt(Hashed::new(key))?;
     let base_key_of_assign_target = |expr: &Expr| {
         if let Some((id, _)) = identifier_and_chain_for_expr(expr) {
             Some(Key::BoundName(ShortIdentifier::new(&id)))

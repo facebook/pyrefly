@@ -54,7 +54,6 @@ use ruff_python_ast::StmtWith;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use ruff_text_size::TextSize;
 use serde::Serialize;
 use starlark_map::Hashed;
 use vec1::Vec1;
@@ -92,6 +91,7 @@ use crate::report::pysa::override_graph::OverrideGraph;
 use crate::report::pysa::types::ScalarTypeProperties;
 use crate::report::pysa::types::has_superclass;
 use crate::report::pysa::types::string_for_type;
+use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Hash, PartialOrd, Ord)]
@@ -413,29 +413,29 @@ struct GraphQLDecoratorRef {
 }
 
 impl GraphQLDecoratorRef {
-    fn is_inside_decorators(
-        &self,
-        mut decorators_range: impl Iterator<Item = TextSize>,
-        module_context: &ModuleContext,
-    ) -> bool {
-        decorators_range.any(|decorator_range| {
-            module_context
-                .transaction
-                .find_definition(
-                    &module_context.handle,
-                    decorator_range,
-                    FindPreference::default(),
-                )
-                .iter()
-                .any(|go_to_definition| {
-                    if let Some(display_name) = &go_to_definition.display_name {
-                        self.module == go_to_definition.module.name().as_str()
-                            && self.name == *display_name
-                    } else {
-                        false
-                    }
-                })
-        })
+    fn matches_definition(&self, definition: &FindDefinitionItemWithDocstring) -> bool {
+        if let Some(display_name) = &definition.display_name {
+            self.module == definition.module.name().as_str() && self.name == *display_name
+        } else {
+            false
+        }
+    }
+
+    fn matches_function_type(&self, ty: &Type) -> bool {
+        let func_metadata = match ty {
+            Type::Function(box pyrefly_types::callable::Function { metadata, .. }) => {
+                Some(metadata)
+            }
+            Type::Overload(pyrefly_types::types::Overload { box metadata, .. }) => Some(metadata),
+            _ => None,
+        };
+        match func_metadata {
+            Some(pyrefly_types::callable::FuncMetadata {
+                kind: pyrefly_types::callable::FunctionKind::Def(box func_id),
+                ..
+            }) => func_id.module.name().as_str() == self.module && func_id.name == self.name,
+            _ => false,
+        }
     }
 }
 
@@ -1029,9 +1029,17 @@ impl<Function: FunctionTrait> FormatStringStringifyCallees<Function> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum ReturnShimArgumentMapping {
+    ReturnExpression,
+    ReturnExpressionElement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReturnShimCallees<Function: FunctionTrait> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) targets: Vec<CallTarget<Function>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) arguments: Vec<ReturnShimArgumentMapping>,
 }
 
 impl<Function: FunctionTrait> ReturnShimCallees<Function> {
@@ -1049,6 +1057,7 @@ impl<Function: FunctionTrait> ReturnShimCallees<Function> {
                 .into_iter()
                 .map(|call_target| CallTarget::map_function(call_target, map))
                 .collect(),
+            arguments: self.arguments,
         }
     }
 
@@ -3391,6 +3400,35 @@ impl<'a> CallGraphVisitor<'a> {
     }
 
     fn resolve_and_register_return_shim(&mut self, return_stmt: &StmtReturn) {
+        let extract_inner_class_and_argument_mapping = |type_| match type_ {
+            Type::ClassDef(class) => Some((class, ReturnShimArgumentMapping::ReturnExpression)),
+            Type::ClassType(class_type) | Type::SelfType(class_type) => {
+                let class_object = class_type.class_object();
+                let mut targs = class_type.targs().iter_paired().map(|(_, targ)| targ);
+                if let Some(targ) = targs.next()
+                    && (class_object == self.module_context.stdlib.list_object()
+                        || class_object == self.module_context.stdlib.set_object()
+                        || class_type == self.module_context.stdlib.sequence(targ.clone()))
+                {
+                    match targ {
+                        Type::ClassType(class_type) => Some((
+                            class_type.class_object().clone(),
+                            ReturnShimArgumentMapping::ReturnExpressionElement,
+                        )),
+                        _ => Some((
+                            class_object.clone(),
+                            ReturnShimArgumentMapping::ReturnExpression,
+                        )),
+                    }
+                } else {
+                    Some((
+                        class_object.clone(),
+                        ReturnShimArgumentMapping::ReturnExpression,
+                    ))
+                }
+            }
+            _ => None,
+        };
         if let Some(graphql_decorator) = self.matching_graphql_decorators.last().unwrap()
             && let Some(return_expression_type) =
                 return_stmt.value.as_ref().and_then(|return_expression| {
@@ -3398,39 +3436,34 @@ impl<'a> CallGraphVisitor<'a> {
                         .answers
                         .get_type_trace(return_expression.range())
                 })
-            && let Some(class) = match return_expression_type {
-                Type::ClassDef(class) => Some(class),
-                Type::ClassType(class) => Some(class.class_object().clone()),
-                Type::SelfType(cls) => Some(cls.class_object().clone()),
-                _ => None,
-            }
+            && let return_expression_type = strip_none_from_union(&return_expression_type)
+            && let Some((return_inner_class, argument_mapping)) =
+                extract_inner_class_and_argument_mapping(return_expression_type)
         {
-            let class_context = get_context_from_class(&class, self.module_context);
-            let have_graphql_decorator = |function_node: &FunctionNode| match function_node {
-                FunctionNode::DecoratedFunction(decorated_function) => {
-                    let decorators_range = decorated_function.undecorated.decorators.iter().map(
-                        |(_, decorator_range)| {
-                            // `start()` does not work with go-to-definitions since the start position always refers to `@`
-                            decorator_range.end()
-                        },
-                    );
-                    graphql_decorator.is_inside_decorators(decorators_range, &class_context)
-                }
+            let class_context = get_context_from_class(&return_inner_class, self.module_context);
+            let has_graphql_decorator = |function_node: &FunctionNode| match function_node {
+                FunctionNode::DecoratedFunction(decorated_function) => decorated_function
+                    .undecorated
+                    .decorators
+                    .iter()
+                    .any(|(ty, _)| graphql_decorator.matches_function_type(ty)),
                 _ => false,
             };
-            let callees: Vec<CallTarget<FunctionRef>> = class
+            let callees: Vec<CallTarget<FunctionRef>> = return_inner_class
                 .fields()
                 .filter_map(|field_name| {
-                    if let Some(class_field) =
-                        get_class_field_from_current_class_only(&class, field_name, &class_context)
-                        && let Some(function_node) =
-                            FunctionNode::exported_function_from_class_field(
-                                &class,
-                                field_name,
-                                class_field,
-                                &class_context,
-                            )
-                        && have_graphql_decorator(&function_node)
+                    if let Some(class_field) = get_class_field_from_current_class_only(
+                        &return_inner_class,
+                        field_name,
+                        &class_context,
+                    ) && let Some(function_node) =
+                        FunctionNode::exported_function_from_class_field(
+                            &return_inner_class,
+                            field_name,
+                            class_field,
+                            &class_context,
+                        )
+                        && has_graphql_decorator(&function_node)
                     {
                         Some(self.call_target_from_static_or_virtual_call(
                             function_node.as_function_ref(&class_context),
@@ -3455,7 +3488,10 @@ impl<'a> CallGraphVisitor<'a> {
                         return_stmt.range(),
                         &self.module_context.module_info,
                     ),
-                    ExpressionCallees::Return(ReturnShimCallees { targets: callees }),
+                    ExpressionCallees::Return(ReturnShimCallees {
+                        targets: callees,
+                        arguments: vec![argument_mapping],
+                    }),
                 );
             }
         }
@@ -3862,20 +3898,30 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
     fn enter_function_scope(&mut self, function_def: &StmtFunctionDef, _: &Scopes) {
         self.enter_debug_scope(&function_def.body);
         self.matching_graphql_decorators.push(
-            GRAPHQL_DECORATORS
+            function_def
+                .decorator_list
                 .iter()
-                .find_map(|(callable_decorator, method_decorator)| {
-                    if callable_decorator.is_inside_decorators(
-                        function_def
-                            .decorator_list
-                            .iter()
-                            .map(|decorator| decorator.expression.end()),
-                        self.module_context,
-                    ) {
-                        Some(*method_decorator)
-                    } else {
-                        None
+                .map(|decorator| match &decorator.expression {
+                    Expr::Name(_) | Expr::Attribute(_) => {
+                        self.module_context.transaction.find_definition(
+                            &self.module_context.handle,
+                            decorator.expression.end(),
+                            FindPreference::default(),
+                        )
                     }
+                    _ => vec![],
+                })
+                .flat_map(|v| v.into_iter())
+                .find_map(|go_to_definition| {
+                    GRAPHQL_DECORATORS
+                        .iter()
+                        .find_map(|(callable_decorator, method_decorator)| {
+                            if callable_decorator.matches_definition(&go_to_definition) {
+                                Some(*method_decorator)
+                            } else {
+                                None
+                            }
+                        })
                 })
                 .cloned(),
         );

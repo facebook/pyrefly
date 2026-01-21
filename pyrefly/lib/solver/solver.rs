@@ -71,15 +71,18 @@ enum Variable {
     ///
     /// It will attempt to infer the type from the first downstream use; if the
     /// type cannot be determined it becomes `Any`.
-    PartialContained,
+    ///
+    /// The TextRange is the location of the empty container literal (e.g., `[]` or `{}`),
+    /// used for error reporting when the type cannot be inferred.
+    PartialContained(TextRange),
     /// A "partial type" (see above) representing a type variable that was not
     /// solved as part of a generic function or constructor call.
     ///
     /// Behaves similar to `PartialContained`, but it has the ability to use
     /// the default type if the first use does not pin.
-    PartialQuantified(Box<Quantified>),
+    PartialQuantified(Quantified),
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
-    Quantified(Box<Quantified>),
+    Quantified(Quantified),
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
     Recursive,
     /// A loop-recursive variable, e.g. `x = None; while x is None: x = f()`
@@ -99,16 +102,12 @@ enum Variable {
 
 impl Variable {
     fn finished(q: &Quantified) -> Self {
-        if let Some(d) = q.default() {
-            Variable::Answer(d.clone())
+        if q.default().is_some() {
+            Variable::Answer(q.as_gradual_type())
         } else {
-            Variable::PartialQuantified(Box::new(q.clone()))
+            Variable::PartialQuantified(q.clone())
         }
     }
-}
-
-fn default(q: &Quantified) -> Type {
-    q.default().cloned().unwrap_or_else(Type::any_implicit)
 }
 
 /// The restrictions placed on a `LoopRecursive` Var during recursive solve of
@@ -128,7 +127,7 @@ enum LoopBound {
 impl Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Variable::PartialContained => write!(f, "PartialContained"),
+            Variable::PartialContained(_) => write!(f, "PartialContained"),
             Variable::PartialQuantified(q) | Variable::Quantified(q) => {
                 let label = if matches!(self, Variable::PartialQuantified(_)) {
                     "PartialQuantified"
@@ -333,23 +332,36 @@ impl Solver {
 
     /// Force all non-recursive Vars in `vars`.
     ///
+    /// Returns `Some(range)` if a `PartialContained` variable was pinned to `Any`,
+    /// where `range` is the location of the empty container literal.
+    /// This allows callers to emit errors about uninferred empty containers.
+    ///
     /// TODO: deduplicate Variable-to-gradual-type logic with `force_var`.
-    pub fn pin_placeholder_type(&self, var: Var) {
+    pub fn pin_placeholder_type(&self, var: Var) -> Option<TextRange> {
         let variables = self.variables.lock();
         let mut variable = variables.get_mut(var);
         match &mut *variable {
             Variable::LoopRecursive(..) | Variable::Recursive | Variable::Answer(..) => {
                 // Nothing to do if we have an answer already, and we want to skip recursive Vars
                 // which do not represent placeholder types.
+                None
             }
             Variable::Quantified(q) => {
                 *variable = Variable::Answer(q.as_gradual_type());
+                None
             }
             Variable::PartialQuantified(q) => {
-                *variable = Variable::Answer(default(q));
+                *variable = Variable::Answer(q.as_gradual_type());
+                None
             }
-            Variable::PartialContained | Variable::Unwrap => {
+            Variable::PartialContained(range) => {
+                let range = *range;
                 *variable = Variable::Answer(Type::any_implicit());
+                Some(range)
+            }
+            Variable::Unwrap => {
+                *variable = Variable::Answer(Type::any_implicit());
+                None
             }
             Variable::Parameter => {
                 unreachable!("Unexpected Variable::Parameter")
@@ -426,7 +438,7 @@ impl Solver {
             _ => {
                 let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
-                    Variable::PartialQuantified(q) => default(q),
+                    Variable::PartialQuantified(q) => q.as_gradual_type(),
                     _ => Type::any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
@@ -595,11 +607,12 @@ impl Solver {
 
     /// Generate a fresh variable based on code that is unspecified inside a container,
     /// e.g. `[]` with an unknown type of element.
-    pub fn fresh_partial_contained(&self, uniques: &UniqueFactory) -> Var {
+    /// The `range` parameter is the location of the empty container literal.
+    pub fn fresh_partial_contained(&self, uniques: &UniqueFactory, range: TextRange) -> Var {
         let v = Var::new(uniques);
         self.variables
             .lock()
-            .insert_fresh(v, Variable::PartialContained);
+            .insert_fresh(v, Variable::PartialContained(range));
         v
     }
 
@@ -657,7 +670,7 @@ impl Solver {
         let t = t.subst(&params.iter().map(|p| &p.quantified).zip(&ts).collect());
         let mut lock = self.variables.lock();
         for (v, param) in vs.iter().zip(params.iter()) {
-            lock.insert_fresh(*v, Variable::Quantified(Box::new(param.quantified.clone())));
+            lock.insert_fresh(*v, Variable::Quantified(param.quantified.clone()));
         }
         (QuantifiedHandle(vs), t)
     }
@@ -702,7 +715,7 @@ impl Solver {
 
         let mut lock = self.variables.lock();
         for (v, q) in vs.iter().zip(qs.into_iter()) {
-            lock.insert_fresh(*v, Variable::Quantified(Box::new(q)));
+            lock.insert_fresh(*v, Variable::Quantified(q));
         }
         drop(lock);
 
@@ -749,7 +762,7 @@ impl Solver {
                     if self.infer_with_first_use {
                         *e = Variable::finished(q);
                     } else {
-                        *e = Variable::Answer(default(q))
+                        *e = Variable::Answer(q.as_gradual_type())
                     }
                 }
                 _ => {}
@@ -772,7 +785,7 @@ impl Solver {
             {
                 let v = Var::new(uniques);
                 *t = v.to_type();
-                lock.insert_fresh(v, Variable::Quantified(Box::new(param.quantified.clone())));
+                lock.insert_fresh(v, Variable::Quantified(param.quantified.clone()));
             }
         })
     }
@@ -839,7 +852,7 @@ impl Solver {
                     self.variables.lock().insert_fresh(v, Variable::finished(q));
                     Some(v.to_type())
                 } else {
-                    Some(default(q))
+                    Some(q.as_gradual_type())
                 }
             } else {
                 None
@@ -1247,8 +1260,9 @@ pub enum SubsetError {
     TypedDict(Box<TypedDictSubsetError>),
     /// Errors involving arbitrary unknown fields in open TypedDicts
     OpenTypedDict(Box<OpenTypedDictSubsetError>),
-    /// An invariant was violated - used for cases that should be unreachabile when - if there is ever a bug - we
+    /// An invariant was violated - used for cases that should be unreachable when - if there is ever a bug - we
     /// would prefer to not panic and get a text location for reproducing rather than just a crash report.
+    /// Note: always use `ErrorCollector::internal_error` to log internal errors.
     InternalError(String),
     /// Protocol class names cannot be assigned to `type[P]` when `P` is a protocol
     TypeOfProtocolNeedsConcreteClass(Name),
@@ -1416,6 +1430,59 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         drop(variables);
                         self.is_subset_eq(&t1, want)
                     }
+                    // When both variables are quantified, we need to preserve the stricter bound.
+                    // The `unify` function preserves the Variable data from its second argument,
+                    // so we call it with the stricter bound in the v2 position.
+                    (Variable::Quantified(q1), Variable::Quantified(q2))
+                    | (Variable::PartialQuantified(q1), Variable::Quantified(q2))
+                    | (Variable::Quantified(q1), Variable::PartialQuantified(q2))
+                    | (Variable::PartialQuantified(q1), Variable::PartialQuantified(q2)) => {
+                        let r1 = q1.restriction().clone();
+                        let r2 = q2.restriction().clone();
+                        drop(variable1);
+                        drop(variable2);
+
+                        match (r1.is_restricted(), r2.is_restricted()) {
+                            (false, false) => {
+                                // Neither has a restriction, order doesn't matter
+                                variables.unify(*v1, *v2);
+                            }
+                            (true, false) => {
+                                // Only v1 has a restriction, preserve v1's data
+                                variables.unify(*v2, *v1);
+                            }
+                            (false, true) => {
+                                // Only v2 has a restriction, preserve v2's data
+                                variables.unify(*v1, *v2);
+                            }
+                            (true, true) => {
+                                // Both have restrictions, need to compare bounds
+                                let b1 = r1.as_type(self.type_order.stdlib());
+                                let b2 = r2.as_type(self.type_order.stdlib());
+                                drop(variables);
+
+                                let b1_subtype_of_b2 = self.is_subset_eq(&b1, &b2).is_ok();
+                                let b2_subtype_of_b1 = self.is_subset_eq(&b2, &b1).is_ok();
+
+                                // Unify in the correct order to preserve the stricter bound.
+                                // unify(x, y) preserves y's Variable data.
+                                if b1_subtype_of_b2 && b2_subtype_of_b1 {
+                                    // Bounds are equivalent, order doesn't matter
+                                    self.solver.variables.lock().unify(*v1, *v2);
+                                } else if b1_subtype_of_b2 {
+                                    // b1 is stricter (subtype of b2), preserve v1's data
+                                    self.solver.variables.lock().unify(*v2, *v1);
+                                } else if b2_subtype_of_b1 {
+                                    // b2 is stricter (subtype of b1), preserve v2's data
+                                    self.solver.variables.lock().unify(*v1, *v2);
+                                } else {
+                                    // Bounds are incompatible
+                                    return Err(SubsetError::Other);
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
                     (_, _) => {
                         drop(variable1);
                         drop(variable2);
@@ -1495,18 +1562,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Err(e) => Err(e),
                         }
                     }
-                    Variable::PartialContained => {
-                        // Promote LiteralStr to str when pinning a partial type.
-                        // TODO(stroxler): should we be promoting other literal types here?
-                        // See: https://github.com/facebook/pyrefly/issues/2068
-                        let t2_p = match t2 {
-                            Type::LiteralString(_) => {
-                                self.type_order.stdlib().str().clone().to_type()
-                            }
-                            _ => t2.clone(),
-                        };
+                    Variable::PartialContained(_) => {
                         drop(v1_ref);
-                        variables.update(*v1, Variable::Answer(t2_p));
+                        variables.update(*v1, Variable::Answer(t2.clone()));
                         Ok(())
                     }
                     Variable::Unwrap | Variable::Recursive => {
@@ -1574,7 +1632,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                         Ok(())
                     }
-                    Variable::PartialContained => {
+                    Variable::PartialContained(_) => {
                         let t1_p = t1
                             .clone()
                             .promote_implicit_literals(self.type_order.stdlib());

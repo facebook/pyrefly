@@ -828,7 +828,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
                     expected_version,
                     actual_version
                 );
-                (actual_version == expected_version).then_some(())
+                (actual_version == expected_version).then_some(Ok(()))
             }
             _ => None,
         }

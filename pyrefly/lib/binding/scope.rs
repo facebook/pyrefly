@@ -2288,41 +2288,30 @@ impl Scopes {
         best_suggestion(missing, candidates)
     }
 
-    /// Look up the information needed to create a `Usage` binding for a read of a name
+    /// Look up the information needed to create a binding for a read of a name
     /// in the current scope stack.
-    pub fn look_up_name_for_read(&self, name: Hashed<&Name>) -> NameReadInfo {
-        self.look_up_name_for_read_impl(name, false)
-    }
-
-    /// Look up a name for a static type context (annotations, type aliases, etc).
     ///
-    /// Skips class-scope overload definitions so that annotations in overload signatures are not
-    /// accidentally resolved to other overloads. That is, in:
-    ///     class A: ...
-    ///     class B: ...
-    ///         @overload
-    ///         def A(self) -> A: ...
-    ///         @overload
-    ///         def A(self) -> A: ...
-    ///         def A(self): ...
-    /// we want the `A` return annotation in the second overload signature to resolve to class `A`,
-    /// not the first overload.
-    ///
-    /// Note that this is intentionally divergent from the runtime and different from how name
-    /// lookup usually works. In all other cases, if the name of a type is locally shadowed by a
-    /// non-type definition, we error if it is then used in an annotation.
-    pub fn look_up_name_for_read_in_static_type_context(
-        &self,
-        name: Hashed<&Name>,
-    ) -> NameReadInfo {
-        self.look_up_name_for_read_impl(name, true)
-    }
-
-    fn look_up_name_for_read_impl(
-        &self,
-        name: Hashed<&Name>,
-        skip_class_overload_function_definitions: bool,
-    ) -> NameReadInfo {
+    /// The `usage` parameter determines lookup behavior:
+    /// - For `Usage::StaticTypeInformation`: Skips class-scope overload definitions so that
+    ///   annotations in overload signatures are not accidentally resolved to other overloads.
+    ///   That is, in:
+    ///   ```python
+    ///   class A: ...
+    ///   class B: ...
+    ///       @overload
+    ///       def A(self) -> A: ...
+    ///       @overload
+    ///       def A(self) -> A: ...
+    ///       def A(self): ...
+    ///   ```
+    ///   we want the `A` return annotation in the second overload signature to resolve to class `A`,
+    ///   not the first overload. (Note that this is intentionally divergent from the runtime and
+    ///   different from how name lookup usually works.) In all other cases, if the name of a type
+    ///   is locally shadowed by a non-type definition, we error if it is then used in an annotation.
+    /// - For other usages: Normal lookup behavior.
+    pub fn look_up_name_for_read(&self, name: Hashed<&Name>, usage: &Usage) -> NameReadInfo {
+        let skip_class_overload_function_definitions =
+            matches!(usage, Usage::StaticTypeInformation);
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 

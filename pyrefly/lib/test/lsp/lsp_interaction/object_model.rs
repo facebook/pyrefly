@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::thread::{self};
 use std::time::Duration;
+use std::time::Instant;
 
 use crossbeam_channel::RecvTimeoutError;
 use lsp_server::RequestId;
@@ -42,6 +43,7 @@ use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::CodeActionRequest;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
+use lsp_types::request::FoldingRangeRequest;
 use lsp_types::request::GotoDefinition;
 use lsp_types::request::GotoImplementation;
 use lsp_types::request::GotoTypeDefinition;
@@ -81,6 +83,7 @@ use crate::test::util::init_test;
 pub enum LspMessageError {
     Timeout { description: String },
     Disconnected { description: String },
+    Custom { description: String },
 }
 
 impl std::fmt::Display for LspMessageError {
@@ -94,6 +97,9 @@ impl std::fmt::Display for LspMessageError {
                     f,
                     "Channel disconnected while waiting for message: {description}"
                 )
+            }
+            LspMessageError::Custom { description } => {
+                write!(f, "{description}")
             }
         }
     }
@@ -226,6 +232,8 @@ pub struct TestClient {
     request_idx: AtomicI32,
     /// Handle to wait for the server to exit
     finish_handle: Arc<FinishHandle>,
+    /// Start time for logging elapsed time in messages
+    start_time: Instant,
 }
 
 impl TestClient {
@@ -237,6 +245,7 @@ impl TestClient {
             recv_timeout: Duration::from_secs(50),
             request_idx: AtomicI32::new(0),
             finish_handle,
+            start_time: Instant::now(),
         }
     }
 
@@ -249,6 +258,12 @@ impl TestClient {
     fn next_request_id(&self) -> RequestId {
         let idx = self.request_idx.fetch_add(1, Ordering::SeqCst);
         RequestId::from(idx + 1)
+    }
+
+    /// Returns a formatted string of elapsed time since the client was created.
+    fn elapsed_time(&self) -> String {
+        let elapsed = self.start_time.elapsed();
+        format!("{:>6.3}s", elapsed.as_secs_f64())
     }
 
     pub fn drop_connection(&mut self) {
@@ -284,7 +299,8 @@ impl TestClient {
 
     pub fn send_message(&self, msg: Message) {
         eprintln!(
-            "client--->server {}",
+            "[{}] client--->server {}",
+            self.elapsed_time(),
             serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
         );
         if let Err(err) = self.send_timeout(msg) {
@@ -484,6 +500,18 @@ impl TestClient {
         }}))
     }
 
+    pub fn folding_range(
+        &self,
+        file: &'static str,
+    ) -> ClientRequestHandle<'_, FoldingRangeRequest> {
+        let path = self.get_root_or_panic().join(file);
+        self.send_request(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&path).unwrap().to_string()
+            }
+        }))
+    }
+
     pub fn hover(
         &self,
         file: &'static str,
@@ -673,20 +701,25 @@ impl TestClient {
         params
     }
 
+    /// The matcher returns behave as follows:
+    /// - Some(Ok(_)) indicates a successful match
+    /// - Some(Err(_)) indicates a failed match that should error
+    /// - None indicates a failed match that should continue waiting
     pub fn expect_message<T>(
         &self,
         description: &str,
-        matcher: impl Fn(Message) -> Option<T>,
+        matcher: impl Fn(Message) -> Option<Result<T, LspMessageError>>,
     ) -> Result<T, LspMessageError> {
         loop {
             match self.recv_timeout() {
                 Ok(msg) => {
                     eprintln!(
-                        "client<---server {}",
+                        "[{}] client<---server {}",
+                        self.elapsed_time(),
                         serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
                     );
                     if let Some(actual) = matcher(msg) {
-                        return Ok(actual);
+                        return actual;
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
@@ -716,7 +749,7 @@ impl TestClient {
                 assert_eq!(x.method, R::METHOD);
                 let actual: R::Params = serde_json::from_value(x.params.clone()).unwrap();
                 assert_eq!(json!(expected), json!(actual));
-                Some(x.id)
+                Some(Ok(x.id))
             } else {
                 None
             }
@@ -740,7 +773,7 @@ impl TestClient {
                 if let Message::Response(x) = msg
                     && x.id == id
                 {
-                    Some(serde_json::from_value(x.result.unwrap()).unwrap())
+                    Some(Ok(serde_json::from_value(x.result.unwrap()).unwrap()))
                 } else {
                     None
                 }
@@ -759,7 +792,7 @@ impl TestClient {
             if let Message::Response(x) = msg
                 && x.id == id
             {
-                Some(x.error.unwrap())
+                Some(Ok(x.error.unwrap()))
             } else {
                 None
             }
@@ -780,7 +813,7 @@ impl TestClient {
                     && x.id == id
                     && matcher(serde_json::from_value::<R::Result>(x.result.unwrap()).unwrap())
                 {
-                    Some(())
+                    Some(Ok(()))
                 } else {
                     None
                 }
@@ -820,7 +853,7 @@ impl TestClient {
     }
 
     /// Wait for a publishDiagnostics notification, then check if it contains the message
-    pub fn expect_publish_diagnostics_message_contains(
+    pub fn expect_publish_diagnostics_eventual_message_contains(
         &self,
         path: PathBuf,
         message: &str,
@@ -842,7 +875,7 @@ impl TestClient {
                             .iter()
                             .any(|d| d.message.contains(message))
                     {
-                        Some(())
+                        Some(Ok(()))
                     } else {
                         None
                     }
@@ -854,8 +887,8 @@ impl TestClient {
         Ok(())
     }
 
-    /// Wait for a publishDiagnostics notification, then check if it has the correct path and count
-    pub fn expect_publish_diagnostics_error_count(
+    /// Wait for a publishDiagnostics notification that has the correct path and count
+    pub fn expect_publish_diagnostics_eventual_error_count(
         &self,
         path: PathBuf,
         count: usize,
@@ -874,7 +907,47 @@ impl TestClient {
                     if params.uri.to_file_path().unwrap() == path
                         && params.diagnostics.len() == count
                     {
-                        Some(())
+                        Some(Ok(()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+        )?;
+        Ok(())
+    }
+
+    /// The next publishDiagnostics for that path should have the expected count, otherwise error
+    pub fn expect_publish_diagnostics_must_have_error_count(
+        &self,
+        path: PathBuf,
+        count: usize,
+    ) -> Result<(), LspMessageError> {
+        self.expect_message(
+            &format!(
+                "Next publishDiagnostics notification for file {} should have {count} errors",
+                path.display()
+            ),
+            |msg| {
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    let params =
+                        serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
+                    if params.uri.to_file_path().unwrap() == path {
+                        if params.diagnostics.len() == count {
+                            Some(Ok(()))
+                        } else {
+                            Some(Err(LspMessageError::Custom {
+                                description: format!(
+                                    "Expected next publish diagnostics for file {} to have {count} errors, but got {}",
+                                    path.display(),
+                                    params.diagnostics.len()
+                                ),
+                            }))
+                        }
                     } else {
                         None
                     }
@@ -900,7 +973,7 @@ impl TestClient {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(x.params).unwrap();
                     if params.uri == *uri && params.diagnostics.len() == count {
-                        Some(())
+                        Some(Ok(()))
                     } else {
                         None
                     }
@@ -959,7 +1032,8 @@ impl TestClient {
         match self.recv_timeout() {
             Ok(msg) => {
                 eprintln!(
-                    "client<---server {}",
+                    "[{}] client<---server {}",
+                    self.elapsed_time(),
                     serde_json::to_string(&JsonRpcMessage::from_message(msg)).unwrap()
                 );
                 Ok(())
@@ -1000,7 +1074,7 @@ impl TestClient {
                 if let Message::Request(x) = msg
                     && x.method == RegisterCapability::METHOD
                 {
-                    Some(serde_json::from_value(x.params).unwrap())
+                    Some(Ok(serde_json::from_value(x.params).unwrap()))
                 } else {
                     None
                 }
@@ -1018,7 +1092,7 @@ impl TestClient {
                 if let Message::Request(x) = msg
                     && x.method == UnregisterCapability::METHOD
                 {
-                    Some(serde_json::from_value(x.params).unwrap())
+                    Some(Ok(serde_json::from_value(x.params).unwrap()))
                 } else {
                     None
                 }

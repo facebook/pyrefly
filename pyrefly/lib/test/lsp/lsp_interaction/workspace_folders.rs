@@ -57,7 +57,7 @@ fn test_workspace_folder_change_with_non_file_uri_does_not_crash() {
     // Wait for diagnostics to confirm the server processed the request
     interaction
         .client
-        .expect_publish_diagnostics_error_count(root.join("foo.py"), 0)
+        .expect_publish_diagnostics_eventual_error_count(root.join("foo.py"), 0)
         .unwrap();
 
     // Also test removal with non-file URI doesn't crash

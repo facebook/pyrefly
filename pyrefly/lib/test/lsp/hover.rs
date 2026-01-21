@@ -917,27 +917,80 @@ c = Container()
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
     // The hover should show the __contains__ method signature
     assert!(
-        report.contains("__contains__") && report.contains("self: Container"),
+        report.contains("self: Container") && report.contains("item: int"),
         "Expected hover to show __contains__ method signature, got: {report}"
     );
 }
 
-/// Test for the exact example from issue #1926: [x for x in x if x in [1]]
-/// For the membership `in`, hover shows __contains__ method.
-/// Note: Hover over iteration `in` (for loops/comprehensions) doesn't show __iter__ because
-/// keywords don't have types, but goto-definition works. See the definition.rs tests.
 #[test]
-fn hover_over_in_keyword_issue_1926_membership() {
-    // The membership `in` shows __contains__ method
+fn hover_over_in_keyword_in_for_loop() {
+    let code = r#"
+for x in [1, 2, 3]:
+#     ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The hover should show the iteration keyword with iterable type
+    assert!(
+        report.contains("(keyword) in") && report.contains("Iteration over"),
+        "Expected hover to show iteration keyword info, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_keyword_in_list_comprehension() {
+    let code = r#"
+result = [x for x in [1, 2, 3] if x in [1]]
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The first 'in' is iteration, expect iteration keyword hover info
+    assert!(
+        report.contains("(keyword) in") && report.contains("Iteration over"),
+        "Expected hover for iteration 'in' in comprehension, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_keyword_for_membership_in_comprehension() {
+    let code = r#"
+result = [x for x in [1, 2, 3] if x in [1]]
+#                                   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The second 'in' is membership test - should show __contains__ signature
+    assert!(
+        report.contains("__contains__"),
+        "Expected hover for membership 'in' to show __contains__, got: {report}"
+    );
+}
+
+/// Test for the exact example from issue #1926: [x for x in x if x in [1]]
+/// This verifies both uses of `in` show appropriate contextual hover.
+#[test]
+fn hover_over_in_keyword_issue_1926_example() {
+    // First `in` - iteration syntax (for clause)
+    let code_iteration = r#"
+x = [1, 2, 3]
+result = [x for x in x if x in [1]]
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code_iteration)], get_test_report);
+    assert!(
+        report.contains("(keyword) in") && report.contains("Iteration over"),
+        "First 'in' should show iteration hover, got: {report}"
+    );
+
+    // Second `in` - membership testing operator
     let code_membership = r#"
 x = [1, 2, 3]
 result = [x for x in x if x in [1]]
 #                           ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code_membership)], get_test_report);
-    // For membership test, we expect to see __contains__
+    // For membership test, we expect to see __contains__ method
     assert!(
         report.contains("__contains__"),
-        "Membership 'in' should show __contains__ hover, got: {report}"
+        "Second 'in' should show __contains__ hover, got: {report}"
     );
 }

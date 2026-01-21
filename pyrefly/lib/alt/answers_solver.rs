@@ -565,9 +565,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         CycleDetectedResult::DuplicateCycleDetected => {
                             let range = self.bindings().idx_to_key(idx).range();
-                            self.base_errors.add(
+                            self.base_errors.internal_error(
                                 range,
-                                ErrorInfo::Kind(ErrorKind::InternalError),
                                 vec1![format!(
                                     "Duplicate cycle detected at {current}; likely infinite recursion in type resolution"
                                 )],
@@ -621,6 +620,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///
     /// Return the final result from the `Calculation`, which potentially might
     /// be coming from another thread because the first write wins.
+    ///
+    /// Errors are collected into a local error collector during solving, and
+    /// only transferred to `base_errors` if this thread is the one that writes
+    /// the answer. This prevents duplicate errors when multiple threads compute
+    /// the same binding.
     fn calculate_and_record_answer<K: Solve<Ans>>(
         &self,
         current: CalcId,
@@ -633,10 +637,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     {
         let binding = self.bindings().get(idx);
 
-        let answer = calculation
-            .record_value(K::solve(self, binding, self.base_errors), |var, answer| {
-                self.finalize_recursive_answer::<K>(idx, var, answer)
+        // Solve the binding with a local error collector.
+        //
+        // Only write the errors if we actually write the result - if another thread
+        // or cycle unwinding already wrote the result, we discard the errors.
+        let local_errors = self.error_collector();
+        let (answer, did_write) = calculation
+            .record_value(K::solve(self, binding, &local_errors), |var, answer| {
+                self.finalize_recursive_answer::<K>(idx, var, answer, &local_errors)
             });
+        if did_write {
+            self.base_errors.extend(local_errors);
+        }
+
         // Handle cycle unwinding, if applicable.
         //
         // TODO(stroxler): we eventually need to use is-a-cycle-active information to isolate
@@ -658,13 +671,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         idx: Idx<K>,
         var: Var,
         answer: Arc<K::Answer>,
+        errors: &ErrorCollector,
     ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         let range = self.bindings().idx_to_key(idx).range();
-        let final_answer = K::record_recursive(self, range, answer, var, self.base_errors);
+        let final_answer = K::record_recursive(self, range, answer, var, errors);
         if var != Var::ZERO {
             self.solver().force_var(var);
         }

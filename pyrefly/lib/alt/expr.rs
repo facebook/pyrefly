@@ -434,17 +434,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if x.is_empty() {
                     let elem_ty = elt_hint.map_or_else(
                         || {
-                            if !self.solver().infer_with_first_use {
-                                self.error(
-                                    errors,
-                                    x.range(),
-                                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
-                                    "This expression is implicitly inferred to be `list[Any]`. Please provide an explicit type annotation.".to_owned(),
-                                );
-                                Type::any_implicit()
-                            } else {
-                                self.solver().fresh_partial_contained(self.uniques).to_type()
-                            }
+                            self.solver()
+                                .fresh_partial_contained(self.uniques, x.range)
+                                .to_type()
                         },
                         |hint| hint.to_type(),
                     );
@@ -460,17 +452,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if x.is_empty() {
                     let elem_ty = elem_hint.map_or_else(
                         || {
-                            if !self.solver().infer_with_first_use {
-                                self.error(
-                                    errors,
-                                    x.range(),
-                                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
-                                    "This expression is implicitly inferred to be `set[Any]`. Please provide an explicit type annotation.".to_owned(),
-                                );
-                                Type::any_implicit()
-                            } else {
-                                self.solver().fresh_partial_contained(self.uniques).to_type()
-                            }
+                            self.solver()
+                                .fresh_partial_contained(self.uniques, x.range)
+                                .to_type()
                         },
                         |hint| hint.to_type(),
                     );
@@ -895,36 +879,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if items.is_empty() {
             let key_ty = key_hint.map_or_else(
                 || {
-                    if !self.solver().infer_with_first_use {
-                        Type::any_implicit()
-                    } else {
-                        self.solver()
-                            .fresh_partial_contained(self.uniques)
-                            .to_type()
-                    }
+                    self.solver()
+                        .fresh_partial_contained(self.uniques, range)
+                        .to_type()
                 },
                 |ty| ty.to_type(),
             );
             let value_ty = value_hint.map_or_else(
                 || {
-                    if !self.solver().infer_with_first_use {
-                        Type::any_implicit()
-                    } else {
-                        self.solver()
-                            .fresh_partial_contained(self.uniques)
-                            .to_type()
-                    }
+                    self.solver()
+                        .fresh_partial_contained(self.uniques, range)
+                        .to_type()
                 },
                 |ty| ty.to_type(),
             );
-            if hint.is_none() && !self.solver().infer_with_first_use {
-                self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
-                    "This expression is implicitly inferred to be `dict[Any, Any]`. Please provide an explicit type annotation.".to_owned(),
-                );
-            }
             self.stdlib.dict(key_ty, value_ty).to_type()
         } else {
             let mut typed_dict_fields = Vec::new();
@@ -962,7 +930,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         Type::union(vec![
                                             Type::None,
                                             self.solver()
-                                                .fresh_partial_contained(self.uniques)
+                                                .fresh_partial_contained(
+                                                    self.uniques,
+                                                    x.value.range(),
+                                                )
                                                 .to_type(),
                                         ])
                                     } else {

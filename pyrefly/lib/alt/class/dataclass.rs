@@ -95,7 +95,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.get_pydantic_root_model_type_via_mro(cls, &metadata)
             {
                 self.get_pydantic_root_model_init(cls, root_model_type, has_strict)
-            } else if metadata.is_pydantic_base_model() {
+            } else if metadata.is_pydantic_model() {
                 // Pydantic models with RootModel fields need type expansion
                 let transform_type: &dyn Fn(Type) -> Type = &|ty: Type| {
                     if let Some(root_type) = self.extract_root_model_inner_type(&ty) {

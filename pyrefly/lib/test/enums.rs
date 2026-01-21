@@ -732,3 +732,18 @@ class IntEnum(int, Enum):
             return cls.DEFAULT.value
     "#,
 );
+
+testcase!(
+    bug = "Enum aliases should have the type of the original member. The alias itself is not a member as per the spec.",
+    test_enum_alias,
+    r#"
+from typing import assert_type, Literal
+from enum import Enum
+
+class TrafficLight(Enum):
+    YELLOW = 3
+    AMBER = YELLOW  # Alias for YELLOW
+
+assert_type(TrafficLight.AMBER, Literal[TrafficLight.YELLOW])  # E: assert_type(Literal[TrafficLight.AMBER], Literal[TrafficLight.YELLOW]) failed
+    "#,
+);

@@ -582,3 +582,283 @@ fn test_incremental_rdeps_with_new() {
 
     i.check(&["foo", "bar", "baz"], &[]); // Nothing appears dirty
 }
+
+/// Test fine-grained dependency tracking: changing an unrelated export should NOT
+/// trigger recomputation of a module that only imports a different export.
+#[test]
+fn test_fine_grained_unrelated_export_no_recompute() {
+    let mut i = Incremental::new();
+    i.set("foo", "x: int = 1\ny: int = 2");
+    i.set("main", "from foo import x\nz = x + 1");
+    i.check(&["main"], &["main", "foo"]);
+
+    // Change only `y` - main should NOT be recomputed since it only imports `x`
+    i.set("foo", "x: int = 1\ny: str = 'changed'");
+    i.check(&["main"], &["foo"]);
+}
+
+/// Test fine-grained dependency tracking: changing the imported export SHOULD
+/// trigger recomputation.
+#[test]
+fn test_fine_grained_related_export_recompute() {
+    let mut i = Incremental::new();
+    i.set("foo", "x: int = 1\ny: int = 2");
+    i.set("main", "from foo import x\nprint(x)");
+    i.check(&["main"], &["main", "foo"]);
+
+    // Change `x` - main SHOULD be recomputed since it imports `x`
+    i.set("foo", "x: str = 'changed'\ny: int = 2");
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// Test fine-grained tracking with `import foo` style (depends on all exports).
+/// Any export change should trigger recomputation.
+#[test]
+fn test_import_module_regular_import_invalidate_all() {
+    let mut i = Incremental::new();
+    i.set("foo", "x: int = 1\ny: int = 2");
+    i.set("main", "import foo\nz = foo.x");
+    i.check(&["main"], &["main", "foo"]);
+
+    i.set("foo", "x: int = 1\ny: str = 'changed'");
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// Test mixed import styles: `from foo import x` followed by `import foo`.
+/// Should only depend on x.
+#[test]
+fn test_mixed_import_depends_on_all() {
+    let mut i = Incremental::new();
+    i.set("foo", "x: int = 1\ny: int = 2");
+    i.set(
+        "main",
+        "from foo import x\nimport foo\nprint(x); print(foo.y)",
+    );
+    i.check(&["main"], &["main", "foo"]);
+
+    // Change only `y` - main SHOULD be recomputed because of `import foo`
+    i.set("foo", "x: int = 1\ny: str = 'changed'");
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// Test incremental behavior with `import foo; bar(foo)` pattern.
+/// Verifies that passing an imported module as an argument to a function works correctly
+/// and triggers recomputation when the module changes.
+#[test]
+fn test_import_module_as_argument() {
+    let mut i = Incremental::new();
+    i.set("foo", "x: int = 1");
+    i.set(
+        "bar",
+        "import types\ndef process(m: types.ModuleType) -> int: return m.x",
+    );
+    i.set("main", "import foo\nimport bar\nresult = bar.process(foo)");
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Change `x` in foo - main should recompute since it passes foo to a function
+    i.set("foo", "x: str = 'changed'");
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// Test transitive export addition: when a module adds an export that a downstream
+/// module re-exports, consumers of the re-export should see the error go away.
+///
+/// Scenario:
+/// - foo (a.py): initially empty
+/// - bar (b.py): `from foo import *` (re-exports everything from foo)
+/// - main (c.py): `from bar import x` (fails because foo doesn't export x)
+///
+/// After foo adds `x = 1`, main's import should succeed.
+#[test]
+fn test_transitive_export_addition_clears_error() {
+    let mut i = Incremental::new();
+
+    // Initial state: foo is empty, bar re-exports from foo, main tries to import x from bar
+    i.set("foo", "");
+    i.set("bar", "from foo import *");
+    i.set(
+        "main",
+        "from bar import x # E: Could not import `x` from `bar`",
+    );
+    i.check(&["main", "foo", "bar"], &["main", "foo", "bar"]);
+
+    let main_handle = i.handle("main");
+
+    // Verify there's an error before the fix
+    let errors = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        !errors.shown.is_empty(),
+        "Expected errors before foo exports x"
+    );
+
+    // Now foo exports x - main's import should succeed
+    i.set("foo", "x = 1");
+    i.check_ignoring_expectations(&["main"], &["foo", "bar", "main"]);
+
+    // Verify the error is gone
+    let errors_after_fix = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        errors_after_fix.shown.is_empty(),
+        "Expected no errors after foo exports x, but got: {:?}",
+        errors_after_fix.shown
+    );
+}
+
+/// Test that when a type is used via inference (not explicitly imported),
+/// changes to that type still trigger recomputation.
+///
+/// Scenario:
+/// - foo: exports class A with field x: int
+/// - bar: imports A, creates instance, and re-exports it
+/// - main: imports the instance from bar (gets type A via inference, not import)
+///
+/// When A's field type changes, main should see the update.
+#[test]
+fn test_inferred_type_changes_trigger_recompute() {
+    let mut i = Incremental::new();
+
+    i.set("foo", "class A:\n    x: int = 1");
+    i.set("bar", "from foo import A\ninstance = A()");
+    i.set("main", "from bar import instance\ny = instance.x + 1");
+    i.check(&["main", "foo", "bar"], &["main", "foo", "bar"]);
+
+    // Change A's field type from int to str - main's arithmetic should now fail
+    i.set("foo", "class A:\n    x: str = 'hello'");
+    i.set(
+        "main",
+        "from bar import instance\ny = instance.x + 1 # E: `+` is not supported",
+    );
+    i.check(&["main"], &["foo", "bar", "main"]);
+}
+
+/// Test that when a function's return type changes, callers that import only
+/// the function (not the return type) still see the update.
+///
+/// Scenario:
+/// - foo: exports class A with field x and function get_a() -> A
+/// - main: imports only get_a, uses the returned value's field
+///
+/// When A's field type changes, main should see the update.
+#[test]
+fn test_function_return_type_changes_trigger_recompute() {
+    let mut i = Incremental::new();
+
+    i.set(
+        "foo",
+        "class A:\n    x: int = 1\ndef get_a() -> A:\n    return A()",
+    );
+    i.set(
+        "main",
+        "from foo import get_a\nval = get_a()\ny = val.x + 1",
+    );
+    i.check(&["main", "foo"], &["main", "foo"]);
+
+    // Change A's field type from int to str - main's arithmetic should now fail
+    i.set(
+        "foo",
+        "class A:\n    x: str = 'hello'\ndef get_a() -> A:\n    return A()",
+    );
+    i.set(
+        "main",
+        "from foo import get_a\nval = get_a()\ny = val.x + 1 # E: `+` is not supported",
+    );
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// Test that non-overlapping export changes do NOT trigger false cycle detection.
+///
+/// This simulates a pattern similar to PyTorch's torch.distributed.pipelining.stage module,
+/// which imports and re-exports from multiple independent sources:
+///   - `from torch.distributed._composable.replicate_with_fsdp import replicate`
+///   - `from torch.distributed.fsdp import fully_shard`
+///
+/// When both sources change in different epochs, the same module (stage) appears multiple
+/// times in the change propagation - but with DIFFERENT exports. This should NOT be
+/// treated as a cycle because:
+///   1. The exports don't overlap - they're independent re-exports
+///   2. Each export chain will stabilize independently
+///   3. There's no infinite loop risk since no single export keeps changing
+#[test]
+fn test_non_overlapping_exports_no_false_cycle() {
+    let mut i = Incremental::new();
+
+    i.set("foo", "x: int = 1");
+    i.set("bar", "y: int = 2");
+    i.set("baz", "from foo import x\nfrom bar import y");
+    i.set("main", "from baz import x, y\nprint(x, y)");
+    i.check(&["main"], &["main", "foo", "bar", "baz"]);
+
+    // Now change BOTH sources simultaneously. The hub module will:
+    // 1. First re-export the changed `x` (from foo)
+    // 2. Then re-export the changed `y` (from bar)
+    // This should NOT trigger cycle detection since the exports don't overlap.
+    i.set("foo", "x: str = 'changed_x'");
+    i.set("bar", "y: str = 'changed_y'");
+    i.check(&["main"], &["foo", "bar", "baz", "main"]);
+}
+
+/// Test that overlapping export changes DO trigger proper cycle detection.
+///
+/// A true cycle occurs when the same export keeps changing:
+///   - Export X in A depends on export Y in B
+///   - Export Y in B depends on export X in A
+///   - X changes -> Y changes -> X changes -> would loop forever
+///
+/// The cycle detection should catch this and force invalidation.
+#[test]
+fn test_overlapping_exports_cycle_detected() {
+    let mut i = Incremental::new();
+
+    // Set up a mutual dependency cycle where both modules export
+    // values that depend on each other.
+    i.set("foo", "import bar\nx: int = 1\ny = bar.x");
+    i.set("bar", "import foo\nx: int = 2\ny = foo.x");
+    i.check(&["foo"], &["foo", "bar"]);
+
+    // Changing `x` in foo should propagate to bar (which uses foo.x),
+    // and potentially back to foo (if bar.x changes). The same export `x`
+    // may need to be recomputed multiple times, triggering cycle detection.
+    i.set("foo", "import bar\nx: str = 'changed'\ny = bar.x");
+
+    // The cycle detection should handle this gracefully.
+    // We use unchecked because the exact recomputation pattern depends on
+    // cycle detection behavior.
+    let res = i.unchecked(&["foo"]);
+    // Both modules should be recomputed to reach stable state
+    assert!(res.changed.contains(&"foo".to_owned()));
+    assert!(res.changed.contains(&"bar".to_owned()));
+}
+
+/// Test a more complex non-overlapping case with a chain of re-exports.
+///
+/// This models a longer dependency chain where multiple intermediate modules
+/// re-export from different sources, similar to:
+///   torch.distributed.fsdp -> torch.distributed.fsdp._fully_shard -> _fully_shard.py
+#[test]
+fn test_reexport_chain_non_overlapping() {
+    let mut i = Incremental::new();
+
+    // Create a chain: source -> intermediate -> hub -> main
+    // with two parallel chains that don't share exports
+    i.set("foo", "a: int = 1\nb: int = 2");
+    i.set("bar", "from foo import a"); // bar re-exports only `a`
+    i.set("baz", "from foo import b"); // baz re-exports only `b`
+    i.set("main", "from bar import a\nfrom baz import b");
+    i.check(&["main"], &["main", "foo", "bar", "baz"]);
+
+    // Change `a` - only bar and main should be affected (fine-grained tracking)
+    i.set("foo", "a: str = 'new_a'\nb: int = 2");
+    i.check(&["main"], &["foo", "bar", "main"]);
+
+    // Change `b` - only baz and main should be affected
+    i.set("foo", "a: str = 'new_a'\nb: str = 'new_b'");
+    i.check(&["main"], &["foo", "baz", "main"]);
+}

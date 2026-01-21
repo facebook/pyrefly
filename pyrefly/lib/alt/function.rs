@@ -704,7 +704,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 true
             }
             SpecialDecorator::PropertyDeleter(decorator) => {
-                flags.property_metadata = decorator.property_metadata();
+                flags.property_metadata = decorator.property_metadata().cloned();
                 true
             }
             SpecialDecorator::DataclassTransformCall(kws) => {
