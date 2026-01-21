@@ -66,6 +66,40 @@ impl<K, V> SmallMap1<K, V> {
             SmallMap1Inner::Map(map) => map.iter().next().unwrap(),
         }
     }
+
+    /// Get a reference to the value associated with the given key.
+    pub fn get(&self, key: &K) -> Option<&V>
+    where
+        K: Hash + Eq,
+    {
+        match &self.0 {
+            SmallMap1Inner::One(existing_key, value) => {
+                if existing_key == key {
+                    Some(value)
+                } else {
+                    None
+                }
+            }
+            SmallMap1Inner::Map(map) => map.get(key),
+        }
+    }
+
+    /// Get a mutable reference to the value associated with the given key.
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V>
+    where
+        K: Hash + Eq,
+    {
+        match &mut self.0 {
+            SmallMap1Inner::One(existing_key, value) => {
+                if existing_key == key {
+                    Some(value)
+                } else {
+                    None
+                }
+            }
+            SmallMap1Inner::Map(map) => map.get_mut(key),
+        }
+    }
 }
 
 impl<'a, K, V> IntoIterator for &'a SmallMap1<K, V> {

@@ -466,7 +466,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self_arg: Option<CallArg>,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
@@ -512,7 +512,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 t => {
                     error(
                         call_errors,
-                        range,
+                        arguments_range,
                         ErrorKind::BadArgumentType,
                         format!("Expected `{}` to be a ParamSpec value", self.for_display(t)),
                     );
@@ -653,7 +653,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if unpacked_variadic_args_count > 1 {
                         error(
                             arg_errors,
-                            range,
+                            arguments_range,
                             ErrorKind::BadArgumentType,
                             "Expected at most one unpacked variadic argument".to_owned(),
                         );
@@ -664,7 +664,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.check_type(
                 &unpacked_args_ty,
                 unpacked_param_ty,
-                range,
+                arguments_range,
                 arg_errors,
                 &|| TypeCheckContext {
                     kind: TypeCheckKind::CallVarArgs(
@@ -884,7 +884,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         if missing_unnamed_posonly > 0 || !missing_named_posonly.is_empty() {
-            let range = keywords.first().map_or(range, |kw| kw.range);
+            let range = keywords.first().map_or(arguments_range, |kw| kw.range);
             let msg = if missing_unnamed_posonly == 0 {
                 format!(
                     "Missing positional argument{} {}",
@@ -931,7 +931,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         error(
                             call_errors,
-                            range,
+                            arguments_range,
                             ErrorKind::MissingArgument,
                             format!("Missing argument `{name}`"),
                         );
@@ -989,7 +989,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut self_obj: Option<Type>,
         mut args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
@@ -1031,7 +1031,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 args = rest;
             }
         }
-        let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, range));
+        let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, arguments_range));
         match callable.params {
             Params::List(params) => {
                 self.callable_infer_params(
@@ -1041,7 +1041,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self_arg,
                     args,
                     keywords,
-                    range,
+                    arguments_range,
                     arg_errors,
                     call_errors,
                     context,
@@ -1063,7 +1063,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self_arg,
                         args,
                         keywords,
-                        range,
+                        arguments_range,
                         arg_errors,
                         call_errors,
                         context,
@@ -1077,7 +1077,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self_arg,
                         args,
                         keywords,
-                        range,
+                        arguments_range,
                         arg_errors,
                         call_errors,
                         context,
@@ -1092,7 +1092,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         {
                             self.error(
                                 call_errors,
-                                range,
+                                arguments_range,
                                 ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
                                 format!(
                                     "Expected *-unpacked {}.args and **-unpacked {}.kwargs",
@@ -1108,7 +1108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 self_arg,
                                 &args[0..args.len() - 1],
                                 &keywords[0..keywords.len() - 1],
-                                range,
+                                arguments_range,
                                 arg_errors,
                                 call_errors,
                                 context,
@@ -1120,7 +1120,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // This could well be our error, but not really sure
                         self.error(
                             call_errors,
-                            range,
+                            arguments_range,
                             ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
                             format!("Unexpected ParamSpec type: `{}`", self.for_display(p)),
                         );
@@ -1136,7 +1136,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let kind = TypeCheckKind::TypeVarSpecialization(e.name);
                 self.error(
                     call_errors,
-                    range,
+                    arguments_range,
                     ErrorInfo::new(kind.as_error_kind(), context),
                     kind.format_error(
                         &self.for_display(e.got),

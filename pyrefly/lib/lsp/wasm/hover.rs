@@ -31,6 +31,7 @@ use pyrefly_types::callable::Required;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::types::Type;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
@@ -41,6 +42,8 @@ use ruff_text_size::TextSize;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::wasm::signature_help::is_constructor_call;
+use crate::lsp::wasm::signature_help::override_constructor_return_type;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
@@ -105,7 +108,7 @@ impl HoverValue {
         match self.kind {
             Some(SymbolKind::Attribute) if self.type_.is_toplevel_callable() => self
                 .type_
-                .check_toplevel_func_metadata(&|meta| match &meta.kind {
+                .visit_toplevel_func_metadata(&|meta| match &meta.kind {
                     FunctionKind::Def(func) if func.cls.is_some() => Some(SymbolKind::Method),
                     _ => Some(SymbolKind::Function),
                 })
@@ -280,11 +283,9 @@ fn position_is_in_docstring(
 /// type metadata knows about the callable. This primarily handles third-party stubs
 /// where we only have typeshed information.
 fn fallback_hover_name_from_type(type_: &Type) -> Option<String> {
-    let name = type_.check_toplevel_func_metadata(&|meta| {
-        Some(meta.kind.function_name().into_owned().to_string())
-    });
-    if name.is_some() {
-        return name;
+    let name = type_.visit_toplevel_func_metadata(&|meta| Some(meta.kind.function_name()));
+    if let Some(name) = name {
+        return Some(name.to_string());
     }
     // Recurse through Type wrapper
     if let Type::Type(inner) = type_ {
@@ -505,7 +506,40 @@ pub fn get_hover(
     }
 
     // Otherwise, fall through to the existing type hover logic
-    let type_ = transaction.get_type_at(handle, position)?;
+    let mut type_ = transaction.get_type_at(handle, position)?;
+
+    // Helper function to check if we're hovering over a callee and get its range
+    let find_callee_range_at_position = || -> Option<TextRange> {
+        use ruff_python_ast::Expr;
+        let mod_module = transaction.get_ast(handle)?;
+        let mut result = None;
+        mod_module.visit(&mut |expr: &Expr| {
+            if let Expr::Call(call) = expr {
+                // Check if position is within the callee (func) range
+                if call.func.range().contains(position) {
+                    result = Some(call.func.range());
+                }
+            }
+        });
+        result
+    };
+
+    // Check both: hovering in arguments area OR hovering over the callee itself
+    let callee_range_opt = transaction
+        .get_callables_from_call(handle, position)
+        .map(|(_, _, _, range)| range)
+        .or_else(find_callee_range_at_position);
+
+    if let Some(callee_range) = callee_range_opt {
+        let is_constructor = transaction
+            .get_answers(handle)
+            .and_then(|ans| ans.get_type_trace(callee_range))
+            .is_some_and(is_constructor_call);
+        if is_constructor && let Some(new_type) = override_constructor_return_type(type_.clone()) {
+            type_ = new_type;
+        }
+    }
+
     let fallback_name_from_type = fallback_hover_name_from_type(&type_);
     let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
@@ -534,7 +568,7 @@ pub fn get_hover(
             } else if let Some(name) = display_name.clone() {
                 Some(name)
             } else {
-                fallback_name_from_type.clone()
+                fallback_name_from_type
             }
         };
         (kind, name, docstring_range, Some(module))

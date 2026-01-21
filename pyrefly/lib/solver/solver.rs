@@ -80,9 +80,9 @@ enum Variable {
     ///
     /// Behaves similar to `PartialContained`, but it has the ability to use
     /// the default type if the first use does not pin.
-    PartialQuantified(Box<Quantified>),
+    PartialQuantified(Quantified),
     /// A variable due to generic instantiation, `def f[T](x: T): T` with `f(1)`
-    Quantified(Box<Quantified>),
+    Quantified(Quantified),
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
     Recursive,
     /// A loop-recursive variable, e.g. `x = None; while x is None: x = f()`
@@ -102,16 +102,12 @@ enum Variable {
 
 impl Variable {
     fn finished(q: &Quantified) -> Self {
-        if let Some(d) = q.default() {
-            Variable::Answer(d.clone())
+        if q.default().is_some() {
+            Variable::Answer(q.as_gradual_type())
         } else {
-            Variable::PartialQuantified(Box::new(q.clone()))
+            Variable::PartialQuantified(q.clone())
         }
     }
-}
-
-fn default(q: &Quantified) -> Type {
-    q.default().cloned().unwrap_or_else(Type::any_implicit)
 }
 
 /// The restrictions placed on a `LoopRecursive` Var during recursive solve of
@@ -355,7 +351,7 @@ impl Solver {
                 None
             }
             Variable::PartialQuantified(q) => {
-                *variable = Variable::Answer(default(q));
+                *variable = Variable::Answer(q.as_gradual_type());
                 None
             }
             Variable::PartialContained(range) => {
@@ -442,7 +438,7 @@ impl Solver {
             _ => {
                 let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
-                    Variable::PartialQuantified(q) => default(q),
+                    Variable::PartialQuantified(q) => q.as_gradual_type(),
                     _ => Type::any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
@@ -674,7 +670,7 @@ impl Solver {
         let t = t.subst(&params.iter().map(|p| &p.quantified).zip(&ts).collect());
         let mut lock = self.variables.lock();
         for (v, param) in vs.iter().zip(params.iter()) {
-            lock.insert_fresh(*v, Variable::Quantified(Box::new(param.quantified.clone())));
+            lock.insert_fresh(*v, Variable::Quantified(param.quantified.clone()));
         }
         (QuantifiedHandle(vs), t)
     }
@@ -719,7 +715,7 @@ impl Solver {
 
         let mut lock = self.variables.lock();
         for (v, q) in vs.iter().zip(qs.into_iter()) {
-            lock.insert_fresh(*v, Variable::Quantified(Box::new(q)));
+            lock.insert_fresh(*v, Variable::Quantified(q));
         }
         drop(lock);
 
@@ -766,7 +762,7 @@ impl Solver {
                     if self.infer_with_first_use {
                         *e = Variable::finished(q);
                     } else {
-                        *e = Variable::Answer(default(q))
+                        *e = Variable::Answer(q.as_gradual_type())
                     }
                 }
                 _ => {}
@@ -789,7 +785,7 @@ impl Solver {
             {
                 let v = Var::new(uniques);
                 *t = v.to_type();
-                lock.insert_fresh(v, Variable::Quantified(Box::new(param.quantified.clone())));
+                lock.insert_fresh(v, Variable::Quantified(param.quantified.clone()));
             }
         })
     }
@@ -856,7 +852,7 @@ impl Solver {
                     self.variables.lock().insert_fresh(v, Variable::finished(q));
                     Some(v.to_type())
                 } else {
-                    Some(default(q))
+                    Some(q.as_gradual_type())
                 }
             } else {
                 None
@@ -1252,7 +1248,6 @@ pub enum SubsetError {
     /// The name of a positional parameter differs between `got` and `want`.
     PosParamName(Name, Name),
     /// Instantiations for quantified vars are incompatible with bounds
-    #[allow(dead_code)]
     TypeVarSpecialization(Vec1<TypeVarSpecializationError>),
     /// `got` is missing an attribute that the Protocol `want` requires
     /// The first element is the name of the protocol, the second is the name of the attribute

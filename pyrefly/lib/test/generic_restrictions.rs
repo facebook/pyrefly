@@ -967,3 +967,13 @@ def go() -> None:
     apply_both_bounded("a", bounded_str("ok"))  # E: `str` is not assignable to upper bound `int` of type variable `U`
     "#,
 );
+
+testcase!(
+    bug = "Asserted type is wrong",
+    test_typevar_default_is_typevar_in_function,
+    r#"
+from typing import assert_type
+def f[T1, T2 = T1](x: T1, y: T2 | None = None) -> tuple[T1, T2]: ...
+assert_type(f(1), tuple[int, int])  # E: assert_type(tuple[int, Any], tuple[int, int])
+    "#,
+);

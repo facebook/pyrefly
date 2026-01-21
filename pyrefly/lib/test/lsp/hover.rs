@@ -14,6 +14,7 @@ use ruff_text_size::TextSize;
 use crate::lsp::wasm::hover::get_hover;
 use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report;
+use crate::test::util::get_batched_lsp_operations_report_allow_error;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     match get_hover(&state.transaction(), handle, position, true) {
@@ -905,6 +906,23 @@ from mymod.submod.deep import Bar
 }
 
 #[test]
+fn hover_on_constructor_shows_instance_type() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str, age: int) -> None: ...
+
+Person()
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report
+            .contains("def Person(\n    self: Person,\n    name: str,\n    age: int\n) -> Person"),
+        "Expected constructor hover to show complete signature with -> Person, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_operator_shows_contains_dunder() {
     let code = r#"
 class Container:
@@ -919,6 +937,22 @@ c = Container()
     assert!(
         report.contains("self: Container") && report.contains("item: int"),
         "Expected hover to show __contains__ method signature, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_constructor_with_arguments() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str, age: int) -> None: ...
+
+Person("Alice", 25)
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("-> Person"),
+        "Expected constructor hover to show -> Person, got: {report}"
     );
 }
 
@@ -938,6 +972,27 @@ for x in [1, 2, 3]:
 }
 
 #[test]
+fn hover_on_direct_init_call_shows_none() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str) -> None: ...
+
+p = Person.__new__(Person)
+Person.__init__(p, "Alice")
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("-> None"),
+        "Expected direct __init__ call to show -> None, got: {report}"
+    );
+    assert!(
+        !report.contains("-> Person") || report.contains("__init__"),
+        "Direct __init__ call should show -> None, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_keyword_in_list_comprehension() {
     let code = r#"
 result = [x for x in [1, 2, 3] if x in [1]]
@@ -948,6 +1003,65 @@ result = [x for x in [1, 2, 3] if x in [1]]
     assert!(
         report.contains("(keyword) in") && report.contains("Iteration over"),
         "Expected hover for iteration 'in' in comprehension, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_method_call_unchanged() {
+    let code = r#"
+class Foo:
+    def method(self) -> str: ...
+
+foo = Foo()
+foo.method()
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("-> str"),
+        "Expected method hover to show -> str, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_argument_shows_argument_type() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str) -> None: ...
+
+Person("Alice")
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    // Hovering over a string literal shows its literal type
+    assert!(
+        report.contains("Literal['Alice']") || report.contains("str"),
+        "Expected argument hover to show literal type or str, got: {report}"
+    );
+    // The argument hover should not show the constructor signature
+    assert!(
+        !report.contains("__init__") || !report.contains("name: str"),
+        "Argument hover should show argument type, not constructor, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_generic_constructor() {
+    let code = r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    def __init__(self, value: T) -> None: ...
+
+Box[str]("hello")
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Box[str]"),
+        "Expected generic constructor to show Box[str], got: {report}"
     );
 }
 

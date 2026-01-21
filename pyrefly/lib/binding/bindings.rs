@@ -959,12 +959,7 @@ impl<'a> BindingsBuilder<'a> {
     /// First-use detection happens later in `process_deferred_bound_names`
     /// when all phi nodes are populated.
     pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
-        let name_read_info = if matches!(usage, Usage::StaticTypeInformation) {
-            self.scopes
-                .look_up_name_for_read_in_static_type_context(name)
-        } else {
-            self.scopes.look_up_name_for_read(name)
-        };
+        let name_read_info = self.scopes.look_up_name_for_read(name, usage);
         match name_read_info {
             NameReadInfo::Flow { idx, initialized } => {
                 // Mark as used (this must happen during traversal for unused-variable detection)
@@ -1366,11 +1361,11 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         narrow_ops: &NarrowOps,
         use_location: NarrowUseLocation,
-        _usage: &Usage,
+        usage: &Usage,
     ) {
         for (name, (op, op_range)) in narrow_ops.0.iter_hashed() {
             // Narrowing operations should not pin partial types
-            let mut narrowing_usage = Usage::narrowing_from(_usage);
+            let mut narrowing_usage = Usage::narrowing_from(usage);
             if let Some(initial_idx) = self.lookup_name(name, &mut narrowing_usage).found() {
                 self.mark_does_not_pin_if_first_use(initial_idx);
                 let narrowed_idx = self.insert_binding(

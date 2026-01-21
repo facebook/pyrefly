@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::thread::{self};
 use std::time::Duration;
+use std::time::Instant;
 
 use crossbeam_channel::RecvTimeoutError;
 use lsp_server::RequestId;
@@ -42,6 +43,7 @@ use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::CodeActionRequest;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
+use lsp_types::request::FoldingRangeRequest;
 use lsp_types::request::GotoDefinition;
 use lsp_types::request::GotoImplementation;
 use lsp_types::request::GotoTypeDefinition;
@@ -230,6 +232,8 @@ pub struct TestClient {
     request_idx: AtomicI32,
     /// Handle to wait for the server to exit
     finish_handle: Arc<FinishHandle>,
+    /// Start time for logging elapsed time in messages
+    start_time: Instant,
 }
 
 impl TestClient {
@@ -241,6 +245,7 @@ impl TestClient {
             recv_timeout: Duration::from_secs(50),
             request_idx: AtomicI32::new(0),
             finish_handle,
+            start_time: Instant::now(),
         }
     }
 
@@ -253,6 +258,12 @@ impl TestClient {
     fn next_request_id(&self) -> RequestId {
         let idx = self.request_idx.fetch_add(1, Ordering::SeqCst);
         RequestId::from(idx + 1)
+    }
+
+    /// Returns a formatted string of elapsed time since the client was created.
+    fn elapsed_time(&self) -> String {
+        let elapsed = self.start_time.elapsed();
+        format!("{:>6.3}s", elapsed.as_secs_f64())
     }
 
     pub fn drop_connection(&mut self) {
@@ -288,7 +299,8 @@ impl TestClient {
 
     pub fn send_message(&self, msg: Message) {
         eprintln!(
-            "client--->server {}",
+            "[{}] client--->server {}",
+            self.elapsed_time(),
             serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
         );
         if let Err(err) = self.send_timeout(msg) {
@@ -486,6 +498,18 @@ impl TestClient {
         "textDocument": {
             "uri": Url::from_file_path(&path).unwrap().to_string()
         }}))
+    }
+
+    pub fn folding_range(
+        &self,
+        file: &'static str,
+    ) -> ClientRequestHandle<'_, FoldingRangeRequest> {
+        let path = self.get_root_or_panic().join(file);
+        self.send_request(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&path).unwrap().to_string()
+            }
+        }))
     }
 
     pub fn hover(
@@ -690,7 +714,8 @@ impl TestClient {
             match self.recv_timeout() {
                 Ok(msg) => {
                     eprintln!(
-                        "client<---server {}",
+                        "[{}] client<---server {}",
+                        self.elapsed_time(),
                         serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
                     );
                     if let Some(actual) = matcher(msg) {
@@ -895,6 +920,7 @@ impl TestClient {
     }
 
     /// The next publishDiagnostics for that path should have the expected count, otherwise error
+    #[expect(dead_code)]
     pub fn expect_publish_diagnostics_must_have_error_count(
         &self,
         path: PathBuf,
@@ -1007,7 +1033,8 @@ impl TestClient {
         match self.recv_timeout() {
             Ok(msg) => {
                 eprintln!(
-                    "client<---server {}",
+                    "[{}] client<---server {}",
+                    self.elapsed_time(),
                     serde_json::to_string(&JsonRpcMessage::from_message(msg)).unwrap()
                 );
                 Ok(())
@@ -1081,7 +1108,7 @@ impl TestClient {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn untyped_import_diagnostic_response(
         package_name: &str,
         line: u32,

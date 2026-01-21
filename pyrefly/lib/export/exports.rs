@@ -27,6 +27,7 @@ use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::DunderAllEntry;
 use crate::export::definitions::DunderAllKind;
+use crate::export::definitions::SyntacticDeps;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
 use crate::state::loader::FindingOrError;
@@ -152,6 +153,12 @@ impl Exports {
     /// Get the docstring for this module.
     pub fn docstring_range(&self) -> Option<TextRange> {
         self.0.docstring_range
+    }
+
+    /// Get the syntactic dependencies for this module.
+    /// Includes imports from all scopes (module-level and nested in functions/classes).
+    pub fn syntactic_deps(&self) -> &SyntacticDeps {
+        &self.0.definitions.syntactic_deps
     }
 
     pub fn is_submodule_imported_implicitly(&self, name: &Name) -> bool {

@@ -305,3 +305,18 @@ foo_str: FooInferred[str] = FooInferred[str]()
 foo_union: FooInferred[int | str] = foo_int | foo_str
 "#,
 );
+
+// Test variance inference with stdlib generic that has covariant type parameter
+testcase!(
+    test_class_variance_with_mapping,
+    r#"
+from collections.abc import Mapping
+
+class Container[T]:
+    def get(self) -> Mapping[str, T]:
+        ...
+
+def widen(c: Container[int]) -> Container[float]:
+    return c  # OK - T is covariant since Mapping's V type is covariant
+"#,
+);

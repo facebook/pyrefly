@@ -46,9 +46,6 @@ pub enum LspEvent {
     /// Inform the server that a request is cancelled.
     /// Server should know about this ASAP to avoid wasting time on cancelled requests.
     CancelRequest(RequestId),
-    /// Inform the server that the given configs' find caches are now invalid, and
-    /// that a new type check must occur.
-    InvalidateConfigFind,
     // Part 2: Events that can be queued in FIFO order and handled at a later time.
     DidOpenTextDocument(DidOpenTextDocumentParams),
     DidChangeTextDocument(DidChangeTextDocumentParams),
@@ -61,6 +58,9 @@ pub enum LspEvent {
     DidCloseNotebookDocument(DidCloseNotebookDocumentParams),
     DidChangeNotebookDocument(DidChangeNotebookDocumentParams),
     DidSaveNotebookDocument(DidSaveNotebookDocumentParams),
+    /// Inform the server that some configs' find caches are now invalid (stored in
+    /// `server.invalidated_configs`), and that a new type check must occur.
+    InvalidateConfigFind,
     LspResponse(Response),
     LspRequest(Request),
     Exit,
@@ -100,9 +100,7 @@ enum LspEventKind {
 impl LspEvent {
     fn kind(&self) -> LspEventKind {
         match self {
-            Self::RecheckFinished | Self::CancelRequest(_) | Self::InvalidateConfigFind => {
-                LspEventKind::Priority
-            }
+            Self::RecheckFinished | Self::CancelRequest(_) => LspEventKind::Priority,
             Self::DidOpenTextDocument(_)
             | Self::DidChangeTextDocument(_)
             | Self::DidCloseTextDocument(_)
@@ -115,6 +113,7 @@ impl LspEvent {
             | Self::DidCloseNotebookDocument(_)
             | Self::DidSaveNotebookDocument(_)
             | Self::DidChangeNotebookDocument(_)
+            | Self::InvalidateConfigFind
             | Self::Exit => LspEventKind::Mutation,
             Self::LspRequest(_) => LspEventKind::Query,
         }
@@ -280,7 +279,7 @@ impl HeavyTaskQueue {
                         TelemetryEvent::new_dequeued(kind, enqueued, server.telemetry_state());
                     let task_stats = TelemetryTaskId::new(
                         self.queue_name,
-                        self.next_task_id.fetch_add(1, Ordering::Relaxed),
+                        Some(self.next_task_id.fetch_add(1, Ordering::Relaxed)),
                     );
                     task.run(server, telemetry, &mut telemetry_event, Some(&task_stats));
                     telemetry_event.set_task_stats(task_stats);

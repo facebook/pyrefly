@@ -16,6 +16,7 @@ use pyrefly_types::annotation::Annotation;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
@@ -246,10 +247,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         pydantic_config_dict: &PydanticConfigDict,
         keywords: &[(Name, Annotation)],
-        _decorators: &[(Arc<Decorator>, TextRange)],
+        decorators: &[(Arc<Decorator>, TextRange)],
         errors: &ErrorCollector,
         range: TextRange,
     ) -> Option<PydanticConfig> {
+        // Check if this class is decorated with @pydantic.dataclasses.dataclass
+        // Handle both @dataclass and @dataclass(...) forms
+        let is_pydantic_dataclass_metadata = |meta: &FuncMetadata| {
+            matches!(&meta.kind, FunctionKind::Def(id)
+                if id.module.name() == ModuleName::pydantic_dataclasses()
+                    && id.name.as_str() == "dataclass")
+        };
+        let is_pydantic_dataclass = decorators.iter().any(|(decorator, _)| {
+            decorator
+                .ty
+                .visit_toplevel_func_metadata(&is_pydantic_dataclass_metadata)
+                || matches!(&decorator.ty, Type::KwCall(call)
+                    if is_pydantic_dataclass_metadata(&call.func_metadata))
+        });
+
         let has_pydantic_base_model_base_class =
             bases_with_metadata.iter().any(|(base_class_object, _)| {
                 base_class_object.has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
@@ -266,7 +282,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .any(|(_, metadata)| metadata.is_pydantic_model());
 
+        // If not a pydantic model, check if it's a pydantic dataclass
         if !is_pydantic_model {
+            // Handle pydantic dataclass (not a pydantic model).
+            // For pydantic dataclasses, frozen/extra/strict come from decorator args via dataclass_transform,
+            // not from this config. We only track the model kind here for lax mode support.
+            // TODO: We should think about whether this is the best design. Specifically:
+            // - Should we populate all the defaults for pydantic dataclasses here and then
+            // add a condition that prevents dataclass code from overriding pydantic dataclasses?
+            // - Should there be two PydanticConfig variants, one for DataClasses and one for the remaining variants?
+            // - Finally, should we add decorator plumbing here so we can detect keywords directly instead of through
+            // the dataclass plumbing, which also has to then have extra checks to avoid overriding pydantic dataclasses with its own defaults?
+            if is_pydantic_dataclass {
+                return Some(PydanticConfig {
+                    frozen: None,
+                    validation_flags: PydanticValidationFlags::default(),
+                    extra: None,
+                    strict: None,
+                    pydantic_model_kind: PydanticModelKind::DataClass,
+                });
+            }
             return None;
         }
 

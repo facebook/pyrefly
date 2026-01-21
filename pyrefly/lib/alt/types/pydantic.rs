@@ -44,6 +44,5 @@ pub enum PydanticModelKind {
     RootModel,
     BaseSettings,
     /// A class decorated with `@pydantic.dataclasses.dataclass`.
-    #[allow(dead_code)]
     DataClass,
 }

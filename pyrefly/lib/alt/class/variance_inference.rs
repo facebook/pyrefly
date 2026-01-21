@@ -149,14 +149,25 @@ fn on_class(
                 );
             }
 
-            Type::ClassType(class) if !class.tparams().is_empty() => {
+            Type::ClassType(class) => {
                 let params = on_edge(class.class_object());
-
                 let targs = class.targs().as_slice();
 
+                // If targs is empty, nothing to do
+                if targs.is_empty() {
+                    return;
+                }
+
+                // Zip params (from on_edge) with targs
+                // Note: if params.len() != targs.len(), zip will stop at the shorter one
                 for (status, ty) in params.values().zip(targs) {
+                    // Use specified_variance if available (for externally defined TypeVars
+                    // with explicit variance like covariant=True), otherwise use inferred.
+                    let effective_variance = status
+                        .specified_variance
+                        .unwrap_or(status.inferred_variance);
                     on_type(
-                        variance.compose(status.inferred_variance),
+                        variance.compose(effective_variance),
                         status.has_variance_inferred,
                         ty,
                         on_edge,
@@ -374,7 +385,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         }
                     };
-                    let mut on_edge = |c: &Class| env.get(c).cloned().unwrap_or_else(SmallMap::new);
+                    let mut on_edge = |c: &Class| env.get(c).cloned().unwrap_or_default();
                     on_class(
                         my_class,
                         &mut on_edge,

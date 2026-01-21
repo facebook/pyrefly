@@ -528,7 +528,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn call_metaclass(
         &self,
         cls: &ClassType,
-        range: TextRange,
+        arguments_range: TextRange,
         args: &[CallArg],
         keywords: &[CallKeyword],
         errors: &ErrorCollector,
@@ -542,13 +542,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.as_call_target_or_error(
                 dunder_call,
                 CallStyle::Method(&dunder::CALL),
-                range,
+                arguments_range,
                 errors,
                 context,
             ),
             args,
             keywords,
-            range,
+            arguments_range,
             errors,
             context,
             hint,
@@ -710,7 +710,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut typed_dict: TypedDictInner,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
@@ -727,13 +727,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.as_call_target_or_error(
                 init_method,
                 CallStyle::Method(&dunder::INIT),
-                range,
+                arguments_range,
                 errors,
                 context,
             ),
             args,
             keywords,
-            range,
+            arguments_range,
             errors,
             context,
             hint,
@@ -755,12 +755,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn call_infer_with_range(
+    fn call_infer_with_callee_range(
         &self,
         call_target: CallTarget,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         callee_range: Option<TextRange>,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
@@ -775,7 +775,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let method_name = meta.kind.format(self.module().name());
             self.error(
                 errors,
-                range,
+                arguments_range,
                 ErrorInfo::new(ErrorKind::AbstractMethodCall, context),
                 format!("Cannot call abstract method `{method_name}`"),
             );
@@ -799,7 +799,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if cls.has_qname("typing", "Any") {
                     return self.error(
                         errors,
-                        range,
+                        arguments_range,
                         ErrorInfo::new(ErrorKind::BadInstantiation, context),
                         format!("`{}` can not be instantiated", cls.name()),
                     );
@@ -808,7 +808,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if metadata.is_protocol() && constructor_kind == ConstructorKind::BareClassName {
                     self.error(
                         errors,
-                        range,
+                        arguments_range,
                         ErrorInfo::new(ErrorKind::BadInstantiation, context),
                         format!(
                             "Cannot instantiate `{}` because it is a protocol",
@@ -824,7 +824,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         self.error(
                             errors,
-                            range,
+                            arguments_range,
                             ErrorInfo::new(ErrorKind::BadInstantiation, context),
                             format!(
                                 "Cannot instantiate `{}` because the following members are abstract: {}",
@@ -841,23 +841,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if cls.has_qname("builtins", "bool") {
                     match self.first_arg_type(args, errors) {
                         None => (),
-                        Some(ty) => self.check_dunder_bool_is_callable(&ty, range, errors),
+                        Some(ty) => {
+                            self.check_dunder_bool_is_callable(&ty, arguments_range, errors)
+                        }
                     }
                 };
                 self.construct_class(
                     cls,
                     args,
                     keywords,
-                    range,
+                    arguments_range,
                     callee_range,
                     errors,
                     context,
                     hint,
                 )
             }
-            CallTarget::TypedDict(td) => {
-                self.construct_typed_dict(td, args, keywords, range, errors, context, hint)
-            }
+            CallTarget::TypedDict(td) => self.construct_typed_dict(
+                td,
+                args,
+                keywords,
+                arguments_range,
+                errors,
+                context,
+                hint,
+            ),
             CallTarget::BoundMethod(
                 obj,
                 TargetWithTParams(
@@ -874,7 +882,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(obj),
                 args,
                 keywords,
-                range,
+                arguments_range,
                 errors,
                 errors,
                 context,
@@ -888,7 +896,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
                 args,
                 keywords,
-                range,
+                arguments_range,
                 errors,
                 errors,
                 context,
@@ -908,7 +916,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
                 args,
                 keywords,
-                range,
+                arguments_range,
                 errors,
                 errors,
                 context,
@@ -917,7 +925,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
             CallTarget::FunctionOverload(overloads, metadata) => {
                 self.call_overloads(
-                    overloads, metadata, None, args, keywords, range, errors, context, hint,
+                    overloads,
+                    metadata,
+                    None,
+                    args,
+                    keywords,
+                    arguments_range,
+                    errors,
+                    context,
+                    hint,
                     ctor_targs,
                 )
                 .0
@@ -929,7 +945,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(obj),
                     args,
                     keywords,
-                    range,
+                    arguments_range,
                     errors,
                     context,
                     hint,
@@ -943,11 +959,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let keywords = call.vec_call_keyword(keywords, self, errors);
                 self.unions(targets.into_map(|t| {
                     let ctor_targs = None; // hack
-                    self.call_infer_with_range(
+                    self.call_infer_with_callee_range(
                         t,
                         &args,
                         &keywords,
-                        range,
+                        arguments_range,
                         callee_range,
                         errors,
                         context,
@@ -993,17 +1009,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         call_target: CallTarget,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
-        self.call_infer_with_range(
+        self.call_infer_with_callee_range(
             call_target,
             args,
             keywords,
-            range,
+            arguments_range,
             None,
             errors,
             context,
@@ -1340,7 +1356,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let callable =
             self.as_call_target_or_error(ty, CallStyle::FreeForm, callee_range, errors, None);
-        self.call_infer_with_range(
+        self.call_infer_with_callee_range(
             callable,
             args,
             kws,
