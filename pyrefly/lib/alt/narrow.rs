@@ -702,17 +702,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .keys()
                         .map(|name| Lit::Str(name.as_str().into()).to_implicit_type())
                         .collect();
-                    let key_union = self.unions(key_types);
                     return self.distribute_over_union(ty, |t| {
-                        if self.literal_equal(t, &key_union) {
-                            // If the left type equals the union of all keys, it becomes Never
-                            // This handles cases where ty is a single literal key
-                            Type::never()
-                        } else {
-                            // Otherwise, we can't narrow significantly
-                            // (e.g., if ty is `str`, it could be any string)
-                            t.clone()
+                        for key_type in &key_types {
+                            if self.literal_equal(t, key_type) {
+                                return Type::never();
+                            }
                         }
+                        t.clone()
                     });
                 }
 
