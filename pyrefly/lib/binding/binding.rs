@@ -349,6 +349,7 @@ pub enum AnyExportedKey {
     KeyVariance(KeyVariance),
     KeyExport(KeyExport),
     KeyClassMetadata(KeyClassMetadata),
+    KeyDjangoRelations(KeyDjangoRelations),
     KeyClassMro(KeyClassMro),
     KeyAbstractClassCheck(KeyAbstractClassCheck),
     KeyTypeAlias(KeyTypeAlias),
@@ -617,6 +618,22 @@ impl Keyed for KeyDjangoRelations {
 }
 impl Exported for KeyDjangoRelations {}
 impl Exported for KeyClassMetadata {}
+impl Keyed for KeyDjangoRelations {
+    const EXPORTED: bool = true;
+    type Value = BindingDjangoRelations;
+    type Answer = DjangoReverseRelationIndex;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyDjangoRelations(idx)
+    }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyDjangoRelations(self.clone()))
+    }
+}
+impl Exported for KeyDjangoRelations {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyDjangoRelations(self.clone())
+    }
+}
 impl Keyed for KeyClassMro {
     const EXPORTED: bool = true;
     type Value = BindingClassMro;
