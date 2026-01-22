@@ -22,3 +22,4 @@ pub(crate) mod move_module;
 pub(crate) mod redundant_cast;
 pub(crate) mod safe_delete;
 pub(crate) mod types;
+pub(crate) mod pytest_fixture;
