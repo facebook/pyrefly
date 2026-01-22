@@ -238,19 +238,18 @@ fn build_member_block(member: &AbstractMemberInfo, indent: &str, indent_unit: &s
     block.push_str(":\n");
 
     let body_indent = format!("{indent}{indent_unit}");
-    if let Some(range) = member.docstring_range {
-        if let Some(docstring) =
+    if let Some(range) = member.docstring_range
+        && let Some(docstring) =
             dedent_block_preserving_layout(member.defining_module.code_at(range))
-        {
-            let mut lines: Vec<&str> = docstring.lines().collect();
-            while lines.last().is_some_and(|line| line.trim().is_empty()) {
-                lines.pop();
-            }
-            for line in lines {
-                block.push_str(&body_indent);
-                block.push_str(line);
-                block.push('\n');
-            }
+    {
+        let mut lines: Vec<&str> = docstring.lines().collect();
+        while lines.last().is_some_and(|line| line.trim().is_empty()) {
+            lines.pop();
+        }
+        for line in lines {
+            block.push_str(&body_indent);
+            block.push_str(line);
+            block.push('\n');
         }
     }
     block.push_str(&body_indent);
