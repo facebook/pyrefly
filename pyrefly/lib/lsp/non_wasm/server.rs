@@ -803,7 +803,7 @@ pub fn capabilities(
             code_action_kinds: Some(vec![
                 CodeActionKind::QUICKFIX,
                 CodeActionKind::REFACTOR_EXTRACT,
-                CodeActionKind::new("refactor.rewrite"),
+                CodeActionKind::REFACTOR_REWRITE,
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
             ]),
