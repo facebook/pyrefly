@@ -2525,6 +2525,26 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn module_is_private(module: ModuleName) -> bool {
+        module
+            .components()
+            .iter()
+            .any(|component| component.as_str().starts_with('_'))
+    }
+
+    fn autoimport_sort_text(name: &str, module: ModuleName) -> String {
+        let depth = module.components().len();
+        let private_rank = if Self::module_is_private(module) {
+            1
+        } else {
+            0
+        };
+        format!(
+            "autoimport|name={name}|private={private_rank}|depth={depth:04}|module={}",
+            module.as_str()
+        )
+    }
+
     fn add_autoimport_completions(
         &self,
         handle: &Handle,
@@ -2568,12 +2588,7 @@ impl<'a> Transaction<'a> {
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
-                let is_private_import = handle_to_import_from
-                    .module()
-                    .components()
-                    .last()
-                    .is_some_and(|component| component.as_str().starts_with('_'));
-                let private_rank = if is_private_import { "1" } else { "0" };
+                let module_name = handle_to_import_from.module();
                 completions.push(CompletionItem {
                     label: name.clone(),
                     detail: Some(insert_text),
@@ -2594,7 +2609,7 @@ impl<'a> Transaction<'a> {
                     } else {
                         None
                     },
-                    sort_text: Some(format!("{name}:{private_rank}")),
+                    sort_text: Some(Self::autoimport_sort_text(&name, module_name)),
                     ..Default::default()
                 });
             }
@@ -2618,11 +2633,6 @@ impl<'a> Transaction<'a> {
                     };
                     let auto_import_label_detail = format!(" (import {module_name_str})");
 
-                    let is_private_import = module_name
-                        .components()
-                        .last()
-                        .is_some_and(|component| component.as_str().starts_with('_'));
-                    let private_rank = if is_private_import { "1" } else { "0" };
                     completions.push(CompletionItem {
                         label: module_name_str.clone(),
                         detail: Some(insert_text),
@@ -2634,7 +2644,7 @@ impl<'a> Transaction<'a> {
                                 description: Some(module_name_str.clone()),
                             },
                         ),
-                        sort_text: Some(format!("{module_name_str}:{private_rank}")),
+                        sort_text: Some(Self::autoimport_sort_text(&module_name_str, module_name)),
                         ..Default::default()
                     });
                 }
@@ -3072,31 +3082,34 @@ impl<'a> Transaction<'a> {
             }
         }
         for item in &mut result {
-            let sort_text = if item
-                .tags
-                .as_ref()
-                .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
-            {
-                "9".to_owned()
-            } else if item.additional_text_edits.is_some() {
-                if let Some(sort_text) = &item.sort_text {
-                    format!("4{sort_text}")
-                } else {
-                    "4".to_owned()
-                }
-            } else if item.label.starts_with("__") {
-                "3".to_owned()
-            } else if item.label.as_str().starts_with("_") {
-                "2".to_owned()
-            } else if let Some(sort_text) = &item.sort_text {
-                // 1 is reserved for re-exports
-                sort_text.clone()
-            } else {
-                "0".to_owned()
-            };
-            item.sort_text = Some(sort_text);
+            item.sort_text = Some(Self::completion_sort_text(item));
         }
         (result, is_incomplete)
+    }
+
+    fn completion_sort_text(item: &CompletionItem) -> String {
+        let existing_sort_text = item.sort_text.as_deref();
+        if item
+            .tags
+            .as_ref()
+            .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
+        {
+            "9".to_owned()
+        } else if item.additional_text_edits.is_some() {
+            match existing_sort_text {
+                Some(sort_text) => format!("4|{sort_text}"),
+                None => "4".to_owned(),
+            }
+        } else if item.label.starts_with("__") {
+            "3".to_owned()
+        } else if item.label.as_str().starts_with("_") {
+            "2".to_owned()
+        } else if let Some(sort_text) = existing_sort_text {
+            // 1 is reserved for re-exports.
+            sort_text.to_owned()
+        } else {
+            "0".to_owned()
+        }
     }
 
     fn export_from_location(
