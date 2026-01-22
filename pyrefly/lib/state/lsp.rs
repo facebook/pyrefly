@@ -2075,6 +2075,12 @@ impl<'a> Transaction<'a> {
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
         quick_fixes::introduce_parameter::introduce_parameter_code_actions(self, handle, selection)
+    pub fn convert_star_import_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::convert_star_import::convert_star_import_code_actions(self, handle, selection)
     }
 
     /// Determines whether a module is a third-party package.
