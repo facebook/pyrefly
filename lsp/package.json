@@ -216,6 +216,11 @@
                     "type": "boolean",
                     "default": true,
                     "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes. This is a global setting that applies to all workspaces."
+                },
+                "pyrefly.commentFoldingRanges": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Controls whether comment section folding ranges are included in the editor. When true, comments following the pattern '# Section Name ----' (with 4+ trailing dashes) create collapsible regions, similar to R's code section convention."
                 }
             }
         }
