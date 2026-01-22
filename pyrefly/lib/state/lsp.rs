@@ -3114,19 +3114,26 @@ impl<'a> Transaction<'a> {
         completions: &mut Vec<CompletionItem>,
         in_string_literal: bool,
     ) {
-        let is_match_value_pattern = covering_nodes.iter().any(|node| {
-            matches!(
-                node,
-                AnyNodeRef::PatternMatchValue(_) | AnyNodeRef::PatternMatchSingleton(_)
-            )
-        });
+        let mut is_match_value_pattern = false;
+        let mut subject = None;
+        for node in covering_nodes {
+            match node {
+                AnyNodeRef::PatternMatchValue(_) | AnyNodeRef::PatternMatchSingleton(_) => {
+                    is_match_value_pattern = true;
+                }
+                AnyNodeRef::StmtMatch(stmt_match) => {
+                    subject = Some(stmt_match.subject.as_ref());
+                }
+                _ => {}
+            }
+            if is_match_value_pattern && subject.is_some() {
+                break;
+            }
+        }
         if !is_match_value_pattern {
             return;
         }
-        let Some(subject) = covering_nodes.iter().find_map(|node| match node {
-            AnyNodeRef::StmtMatch(stmt_match) => Some(stmt_match.subject.as_ref()),
-            _ => None,
-        }) else {
+        let Some(subject) = subject else {
             return;
         };
         if let Some(subject_type) = self.get_type_trace(handle, subject.range()) {
