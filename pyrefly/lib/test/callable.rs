@@ -54,7 +54,7 @@ testcase!(
 from typing import Callable, TypeVar, reveal_type
 T = TypeVar("T", bound=int)
 f: Callable[[T], T] = lambda x: x
-reveal_type(f)  # E: revealed type: [T](T) -> T
+reveal_type(f)  # E: revealed type: [T: int](T) -> T
 reveal_type(f(1))  # E: revealed type: int
 f("hello")  # E: `str` is not assignable to upper bound `int` of type variable `T`
 "#,
@@ -993,7 +993,7 @@ class C(B): ...
 
 def f[T: B](x: T) -> T: ...
 
-c1: Callable[[A], A] = f # E: `[T](x: T) -> T` is not assignable to `(A) -> A`
+c1: Callable[[A], A] = f # E: `[T: B](x: T) -> T` is not assignable to `(A) -> A`
 c2: Callable[[B], B] = f # OK
 c3: Callable[[C], C] = f # OK
     "#,

@@ -112,7 +112,27 @@ pub struct TParam {
 
 impl Display for TParam {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())
+        write!(f, "{}", self.name())?;
+        // Display bounds/constraints
+        match self.restriction() {
+            Restriction::Bound(t) => write!(f, ": {}", t)?,
+            Restriction::Constraints(ts) => {
+                write!(f, ": (")?;
+                for (i, t) in ts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", t)?;
+                }
+                write!(f, ")")?;
+            }
+            Restriction::Unrestricted => {}
+        }
+        // Display default
+        if let Some(default) = self.default() {
+            write!(f, " = {}", default)?;
+        }
+        Ok(())
     }
 }
 
