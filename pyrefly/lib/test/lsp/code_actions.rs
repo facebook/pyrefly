@@ -340,6 +340,29 @@ fn compute_make_top_level_actions(
     (module_info, edit_sets, titles)
 }
 
+fn compute_convert_star_import_actions(
+    code_by_module: &[(&'static str, &str)],
+    module_name: &'static str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(code_by_module, Require::Everything);
+    let handle = handles.get(module_name).unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .convert_star_import_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
 fn compute_pull_up_actions(
     code: &str,
 ) -> (
@@ -1408,6 +1431,122 @@ class C:
     # MOVE-END
 "#;
     assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_basic() {
+    let code_main = r#"
+# CONVERT-START
+from foo import *  # noqa: F401
+# CONVERT-END
+a = A
+b = B
+"#;
+    let code_foo = r#"
+A = 1
+B = 2
+C = 3
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo)],
+        "main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+# CONVERT-START
+from foo import A, B # noqa: F401
+# CONVERT-END
+a = A
+b = B
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_relative() {
+    let code_main = r#"
+# CONVERT-START
+from .foo import *
+# CONVERT-END
+x = A
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("pkg.main", code_main), ("pkg.foo", code_foo)],
+        "pkg.main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `pkg.foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+# CONVERT-START
+from .foo import A
+# CONVERT-END
+x = A
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_selects_correct_import() {
+    let code_main = r#"
+# CONVERT-START
+from foo import *
+# CONVERT-END
+from bar import *
+a = A
+b = B
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let code_bar = r#"
+B = 2
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo), ("bar", code_bar)],
+        "main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+# CONVERT-START
+from foo import A
+# CONVERT-END
+from bar import *
+a = A
+b = B
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_no_action_when_unused() {
+    let code_main = r#"
+# CONVERT-START
+from foo import *
+# CONVERT-END
+x = 1
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (_module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo)],
+        "main",
+        selection,
+    );
+    assert!(actions.is_empty());
+    assert!(titles.is_empty());
 }
 
 #[test]
