@@ -241,6 +241,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &bases_with_metadata,
             pydantic_config_dict,
             &keywords,
+            &decorators,
             errors,
             cls.range(),
         );
@@ -709,6 +710,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // - it inherits from a base class decorated with `dataclass_transform(...)`, or
         // - it inherits from a base class whose metaclass is decorated with `dataclass_transform(...)`, or
         // - it is decorated with a decorator that is decorated with `dataclass_transform(...)`.
+
+        // Pydantic models and dataclasses default to strict=false (lax mode).
+        // Regular dataclasses default to strict=true.
+        let strict_default = pydantic_config.is_none();
+
         let mut dataclass_from_dataclass_transform = None;
         if let Some(defaults) = dataclass_defaults_from_base_class {
             // This class inherits from a dataclass_transform-ed base class, so its keywords are
@@ -717,13 +723,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .map(|(name, annot)| (name.clone(), annot.get_type().clone()))
                 .collect::<OrderedMap<_, _>>();
-            let mut kws = DataclassKeywords::from_type_map(&TypeMap(map), &defaults);
+            let mut kws =
+                DataclassKeywords::from_type_map(&TypeMap(map), &defaults, strict_default);
 
-            // Inject pydantic model configuration
+            // Inject pydantic model configuration from ConfigDict.
+            // This path is for pydantic models (BaseModel, etc.), not pydantic dataclasses.
             if let Some(pydantic) = pydantic_config {
-                kws.frozen = pydantic.frozen;
-                kws.extra = pydantic.extra;
-                kws.strict = pydantic.strict;
+                if let Some(frozen) = pydantic.frozen {
+                    kws.frozen = frozen;
+                }
+                if let Some(extra) = pydantic.extra {
+                    kws.extra = extra;
+                }
+                if let Some(strict) = pydantic.strict {
+                    kws.strict = strict;
+                }
             }
 
             dataclass_from_dataclass_transform = Some((kws, defaults.field_specifiers));
@@ -731,19 +745,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for (decorator, _) in decorators {
             // `@foo` where `foo` is decorated with `@dataclass_transform(...)`
             if let Some(defaults) = decorator.ty.dataclass_transform_metadata() {
-                dataclass_from_dataclass_transform = Some((
-                    DataclassKeywords::from_type_map(&TypeMap::new(), &defaults),
-                    defaults.field_specifiers,
-                ));
+                let kws =
+                    DataclassKeywords::from_type_map(&TypeMap::new(), defaults, strict_default);
+                dataclass_from_dataclass_transform = Some((kws, defaults.field_specifiers.clone()));
             }
             // `@foo(...)` where `foo` is decorated with `@dataclass_transform(...)`
             else if let Type::KwCall(call) = &decorator.ty
                 && let Some(defaults) = &call.func_metadata.flags.dataclass_transform_metadata
             {
-                dataclass_from_dataclass_transform = Some((
-                    DataclassKeywords::from_type_map(&call.keywords, defaults),
-                    defaults.field_specifiers.clone(),
-                ));
+                let kws =
+                    DataclassKeywords::from_type_map(&call.keywords, defaults, strict_default);
+                dataclass_from_dataclass_transform = Some((kws, defaults.field_specifiers.clone()));
             }
         }
         dataclass_from_dataclass_transform
@@ -805,6 +817,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         kws: DataclassKeywords::from_type_map(
                             &call.keywords,
                             &DataclassTransformMetadata::new(),
+                            true, // Regular dataclasses are always strict
                         ),
                         field_specifiers: vec![
                             CalleeKind::Function(FunctionKind::DataclassField),

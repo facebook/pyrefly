@@ -177,6 +177,9 @@ struct PyreflyClientConfig {
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
     disabled_language_services: Option<DisabledLanguageServices>,
+    // This is a global config that's read separately
+    #[allow(dead_code)]
+    stream_diagnostics: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]

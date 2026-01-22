@@ -896,6 +896,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ClassFieldDefinition::AssignedInBody {
                 value: _,
                 annotation,
+                alias_of: _,
             } => (annotation.as_ref(), false),
             _ => (None, false),
         };

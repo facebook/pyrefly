@@ -1660,11 +1660,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut descriptor = None;
         // Descriptor semantics apply when:
         // 1. The field is initialized in the class body (class-level attribute), or
-        // 2. The field is annotated with ClassVar (explicitly class-level, even without initialization)
+        // 2. The field is annotated with ClassVar (explicitly class-level, even without initialization), or
+        // 3. The field's type is special-case to always be treated like a descriptor.
         let is_classvar = direct_annotation
             .as_ref()
             .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar));
-        if matches!(initialization, ClassFieldInitialization::ClassBody(_)) || is_classvar {
+        let is_special_descriptor_type = direct_annotation.as_ref().is_some_and(|annot| {
+            annot
+                .ty
+                .as_ref()
+                .is_some_and(|ty| self.is_special_descriptor_type(ty))
+        });
+        if matches!(initialization, ClassFieldInitialization::ClassBody(_))
+            || is_classvar
+            || is_special_descriptor_type
+        {
             match &ty {
                 // TODO(stroxler): This works for simple descriptors. There are known gaps:
                 // - Gracefully handle instance-only `__get__`/`__set__`. Descriptors only seem to be detected
@@ -1875,6 +1885,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_field
     }
 
+    /// Is this a type that is special-cased to always have descriptor behavior?
+    fn is_special_descriptor_type(&self, ty: &Type) -> bool {
+        // `sqlalchemy.orm.Mapped` is used in subclasses of `sqlalchemy.orm.DeclarativeBase`,
+        // which does runtime magic to initialize fields annotated as `Mapped`, making them class-level.
+        matches!(ty, Type::ClassType(cls) if cls.has_qname("sqlalchemy.orm.base", "Mapped"))
+    }
+
     /// Helper to infer with an optional annotation as a hint and then expand
     pub fn attribute_expr_infer(
         &self,
@@ -1921,11 +1938,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 | ClassFieldDefinition::MethodLike { .. }
                 | ClassFieldDefinition::DefinedWithoutAssign { .. }
         );
+        // Extract alias_of from field_definition for enum alias detection
+        let alias_of = match field_definition {
+            ClassFieldDefinition::AssignedInBody { alias_of, .. } => alias_of.as_ref(),
+            _ => None,
+        };
         self.get_enum_class_field_type(
             class,
             name,
             direct_annotation,
             ty,
+            alias_of,
             is_initialized_on_class_body,
             is_descriptor,
             range,
@@ -1979,7 +2002,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && dm.kws.frozen
             && dm.fields.contains(name)
         {
-            let reason = if metadata.is_pydantic_base_model() {
+            let reason = if metadata.is_pydantic_model() {
                 ReadOnlyReason::PydanticFrozen
             } else {
                 ReadOnlyReason::FrozenDataclass
@@ -2136,7 +2159,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if errors2.is_empty() {
                             // The new type is compatible with the inherited one; use the inherited type to
                             // avoid spurious errors about changing the type of a read-write attribute.
-                            inherited_ty
+                            // However, we need to clear the is_abstract_method flag since assigning
+                            // a concrete implementation makes this field non-abstract.
+                            let mut ty = inherited_ty;
+                            ty.transform_toplevel_func_metadata(|meta| {
+                                meta.flags.is_abstract_method = false;
+                            });
+                            ty
                         } else {
                             // The hint was no good; infer the type without it.
                             self.attribute_expr_infer(e, None, name, errors)
@@ -2219,7 +2248,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        if metadata.is_pydantic_base_model()
+        if metadata.is_pydantic_model()
             && let ClassFieldInitialization::ClassBody(Some(kws)) = initialization
         {
             let field_ty = annotation.get_type();
@@ -3183,7 +3212,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn get_non_synthesized_field_from_current_class_only(
+    pub fn get_non_synthesized_field_from_current_class_only(
         &self,
         cls: &Class,
         name: &Name,
@@ -3750,7 +3779,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let should_raise_error = if let Some(instance_class) = instance_class {
                     let class = instance_class.class_object();
                     let metadata = self.get_metadata_for_class(class);
-                    !(metadata.is_pydantic_base_model()
+                    !(metadata.is_pydantic_model()
                         && metadata
                             .dataclass_metadata()
                             .is_some_and(|dm| !dm.kws.frozen))

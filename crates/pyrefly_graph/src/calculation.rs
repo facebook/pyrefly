@@ -137,12 +137,17 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
 
     /// Attempt to record a calculated value.
     ///
-    /// Returns the final value (which may be different from the value passed
-    /// in if another thread finished the calculation first) along with
-    /// the recursive placeholder, if this thread was the first to write and
-    /// one was recorded (the caller, in some cases, may be responsible for
-    /// recording a mapping between the placeholder and the final value).
-    pub fn record_value(&self, value: T, on_recursive: impl FnOnce(R, T) -> T) -> T {
+    /// Returns `(final_value, did_write)` where:
+    /// - `final_value` is the value that was recorded (which may be different from
+    ///   the value passed in if another thread finished the calculation first)
+    /// - `did_write` is `true` if this call was the one that wrote the value,
+    ///   `false` if another thread had already written it
+    ///
+    /// If this thread was the first to write and a recursive placeholder was
+    /// recorded, the `on_recursive` callback will be invoked to finalize the
+    /// answer (the caller, in some cases, may be responsible for recording a
+    /// mapping between the placeholder and the final value).
+    pub fn record_value(&self, value: T, on_recursive: impl FnOnce(R, T) -> T) -> (T, bool) {
         let mut lock = self.0.lock();
         match &mut *lock {
             Status::NotCalculated => {
@@ -155,11 +160,11 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
                     None => value,
                 };
                 *lock = Status::Calculated(value.dupe());
-                value
+                (value, true)
             }
             Status::Calculated(v) => {
                 // The first thread to write a value wins
-                v.dupe()
+                (v.dupe(), false)
             }
         }
     }
@@ -175,7 +180,7 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
         match self.propose_calculation() {
             ProposalResult::Calculatable => {
                 let value = calculate();
-                let value = self.record_value(value, |_, v| v);
+                let (value, _did_write) = self.record_value(value, |_, v| v);
                 Some(value)
             }
             ProposalResult::Calculated(v) => Some(v.dupe()),

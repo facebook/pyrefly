@@ -173,6 +173,21 @@ impl DisplayWith<Bindings> for AnyIdx {
     }
 }
 
+/// A type-erased exported key, used for fine-grained dependency tracking.
+/// Unlike `AnyIdx`, this stores the key itself rather than an index into a bindings table.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AnyExportedKey {
+    KeyTParams(KeyTParams),
+    KeyClassBaseType(KeyClassBaseType),
+    KeyClassField(KeyClassField),
+    KeyClassSynthesizedFields(KeyClassSynthesizedFields),
+    KeyVariance(KeyVariance),
+    KeyExport(KeyExport),
+    KeyClassMetadata(KeyClassMetadata),
+    KeyClassMro(KeyClassMro),
+    KeyAbstractClassCheck(KeyAbstractClassCheck),
+}
+
 /// Any key that sets `EXPORTED` to `true` should not include positions
 /// Incremental updates depend on knowing when a file's exports changed, which uses equality between exported keys
 /// Moving code around should not cause all dependencies to be re-checked
@@ -181,11 +196,25 @@ pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + Ranged + 
     type Value: Debug + DisplayWith<Bindings>;
     type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type>;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx;
+
+    /// If this key represents an exported name (like KeyExport), return the name.
+    /// This is used for fine-grained incremental invalidation.
+    fn as_export_name(&self) -> Option<&Name> {
+        None
+    }
+
+    /// Convert this key to an AnyExportedKey if it is an exported key.
+    /// Returns None for non-exported keys.
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        None
+    }
 }
 
 /// Should be equivalent to Keyed<EXPORTED=true>.
 /// Once `associated_const_equality` is stabilised, can switch to that.
-pub trait Exported: Keyed {}
+pub trait Exported: Keyed {
+    fn to_anykey(&self) -> AnyExportedKey;
+}
 
 impl Keyed for Key {
     type Value = Binding;
@@ -222,8 +251,15 @@ impl Keyed for KeyTParams {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyTParams(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyTParams(self.clone()))
+    }
 }
-impl Exported for KeyTParams {}
+impl Exported for KeyTParams {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyTParams(self.clone())
+    }
+}
 impl Keyed for KeyClassBaseType {
     const EXPORTED: bool = true;
     type Value = BindingClassBaseType;
@@ -231,8 +267,15 @@ impl Keyed for KeyClassBaseType {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassBaseType(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassBaseType(self.clone()))
+    }
 }
-impl Exported for KeyClassBaseType {}
+impl Exported for KeyClassBaseType {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassBaseType(self.clone())
+    }
+}
 impl Keyed for KeyClassField {
     const EXPORTED: bool = true;
     type Value = BindingClassField;
@@ -240,8 +283,15 @@ impl Keyed for KeyClassField {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassField(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassField(self.clone()))
+    }
 }
-impl Exported for KeyClassField {}
+impl Exported for KeyClassField {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassField(self.clone())
+    }
+}
 impl Keyed for KeyClassSynthesizedFields {
     const EXPORTED: bool = true;
     type Value = BindingClassSynthesizedFields;
@@ -249,8 +299,15 @@ impl Keyed for KeyClassSynthesizedFields {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassSynthesizedFields(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassSynthesizedFields(self.clone()))
+    }
 }
-impl Exported for KeyClassSynthesizedFields {}
+impl Exported for KeyClassSynthesizedFields {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassSynthesizedFields(self.clone())
+    }
+}
 impl Keyed for KeyVariance {
     const EXPORTED: bool = true;
     type Value = BindingVariance;
@@ -258,8 +315,15 @@ impl Keyed for KeyVariance {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyVariance(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyVariance(self.clone()))
+    }
 }
-impl Exported for KeyVariance {}
+impl Exported for KeyVariance {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyVariance(self.clone())
+    }
+}
 impl Keyed for KeyExport {
     const EXPORTED: bool = true;
     type Value = BindingExport;
@@ -267,8 +331,18 @@ impl Keyed for KeyExport {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyExport(idx)
     }
+    fn as_export_name(&self) -> Option<&Name> {
+        Some(&self.0)
+    }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyExport(self.clone()))
+    }
 }
-impl Exported for KeyExport {}
+impl Exported for KeyExport {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyExport(self.clone())
+    }
+}
 impl Keyed for KeyDecorator {
     type Value = BindingDecorator;
     type Answer = Decorator;
@@ -304,17 +378,15 @@ impl Keyed for KeyClassMetadata {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassMetadata(idx)
     }
-}
-impl Exported for KeyClassMetadata {}
-impl Keyed for KeyDjangoRelations {
-    const EXPORTED: bool = true;
-    type Value = BindingDjangoRelations;
-    type Answer = DjangoReverseRelationIndex;
-    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
-        AnyIdx::KeyDjangoRelations(idx)
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassMetadata(self.clone()))
     }
 }
-impl Exported for KeyDjangoRelations {}
+impl Exported for KeyClassMetadata {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassMetadata(self.clone())
+    }
+}
 impl Keyed for KeyClassMro {
     const EXPORTED: bool = true;
     type Value = BindingClassMro;
@@ -322,8 +394,15 @@ impl Keyed for KeyClassMro {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassMro(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassMro(self.clone()))
+    }
 }
-impl Exported for KeyClassMro {}
+impl Exported for KeyClassMro {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassMro(self.clone())
+    }
+}
 impl Keyed for KeyAbstractClassCheck {
     const EXPORTED: bool = true;
     type Value = BindingAbstractClassCheck;
@@ -331,8 +410,15 @@ impl Keyed for KeyAbstractClassCheck {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyAbstractClassCheck(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyAbstractClassCheck(self.clone()))
+    }
 }
-impl Exported for KeyAbstractClassCheck {}
+impl Exported for KeyAbstractClassCheck {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyAbstractClassCheck(self.clone())
+    }
+}
 impl Keyed for KeyLegacyTypeParam {
     type Value = BindingLegacyTypeParam;
     type Answer = LegacyTypeParameterLookup;
@@ -2103,10 +2189,13 @@ pub enum ClassFieldDefinition {
     /// Declared with no annotation or assignment (this is impossible
     /// in a normal class, but can happen with some synthesized classes).
     DeclaredWithoutAnnotation,
-    /// Defined via assignment, possibly with an annotation
+    /// Defined via assignment, possibly with an annotation.
+    /// `alias_of` is set when the value is a simple name referring to another
+    /// field in the same class (used for enum alias detection).
     AssignedInBody {
         value: ExprOrBinding,
         annotation: Option<Idx<KeyAnnotation>>,
+        alias_of: Option<Name>,
     },
     /// Defined by a `def` form. Because of decorators it may not
     /// actually *be* a method, hence the name `MethodLike`.

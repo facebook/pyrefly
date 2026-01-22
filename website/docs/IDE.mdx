@@ -47,6 +47,8 @@ The following configuration options are IDE-specific and exposed as VSCode setti
   - `python.defaultInterpreterPath` will override the default interpreter selected by VSCode for your workspace.
 - Control hover tooltip links
   - `python.analysis.showHoverGoToLinks` [boolean: true]: Controls whether hover tooltips include "Go to definition" and "Go to type definition" navigation links. Set to `false` for cleaner tooltips with only type information.
+- Control comment section folding
+  - `commentFoldingRanges` [boolean: false]: Controls whether comment section folding ranges are included in the editor. When `true`, comments following the pattern `# Section Name ----` (with 4+ trailing dashes) create collapsible regions, similar to R's code section convention. Set to `true` to enable this feature.
 
 When used with non-VSCode editors, these options can also be configured by sending them via `initializationOptions` in the LSP [initialization](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#initialize) request.
 
@@ -54,6 +56,7 @@ Below is an example of a value that can be passed for `initializationOptions`:
 ```json
 {
   "pythonPath": "/usr/bin/python3",
+  "commentFoldingRanges": true,
   "pyrefly": {
     "displayTypeErrors": "default",
     "disableLanguageServices": false,

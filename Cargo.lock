@@ -142,9 +142,9 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
 name = "append-only-vec"
-version = "0.1.2"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5608767d94038891df4c7bb82f6b1beb55fe3d204735985e20de329bc35d5fee"
+checksum = "2114736faba96bcd79595c700d03183f61357b9fbce14852515e59f3bee4ed4a"
 
 [[package]]
 name = "argfile"
@@ -1079,6 +1079,7 @@ checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 dependencies = [
  "ahash",
  "allocator-api2",
+ "serde",
 ]
 
 [[package]]
@@ -1299,6 +1300,12 @@ dependencies = [
  "walkdir",
  "winapi-util",
 ]
+
+[[package]]
+name = "index_vec"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44faf5bb8861a9c72e20d3fb0fdbd59233e43056e2b80475ab0aacdc2e781355"
 
 [[package]]
 name = "indexmap"
@@ -2027,7 +2034,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2084,7 +2091,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_build"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2104,7 +2111,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "anyhow",
  "sha2",
@@ -2115,7 +2122,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2150,7 +2157,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2159,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_graph"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "dupe",
  "itertools 0.14.0",
@@ -2169,7 +2176,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2196,7 +2203,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_types"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "compact_str 0.8.0",
  "dupe",
@@ -2216,7 +2223,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2227,9 +2234,12 @@ dependencies = [
  "const-str",
  "dupe",
  "equivalent",
+ "fxhash",
  "glob",
+ "hashbrown 0.14.5",
  "human_bytes",
  "ignore",
+ "index_vec",
  "itertools 0.14.0",
  "lock_free_hashtable",
  "lsp-types",
@@ -3253,9 +3263,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.9.8"
+version = "0.9.11+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0dc8b1fb61449e27716ec0e1bdf0f6b8f3e8f6b05391e8497b8b6d7804ea6d8"
+checksum = "f3afc9a848309fe1aaffaed6e1546a7a14de1f935dc9d89d32afd9a44bab7c46"
 dependencies = [
  "indexmap 2.12.1",
  "serde_core",
@@ -3394,7 +3404,7 @@ dependencies = [
 
 [[package]]
 name = "tsp_types"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "lsp-server",
  "serde",
@@ -4142,9 +4152,9 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.12"
+version = "1.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fc5a66a20078bf1251bde995aa2fdcc4b800c70b5d92dd2c62abc5c60f679f8"
+checksum = "dfcd145825aace48cff44a8844de64bf75feec3080e0aa5cdbde72961ae51a65"
 
 [[package]]
 name = "zstd"

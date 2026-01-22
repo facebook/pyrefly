@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -549,5 +550,47 @@ class A:
         self.a = MyDescriptor()
 
 assert_type(A().a, MyDescriptor)
+    "#,
+);
+
+fn sqlalchemy_mapped_env() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add(
+        "sqlalchemy.orm.base",
+        r#"
+class Mapped[T]:
+    def __get__(self, instance, owner) -> T: ...
+    def __set__(self, instance, value: T) -> None: ...
+    def __delete__(self, instance) -> None: ...
+    "#,
+    );
+    env.add_with_path(
+        "sqlalchemy.orm.decl_api",
+        "sqlalchemy/orm/decl_api.py",
+        "class DeclarativeBase: ...",
+    );
+    env.add_with_path(
+        "sqlalchemy.orm",
+        "sqlalchemy/orm/__init__.py",
+        r#"
+from .base import Mapped as Mapped
+from .decl_api import DeclarativeBase as DeclarativeBase
+    "#,
+    );
+    env.add_with_path("sqlalchemy", "sqlalchemy/__init__.py", "");
+    env
+}
+
+testcase!(
+    test_sqlalchemy_mapped_is_always_descriptor,
+    sqlalchemy_mapped_env(),
+    r#"
+from sqlalchemy.orm import DeclarativeBase, Mapped
+class Base(DeclarativeBase):
+    pass
+class User(Base):
+    name: Mapped[str]
+    def __init__(self, name: str):
+        self.name = name
     "#,
 );

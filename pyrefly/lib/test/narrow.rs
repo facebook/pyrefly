@@ -1527,6 +1527,26 @@ def test(x: Literal["foo", 1] | Color | bool | None, y: object, z: Literal["f", 
 );
 
 testcase!(
+    test_narrow_in_with_starred,
+    r#"
+from typing import Literal, assert_type
+
+def test(x: Literal["a", "b", "c", "d"]) -> None:
+    y = ["a", "b"]
+    # Starred expressions in `in` checks should not cause type errors,
+    # and should not narrow (since we can't know all values at compile time)
+    if x in [*y, "c"]:
+        assert_type(x, Literal["a", "b", "c", "d"])
+    if x not in [*y, "c"]:
+        assert_type(x, Literal["a", "b", "c", "d"])
+
+    # Also test in ternary expression
+    z = "yes" if x in [*y, "c"] else "no"
+    assert_type(z, Literal["yes", "no"])
+"#,
+);
+
+testcase!(
     test_narrow_len,
     r#"
 from typing import assert_type, Never, NamedTuple

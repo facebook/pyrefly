@@ -459,6 +459,10 @@ impl Bindings {
             );
         }
 
+        if let Some(exported_names) = exports.get_explicit_dunder_all_names_iter() {
+            builder.record_used_imports_from_dunder_all_names(exported_names);
+        }
+
         let unused_imports = builder.scopes.collect_module_unused_imports();
         builder.record_unused_imports(unused_imports);
         let scope_trace = builder.scopes.finish();
@@ -642,7 +646,7 @@ impl CurrentIdx {
         &mut self.0
     }
 
-    fn idx(&self) -> Idx<Key> {
+    pub fn idx(&self) -> Idx<Key> {
         match self.0 {
             Usage::CurrentIdx(idx) => idx,
             _ => unreachable!(),
@@ -655,6 +659,11 @@ impl CurrentIdx {
 }
 
 impl<'a> BindingsBuilder<'a> {
+    /// Whether to infer empty container types and unsolved type variables based on first use.
+    pub fn infer_with_first_use(&self) -> bool {
+        self.solver.infer_with_first_use
+    }
+
     /// Given a `key: K = impl Keyed`, get an `Idx<K>` for it. The intended use case
     /// is when creating a complex binding where the process of creating the binding
     /// requires being able to identify what we are binding.
@@ -716,6 +725,17 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn record_django_relation_field(&mut self, field: Idx<KeyClassField>) {
         self.django_relation_fields.push(field);
+    }
+
+    pub fn record_used_imports_from_dunder_all_names<T>(&mut self, dunder_all_names: T)
+    where
+        T: Iterator<Item = &'a Name>,
+    {
+        for name in dunder_all_names {
+            if self.scopes.has_import_name(name) {
+                self.scopes.mark_import_used(name);
+            }
+        }
     }
 
     pub(crate) fn with_await_context<R>(
@@ -831,12 +851,8 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             FindingOrError::Error(err @ FindError::NotFound(..)) if !ignore_if_missing => {
-                let (ctx, msg) = err.display();
-                self.error_multiline(
-                    TextRange::default(),
-                    ErrorInfo::new(ErrorKind::InternalError, ctx.as_deref()),
-                    msg,
-                );
+                let (_, msg) = err.display();
+                self.errors.internal_error(TextRange::default(), msg);
             }
             FindingOrError::Error(_) => (),
         }
@@ -973,12 +989,7 @@ impl<'a> BindingsBuilder<'a> {
     /// First-use detection happens later in `process_deferred_bound_names`
     /// when all phi nodes are populated.
     pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
-        let name_read_info = if matches!(usage, Usage::StaticTypeInformation) {
-            self.scopes
-                .look_up_name_for_read_in_static_type_context(name)
-        } else {
-            self.scopes.look_up_name_for_read(name)
-        };
+        let name_read_info = self.scopes.look_up_name_for_read(name, usage);
         match name_read_info {
             NameReadInfo::Flow { idx, initialized } => {
                 // Mark as used (this must happen during traversal for unused-variable detection)
@@ -1380,11 +1391,11 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         narrow_ops: &NarrowOps,
         use_location: NarrowUseLocation,
-        _usage: &Usage,
+        usage: &Usage,
     ) {
         for (name, (op, op_range)) in narrow_ops.0.iter_hashed() {
             // Narrowing operations should not pin partial types
-            let mut narrowing_usage = Usage::narrowing_from(_usage);
+            let mut narrowing_usage = Usage::narrowing_from(usage);
             if let Some(initial_idx) = self.lookup_name(name, &mut narrowing_usage).found() {
                 self.mark_does_not_pin_if_first_use(initial_idx);
                 let narrowed_idx = self.insert_binding(

@@ -14,6 +14,7 @@ use ruff_text_size::TextSize;
 use crate::lsp::wasm::hover::get_hover;
 use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report;
+use crate::test::util::get_batched_lsp_operations_report_allow_error;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     match get_hover(&state.transaction(), handle, position, true) {
@@ -905,6 +906,23 @@ from mymod.submod.deep import Bar
 }
 
 #[test]
+fn hover_on_constructor_shows_instance_type() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str, age: int) -> None: ...
+
+Person()
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report
+            .contains("def Person(\n    self: Person,\n    name: str,\n    age: int\n) -> Person"),
+        "Expected constructor hover to show complete signature with -> Person, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_operator_shows_contains_dunder() {
     let code = r#"
 class Container:
@@ -917,27 +935,176 @@ c = Container()
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
     // The hover should show the __contains__ method signature
     assert!(
-        report.contains("__contains__") && report.contains("self: Container"),
+        report.contains("self: Container") && report.contains("item: int"),
         "Expected hover to show __contains__ method signature, got: {report}"
     );
 }
 
-/// Test for the exact example from issue #1926: [x for x in x if x in [1]]
-/// For the membership `in`, hover shows __contains__ method.
-/// Note: Hover over iteration `in` (for loops/comprehensions) doesn't show __iter__ because
-/// keywords don't have types, but goto-definition works. See the definition.rs tests.
 #[test]
-fn hover_over_in_keyword_issue_1926_membership() {
-    // The membership `in` shows __contains__ method
+fn hover_on_constructor_with_arguments() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str, age: int) -> None: ...
+
+Person("Alice", 25)
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("-> Person"),
+        "Expected constructor hover to show -> Person, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_keyword_in_for_loop() {
+    let code = r#"
+for x in [1, 2, 3]:
+#     ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The hover should show the iteration keyword with iterable type
+    assert!(
+        report.contains("(keyword) in") && report.contains("Iteration over"),
+        "Expected hover to show iteration keyword info, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_direct_init_call_shows_none() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str) -> None: ...
+
+p = Person.__new__(Person)
+Person.__init__(p, "Alice")
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("-> None"),
+        "Expected direct __init__ call to show -> None, got: {report}"
+    );
+    assert!(
+        !report.contains("-> Person") || report.contains("__init__"),
+        "Direct __init__ call should show -> None, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_keyword_in_list_comprehension() {
+    let code = r#"
+result = [x for x in [1, 2, 3] if x in [1]]
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The first 'in' is iteration, expect iteration keyword hover info
+    assert!(
+        report.contains("(keyword) in") && report.contains("Iteration over"),
+        "Expected hover for iteration 'in' in comprehension, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_method_call_unchanged() {
+    let code = r#"
+class Foo:
+    def method(self) -> str: ...
+
+foo = Foo()
+foo.method()
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("-> str"),
+        "Expected method hover to show -> str, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_argument_shows_argument_type() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str) -> None: ...
+
+Person("Alice")
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    // Hovering over a string literal shows its literal type
+    assert!(
+        report.contains("Literal['Alice']") || report.contains("str"),
+        "Expected argument hover to show literal type or str, got: {report}"
+    );
+    // The argument hover should not show the constructor signature
+    assert!(
+        !report.contains("__init__") || !report.contains("name: str"),
+        "Argument hover should show argument type, not constructor, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_generic_constructor() {
+    let code = r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    def __init__(self, value: T) -> None: ...
+
+Box[str]("hello")
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Box[str]"),
+        "Expected generic constructor to show Box[str], got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_keyword_for_membership_in_comprehension() {
+    let code = r#"
+result = [x for x in [1, 2, 3] if x in [1]]
+#                                   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The second 'in' is membership test - should show __contains__ signature
+    assert!(
+        report.contains("__contains__"),
+        "Expected hover for membership 'in' to show __contains__, got: {report}"
+    );
+}
+
+/// Test for the exact example from issue #1926: [x for x in x if x in [1]]
+/// This verifies both uses of `in` show appropriate contextual hover.
+#[test]
+fn hover_over_in_keyword_issue_1926_example() {
+    // First `in` - iteration syntax (for clause)
+    let code_iteration = r#"
+x = [1, 2, 3]
+result = [x for x in x if x in [1]]
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code_iteration)], get_test_report);
+    assert!(
+        report.contains("(keyword) in") && report.contains("Iteration over"),
+        "First 'in' should show iteration hover, got: {report}"
+    );
+
+    // Second `in` - membership testing operator
     let code_membership = r#"
 x = [1, 2, 3]
 result = [x for x in x if x in [1]]
 #                           ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code_membership)], get_test_report);
-    // For membership test, we expect to see __contains__
+    // For membership test, we expect to see __contains__ method
     assert!(
         report.contains("__contains__"),
-        "Membership 'in' should show __contains__ hover, got: {report}"
+        "Second 'in' should show __contains__ hover, got: {report}"
     );
 }

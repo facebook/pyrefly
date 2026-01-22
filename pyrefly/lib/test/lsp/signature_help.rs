@@ -903,3 +903,115 @@ Signature Help Result: active=0
         report.trim(),
     );
 }
+
+#[test]
+fn constructor_signature_shows_instance_type() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str, age: int) -> None: ...
+
+Person()
+#      ^
+Person("Alice", )
+#              ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 | Person()
+           ^
+Signature Help Result: active=0
+- (self: Person, name: str, age: int) -> Person, parameters=[name: str, age: int], active parameter = 0
+
+7 | Person("Alice", )
+                   ^
+Signature Help Result: active=0
+- (self: Person, name: str, age: int) -> Person, parameters=[name: str, age: int], active parameter = 1
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn direct_init_call_shows_none() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str) -> None: ...
+
+p = Person.__new__(Person)
+Person.__init__(p, )
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+6 | Person.__init__(p, )
+                      ^
+Signature Help Result: active=0
+- def __init__(self: Person, name: str) -> None: ..., parameters=[name: str]
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn generic_constructor_signature() {
+    let code = r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    def __init__(self, value: T) -> None: ...
+
+Box[str]()
+#        ^
+Box[int](42)
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+9 | Box[str]()
+             ^
+Signature Help Result: active=0
+- (self: Box[str], value: str) -> Box[str], parameters=[value: str], active parameter = 0
+
+11 | Box[int](42)
+              ^
+Signature Help Result: active=0
+- (self: Box[int], value: int) -> Box[int], parameters=[value: int], active parameter = 0
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn method_call_signature_unchanged() {
+    let code = r#"
+class Foo:
+    def method(self, x: int) -> str: ...
+
+foo = Foo()
+foo.method()
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+6 | foo.method()
+               ^
+Signature Help Result: active=0
+- def method(self: Foo, x: int) -> str: ..., parameters=[x: int], active parameter = 0
+"#
+        .trim(),
+        report.trim(),
+    );
+}

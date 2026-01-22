@@ -577,11 +577,25 @@ impl<'a> TypeDisplayContext<'a> {
                 }
             }
             Type::Never(NeverStyle::NoReturn) => {
-                self.maybe_fmt_with_module("typing", "NoReturn", output)
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("NoReturn");
+                output.write_builtin("NoReturn", qname)
             }
-            Type::Never(NeverStyle::Never) => self.maybe_fmt_with_module("typing", "Never", output),
+            Type::Never(NeverStyle::Never) => {
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("Never");
+                output.write_builtin("Never", qname)
+            }
             Type::Union(box Union { members: types, .. }) if types.is_empty() => {
-                self.maybe_fmt_with_module("typing", "Never", output)
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("Never");
+                output.write_builtin("Never", qname)
             }
             Type::Union(box Union {
                 display_name: Some(name),

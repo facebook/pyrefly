@@ -55,6 +55,7 @@ mod perf;
 mod protocol;
 mod pydantic;
 mod pysa;
+mod query;
 mod redundant_cast;
 mod returns;
 mod scope;

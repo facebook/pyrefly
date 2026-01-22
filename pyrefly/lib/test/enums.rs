@@ -732,3 +732,17 @@ class IntEnum(int, Enum):
             return cls.DEFAULT.value
     "#,
 );
+
+testcase!(
+    test_enum_alias,
+    r#"
+from typing import assert_type, Literal
+from enum import Enum
+
+class TrafficLight(Enum):
+    YELLOW = 3
+    AMBER = YELLOW  # Alias for YELLOW
+
+assert_type(TrafficLight.AMBER, Literal[TrafficLight.YELLOW])
+    "#,
+);

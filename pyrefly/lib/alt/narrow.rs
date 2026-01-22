@@ -658,6 +658,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let Some(exprs) = exprs else {
                     return ty.clone();
                 };
+                // Bail out if any element is a starred expression (e.g., `x in [*y, 1]`).
+                // We can't know all values at compile time when unpacking occurs.
+                if exprs.iter().any(|e| matches!(e, Expr::Starred(_))) {
+                    return ty.clone();
+                }
                 let mut literal_types = Vec::new();
                 for expr in exprs {
                     let expr_ty = self.expr_infer(&expr, errors);
@@ -679,6 +684,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let Some(exprs) = exprs else {
                     return ty.clone();
                 };
+                // Bail out if any element is a starred expression (e.g., `x not in [*y, 1]`).
+                // We can't know all values at compile time when unpacking occurs.
+                if exprs.iter().any(|e| matches!(e, Expr::Starred(_))) {
+                    return ty.clone();
+                }
                 let mut literal_types = Vec::new();
                 for expr in exprs {
                     let expr_ty = self.expr_infer(&expr, errors);

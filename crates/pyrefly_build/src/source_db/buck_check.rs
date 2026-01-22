@@ -17,7 +17,6 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
@@ -57,17 +56,17 @@ fn read_manifest_file_data(data: &[u8]) -> anyhow::Result<Vec<ManifestItem>> {
         let module_relative_path = Path::new(raw_item[0].as_str());
         match ModuleName::from_relative_path(&strip_stubs_suffix(module_relative_path)) {
             Ok(module_name) => {
-                // absolutize should be fine here to get absolute path, since Pyrefly
-                // will be run from Buck root.
-                let absolute_path = PathBuf::from(raw_item[1].clone()).absolutize();
-                if absolute_path.iter().any(|x| x == "pyre_buck_typeshed") {
+                // We deliberately stick with relative paths, as sometimes we are run on RE,
+                // so the absolute path on RE will not match the users absolute path.
+                let path = PathBuf::from(raw_item[1].clone());
+                if path.iter().any(|x| x == "pyre_buck_typeshed") {
                     // We sometimes get Pyre typeshed files in the manifest, which don't match the versions we expect.
                     // Once Pyre is retired, we can remove this filtering.
                     continue;
                 }
                 results.push(ManifestItem {
                     module_name,
-                    module_path: ModulePath::filesystem(absolute_path),
+                    module_path: ModulePath::filesystem(path),
                 });
             }
             Err(error) => {
@@ -284,9 +283,7 @@ mod tests {
                 .unwrap(),
             vec![ManifestItem {
                 module_name: ModuleName::from_str("foo.bar"),
-                module_path: ModulePath::filesystem(
-                    PathBuf::from_str("root/foo/bar.py").unwrap().absolutize()
-                )
+                module_path: ModulePath::filesystem(PathBuf::from_str("root/foo/bar.py").unwrap())
             }]
         );
         assert_eq!(
@@ -298,9 +295,7 @@ mod tests {
             vec![ManifestItem {
                 module_name: ModuleName::from_str("foo.bar"),
                 module_path: ModulePath::filesystem(
-                    PathBuf::from_str("root/foo-stubs/bar/__init__.pyi")
-                        .unwrap()
-                        .absolutize()
+                    PathBuf::from_str("root/foo-stubs/bar/__init__.pyi").unwrap()
                 )
             }]
         );

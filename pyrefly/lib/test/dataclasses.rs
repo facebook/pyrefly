@@ -24,6 +24,36 @@ assert_type(Data, type[Data])
 );
 
 testcase!(
+    test_kw_only_sentinel_deep_inheritance,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+
+@dataclass
+class A:
+    _: KW_ONLY
+    a: int = 0
+
+@dataclass
+class B(A):
+    b: int = 1
+
+@dataclass
+class C(B):
+    _: KW_ONLY
+    c: int = 2
+
+@dataclass
+class D(C):
+    d: int = 3
+
+D()
+D(4)
+D(4, 5)
+D(4, 5, 6) # E: Expected 2 positional arguments, got 3 in function `D.__init__`
+    "#,
+);
+
+testcase!(
     test_fields,
     r#"
 from typing import assert_type
@@ -1507,6 +1537,25 @@ class C1:
 class C2(C1):
     c: float
 C2('', 0.2, b=3)
+    "#,
+);
+
+testcase!(
+    test_kw_only_sentinel_inheritance,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+
+@dataclass
+class Foo:
+    _: KW_ONLY
+    option: int | None = None
+
+@dataclass
+class Bar(Foo):
+    arg: str
+
+Bar("arg")
+Bar(arg="arg")
     "#,
 );
 

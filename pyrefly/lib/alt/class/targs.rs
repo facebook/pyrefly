@@ -534,6 +534,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         if arg.is_kind_param_spec() {
             arg.clone()
+        } else if arg.is_any() {
+            // Any is the universal type that is compatible with any ParamSpec.
+            // Convert it to Ellipsis, which is the gradual type for ParamSpec.
+            Type::Ellipsis
         } else {
             self.error(
                 errors,
