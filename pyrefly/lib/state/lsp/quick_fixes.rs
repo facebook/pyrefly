@@ -8,6 +8,7 @@
 pub(crate) mod add_override;
 pub(crate) mod change_signature;
 pub(crate) mod convert_dict;
+pub(crate) mod convert_import;
 pub(crate) mod convert_star_import;
 pub(crate) mod enum_member;
 pub(crate) mod extract_field;
