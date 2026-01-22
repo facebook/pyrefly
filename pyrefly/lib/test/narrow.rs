@@ -2374,6 +2374,30 @@ class X:
 );
 
 testcase!(
+    test_typeis_return_type,
+    r#"
+from typing import TypeIs, assert_type
+
+def is_bool(x: int) -> TypeIs[bool]:
+    return isinstance(x, bool)
+
+assert_type(is_bool(0), bool)
+    "#,
+);
+
+testcase!(
+    test_typeguard_return_type,
+    r#"
+from typing import TypeGuard, assert_type
+
+def is_str(x: object) -> TypeGuard[str]:
+    return isinstance(x, str)
+
+assert_type(is_str("hello"), bool)
+    "#,
+);
+
+testcase!(
     test_isinstance_invalid_special_form,
     r#"
 from typing import Final

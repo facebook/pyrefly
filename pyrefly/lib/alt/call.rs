@@ -1256,7 +1256,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 kws = x.arguments.keywords.map(CallKeyword::new);
             }
 
-            self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
+            let result = self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                     .call_assert_type(
                         &x.arguments.args,
@@ -1340,7 +1340,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Check if this call applies a decorator with known typing effects to a function.
                 _ if let Some(ret) = self.maybe_apply_function_decorator(ty, &args, &kws, errors) => ret,
                 _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors),
-            })
+            });
+            // TypeIs and TypeGuard functions return bool at runtime
+            match result {
+                Type::TypeIs(_) | Type::TypeGuard(_) => self.stdlib.bool().clone().to_type(),
+                other => other,
+            }
         }
     }
 
