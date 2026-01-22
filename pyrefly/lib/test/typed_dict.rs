@@ -2120,7 +2120,7 @@ test(other=int, default="") # E: Argument `Literal['']` is not assignable to par
 testcase!(
     test_typed_dict_contains_narrowing,
     r#"
-from typing import TypedDict, reveal_type
+from typing import TypedDict, Literal, reveal_type
 
 class AClient: ...
 class BClient: ...
@@ -2143,6 +2143,27 @@ def test_not_in(clients: Clients, name: str):
         reveal_type(name)  # E: revealed type: str
         return GenericClient()
     # name is narrowed in the else branch
+    reveal_type(name)  # E: revealed type: Literal['a', 'b']
+    client = clients[name]
+
+def test_literal_union_in(clients: Clients, name: Literal['a', 'b', 'c']):
+    # Test narrowing a literal union with 'in'
+    if name in clients:
+        reveal_type(name)  # E: revealed type: Literal['a', 'b']
+        client = clients[name]
+    else:
+        # Only 'c' remains outside the TypedDict
+        reveal_type(name)  # E: revealed type: Literal['c']
+        client = GenericClient()
+    return client
+
+def test_literal_union_not_in(clients: Clients, name: Literal['a', 'b', 'c']):
+    # Test narrowing a literal union with 'not in'
+    if name not in clients:
+        # Only 'c' is not in the TypedDict
+        reveal_type(name)  # E: revealed type: Literal['c']
+        return GenericClient()
+    # 'a' and 'b' remain
     reveal_type(name)  # E: revealed type: Literal['a', 'b']
     client = clients[name]
     return client
