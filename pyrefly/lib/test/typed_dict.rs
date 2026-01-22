@@ -2130,11 +2130,21 @@ class Clients(TypedDict):
     a: AClient
     b: BClient
 
-def main(clients: Clients, name: str):
+def test_in(clients: Clients, name: str):
     if name in clients:
         reveal_type(name)  # E: revealed type: Literal['a', 'b']
         client = clients[name]
     else:
         client = GenericClient()
+    return client
+
+def test_not_in(clients: Clients, name: str):
+    if name not in clients:
+        reveal_type(name)  # E: revealed type: str
+        return GenericClient()
+    # name is narrowed in the else branch
+    reveal_type(name)  # E: revealed type: Literal['a', 'b']
+    client = clients[name]
+    return client
 "#,
 );
