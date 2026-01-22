@@ -2833,6 +2833,103 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn add_literal_completions_from_type(
+        param_type: &Type,
+        completions: &mut Vec<CompletionItem>,
+        in_string_literal: bool,
+    ) {
+        match param_type {
+            Type::Literal(lit) => {
+                // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
+                let label = lit.value.to_string_escaped(true);
+                let insert_text = if in_string_literal {
+                    if let Lit::Str(s) = &lit.value {
+                        s.to_string()
+                    } else {
+                        label.clone()
+                    }
+                } else {
+                    label.clone()
+                };
+                completions.push(CompletionItem {
+                    label,
+                    kind: Some(CompletionItemKind::VALUE),
+                    detail: Some(format!("{param_type}")),
+                    insert_text: Some(insert_text),
+                    ..Default::default()
+                });
+            }
+            Type::Union(box Union { members, .. }) => {
+                for member in members {
+                    Self::add_literal_completions_from_type(member, completions, in_string_literal);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn add_match_literal_completions(
+        &self,
+        handle: &Handle,
+        covering_nodes: &[AnyNodeRef],
+        completions: &mut Vec<CompletionItem>,
+        in_string_literal: bool,
+    ) {
+        let is_match_value_pattern = covering_nodes.iter().any(|node| {
+            matches!(
+                node,
+                AnyNodeRef::PatternMatchValue(_) | AnyNodeRef::PatternMatchSingleton(_)
+            )
+        });
+        if !is_match_value_pattern {
+            return;
+        }
+        let Some(subject) = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::StmtMatch(stmt_match) => Some(stmt_match.subject.as_ref()),
+            _ => None,
+        }) else {
+            return;
+        };
+        if let Some(subject_type) = self.get_type_trace(handle, subject.range()) {
+            Self::add_literal_completions_from_type(&subject_type, completions, in_string_literal);
+        }
+    }
+
+    fn add_literal_completions_from_type(
+        param_type: &Type,
+        completions: &mut Vec<CompletionItem>,
+        in_string_literal: bool,
+    ) {
+        match param_type {
+            Type::Literal(lit) => {
+                // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
+                let label = lit.value.to_string_escaped(true);
+                let insert_text = if in_string_literal {
+                    if let Lit::Str(s) = &lit.value {
+                        s.to_string()
+                    } else {
+                        label.clone()
+                    }
+                } else {
+                    label.clone()
+                };
+                completions.push(CompletionItem {
+                    label,
+                    kind: Some(CompletionItemKind::VALUE),
+                    detail: Some(format!("{param_type}")),
+                    insert_text: Some(insert_text),
+                    ..Default::default()
+                });
+            }
+            Type::Union(box Union { members, .. }) => {
+                for member in members {
+                    Self::add_literal_completions_from_type(member, completions, in_string_literal);
+                }
+            }
+            _ => {}
+        }
+    }
+
     // Kept for backwards compatibility - used by external callers (lsp/server.rs, playground.rs)
     // who don't need the is_incomplete flag
     pub fn completion(
@@ -3061,6 +3158,12 @@ impl<'a> Transaction<'a> {
                     let in_string_literal = nodes
                         .iter()
                         .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)));
+                    self.add_match_literal_completions(
+                        handle,
+                        &nodes,
+                        &mut result,
+                        in_string_literal,
+                    );
                     self.add_literal_completions(handle, position, &mut result, in_string_literal);
                     self.add_dict_key_completions(
                         handle,
