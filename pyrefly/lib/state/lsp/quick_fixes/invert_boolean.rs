@@ -19,10 +19,10 @@ use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
-use super::extract_function::LocalRefactorCodeAction;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
+use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 
 #[derive(Clone, Debug)]
