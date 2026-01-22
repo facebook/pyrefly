@@ -4613,6 +4613,10 @@ impl Server {
                 transaction.extract_superclass_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "implement_abstract_members",
+                transaction.implement_abstract_members_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "inline_variable",
                 transaction.inline_variable_code_actions(&handle, range)
             );
