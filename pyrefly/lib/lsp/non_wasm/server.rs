@@ -34,6 +34,7 @@ use lsp_types::CodeActionOrCommand;
 use lsp_types::CodeActionParams;
 use lsp_types::CodeActionProviderCapability;
 use lsp_types::CodeActionResponse;
+use lsp_types::CodeActionTriggerKind;
 use lsp_types::CompletionList;
 use lsp_types::CompletionOptions;
 use lsp_types::CompletionParams;
@@ -783,6 +784,7 @@ pub fn capabilities(
                 CodeActionKind::QUICKFIX,
                 CodeActionKind::REFACTOR_EXTRACT,
                 CodeActionKind::new("refactor.move"),
+                CodeActionKind::REFACTOR_INLINE,
             ]),
             ..Default::default()
         })),
@@ -3069,6 +3071,13 @@ impl Server {
                 },
             ));
         }
+        // Optimization: do not calculate refactors for automated codeactions since they're expensive
+        // If we had lazy code actions, we could keep them.
+        if let Some(trigger_kind) = params.context.trigger_kind
+            && trigger_kind == CodeActionTriggerKind::AUTOMATIC
+        {
+            return (!actions.is_empty()).then_some(actions);
+        }
         let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
             for action in refactors {
                 let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
@@ -3111,6 +3120,15 @@ impl Server {
         if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
+        if let Some(refactors) = transaction.inline_variable_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.inline_method_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.inline_parameter_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
         if let Some(refactors) = transaction.pull_members_up_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
@@ -3127,16 +3145,15 @@ impl Server {
         {
             push_refactor_actions(refactors);
         }
+        if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
         if let Some(action) =
             convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
         {
             actions.push(action);
         }
-        if actions.is_empty() {
-            None
-        } else {
-            Some(actions)
-        }
+        (!actions.is_empty()).then_some(actions)
     }
 
     fn document_highlight(

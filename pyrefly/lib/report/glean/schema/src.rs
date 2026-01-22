@@ -130,6 +130,27 @@ impl FileDigest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct FileContent {
+    pub id: u64,
+    pub key: Box<File>,
+    pub value: FileContent_value,
+}
+
+impl FileContent {
+    pub fn GLEAN_name() -> String {
+        String::from("src.FileContent.1")
+    }
+
+    pub fn new(key: File, value: FileContent_value) -> Self {
+        FileContent {
+            id: 0,
+            key: Box::new(key),
+            value: value,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct File {
     pub id: u64,
     pub key: Box<String>,
@@ -253,6 +274,8 @@ pub struct FileLanguage_key {
 }
 
 pub type FileDigest_value = String;
+
+pub type FileContent_value = String;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ByteSpan {

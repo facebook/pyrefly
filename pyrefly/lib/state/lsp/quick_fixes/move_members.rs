@@ -17,10 +17,10 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
-use super::extract_function::LocalRefactorCodeAction;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::member_name_from_stmt;
 use super::extract_shared::selection_anchor;
+use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 
 const DEFAULT_INDENT: &str = "    ";

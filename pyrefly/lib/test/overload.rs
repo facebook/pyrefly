@@ -1324,3 +1324,29 @@ def f(path: Any, data: Any) -> dict[str, Any]:
     return outputs  # E: `dict[LiteralString, Any]` is not assignable to declared return type `dict[str, Any]`
     "#,
 );
+
+testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/2187",
+    test_one_overload_is_typeis,
+    r#"
+from typing import TypeIs, assert_type, overload
+
+@overload
+def f(x: str) -> str: ...
+@overload
+def f(x: int) -> TypeIs[bool]: ...
+def f(x):
+    if isinstance(x, str):
+        return x
+    else:
+        return isinstance(x, bool)
+
+def g(x: str, y: int):
+    assert_type(f(x), str)
+    assert_type(f(y), bool)  # E: (TypeIs[bool], bool)
+    if f(x):
+        assert_type(x, str)
+    if f(y):
+        assert_type(y, bool)
+    "#,
+);

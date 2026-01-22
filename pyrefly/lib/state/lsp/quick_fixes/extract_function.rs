@@ -11,7 +11,6 @@ use dupe::Dupe;
 use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::dedent_block_preserving_layout;
-use pyrefly_python::module::Module;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprContext;
@@ -24,21 +23,15 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use super::extract_shared::MethodInfo;
 use super::extract_shared::first_parameter_name;
 use super::extract_shared::function_has_decorator;
 use super::extract_shared::line_indent_and_start;
+use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 
 const HELPER_INDENT: &str = "    ";
-
-/// Description of a refactor edit that stays within the local workspace.
-#[derive(Clone, Debug)]
-pub struct LocalRefactorCodeAction {
-    pub title: String,
-    pub edits: Vec<(Module, TextRange, String)>,
-    pub kind: CodeActionKind,
-}
 
 /// Builds extract-function quick fix code actions for the supplied selection.
 pub(crate) fn extract_function_code_actions(
@@ -133,8 +126,8 @@ pub(crate) fn extract_function_code_actions(
     if let Some(method_ctx) = find_enclosing_method(ast.as_ref(), selection, module_source) {
         let method_helper_name = generate_helper_name(module_source, "extracted_method");
         let mut signature_params = Vec::new();
-        signature_params.push(method_ctx.receiver_name.clone());
-        let method_params = filter_params_excluding(&params, &method_ctx.receiver_name);
+        signature_params.push(method_ctx.info.receiver_name.clone());
+        let method_params = filter_params_excluding(&params, &method_ctx.info.receiver_name);
         signature_params.extend(method_params.iter().cloned());
         let method_helper_text = build_helper_text(
             &method_helper_name,
@@ -145,7 +138,7 @@ pub(crate) fn extract_function_code_actions(
         );
         let method_call_expr = build_call_expr(
             &method_helper_name,
-            Some(&method_ctx.receiver_name),
+            Some(&method_ctx.info.receiver_name),
             &method_params,
         );
         let method_replacement = build_call_replacement(&block_indent, &method_call_expr, &returns);
@@ -158,7 +151,7 @@ pub(crate) fn extract_function_code_actions(
         actions.push(LocalRefactorCodeAction {
             title: format!(
                 "Extract into method `{}` on `{}`",
-                method_helper_name, method_ctx.class_name
+                method_helper_name, method_ctx.info.class_name
             ),
             edits: vec![method_helper_edit, method_call_edit],
             kind: CodeActionKind::REFACTOR_EXTRACT,
@@ -237,10 +230,8 @@ fn collect_identifier_refs(
 /// Contains details about where and how to insert the extracted method,
 /// as well as relevant naming and formatting information.
 struct MethodContext {
-    /// Name of the class from which the method is being extracted.
-    class_name: String,
-    /// Name of the receiver variable (typically `self`).
-    receiver_name: String,
+    /// Core method information (class name, receiver name).
+    info: MethodInfo,
     /// Byte offset in the source code where the extracted method should be inserted.
     insert_position: TextSize,
     /// Indentation string to use for the method definition line.
@@ -360,8 +351,10 @@ fn method_context_from_function(
     let (method_indent, insert_position) =
         line_indent_and_start(source, function_def.range().start())?;
     Some(MethodContext {
-        class_name: class_def.name.id.to_string(),
-        receiver_name,
+        info: MethodInfo {
+            class_name: class_def.name.id.to_string(),
+            receiver_name,
+        },
         insert_position,
         method_indent,
     })
