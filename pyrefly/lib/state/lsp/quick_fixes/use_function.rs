@@ -24,7 +24,6 @@ use ruff_python_ast::ExprBytesLiteral;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprEllipsisLiteral;
-use ruff_python_ast::ExprIf;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNoneLiteral;
@@ -48,8 +47,8 @@ use ruff_text_size::TextSize;
 
 use crate::ModuleInfo;
 use crate::state::ide::import_regular_import_edit;
+use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
-use crate::state::lsp::quick_fixes::extract_function::LocalRefactorCodeAction;
 
 /// Builds use-function refactor actions for the supplied selection.
 pub(crate) fn use_function_code_actions(
