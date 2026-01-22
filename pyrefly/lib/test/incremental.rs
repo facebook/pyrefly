@@ -1272,3 +1272,197 @@ fn test_mixed_import_failed_export_invalidated() {
         "Expected error after foo exports y"
     );
 }
+
+/// Test that abstract class check changes propagate correctly (KeyAbstractClassCheck).
+///
+/// When a class becomes concrete (by implementing abstract methods), modules
+/// that try to instantiate it should be recomputed and errors should clear.
+#[test]
+fn test_abstract_class_check_change_propagates() {
+    let mut i = Incremental::new();
+
+    // foo.Base is abstract (has abstract method), bar.Impl does NOT implement it initially
+    i.set(
+        "foo",
+        "from abc import ABC, abstractmethod\nclass Base(ABC):\n    @abstractmethod\n    def m(self) -> int: ...",
+    );
+    i.set("bar", "from foo import Base\nclass Impl(Base): pass");
+    i.set(
+        "main",
+        "from bar import Impl\nx = Impl() # E: Cannot instantiate `Impl` because the following members are abstract: `m`",
+    );
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Implement the abstract method - main should be recomputed and error should go away
+    i.set(
+        "bar",
+        "from foo import Base\nclass Impl(Base):\n    def m(self) -> int: return 1",
+    );
+    i.set("main", "from bar import Impl\nx = Impl()");
+    i.check(&["main"], &["bar", "main"]);
+}
+
+/// Test that class metadata changes propagate correctly (KeyClassMetadata).
+///
+/// When a class becomes a Protocol or stops being one, modules using it
+/// should be recomputed.
+#[test]
+fn test_class_metadata_protocol_change_propagates() {
+    let mut i = Incremental::new();
+
+    // foo.P is NOT a Protocol initially - main uses it as a regular class
+    i.set("foo", "class P:\n    def m(self) -> int: return 1");
+    i.set("bar", "class Q:\n    def m(self) -> int: return 2");
+    i.set(
+        "main",
+        "from foo import P\nfrom bar import Q\nx: P = Q() # E: `Q` is not assignable to `P`",
+    );
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Make P a Protocol - main should be recomputed and Q should be assignable
+    i.set(
+        "foo",
+        "from typing import Protocol\nclass P(Protocol):\n    def m(self) -> int: ...",
+    );
+    i.set("main", "from foo import P\nfrom bar import Q\nx: P = Q()");
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// Test that type parameter variance changes propagate correctly (KeyVariance).
+///
+/// When a generic class's variance changes (e.g., from invariant to covariant),
+/// modules using that class should be recomputed.
+#[test]
+fn test_variance_change_propagates() {
+    let mut i = Incremental::new();
+
+    // foo.Container is invariant (default) - main has an error trying to assign Container[Derived] to Container[Base]
+    i.set(
+        "foo",
+        "from typing import Generic, TypeVar\nT = TypeVar('T')\nclass Container(Generic[T]):\n    def get(self) -> T: ...",
+    );
+    i.set("bar", "class Base: pass\nclass Derived(Base): pass");
+    i.set(
+        "main",
+        "from foo import Container\nfrom bar import Base, Derived\ndef f(c: Container[Derived]) -> Container[Base]:\n    return c # E: Returned type `Container[Derived]` is not assignable to declared return type `Container[Base]`",
+    );
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Make Container covariant - main should be recomputed and error should go away
+    i.set(
+        "foo",
+        "from typing import Generic, TypeVar\nT = TypeVar('T', covariant=True)\nclass Container(Generic[T]):\n    def get(self) -> T: ...",
+    );
+    i.set(
+        "main",
+        "from foo import Container\nfrom bar import Base, Derived\ndef f(c: Container[Derived]) -> Container[Base]:\n    return c",
+    );
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// Test that adding a base class to a derived class propagates (KeyClassBaseType).
+///
+/// When a class gains a base class, modules that use the derived class
+/// should be recomputed and see the inherited methods.
+#[test]
+fn test_adding_base_class_propagates() {
+    let mut i = Incremental::new();
+
+    // foo.Base has method m, bar.Derived does NOT extend Base initially
+    i.set("foo", "class Base:\n    def m(self) -> int: return 1");
+    i.set("bar", "class Derived: pass");
+    i.set(
+        "main",
+        "from bar import Derived\ndef f(d: Derived) -> int:\n    return d.m() # E: Object of class `Derived` has no attribute `m`",
+    );
+    i.check(&["main"], &["main", "bar"]);
+
+    // Change Derived to extend Base - main should be recomputed and error should go away
+    i.set("bar", "from foo import Base\nclass Derived(Base): pass");
+    i.set(
+        "main",
+        "from bar import Derived\ndef f(d: Derived) -> int:\n    return d.m()",
+    );
+    i.check(&["main"], &["main", "foo", "bar"]);
+}
+
+/// Test that adding a dataclass field propagates (KeyClassSynthesizedFields).
+///
+/// When a dataclass gains a new field, its __init__ parameters change and
+/// modules using the class should be recomputed.
+#[test]
+fn test_adding_dataclass_field_propagates() {
+    let mut i = Incremental::new();
+
+    // foo.Data is a dataclass with field x: int - main tries to use missing field y
+    i.set(
+        "foo",
+        "from dataclasses import dataclass\n@dataclass\nclass Data:\n    x: int",
+    );
+    i.set("bar", "from foo import Data\nclass Wrapper:\n    d: Data");
+    i.set(
+        "main",
+        "from foo import Data\na = Data(x=1, y=2) # E: Unexpected keyword argument `y`",
+    );
+    i.check(&["main"], &["main", "foo"]);
+
+    // Add field y to the dataclass - main should be recomputed and error should go away
+    i.set(
+        "foo",
+        "from dataclasses import dataclass\n@dataclass\nclass Data:\n    x: int\n    y: int",
+    );
+    i.set("main", "from foo import Data\na = Data(x=1, y=2)");
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// Test that adding a field to a class propagates (KeyClassField).
+///
+/// When a class gains a new field, modules accessing that field should be
+/// recomputed and no longer see an error.
+#[test]
+fn test_adding_class_field_propagates() {
+    let mut i = Incremental::new();
+
+    // foo.A has only field x - main tries to access missing field y
+    i.set("foo", "class A:\n    x: int = 1");
+    i.set("bar", "from foo import A\nclass B:\n    a: A");
+    i.set(
+        "main",
+        "from bar import B\ndef f(b: B):\n    b.a.y # E: Object of class `A` has no attribute `y`",
+    );
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Add field y to A - main should be recomputed and error should go away
+    i.set("foo", "class A:\n    x: int = 1\n    y: int = 2");
+    i.set("main", "from bar import B\ndef f(b: B):\n    b.a.y");
+    i.check_ignoring_expectations(&["main"], &["main", "foo", "bar"]);
+}
+
+/// Test that making a class generic propagates (KeyTParams).
+///
+/// When a class gains type parameters (becomes generic), modules using
+/// the class with type arguments should be recomputed.
+#[test]
+fn test_making_class_generic_propagates() {
+    let mut i = Incremental::new();
+
+    // foo.Container is not generic initially - main tries to use it with type args
+    i.set("foo", "class Container:\n    items: list[int]");
+    i.set(
+        "bar",
+        "from foo import Container\nclass Wrapper:\n    c: Container",
+    );
+    i.set(
+        "main",
+        "from foo import Container\nx: Container[int] # E: Expected 0 type arguments for `Container`, got 1",
+    );
+    i.check(&["main"], &["main", "foo"]);
+
+    // Make Container generic - main should be recomputed and error should go away
+    i.set(
+        "foo",
+        "from typing import Generic, TypeVar\nT = TypeVar('T')\nclass Container(Generic[T]):\n    items: list[int]",
+    );
+    i.set("main", "from foo import Container\nx: Container[int]");
+    i.check(&["main"], &["foo", "main"]);
+}
