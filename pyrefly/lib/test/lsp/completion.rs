@@ -1387,6 +1387,31 @@ Completion Results:
 }
 
 #[test]
+fn completion_literal_match_value() {
+    let code = r#"
+from typing import Literal
+x: Literal['a', 'b'] = 'a'
+match x:
+    case ':
+#         ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 |     case ':
+              ^
+Completion Results:
+- (Value) 'a': Literal['a'] inserting `a`
+- (Value) 'b': Literal['b'] inserting `b`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn completion_literal_union_alias() {
     let code = r#"
 from typing import Literal, Union
