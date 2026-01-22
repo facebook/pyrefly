@@ -171,13 +171,17 @@ fn fixture_return_type(
     let mut ty = transaction.get_type(handle, &return_key)?;
     if func.is_async {
         if let Some(Some((_, _, return_ty))) =
-            transaction.ad_hoc_solve(handle, |solver| solver.unwrap_coroutine(&ty))
+            transaction.ad_hoc_solve(handle, "pytest_fixture_unwrap_coroutine", |solver| {
+                solver.unwrap_coroutine(&ty)
+            })
         {
             ty = return_ty;
         }
     }
     if let Some(display_ty) =
-        transaction.ad_hoc_solve(handle, |solver| solver.for_display(ty.clone()))
+        transaction.ad_hoc_solve(handle, "pytest_fixture_for_display", |solver| {
+            solver.for_display(ty.clone())
+        })
     {
         ty = display_ty;
     }

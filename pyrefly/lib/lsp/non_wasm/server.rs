@@ -4150,19 +4150,19 @@ impl Server {
                 "convert_star_import",
                 transaction.convert_star_import_code_actions(&handle, range)
             );
+            timed_refactor_action!(
+                "pytest_fixture_type_annotation",
+                transaction.pytest_fixture_type_annotation_code_actions(
+                    &handle,
+                    range,
+                    import_format
+                )
+            );
             if let Some(action) =
                 convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
             {
                 actions.push(action);
             }
-        };
-        if let Some(pytest_actions) =
-            transaction.pytest_fixture_type_annotation_code_actions(&handle, range, import_format)
-        {
-            push_refactor_actions(pytest_actions);
-        }
-        if let Some(refactors) = transaction.extract_field_code_actions(&handle, range) {
-            push_refactor_actions(refactors);
         }
         if let Some(action) = safe_delete_file_code_action(
             &self.initialize_params.capabilities,
