@@ -463,6 +463,22 @@ fn compute_convert_star_import_actions(
     let module_info = transaction.get_module_info(handle).unwrap();
     let actions = transaction
         .convert_star_import_code_actions(handle, selection)
+fn compute_convert_import_actions(
+    code_by_module: &[(&'static str, &str)],
+    module_name: &'static str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(code_by_module, Require::Everything);
+    let handle = handles.get(module_name).unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .convert_import_code_actions(handle, selection)
         .unwrap_or_default();
     let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
         actions.iter().map(|action| action.edits.clone()).collect();
@@ -3015,4 +3031,106 @@ def compute():
     return add(1)
 "#;
     assert_eq!(expected, updated);
+}
+
+#[test]
+fn convert_from_import_to_relative() {
+    let code_a = r#"
+# IMPORT-START
+from pkg.b import Foo
+# IMPORT-END
+"#;
+    let code_b = "class Foo: ...\n";
+    let selection = find_marked_range_with(code_a, "# IMPORT-START", "# IMPORT-END");
+    let (module_info, actions, titles) =
+        compute_convert_import_actions(&[("pkg.a", code_a), ("pkg.b", code_b)], "pkg.a", selection);
+    assert!(
+        titles
+            .iter()
+            .any(|title| title == "Convert import to relative path"),
+        "expected relative import code action"
+    );
+    assert!(
+        titles
+            .iter()
+            .any(|title| title == "Convert all imports to relative path"),
+        "expected convert-all relative code action"
+    );
+    let idx = titles
+        .iter()
+        .position(|title| title == "Convert import to relative path")
+        .unwrap();
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[idx]);
+    let expected = r#"
+# IMPORT-START
+from .b import Foo
+# IMPORT-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_from_import_to_absolute() {
+    let code_a = r#"
+# IMPORT-START
+from .b import Foo
+# IMPORT-END
+"#;
+    let code_b = "class Foo: ...\n";
+    let selection = find_marked_range_with(code_a, "# IMPORT-START", "# IMPORT-END");
+    let (module_info, actions, titles) =
+        compute_convert_import_actions(&[("pkg.a", code_a), ("pkg.b", code_b)], "pkg.a", selection);
+    assert!(
+        titles
+            .iter()
+            .any(|title| title == "Convert import to absolute path"),
+        "expected absolute import code action"
+    );
+    assert!(
+        titles
+            .iter()
+            .any(|title| title == "Convert all imports to absolute path"),
+        "expected convert-all absolute code action"
+    );
+    let idx = titles
+        .iter()
+        .position(|title| title == "Convert import to absolute path")
+        .unwrap();
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[idx]);
+    let expected = r#"
+# IMPORT-START
+from pkg.b import Foo
+# IMPORT-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_import_statement_to_relative() {
+    let code_a = r#"
+# IMPORT-START
+import pkg.b as mod_b
+# IMPORT-END
+"#;
+    let code_b = "class Foo: ...\n";
+    let selection = find_marked_range_with(code_a, "# IMPORT-START", "# IMPORT-END");
+    let (module_info, actions, titles) =
+        compute_convert_import_actions(&[("pkg.a", code_a), ("pkg.b", code_b)], "pkg.a", selection);
+    assert!(
+        titles
+            .iter()
+            .any(|title| title == "Convert import to relative path"),
+        "expected relative import code action"
+    );
+    let idx = titles
+        .iter()
+        .position(|title| title == "Convert import to relative path")
+        .unwrap();
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[idx]);
+    let expected = r#"
+# IMPORT-START
+from . import b as mod_b
+# IMPORT-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
 }
