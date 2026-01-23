@@ -2378,6 +2378,40 @@ impl<'a> LookupExport for TransactionHandle<'a> {
             ModuleDep::name_metadata(name.clone()),
         )?
     }
+
+    fn is_final(&self, mut module: ModuleName, name: &Name) -> bool {
+        let mut seen = HashSet::new();
+        let mut name = name.clone();
+
+        loop {
+            if !seen.insert(module) {
+                return false; // Cycle detected
+            }
+
+            let next = self.with_exports(
+                module,
+                |exports, lookup| match exports.exports(lookup).get(&name) {
+                    Some(ExportLocation::ThisModule(Export { is_final, .. })) => Err(*is_final),
+                    Some(ExportLocation::OtherModule(other_module, original_name)) => {
+                        Ok((*other_module, original_name.clone()))
+                    }
+                    None => Err(false),
+                },
+                ModuleDep::name_metadata(name.clone()),
+            );
+
+            match next {
+                Some(Err(is_final)) => return is_final,
+                Some(Ok((other_module, original_name))) => {
+                    if let Some(original_name) = original_name {
+                        name = original_name;
+                    }
+                    module = other_module;
+                }
+                None => return false,
+            }
+        }
+    }
 }
 
 impl<'a> LookupAnswer for TransactionHandle<'a> {

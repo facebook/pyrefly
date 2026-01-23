@@ -62,6 +62,9 @@ pub trait LookupExport {
 
     /// Get the docstring range for an export. Records a dependency on `name` from `module` regardless of if it exists.
     fn docstring_range(&self, module: ModuleName, name: &Name) -> Option<TextRange>;
+
+    /// Check if an export is marked as `Final`. Records a dependency on `name` from `module` regardless of if it exists.
+    fn is_final(&self, module: ModuleName, name: &Name) -> bool;
 }
 
 #[derive(Debug, Clone)]
@@ -457,6 +460,10 @@ mod tests {
         }
 
         fn is_submodule_imported_implicitly(&self, _module: ModuleName, _name: &Name) -> bool {
+            false
+        }
+
+        fn is_final(&self, _module: ModuleName, _name: &Name) -> bool {
             false
         }
     }

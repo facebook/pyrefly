@@ -1335,6 +1335,7 @@ impl<'a> BindingsBuilder<'a> {
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
         self.check_for_type_alias_redefinition(name, idx);
+        self.check_for_imported_final_reassignment(name, idx);
         let name = Hashed::new(name);
         let write_info = self
             .scopes
@@ -1371,6 +1372,20 @@ impl<'a> BindingsBuilder<'a> {
                     format!("Cannot redefine existing name `{name}` as a type alias",),
                 );
             }
+        }
+    }
+
+    fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
+        let prev_idx = self.scopes.current_flow_idx(name);
+        if let Some(prev_idx) = prev_idx
+            && let Some(Binding::Import(module, original_name, _)) = self.idx_to_binding(prev_idx)
+            && self.lookup.is_final(*module, original_name)
+        {
+            self.error(
+                self.idx_to_key(idx).range(),
+                ErrorInfo::Kind(ErrorKind::BadAssignment),
+                format!("Cannot assign to `{name}` because it is imported as final"),
+            );
         }
     }
 

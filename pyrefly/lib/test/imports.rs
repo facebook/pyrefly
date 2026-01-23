@@ -1147,12 +1147,11 @@ Y: Final[int] = 42
 }
 
 testcase!(
-    bug = "Should not allow modifying imported Final values",
     test_modify_imported_final_value,
     env_final_value(),
     r#"
 from foo import X, Y
-X = 10
-Y = 10
+X = 10  # E: Cannot assign to `X` because it is imported as final
+Y = 10  # E: Cannot assign to `Y` because it is imported as final
 "#,
 );

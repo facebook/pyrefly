@@ -10183,6 +10183,28 @@
       "severity": "error",
       "stop_column": 11,
       "stop_line": 155
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Cannot assign to `TEN` because it is imported as final",
+      "description": "Cannot assign to `TEN` because it is imported as final",
+      "line": 166,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 4,
+      "stop_line": 166
+    },
+    {
+      "code": -2,
+      "column": 1,
+      "concise_description": "Cannot assign to `PI` because it is imported as final",
+      "description": "Cannot assign to `PI` because it is imported as final",
+      "line": 170,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 3,
+      "stop_line": 170
     }
   ],
   "qualifiers_final_decorator.py": [
