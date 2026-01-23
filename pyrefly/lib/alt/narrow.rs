@@ -992,18 +992,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             AtomicNarrowOp::IsMapping => {
-                let mapping_type = self
-                    .stdlib
-                    .mapping(Type::any_implicit(), Type::any_implicit());
-                // Wrap in Type::Type to make it look like a class reference for isinstance
-                self.narrow_isinstance(ty, &Type::Type(Box::new(mapping_type.to_type())))
+                let mapping_class = self.stdlib.mapping_object().clone();
+                self.narrow_isinstance(ty, &Type::ClassDef(mapping_class))
             }
             AtomicNarrowOp::IsNotMapping => {
-                let mapping_type = self
-                    .stdlib
-                    .mapping(Type::any_implicit(), Type::any_implicit());
-                // Wrap in Type::Type to make it look like a class reference for isinstance
-                self.narrow_is_not_instance(ty, &Type::Type(Box::new(mapping_type.to_type())))
+                let mapping_class = self.stdlib.mapping_object().clone();
+                self.narrow_is_not_instance(ty, &Type::ClassDef(mapping_class))
             }
         }
     }
