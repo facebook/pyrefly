@@ -132,6 +132,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if fallback.is_never() {
                 fallback
             } else {
+                let is_effectively_final = |ty: &Type| {
+                    if let Type::ClassType(cls) = ty {
+                        let class = cls.class_object();
+                        if self.get_metadata_for_class(class).is_final() {
+                            return true;
+                        }
+                        if self.get_enum_from_class(class).is_some()
+                            && !self.get_enum_members(class).is_empty()
+                        {
+                            return true;
+                        }
+                    }
+                    false
+                };
+
+                if is_effectively_final(left) || is_effectively_final(right) {
+                    return Type::never();
+                }
+
                 let left_base = self.disjoint_base(left);
                 let right_base = self.disjoint_base(right);
                 if self.has_superclass(left_base, right_base)

@@ -795,6 +795,42 @@ def g(x):
 );
 
 testcase!(
+    test_isinstance_final_intersection,
+    r#"
+from typing import assert_never, final
+
+@final
+class A: ...
+class B: ...
+
+def f(x: A):
+    if isinstance(x, B):
+        assert_never(x)
+    "#,
+);
+
+testcase!(
+    test_isinstance_enum_intersection,
+    r#"
+from enum import Enum
+from typing import assert_never, reveal_type
+
+class E1(Enum):
+    pass
+
+class E2(Enum):
+    X = 1
+
+class A: ...
+
+def f(x: A):
+    if isinstance(x, E1):
+        reveal_type(x) # E: A & E1
+    if isinstance(x, E2):
+        assert_never(x)
+    "#,
+);
+testcase!(
     test_isinstance_tuple,
     r#"
 from typing import assert_type
