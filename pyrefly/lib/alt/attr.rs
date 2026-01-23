@@ -545,6 +545,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut error_messages = Vec::new();
         let mut success = true;
         let (found, not_found, error) = lookup_result.decompose();
+        // Check if we have a partial union failure (attribute exists on some union members
+        // but not others) before consuming the vectors. This helps us decide whether to suggest.
+        let is_partial_union_failure = !found.is_empty() && !not_found.is_empty();
         for (attr, _) in found {
             match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
@@ -571,9 +574,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             error_messages.sort();
             error_messages.dedup();
             let mut msg = vec1![error_messages.join("\n")];
-            if let Some(suggestion) = attr_base
-                .as_ref()
-                .and_then(|attr_base| self.suggest_attribute_name(attr_name, attr_base))
+            // Skip suggestions when we have a partial union failure to avoid suggesting
+            // attributes from the types that have them when the problem is that some types
+            // don't have the attribute at all.
+            if !is_partial_union_failure
+                && let Some(suggestion) = attr_base
+                    .as_ref()
+                    .and_then(|attr_base| self.suggest_attribute_name(attr_name, attr_base))
             {
                 msg.push(format!("Did you mean `{suggestion}`?"));
             }
@@ -643,12 +650,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Suggest an attribute name for a missing attribute.
+    /// Only suggests attributes that exist on ALL bases in the AttributeBase,
+    /// so that the suggestion is valid for the entire type (including all union members).
     fn suggest_attribute_name(&self, missing: &Name, attr_base: &AttributeBase) -> Option<Name> {
-        let mut candidates = SmallSet::new();
-        for base in attr_base.0.iter() {
-            self.collect_attribute_candidates_from_base(base, &mut candidates);
+        // Collect candidates from each base separately to find attributes common to all.
+        // This prevents suggesting an attribute that only exists on some union members.
+        let mut base_iter = attr_base.0.iter();
+
+        // Get candidates from the first base
+        let mut common_candidates = SmallSet::new();
+        if let Some(first_base) = base_iter.next() {
+            self.collect_attribute_candidates_from_base(first_base, &mut common_candidates);
         }
-        best_suggestion(missing, candidates.iter().map(|candidate| (candidate, 0)))
+
+        // Intersect with candidates from remaining bases
+        for base in base_iter {
+            let mut this_base_candidates = SmallSet::new();
+            self.collect_attribute_candidates_from_base(base, &mut this_base_candidates);
+            common_candidates.retain(|c| this_base_candidates.contains(c));
+        }
+
+        best_suggestion(
+            missing,
+            common_candidates.iter().map(|candidate| (candidate, 0)),
+        )
     }
 
     /// Can the attribute be successfully looked up in all cases?
@@ -740,7 +766,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let got = match got {
             ExprOrBinding::Expr(value) => TypeOrExpr::Expr(value),
             ExprOrBinding::Binding(got) => {
-                ty = self.solve_binding(got, errors);
+                ty = self.solve_binding(got, range, errors);
                 TypeOrExpr::Type(ty.ty(), range)
             }
         };

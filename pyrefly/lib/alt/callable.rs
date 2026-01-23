@@ -25,6 +25,7 @@ use ruff_text_size::TextRange;
 use starlark_map::ordered_map::OrderedMap;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -996,17 +997,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         mut ctor_targs: Option<&mut TArgs>,
     ) -> Type {
-        let (qs, mut callable) = if let Some(tparams) = tparams {
+        let (callable_qs, mut callable) = if let Some(tparams) = tparams {
             // If we have a hint, we want to try to instantiate against it first, so we can contextually type
             // arguments. If we don't match the hint, we need to throw away any instantiations we might have made.
             // By invariant, hint will be None if we are calling a constructor.
             if let Some(hint) = hint {
-                let (qs_, callable_) = self.instantiate_fresh_callable(tparams, callable.clone());
+                let (qs, callable_) = self.instantiate_fresh_callable(tparams, callable.clone());
                 if self.is_subset_eq(&callable_.ret, hint.ty())
-                    && !self.solver().has_instantiation_errors(&qs_)
+                    && !self.solver().has_instantiation_errors(&qs)
                 {
-                    (qs_, callable_)
+                    (qs, callable_)
                 } else {
+                    // Even though these quantifieds aren't used, let's make sure to not leave
+                    // unfinished quantifieds around.
+                    let _ = self.solver().finish_quantified(qs, false);
                     self.instantiate_fresh_callable(tparams, callable)
                 }
             } else {
@@ -1015,8 +1019,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             (QuantifiedHandle::empty(), callable)
         };
-        if let Some(targs) = ctor_targs.as_mut() {
-            self.solver().freshen_class_targs(targs, self.uniques);
+        let ctor_qs = if let Some(targs) = ctor_targs.as_mut() {
+            let qs = self.solver().freshen_class_targs(targs, self.uniques);
             let mp = targs.substitution_map();
             callable.params.visit_mut(&mut |t| t.subst_mut(&mp));
             if let Some(obj) = self_obj.as_mut() {
@@ -1030,7 +1034,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self_obj = Some((*obj).clone().subst(&mp));
                 args = rest;
             }
-        }
+            qs
+        } else {
+            QuantifiedHandle::empty()
+        };
         let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, arguments_range));
         match callable.params {
             Params::List(params) => {
@@ -1131,20 +1138,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(targs) = ctor_targs {
             self.solver().generalize_class_targs(targs);
         }
-        if let Err(e) = self.solver().finish_quantified(qs) {
-            for e in e {
-                let kind = TypeCheckKind::TypeVarSpecialization(e.name);
-                self.error(
-                    call_errors,
-                    arguments_range,
-                    ErrorInfo::new(kind.as_error_kind(), context),
-                    kind.format_error(
-                        &self.for_display(e.got),
-                        &self.for_display(e.want),
-                        self.module().name(),
-                    ),
-                );
-            }
+        let mut errors = self
+            .solver()
+            .finish_quantified(callable_qs, self.solver().infer_with_first_use)
+            .map_or_else(|e| e.to_vec(), |_| Vec::new());
+        if let Err(e) = self
+            .solver()
+            .finish_quantified(ctor_qs, self.solver().infer_with_first_use)
+        {
+            errors.extend(e);
+        }
+        if let Ok(errors) = Vec1::try_from_vec(errors) {
+            self.add_specialization_errors(errors, arguments_range, call_errors, context);
         }
         self.solver().finish_function_return(callable.ret)
     }

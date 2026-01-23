@@ -100,6 +100,14 @@ impl<K, V> SmallMap1<K, V> {
             SmallMap1Inner::Map(map) => map.get_mut(key),
         }
     }
+
+    /// Returns an iterator over the keys in the map.
+    pub fn iter_keys(&self) -> impl Iterator<Item = &K> {
+        match &self.0 {
+            SmallMap1Inner::One(key, _) => Either::Left(iter::once(key)),
+            SmallMap1Inner::Map(map) => Either::Right(map.keys()),
+        }
+    }
 }
 
 impl<'a, K, V> IntoIterator for &'a SmallMap1<K, V> {

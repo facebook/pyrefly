@@ -7,9 +7,12 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -22,7 +25,6 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
-use pyrefly_util::display::commas_iter;
 use pyrefly_util::recurser::Guard;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_text_size::TextRange;
@@ -106,6 +108,13 @@ impl PartialOrd for CalcId {
     }
 }
 
+impl Hash for CalcId {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.module().hash(state);
+        self.1.hash(state);
+    }
+}
+
 /// Represent a stack of in-progress calculations in an `AnswersSolver`.
 ///
 /// This is useful for debugging, particularly for debugging cycle handling.
@@ -172,130 +181,110 @@ fn normalize_raw_cycle(raw: &Vec1<CalcId>) -> Vec<CalcId> {
     normalized
 }
 
+/// Tracks the state of a node within an active cycle.
+///
+/// This replaces the previous stack-based tracking (recursion_stack, unwind_stack)
+/// with explicit state tracking. The state transitions are:
+/// - Fresh → InProgress (when we first encounter the node as a Participant)
+/// - InProgress → Done (when the node's calculation completes)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeState {
+    /// Node hasn't been processed yet as part of cycle handling.
+    Fresh,
+    /// Node is currently being processed (on the Rust call stack).
+    InProgress,
+    /// Node's calculation has completed.
+    Done,
+}
+
 /// Represent a cycle we are currently solving.
+///
+/// This simplified model tracks cycle participants with explicit state rather than
+/// using separate recursion and unwind stacks. The Rust call stack naturally
+/// enforces LIFO ordering, so we only need to track:
+/// - Which idx is the anchor where we break the cycle
+/// - The state of each participant (Fresh/InProgress/Done)
 #[derive(Debug, Clone)]
 pub struct Cycle {
-    /// Where do we want to break the cycle
+    /// Where do we want to break the cycle (the minimal CalcId in the cycle)
     break_at: CalcId,
-    /// The recursion stack is everything we need new stack frames for
-    /// (including the place where we'll break the cycle, which briefly requires
-    /// a frame to produce the placeholder result).
-    ///
-    /// When we first create the `Cycle` after detecting a raw cycle, we
-    /// initialize it with everything from the current idx (not inclusive) to
-    /// `break_at` (inclusive) in reverse order.
-    ///
-    /// We'll pop from it and push to the `unwind_stack` as we recurse toward `break_at`
-    recursion_stack: Vec<CalcId>,
-    /// The unwind stack is all stack frames from where we are right now to the original entrypoint for `break_at`.
-    ///
-    /// When we first create the `Cycle` after detecting a raw cycle, we initialize
-    /// it with everything from `break_at` up to the current idx (inclusive).
-    ///
-    /// We'll push to it as we recurs, and then pop as calculations complete.
-    unwind_stack: Vec<CalcId>,
-    /// The unwound vec tracks things popped from the unwind stack. It is used for debugging only, because
-    /// without it we can lose track of what the cycle actually looked like.
-    unwound: Vec<CalcId>,
-    /// The algorithm doesn't actually require knowing where we were when we detected the cycle, but it is
-    /// essentially free and could be very useful for debugging.
+    /// State of each participant in this cycle.
+    /// Keys are all participants; values track their computation state.
+    node_state: HashMap<CalcId, NodeState>,
+    /// Where we detected the cycle (for debugging only)
     detected_at: CalcId,
 }
 
 impl Display for Cycle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let states: Vec<_> = self.node_state.iter().collect();
         write!(
             f,
-            "Cycle{{break_at: {}, recursion_stack: [{}], unwind_stack: [{}], unwound: [{}], detected_at: {}}}",
-            self.break_at,
-            commas_iter(|| &self.recursion_stack),
-            commas_iter(|| &self.unwind_stack),
-            commas_iter(|| &self.unwound),
-            self.detected_at,
+            "Cycle{{break_at: {}, node_state: {:?}, detected_at: {}}}",
+            self.break_at, states, self.detected_at,
         )
     }
 }
 
 impl Cycle {
+    #[allow(clippy::mutable_key_type)] // CalcId's Hash impl doesn't depend on mutable parts
     fn new(raw: Vec1<CalcId>) -> Self {
         let detected_at = raw.first().dupe();
-        let (i_break_at, break_at) = raw.iter().enumerate().min_by_key(|(_, c)| *c).unwrap();
-        let cycle = if *break_at != detected_at {
-            // Split so that `break_at` is the final item in `before`, so that it will wind up at the
-            // bottom of the unwind stack.
-            let (before_and_at, after) = raw.split_at(i_break_at + 1);
-            // The raw cycle is in order of recency (current key at the front, entrypoint at the top). This means:
-            // - The recursion stack is already in the right order (older frames we will re-encounter at the top)
-            // - The unwind stack has to be flipped so that newer frames are at the top
-            let unwind_stack = before_and_at.iter().rev().duped().collect();
-            let recursion_stack = after.iter().duped().collect();
-            Cycle {
-                break_at: break_at.dupe(),
-                recursion_stack,
-                unwind_stack,
-                unwound: Vec::new(),
-                detected_at,
-            }
-        } else {
-            // Short circuit the recursion if we're already at `break_at`. Make sure that `break_at` is
-            // at the bottom rather than the top of the `unwind_stack` by 'rotating' the iterator one position.
-            let unwind_stack = raw
-                .iter()
-                .skip(1)
-                .chain(raw.iter().take(1))
-                .rev()
-                .duped()
-                .collect();
-            Cycle {
-                break_at: break_at.dupe(),
-                recursion_stack: Vec::new(),
-                unwind_stack,
-                unwound: Vec::new(),
-                detected_at,
-            }
-        };
-        assert!(
-            cycle
-                .unwind_stack
-                .first()
-                .is_some_and(|calc_id| *calc_id == cycle.break_at),
-            "The bottom of the unwind stack should always be `break_at`."
-        );
-        cycle
+        let (_, break_at) = raw.iter().enumerate().min_by_key(|(_, c)| *c).unwrap();
+
+        // Initialize all nodes as Fresh
+        let node_state: HashMap<CalcId, NodeState> =
+            raw.iter().duped().map(|c| (c, NodeState::Fresh)).collect();
+
+        Cycle {
+            break_at: break_at.dupe(),
+            node_state,
+            detected_at,
+        }
     }
 
-    /// Do a pre-calculation check, to handle progress recursively traversing
-    /// the cycle until we reach the second instance of `break_at`.
+    /// Check if the current idx is a participant in this cycle and determine its state.
     ///
-    /// For each cycle participant we encounter, we move it from the
-    /// `recursion_stack` to the `unwind_stack`.
+    /// Returns the appropriate CycleState:
+    /// - BreakAt if this is the anchor where we produce a placeholder
+    /// - Participant if this is a Fresh node (marks it as InProgress)
+    /// - NoDetectedCycle if this idx is InProgress or Done (or not in cycle)
     ///
-    /// This check only occurs for the most recently detected cycle (i.e.
+    /// When a Fresh node is encountered, it transitions to InProgress.
+    /// If an InProgress node is hit again (via a different path like A→X→C),
+    /// we return NoDetectedCycle which triggers proper new cycle detection.
     fn pre_calculate_state(&mut self, current: &CalcId) -> CycleState {
         if *current == self.break_at {
             CycleState::BreakAt
-        } else if let Some(c) = self.recursion_stack.last()
-            && *current == *c
-        {
-            let c = self.recursion_stack.pop().unwrap();
-            self.unwind_stack.push(c);
-            CycleState::Participant
+        } else if let Some(state) = self.node_state.get_mut(current) {
+            match state {
+                NodeState::Fresh => {
+                    *state = NodeState::InProgress;
+                    CycleState::Participant
+                }
+                NodeState::InProgress | NodeState::Done => {
+                    // Already being processed or finished - treat as if not in cycle.
+                    // If InProgress, a back edge through this node will trigger new cycle detection.
+                    CycleState::NoDetectedCycle
+                }
+            }
         } else {
             CycleState::NoDetectedCycle
         }
     }
 
-    /// Do a post-calculation check, to track progress unwinding the cycle
-    /// back toward the `break_at` as we produce final results.
+    /// Track that a calculation has finished, marking it as Done.
     fn on_calculation_finished(&mut self, current: &CalcId) {
-        if let Some(c) = self.unwind_stack.last()
-            && current == c
-        {
-            // This is part of the cycle; remove it from the unwind stack.
-            let c = self.unwind_stack.pop().unwrap();
-            // Track what we unwound to make debugging easier.
-            self.unwound.push(c);
+        if let Some(state) = self.node_state.get_mut(current) {
+            *state = NodeState::Done;
         }
+    }
+
+    /// Check if the cycle is complete (all participants are Done).
+    fn is_complete(&self) -> bool {
+        self.node_state
+            .values()
+            .all(|state| *state == NodeState::Done)
     }
 
     /// Get all participants in this cycle as a sorted vector for comparison.
@@ -303,13 +292,7 @@ impl Cycle {
     /// This normalizes the cycle representation so cycles can be compared regardless
     /// of where they were detected or how far they've been processed.
     fn participants_normalized(&self) -> Vec<CalcId> {
-        let mut participants: Vec<CalcId> = self
-            .recursion_stack
-            .iter()
-            .chain(self.unwind_stack.iter())
-            .chain(self.unwound.iter())
-            .duped()
-            .collect();
+        let mut participants: Vec<CalcId> = self.node_state.keys().duped().collect();
         participants.sort();
         participants.dedup();
         participants
@@ -399,7 +382,7 @@ impl Cycles {
     }
 
     /// Handle the completion of a calculation. This might involve progress on
-    /// the unwind stack of one or more cycles.
+    /// the remaining participants of one or more cycles.
     ///
     /// Return `true` if there are active cycles after finishing this calculation,
     /// `false` if there are not.
@@ -408,8 +391,8 @@ impl Cycles {
         for cycle in stack.iter_mut() {
             cycle.on_calculation_finished(current);
         }
-        while let Some(cycle) = stack.last_mut() {
-            if cycle.unwind_stack.is_empty() {
+        while let Some(cycle) = stack.last() {
+            if cycle.is_complete() {
                 stack.pop();
             } else {
                 break;
@@ -587,19 +570,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             CycleState::Participant => {
                 match calculation.propose_calculation() {
-                    ProposalResult::Calculatable => {
-                        unreachable!(
-                            "Should not get Calculatable when we are participating in a cycle"
-                        )
-                    }
+                    // Participant nodes were on the CalcStack when the cycle was detected,
+                    // so their Calculation must be Calculating, not NotCalculated.
+                    ProposalResult::Calculatable => unreachable!(
+                        "Participant nodes must have Calculating state, not NotCalculated"
+                    ),
                     ProposalResult::CycleDetected => {
-                        // Ignore cycle detection (we're expecting this)
                         self.calculate_and_record_answer(current, idx, calculation)
                     }
                     // Short circuit if another thread has already written an answer or recursive placeholder.
                     //
                     // In either case, we need to call `on_calculation_finished` to make sure that
-                    // we accurately reflect that this idx is no longer relevant to the unwind stack of
+                    // we accurately reflect that this idx is no longer a remaining participant in
                     // active cycles.
                     ProposalResult::Calculated(v) => {
                         self.cycles().on_calculation_finished(&current);
@@ -636,16 +618,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         let binding = self.bindings().get(idx);
+        // Note that we intentionally do not pass in the key when solving the binding,
+        // as the result of a binding should not depend on the key it was bound to.
+        // We use the range for error reporting.
+        let range = self.bindings().idx_to_key(idx).range();
 
         // Solve the binding with a local error collector.
         //
         // Only write the errors if we actually write the result - if another thread
         // or cycle unwinding already wrote the result, we discard the errors.
         let local_errors = self.error_collector();
-        let (answer, did_write) = calculation
-            .record_value(K::solve(self, binding, &local_errors), |var, answer| {
-                self.finalize_recursive_answer::<K>(idx, var, answer, &local_errors)
-            });
+        let (answer, did_write) = calculation.record_value(
+            K::solve(self, binding, range, &local_errors),
+            |var, answer| self.finalize_recursive_answer::<K>(idx, var, answer, &local_errors),
+        );
         if did_write {
             self.base_errors.extend(local_errors);
         }

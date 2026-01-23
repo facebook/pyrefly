@@ -27,6 +27,16 @@ use tracing::info;
 use crate::error::error::Error;
 use crate::state::errors::Errors;
 
+/// Detects the line ending style used in a string.
+/// Returns "\r\n" if CRLF is detected, otherwise returns "\n".
+fn detect_line_ending(content: &str) -> &'static str {
+    if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
 /// Combines all errors that affect one line into a single entry.
 /// The current format is: `# pyrefly: ignore [error1, error2, ...]`
 fn dedup_errors(errors: &[Error]) -> SmallMap<usize, String> {
@@ -208,6 +218,7 @@ fn add_suppressions(
             }
         }
 
+        let line_ending = detect_line_ending(&file);
         let mut buf = String::new();
         for (idx, line) in lines.iter().enumerate() {
             // Skip old standalone suppression lines that are being replaced
@@ -222,7 +233,7 @@ fn add_suppressions(
                     // Replace the inline suppression with the merged version
                     let updated_line = replace_ignore_comment(line, error_comment);
                     buf.push_str(&updated_line);
-                    buf.push('\n');
+                    buf.push_str(line_ending);
                 } else {
                     // Calculate once whether suppression goes below this line
                     let suppression_below =
@@ -232,24 +243,24 @@ fn add_suppressions(
                         // Add suppression line above (normal case)
                         buf.push_str(get_indentation(line));
                         buf.push_str(error_comment);
-                        buf.push('\n');
+                        buf.push_str(line_ending);
                     }
 
                     // Write the current line as-is
                     buf.push_str(line);
-                    buf.push('\n');
+                    buf.push_str(line_ending);
 
                     if suppression_below {
                         // Add suppression line below
                         buf.push_str(get_indentation(lines[idx + 1]));
                         buf.push_str(error_comment);
-                        buf.push('\n');
+                        buf.push_str(line_ending);
                     }
                 }
             } else {
                 // No error on this line, write as-is
                 buf.push_str(line);
-                buf.push('\n');
+                buf.push_str(line_ending);
             }
         }
         if let Err(e) = fs_anyhow::write(path, buf) {
@@ -357,6 +368,7 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
             ignore_locations.insert(same_line);
         }
         if let Ok(file) = read_and_validate_file(path) {
+            let line_ending = detect_line_ending(&file);
             let mut buf = String::with_capacity(file.len());
             let lines = file.lines();
             for (idx, line) in lines.enumerate() {
@@ -366,17 +378,17 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
                         let new_string = regex.replace_all(line, "");
                         if !new_string.trim().is_empty() {
                             buf.push_str(new_string.trim_end());
-                            buf.push('\n');
+                            buf.push_str(line_ending);
                         }
                         // Skip writing newline if the line becomes empty after removing the ignore
                         continue;
                     }
                     buf.push_str(line);
-                    buf.push('\n');
+                    buf.push_str(line_ending);
                     continue;
                 }
                 buf.push_str(line);
-                buf.push('\n');
+                buf.push_str(line_ending);
             }
             if let Err(e) = fs_anyhow::write(path, buf) {
                 error!("Failed to remove unused error suppressions in {} files:", e);
@@ -835,5 +847,27 @@ def g() -> str:
             merged,
             "# pyrefly: ignore [bad-return, unsupported-operation]"
         );
+    }
+
+    #[test]
+    fn test_detect_line_ending() {
+        assert_eq!(detect_line_ending("line1\nline2\n"), "\n");
+        assert_eq!(detect_line_ending("line1\r\nline2\r\n"), "\r\n");
+        assert_eq!(detect_line_ending("single line"), "\n");
+        assert_eq!(detect_line_ending("mixed\r\nlines\n"), "\r\n");
+    }
+
+    #[test]
+    fn test_remove_unused_ignores_preserves_crlf_line_endings() {
+        let input = "def g() -> str:\r\n    return \"hello\" # pyrefly: ignore [bad-return]\r\n";
+        let want = "def g() -> str:\r\n    return \"hello\"\r\n";
+        assert_remove_ignores(input, want, false, 1);
+    }
+
+    #[test]
+    fn test_add_suppressions_preserves_crlf_line_endings() {
+        let before = "\r\nx: str = 1\r\n";
+        let after = "\r\n# pyrefly: ignore [bad-assignment]\r\nx: str = 1\r\n";
+        assert_suppress_errors(before, after);
     }
 }

@@ -370,31 +370,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // Type arguments for the protocol are not provided, so we'll use
                         // fresh vars and solve them during the `is_subset_eq` check below.
                         let protocol_metadata = metadata.protocol_metadata().unwrap();
-                        if let Some(object_type) = &object_type
-                            && let Type::ClassType(protocol_class_type) =
-                                self.instantiate_fresh_class(cls)
-                        {
+                        if let Some(object_type) = &object_type {
                             let mut unsafe_overlap_errors = vec![];
-                            for field_name in &protocol_metadata.members {
-                                if !self.has_attr(object_type, field_name) {
-                                    // It's okay if the field is missing, since
-                                    // we only care about unsafe overlaps
-                                    continue;
+                            let (vs, protocol_type) = self.instantiate_fresh_class(cls);
+                            if let Type::ClassType(protocol_class_type) = protocol_type {
+                                for field_name in &protocol_metadata.members {
+                                    if !self.has_attr(object_type, field_name) {
+                                        // It's okay if the field is missing, since
+                                        // we only care about unsafe overlaps
+                                        continue;
+                                    }
+                                    if let Err(subset_err) = self.is_protocol_subset_at_attr(
+                                        object_type,
+                                        &protocol_class_type,
+                                        field_name,
+                                        &mut |x, y| self.is_subset_eq_with_reason(x, y),
+                                    ) {
+                                        let error_msg = subset_err
+                                            .to_error_msg()
+                                            .map(|msg| format!(": {msg}"))
+                                            .unwrap_or_default();
+                                        unsafe_overlap_errors.push(format!(
+                                            "Attribute `{}` has incompatible types{}",
+                                            field_name, error_msg,
+                                        ));
+                                    }
                                 }
-                                if let Err(subset_err) = self.is_protocol_subset_at_attr(
-                                    object_type,
-                                    &protocol_class_type,
-                                    field_name,
-                                    &mut |x, y| self.is_subset_eq_with_reason(x, y),
-                                ) {
-                                    let error_msg = subset_err
-                                        .to_error_msg()
-                                        .map(|msg| format!(": {msg}"))
-                                        .unwrap_or_default();
-                                    unsafe_overlap_errors.push(format!(
-                                        "Attribute `{}` has incompatible types{}",
-                                        field_name, error_msg,
-                                    ));
+                            }
+                            if let Err(specialization_errors) =
+                                self.solver().finish_quantified(vs, false)
+                            {
+                                for e in specialization_errors {
+                                    unsafe_overlap_errors.push(e.to_error_msg(self))
                                 }
                             }
                             if !unsafe_overlap_errors.is_empty() {

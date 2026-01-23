@@ -73,6 +73,7 @@ use starlark_map::small_set::SmallSet;
 use crate::alt::answers::Answers;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::binding::binding::ClassFieldDefinition;
+use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassSynthesizedFields;
@@ -1034,7 +1035,6 @@ impl Query {
             let res = cd
                 .fields()
                 .filter_map(|n| {
-                    let range = cd.field_decl_range(n)?;
                     let class_field_index = KeyClassField(cd.index(), n.clone());
                     let class_field_idx =
                         bindings.key_to_idx_hashed_opt(Hashed::new(&class_field_index))?;
@@ -1044,15 +1044,43 @@ impl Query {
                             Some(*annotation)
                         }
                         ClassFieldDefinition::AssignedInBody { annotation, .. } => *annotation,
-                        ClassFieldDefinition::DefinedInMethod { annotation, .. } => *annotation,
                         _ => None,
                     }
                     .and_then(|idx| answers.get_idx(idx))
                     .map(|f| f.annotation.is_final())
                     .unwrap_or(false);
 
-                    let field_ty = transaction.get_type_at(&handle, range.start())?;
+                    // Get field type efficiently (avoids expensive position-based lookup)
+                    // Priority: annotation type > expression type trace > ClassField.ty()
+                    let field_ty = match &class_field.definition {
+                        ClassFieldDefinition::AssignedInBody {
+                            value,
+                            annotation,
+                            alias_of: _,
+                        }
+                        | ClassFieldDefinition::DefinedInMethod {
+                            value, annotation, ..
+                        } => {
+                            annotation
+                                .and_then(|idx| answers.get_idx(idx))
+                                .and_then(|a| a.annotation.ty.clone())
+                                // Fall back to expression type trace
+                                .or_else(|| {
+                                    if let ExprOrBinding::Expr(expr) = value {
+                                        answers.get_type_trace(expr.range())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                // Final fallback: ClassField.ty()
+                                .or_else(|| answers.get_idx(class_field_idx).map(|cf| cf.ty()))
+                        }
+                        _ => answers.get_idx(class_field_idx).map(|cf| cf.ty()),
+                    };
+
+                    let field_ty = field_ty?;
                     let (kind, field_ty) = get_kind_and_field_type(&field_ty);
+
                     Some(Attribute {
                         name: n.to_string(),
                         kind,

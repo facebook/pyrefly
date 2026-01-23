@@ -632,7 +632,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> SmallMap<PydanticParamKey, PydanticParamConstraint> {
         let mut constraints = SmallMap::new();
         let mut position = 0;
-        for (field_name, _field, keywords) in self.iter_fields(cls, dataclass, true) {
+        let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
+        for (field_name, _field, keywords) in
+            self.iter_fields(cls, dataclass, true, &kw_only_by_class)
+        {
             if !keywords.init {
                 continue;
             }

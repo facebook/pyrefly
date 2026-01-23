@@ -1095,10 +1095,6 @@ impl<'a> BindingsBuilder<'a> {
                     .insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
                 // Track this StmtExpr as the trailing statement for type-based termination
                 self.scopes.set_last_stmt_expr(Some(key));
-                // TODO(stroxler): PytestNoReturn may now be redundant given type-based termination
-                if special_export == Some(SpecialExport::PytestNoReturn) {
-                    self.scopes.mark_flow_termination(false);
-                }
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {

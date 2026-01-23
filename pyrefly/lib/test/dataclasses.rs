@@ -24,7 +24,6 @@ assert_type(Data, type[Data])
 );
 
 testcase!(
-    bug = "Only the call D(4, 5, 6) should raise an error",
     test_kw_only_sentinel_deep_inheritance,
     r#"
 from dataclasses import dataclass, KW_ONLY
@@ -48,9 +47,9 @@ class D(C):
     d: int = 3
 
 D()
-D(4) # E: Expected 0 positional arguments, got 1 in function `D.__init__` 
-D(4, 5) # E: Expected 0 positional arguments, got 2 in function `D.__init__`
-D(4, 5, 6) # E: Expected 0 positional arguments, got 3 in function `D.__init__` 
+D(4)
+D(4, 5)
+D(4, 5, 6) # E: Expected 2 positional arguments, got 3 in function `D.__init__`
     "#,
 );
 
@@ -1542,7 +1541,6 @@ C2('', 0.2, b=3)
 );
 
 testcase!(
-    bug = "Child class positional fields incorrectly inherit KW_ONLY from parent",
     test_kw_only_sentinel_inheritance,
     r#"
 from dataclasses import dataclass, KW_ONLY
@@ -1556,7 +1554,7 @@ class Foo:
 class Bar(Foo):
     arg: str
 
-Bar("arg")  # E: Expected argument `arg` to be passed by name
+Bar("arg")
 Bar(arg="arg")
     "#,
 );

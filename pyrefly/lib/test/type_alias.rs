@@ -446,6 +446,23 @@ bad2: C[int].X  # E: Generic attribute `X` of class `C` is not visible on the cl
     "#,
 );
 
+// Type alias scopes (PEP 695) should have access to enclosing class scopes,
+// similar to annotation scopes.
+testcase!(
+    test_type_alias_sees_class_scope,
+    r#"
+from typing import assert_type
+class Foo:
+    class Bar: ...
+
+    attr = Bar()
+    type Baz = Bar | None
+
+def f(x: Foo.Baz):
+    assert_type(x, Foo.Bar | None)
+    "#,
+);
+
 testcase!(
     test_union_alias,
     r#"

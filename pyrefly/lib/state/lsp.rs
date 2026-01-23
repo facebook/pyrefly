@@ -21,7 +21,6 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
-use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
@@ -32,7 +31,6 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::display::LspDisplayMode;
-use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::SliceExt;
@@ -78,7 +76,6 @@ use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
-use crate::types::callable::Param;
 use crate::types::module::ModuleType;
 use crate::types::type_var::Restriction;
 use crate::types::types::Type;
@@ -86,7 +83,7 @@ use crate::types::types::Type;
 mod dict_completions;
 mod quick_fixes;
 
-pub(crate) use self::quick_fixes::extract_function::LocalRefactorCodeAction;
+pub(crate) use self::quick_fixes::types::LocalRefactorCodeAction;
 
 #[derive(Debug)]
 pub(crate) enum CalleeKind {
@@ -1065,7 +1062,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn resolve_attribute_definition(
+    pub(crate) fn resolve_attribute_definition(
         &self,
         handle: &Handle,
         attr_name: &Name,
@@ -2018,6 +2015,38 @@ impl<'a> Transaction<'a> {
         )
     }
 
+    pub fn inline_variable_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::inline_variable::inline_variable_code_actions(self, handle, selection)
+    }
+
+    pub fn inline_method_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::inline_method::inline_method_code_actions(self, handle, selection)
+    }
+
+    pub fn inline_parameter_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::inline_parameter::inline_parameter_code_actions(self, handle, selection)
+    }
+
+    pub fn introduce_parameter_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::introduce_parameter::introduce_parameter_code_actions(self, handle, selection)
+    }
+
     /// Determines whether a module is a third-party package.
     ///
     /// Checks if the module's path is located within any of the configured
@@ -2434,58 +2463,6 @@ impl<'a> Transaction<'a> {
         Some(references)
     }
 
-    fn add_kwargs_completions(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        if let Some((callables, overload_idx, _, _)) =
-            self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(overload_idx).cloned()
-            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
-        {
-            for param in params {
-                match param {
-                    Param::Pos(name, ty, _)
-                    | Param::PosOnly(Some(name), ty, _)
-                    | Param::KwOnly(name, ty, _)
-                    | Param::VarArg(Some(name), ty) => {
-                        if name.as_str() != "self" {
-                            completions.push(CompletionItem {
-                                label: format!("{}=", name.as_str()),
-                                detail: Some(ty.to_string()),
-                                kind: Some(CompletionItemKind::VARIABLE),
-                                ..Default::default()
-                            });
-                        }
-                    }
-                    Param::VarArg(None, _) | Param::Kwargs(_, _) | Param::PosOnly(None, _, _) => {}
-                }
-            }
-        }
-    }
-
-    fn add_magic_method_completions(
-        &self,
-        identifier: &Identifier,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        let typed = identifier.as_str();
-        if !typed.is_empty() && !typed.starts_with("__") {
-            return;
-        }
-        for name in dunder::MAGIC_METHOD_NAMES {
-            if name.starts_with(typed) {
-                completions.push(CompletionItem {
-                    label: (*name).to_owned(),
-                    kind: Some(CompletionItemKind::METHOD),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-
     fn add_builtins_autoimport_completions(
         &self,
         handle: &Handle,
@@ -2631,21 +2608,6 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn get_documentation_from_export(
-        &self,
-        export_info: Option<(Handle, Export)>,
-    ) -> Option<lsp_types::Documentation> {
-        let (definition_handle, export) = export_info?;
-        let docstring_range = export.docstring_range?;
-        let def_module = self.get_module_info(&definition_handle)?;
-        let docstring = Docstring(docstring_range, def_module.clone()).resolve();
-        let documentation = lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
-            kind: lsp_types::MarkupKind::Markdown,
-            value: docstring,
-        });
-        Some(documentation)
-    }
-
     /// Adds completions for local variables and returns true if we have added any
     /// If an identifier is present, filter matches
     fn add_local_variable_completions(
@@ -2722,45 +2684,6 @@ impl<'a> Transaction<'a> {
         has_added_any
     }
 
-    fn add_keyword_completions(&self, handle: &Handle, completions: &mut Vec<CompletionItem>) {
-        get_keywords(handle.sys_info().version())
-            .iter()
-            .for_each(|name| {
-                completions.push(CompletionItem {
-                    label: (*name).to_owned(),
-                    kind: Some(CompletionItemKind::KEYWORD),
-                    ..Default::default()
-                })
-            });
-    }
-
-    fn get_docstring_for_attribute(
-        &self,
-        handle: &Handle,
-        attr_info: &AttrInfo,
-    ) -> Option<lsp_types::Documentation> {
-        let definition = attr_info.definition.as_ref()?.clone();
-        let attribute_definition = self.resolve_attribute_definition(
-            handle,
-            &attr_info.name,
-            definition,
-            attr_info.docstring_range,
-            FindPreference::default(),
-        );
-
-        let (definition, Some(docstring_range)) = attribute_definition? else {
-            return None;
-        };
-        let docstring = Docstring(docstring_range, definition.module);
-
-        Some(lsp_types::Documentation::MarkupContent(
-            lsp_types::MarkupContent {
-                kind: lsp_types::MarkupKind::Markdown,
-                value: docstring.resolve().trim().to_owned(),
-            },
-        ))
-    }
-
     fn add_literal_completions(
         &self,
         handle: &Handle,
@@ -2781,41 +2704,6 @@ impl<'a> Transaction<'a> {
                 completions,
                 in_string_literal,
             );
-        }
-    }
-
-    fn add_literal_completions_from_type(
-        param_type: &Type,
-        completions: &mut Vec<CompletionItem>,
-        in_string_literal: bool,
-    ) {
-        match param_type {
-            Type::Literal(lit) => {
-                // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
-                let label = lit.value.to_string_escaped(true);
-                let insert_text = if in_string_literal {
-                    if let Lit::Str(s) = &lit.value {
-                        s.to_string()
-                    } else {
-                        label.clone()
-                    }
-                } else {
-                    label.clone()
-                };
-                completions.push(CompletionItem {
-                    label,
-                    kind: Some(CompletionItemKind::VALUE),
-                    detail: Some(format!("{param_type}")),
-                    insert_text: Some(insert_text),
-                    ..Default::default()
-                });
-            }
-            Type::Union(box Union { members, .. }) => {
-                for member in members {
-                    Self::add_literal_completions_from_type(member, completions, in_string_literal);
-                }
-            }
-            _ => {}
         }
     }
 
@@ -2997,10 +2885,10 @@ impl<'a> Transaction<'a> {
                 context,
             }) => {
                 if matches!(context, IdentifierContext::MethodDef { .. }) {
-                    self.add_magic_method_completions(&identifier, &mut result);
+                    Self::add_magic_method_completions(&identifier, &mut result);
                 }
                 self.add_kwargs_completions(handle, position, &mut result);
-                self.add_keyword_completions(handle, &mut result);
+                Self::add_keyword_completions(handle, &mut result);
                 let has_local_completions = self.add_local_variable_completions(
                     handle,
                     Some(&identifier),
@@ -3036,7 +2924,7 @@ impl<'a> Transaction<'a> {
                 if let Some(mod_module) = self.get_ast(handle) {
                     let nodes = Ast::locate_node(&mod_module, position);
                     if nodes.is_empty() {
-                        self.add_keyword_completions(handle, &mut result);
+                        Self::add_keyword_completions(handle, &mut result);
                         self.add_local_variable_completions(handle, None, position, &mut result);
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }

@@ -707,15 +707,17 @@ struct ScopeClass {
     indices: ClassIndices,
     attributes_from_recognized_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
     attributes_from_other_methods: SmallMap<Name, SmallMap<Name, InstanceAttribute>>,
+    has_protocol_base: bool,
 }
 
 impl ScopeClass {
-    pub fn new(name: Identifier, indices: ClassIndices) -> Self {
+    pub fn new(name: Identifier, indices: ClassIndices, has_protocol_base: bool) -> Self {
         Self {
             name,
             indices,
             attributes_from_recognized_methods: SmallMap::new(),
             attributes_from_other_methods: SmallMap::new(),
+            has_protocol_base,
         }
     }
 
@@ -997,6 +999,10 @@ pub struct Scope {
     finally_depth: usize,
     /// Depth of with blocks we're in. Resets in new function scopes.
     with_depth: usize,
+    /// Names that are known to be initialized from outer scopes when this scope was created.
+    /// Used to determine whether captured variables should be considered "always defined"
+    /// during flow merges, even if they have no local assignment.
+    captured_initialized: SmallSet<Name>,
 }
 
 impl Scope {
@@ -1013,6 +1019,7 @@ impl Scope {
             variables: SmallMap::new(),
             finally_depth: 0,
             with_depth: 0,
+            captured_initialized: SmallSet::new(),
         }
     }
 
@@ -1024,11 +1031,16 @@ impl Scope {
         Self::new(range, FlowBarrier::AllowFlowChecked, ScopeKind::TypeAlias)
     }
 
-    pub fn class_body(range: TextRange, indices: ClassIndices, name: Identifier) -> Self {
+    pub fn class_body(
+        range: TextRange,
+        indices: ClassIndices,
+        name: Identifier,
+        has_protocol_base: bool,
+    ) -> Self {
         Self::new(
             range,
             FlowBarrier::AllowFlowChecked,
-            ScopeKind::Class(ScopeClass::new(name, indices)),
+            ScopeKind::Class(ScopeClass::new(name, indices, has_protocol_base)),
         )
     }
 
@@ -1240,6 +1252,16 @@ impl Scopes {
         None
     }
 
+    /// Check if we're currently in the body of a class with `Protocol` in its base class list
+    pub fn is_in_protocol_class(&self) -> bool {
+        for scope in self.iter_rev() {
+            if let ScopeKind::Class(class_scope) = &scope.kind {
+                return class_scope.has_protocol_base;
+            }
+        }
+        false
+    }
+
     /// Are we inside an async function or method?
     pub fn is_in_async_def(&self) -> bool {
         for scope in self.iter_rev() {
@@ -1294,6 +1316,15 @@ impl Scopes {
         let (a, b) = self.scopes.split_off_last();
         assert_eq!(a.len(), 0);
         ScopeTrace(b)
+    }
+
+    pub fn has_import_name(&self, name: &Name) -> bool {
+        let module_scope = self.scopes.first();
+
+        match module_scope.scope.kind {
+            ScopeKind::Module => module_scope.scope.imports.contains_key(name),
+            _ => false,
+        }
     }
 
     pub fn collect_module_unused_imports(&self) -> Vec<UnusedImport> {
@@ -1365,11 +1396,38 @@ impl Scopes {
         in_class: bool,
         is_async: bool,
     ) {
-        if in_class {
-            self.push(Scope::method(range, name.clone(), is_async));
+        // Collect names that are currently initialized in outer scopes.
+        // This is used during flow merges to determine if a captured variable
+        // should be considered "always defined" even without a local assignment.
+        let captured_initialized = self.collect_initialized_names_from_outer_scopes();
+        let mut scope = if in_class {
+            Scope::method(range, name.clone(), is_async)
         } else {
-            self.push(Scope::function(range, is_async));
+            Scope::function(range, is_async)
+        };
+        scope.captured_initialized = captured_initialized;
+        self.push(scope);
+    }
+
+    /// Collect names that are currently initialized in outer scopes (with flow barriers).
+    /// Used when entering a new function scope to track which captured variables
+    /// are known to be initialized.
+    fn collect_initialized_names_from_outer_scopes(&self) -> SmallSet<Name> {
+        let mut initialized = SmallSet::new();
+        let mut flow_barrier = FlowBarrier::AllowFlowChecked;
+        for scope in self.iter_rev() {
+            // Only collect from scopes where flow information is accessible
+            // (i.e., before we hit a flow barrier)
+            if flow_barrier < FlowBarrier::BlockFlow {
+                for (name, info) in scope.flow.info.iter() {
+                    if matches!(info.initialized(), InitializedInFlow::Yes) {
+                        initialized.insert(name.clone());
+                    }
+                }
+            }
+            flow_barrier = max(flow_barrier, scope.flow_barrier);
         }
+        initialized
     }
 
     fn collect_unused_parameters(
@@ -2122,10 +2180,27 @@ impl Scopes {
                     },
                     FlowStyle::ClassField {
                         initial_value: Some(e),
-                    } => ClassFieldDefinition::AssignedInBody {
-                        value: ExprOrBinding::Expr(e.clone()),
-                        annotation: static_info.annotation(),
-                    },
+                    } => {
+                        // Detect if this is an alias (value is a simple name referring to another field
+                        // that was defined before this one in source order).
+                        let mut alias_of = None;
+                        if let Expr::Name(name_expr) = &e {
+                            let target_name = &name_expr.id;
+                            // Check if this name is another field in the class defined before this one.
+                            // We use source order (target ends before this field starts) to ensure
+                            // deterministic behavior regardless of hash map iteration order.
+                            if let Some(target_info) = class_body.stat.0.get(target_name)
+                                && target_info.range.end() <= static_info.range.start()
+                            {
+                                alias_of = Some(target_name.clone());
+                            }
+                        }
+                        ClassFieldDefinition::AssignedInBody {
+                            value: ExprOrBinding::Expr(e.clone()),
+                            annotation: static_info.annotation(),
+                            alias_of,
+                        }
+                    }
                     FlowStyle::ClassField {
                         initial_value: None,
                     } => ClassFieldDefinition::DeclaredByAnnotation {
@@ -2233,7 +2308,11 @@ impl Scopes {
         mut visitor: impl FnMut(usize, &'a Scope, FlowBarrier) -> Option<T>,
     ) -> Option<T> {
         let mut flow_barrier = FlowBarrier::AllowFlowChecked;
-        let is_current_scope_annotation = matches!(self.current().kind, ScopeKind::Annotation);
+        // Annotation scopes and type alias scopes (PEP 695) can see their enclosing class scope.
+        let is_current_scope_annotation_like = matches!(
+            self.current().kind,
+            ScopeKind::Annotation | ScopeKind::TypeAlias
+        );
         for (lookup_depth, scope) in self.iter_rev().enumerate() {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
             // From https://docs.python.org/3/reference/executionmodel.html#resolution-of-names:
@@ -2242,8 +2321,9 @@ impl Scopes {
             //   methods. This includes comprehensions and generator
             //   expressions, but it does not include annotation scopes, which
             //   have access to their enclosing class scopes.
+            // Type alias scopes (PEP 695) also have access to enclosing class scopes.
             if is_class
-                && !((lookup_depth == 0) || (is_current_scope_annotation && lookup_depth == 1))
+                && !((lookup_depth == 0) || (is_current_scope_annotation_like && lookup_depth == 1))
             {
                 // Note: class body scopes have `flow_barrier = AllowFlowChecked`, so skipping the flow_barrier update is okay.
                 continue;
@@ -2552,7 +2632,6 @@ struct MergeBranch {
     flow_info: FlowInfo,
     /// The last StmtExpr in the flow this branch came from, if any.
     /// Used for type-based termination checking at solve time.
-    #[expect(dead_code)]
     termination_key: Option<Idx<Key>>,
 }
 
@@ -2642,22 +2721,28 @@ impl<'a> BindingsBuilder<'a> {
     /// The default value will depend on whether we are still in a loop after the
     /// current merge. If so, we preserve the existing default; if not, the
     /// merged phi is the new default used for downstream loops.
+    ///
+    /// `is_captured_initialized` indicates whether this name is a captured variable
+    /// that was known to be initialized when the current scope was created. If true,
+    /// the name is treated as "always defined" during flow merges even if it has
+    /// no local assignment in the current scope.
     fn merged_flow_info(
         &mut self,
+        is_captured_initialized: bool,
         merge_item: MergeItem,
         phi_idx: Idx<Key>,
         merge_style: MergeStyle,
         n_branches: usize,
+        n_branches_with_termination_key: usize,
     ) -> FlowInfo {
         let base_idx = merge_item.base.as_ref().map(|base| base.idx());
         let mut merge_branches = merge_item.branches;
-        // Track the number of branch values before adding base (for LoopDefinitelyRuns)
-        let n_branch_flow_infos = merge_branches.len();
         // Track if base has a value for this name (for LoopDefinitelyRuns init check)
         let base_has_value = merge_item.base.as_ref().is_some_and(|b| b.value.is_some());
         // If this is a loop, we want to use the current default in any phis we produce,
         // and the base flow is part of the merge for type inference purposes.
-        let loop_prior = if merge_style.is_loop()
+        // Track whether we added base so we can correctly count total branches later.
+        let (loop_prior, added_base_to_merge) = if merge_style.is_loop()
             && let Some(base) = merge_item.base
         {
             let loop_prior = base.loop_prior;
@@ -2665,9 +2750,9 @@ impl<'a> BindingsBuilder<'a> {
                 flow_info: base,
                 termination_key: None,
             });
-            Some(loop_prior)
+            (Some(loop_prior), true)
         } else {
-            None
+            (None, false)
         };
         let merged_loop_prior = {
             let contained_in_loop = self.scopes.loop_depth() > 0;
@@ -2697,11 +2782,24 @@ impl<'a> BindingsBuilder<'a> {
         // a narrow only when all the value idxs are the same.
         let mut value_idxs = SmallSet::with_capacity(merge_branches.len());
         let mut branch_idxs = SmallSet::with_capacity(merge_branches.len());
+        let mut branch_infos = Vec::with_capacity(merge_branches.len());
         let mut styles = Vec::with_capacity(merge_branches.len());
         let mut n_values = 0;
         for merge_branch in merge_branches.into_iter() {
             let flow_info = merge_branch.flow_info;
             let branch_idx = flow_info.idx();
+
+            // The BranchInfo always sees the branch_idx, which will will be
+            // a narrow if one exists, otherwise the value. Each branch may have a
+            // termination key, which potentially causes us to ignore it in the Phi based
+            // on Never/NoReturn type information.
+            if branch_idx != phi_idx {
+                branch_infos.push(BranchInfo {
+                    value_key: branch_idx,
+                    termination_key: merge_branch.termination_key,
+                });
+            }
+
             if let Some(v) = flow_info.value {
                 n_values += 1;
                 if v.idx == phi_idx {
@@ -2715,24 +2813,41 @@ impl<'a> BindingsBuilder<'a> {
             }
             branch_idxs.insert(branch_idx);
         }
-        // Build branch_infos from branch_idxs (matching old behavior).
-        // For now, termination_key is always None - the next commit will
-        // wire this up properly once we're ready to use it.
-        let branch_infos: Vec<BranchInfo> = branch_idxs
-            .iter()
-            .map(|&value_key| BranchInfo {
-                value_key,
-                termination_key: None,
-            })
-            .collect();
         // For LoopDefinitelyRuns, a name is always defined if:
         // - It was defined before the loop (base_has_value), OR
         // - It's defined in all loop body branches (since the loop definitely runs at least once)
-        // For regular loops and other merges, a name is always defined if it's in all branches.
-        let this_name_always_defined = match merge_style {
-            MergeStyle::LoopDefinitelyRuns => base_has_value || n_branch_flow_infos == n_branches,
-            _ => n_values == n_branches,
+        //
+        // For regular loops and other merges, a name is always defined if it's in all
+        // non-terminating branches; in the presence of branches with last statements
+        // (termination keys), we prefer false negatives to false positives by treating
+        // the branch as terminating for the purpose of uninitialized local checks only.
+        //
+        // We also treat captures as always initialized to avoid false positives.
+        //
+        // TODO(stroxler): to allow both `Never` / `NoReturn` last statement handing and
+        // uninitialized local checks without false negatives, we have to rewrite uninitialized
+        // local logic completely - it has to be a solve-time only concept, because it is not
+        // possible for binding time to know whether a branch terminates in general.
+        //
+        // n_total_branches is the actual number of branches we iterated over, which includes
+        // the base flow for loops (since base is added to merge_branches for type inference).
+        let n_total_branches = if added_base_to_merge {
+            n_branches + 1
+        } else {
+            n_branches
         };
+        let n_missing_branches = n_total_branches - n_values;
+        let this_name_always_defined = is_captured_initialized
+            || match merge_style {
+                MergeStyle::LoopDefinitelyRuns => {
+                    base_has_value
+                        || n_values == n_branches
+                        || n_missing_branches <= n_branches_with_termination_key
+                }
+                _ => {
+                    n_values == n_branches || n_missing_branches <= n_branches_with_termination_key
+                }
+            };
         match value_idxs.len() {
             // If there are no values, then this name isn't assigned at all
             // and is only narrowed (it's most likely a capture, but could be
@@ -2861,6 +2976,10 @@ impl<'a> BindingsBuilder<'a> {
                 0
             };
 
+        // Count how many branches have a last_stmt_expr (potential type-based termination)
+        let n_branches_with_termination_key =
+            flows.iter().filter(|f| f.last_stmt_expr.is_some()).count();
+
         // Collect all the branches into a `MergeItem` per name we need to merge
         let mut merge_items = MergeItems::new(flows.first().unwrap_or(&base).info.len());
         for (name, info) in base.info.into_iter_hashed() {
@@ -2875,11 +2994,20 @@ impl<'a> BindingsBuilder<'a> {
 
         // For each name and merge item, produce the merged FlowInfo for our new Flow
         let mut merged_flow_infos = SmallMap::with_capacity(merge_items.0.len());
+        let captured_initialized = self.scopes.current().captured_initialized.clone();
         for (name, merge_item) in merge_items.0.into_iter_hashed() {
             let phi_idx = self.idx_for_promise(Key::Phi(name.key().clone(), range));
+            let is_captured_initialized = captured_initialized.contains(name.key());
             merged_flow_infos.insert_hashed(
                 name,
-                self.merged_flow_info(merge_item, phi_idx, merge_style, n_branches),
+                self.merged_flow_info(
+                    is_captured_initialized,
+                    merge_item,
+                    phi_idx,
+                    merge_style,
+                    n_branches,
+                    n_branches_with_termination_key,
+                ),
             );
         }
 

@@ -211,6 +211,11 @@
                     "type": "boolean",
                     "default": true,
                     "description": "If true, Pyrefly will sync notebook documents with the language server. Set to false to disable notebook support."
+                },
+                "python.pyrefly.streamDiagnostics": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes. This is a global setting that applies to all workspaces."
                 }
             }
         }

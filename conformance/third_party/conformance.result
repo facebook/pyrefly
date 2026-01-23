@@ -123,9 +123,7 @@
   "enums_expansion.py": [],
   "enums_member_names.py": [],
   "enums_member_values.py": [],
-  "enums_members.py": [
-    "Line 100: Unexpected errors ['assert_type(Literal[TrafficLight.AMBER], Literal[TrafficLight.YELLOW]) failed']"
-  ],
+  "enums_members.py": [],
   "exceptions_context_managers.py": [
     "Line 50: Unexpected errors ['assert_type(str, int | str) failed']",
     "Line 57: Unexpected errors ['assert_type(str, int | str) failed']"
@@ -139,7 +137,7 @@
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
   "generics_defaults.py": [
-    "Line 170: Unexpected errors ['assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
+    "Line 170: Unexpected errors ['assert_type([DefaultIntT = int](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
   ],
   "generics_defaults_referential.py": [],
   "generics_defaults_specialization.py": [],

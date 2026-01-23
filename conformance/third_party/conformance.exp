@@ -4836,17 +4836,6 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(Literal[TrafficLight.AMBER], Literal[TrafficLight.YELLOW]) failed",
-      "description": "assert_type(Literal[TrafficLight.AMBER], Literal[TrafficLight.YELLOW]) failed",
-      "line": 100,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 62,
-      "stop_line": 100
-    },
-    {
-      "code": -2,
-      "column": 12,
       "concise_description": "assert_type(nonmember[int], Any) failed",
       "description": "assert_type(nonmember[int], Any) failed",
       "line": 116,
@@ -5284,8 +5273,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed",
-      "description": "assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed",
+      "concise_description": "assert_type([DefaultIntT = int](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed",
+      "description": "assert_type([DefaultIntT = int](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed",
       "line": 170,
       "name": "assert-type",
       "severity": "error",

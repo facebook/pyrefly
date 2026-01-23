@@ -1420,7 +1420,6 @@ for _ in []:
 );
 
 testcase!(
-    bug = "Pyrefly doesn't understand termination from NoReturn - see https://github.com/facebook/pyrefly/issues/361",
     test_noreturn_branch_termination,
     r#"
 from typing import NoReturn, assert_type
@@ -1435,18 +1434,74 @@ def f(x: str | bytes | bool) -> str | bytes:
         pass
     else:
         raises()
-    return x  # E: Returned type `bool | bytes | str`
+    return x  # Should be ok - x is str | bytes here
 
 def g(x: str | None) -> str:
     if x is None:
         raises()
-    return x  # E: Returned type `str | None`
+    return x  # Should be ok - x is str here
 
 def h(x: int | str) -> None:
     if isinstance(x, int):
         y = x + 1
     else:
         raises()
-    assert_type(y, int)  # E: `y` may be uninitialized
+    assert_type(y, int)  # y should be int, not str | int
+"#,
+);
+
+testcase!(
+    test_noreturn_nested_branches,
+    r#"
+from typing import NoReturn, assert_type
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: str | int | None) -> str:
+    if x is None:
+        raises()
+    else:
+        if isinstance(x, str):
+            return x
+        else:
+            raises()
+    # Should not be reachable, but if it were, x would be str
+"#,
+);
+
+testcase!(
+    test_noreturn_with_assignment_after,
+    r#"
+from typing import assert_type, NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: str | None):
+    if x is None:
+        raises()
+        y = "unreachable"  # This makes the branch NOT terminate
+    assert_type(x, str | None)
+"#,
+);
+
+testcase!(
+    test_noreturn_all_branches_terminate,
+    r#"
+from typing import assert_type, NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: int | str):
+    if isinstance(x, str):
+        raises()
+    else:
+        raises()
+    # All branches terminate with a NoReturn call; when Pyrefly
+    # encounters this it just ignores the NoReturn and goes ahead
+    # producing the union.
+    assert_type(x, int | str)
 "#,
 );

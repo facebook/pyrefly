@@ -112,7 +112,27 @@ pub struct TParam {
 
 impl Display for TParam {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())
+        write!(f, "{}", self.name())?;
+        // Display bounds/constraints
+        match self.restriction() {
+            Restriction::Bound(t) => write!(f, ": {}", t)?,
+            Restriction::Constraints(ts) => {
+                write!(f, ": (")?;
+                for (i, t) in ts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", t)?;
+                }
+                write!(f, ")")?;
+            }
+            Restriction::Unrestricted => {}
+        }
+        // Display default
+        if let Some(default) = self.default() {
+            write!(f, " = {}", default)?;
+        }
+        Ok(())
     }
 }
 
@@ -162,6 +182,10 @@ impl Display for TParams {
 impl TParams {
     pub fn new(tparams: Vec<TParam>) -> TParams {
         Self(tparams)
+    }
+
+    pub fn empty() -> TParams {
+        Self(Vec::new())
     }
 
     pub fn len(&self) -> usize {
@@ -1074,8 +1098,19 @@ impl Type {
     /// Check if the type contains a Var that may have been instantiated from a Quantified.
     pub fn may_contain_quantified_var(&self) -> bool {
         let mut seen = false;
-        self.visit_type_variables(&mut |t| seen |= matches!(t, TypeVariable::Var));
+        self.visit_type_variables(&mut |t| seen |= matches!(t, TypeVariable::Var(_)));
         seen
+    }
+
+    /// Collect vars that may have been instantiated from Quantifieds.
+    pub fn collect_maybe_quantified_vars(&self) -> Vec<Var> {
+        let mut vs = Vec::new();
+        self.visit_type_variables(&mut |t| {
+            if let TypeVariable::Var(v) = t {
+                vs.push(v);
+            }
+        });
+        vs
     }
 
     pub fn is_kind_param_spec(&self) -> bool {
@@ -1783,7 +1818,7 @@ enum TypeVariable<'a> {
     /// A legacy typing.ParamSpec appearing in a position where it is not resolved to an in-scope type variable
     LegacyParamSpec(&'a ParamSpec),
     /// A placeholder type that may have been instantiated from a Quantified
-    Var,
+    Var(Var),
 }
 
 impl<'a> TypeVariable<'a> {
@@ -1793,7 +1828,7 @@ impl<'a> TypeVariable<'a> {
             Type::TypeVar(t) => Some(Self::LegacyTypeVar(t)),
             Type::TypeVarTuple(t) => Some(Self::LegacyTypeVarTuple(t)),
             Type::ParamSpec(p) => Some(Self::LegacyParamSpec(p)),
-            Type::Var(_) => Some(Self::Var),
+            Type::Var(v) => Some(Self::Var(*v)),
             _ => None,
         }
     }

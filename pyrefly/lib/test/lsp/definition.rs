@@ -1795,6 +1795,7 @@ Definition Result:
 #[test]
 fn submodule_access_test() {
     let code_torch_init = r#"# torch/__init__.py
+from torch import autograd as autograd
 "#;
     let code_autograd_init = r#"# torch/autograd/__init__.py
 class Function:

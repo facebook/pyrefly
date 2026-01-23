@@ -654,6 +654,20 @@ def f(x: int) -> int:
 );
 
 testcase!(
+    test_typevar_bound_consistency,
+    r#"
+from typing import overload
+
+@overload
+def f[T: str](x: T) -> T: ...  # E: `str` is not assignable to upper bound `bytes` of type variable `T`
+@overload
+def f[T: bytes](x: T) -> T: ...
+def f[T: bytes](x: T) -> T:
+    return x
+    "#,
+);
+
+testcase!(
     test_generic_implementation_multiple_typevars,
     r#"
 from typing import overload
@@ -1322,5 +1336,30 @@ def f(path: Any, data: Any) -> dict[str, Any]:
     relative_normalized_path = relpath(normpath(path))
     outputs[relative_normalized_path] = data
     return outputs  # E: `dict[LiteralString, Any]` is not assignable to declared return type `dict[str, Any]`
+    "#,
+);
+
+testcase!(
+    test_one_overload_is_typeis,
+    r#"
+from typing import TypeIs, assert_type, overload
+
+@overload
+def f(x: str) -> str: ...
+@overload
+def f(x: int) -> TypeIs[bool]: ...
+def f(x):
+    if isinstance(x, str):
+        return x
+    else:
+        return isinstance(x, bool)
+
+def g(x: str, y: int):
+    assert_type(f(x), str)
+    assert_type(f(y), bool)
+    if f(x):
+        assert_type(x, str)
+    if f(y):
+        assert_type(y, bool)
     "#,
 );

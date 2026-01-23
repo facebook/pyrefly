@@ -421,6 +421,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }));
                 }
                 let params = Params::List(ParamList::new(params));
+                if let Some(hint) = hint {
+                    // Ensure no param vars are pinned to unfinished Variable::Quantified.
+                    // Since lambda parameters are unannotated, the specialization errors can be ignored.
+                    let _specialization_errors = self.solver().finish_all_quantified(hint.ty());
+                }
                 let ret = self.expr_infer_type_no_trace(
                     &lambda.body,
                     return_hint.as_ref().map(|hint| hint.as_ref()),

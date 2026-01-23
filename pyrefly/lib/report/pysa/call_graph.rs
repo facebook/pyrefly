@@ -20,6 +20,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
+use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::OverloadType;
@@ -67,7 +68,6 @@ use crate::report::pysa::ast_visitor::AstScopedVisitor;
 use crate::report::pysa::ast_visitor::ScopeExportedFunctionFlags;
 use crate::report::pysa::ast_visitor::Scopes;
 use crate::report::pysa::ast_visitor::visit_module_ast;
-use crate::report::pysa::captured_variable::CapturedVariable;
 use crate::report::pysa::captured_variable::CapturedVariableRef;
 use crate::report::pysa::captured_variable::WholeProgramCapturedVariables;
 use crate::report::pysa::class::ClassRef;
@@ -868,7 +868,7 @@ pub struct IdentifierCallees<Function: FunctionTrait> {
     pub(crate) if_called: CallCallees<Function>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) global_targets: Vec<GlobalVariableRef>,
-    pub(crate) nonlocal_targets: Vec<CapturedVariableRef<Function>>,
+    pub(crate) captured_variables: Vec<CapturedVariableRef<Function>>,
 }
 
 impl<Function: FunctionTrait> IdentifierCallees<Function> {
@@ -883,8 +883,8 @@ impl<Function: FunctionTrait> IdentifierCallees<Function> {
         IdentifierCallees {
             if_called: self.if_called.map_function(map),
             global_targets: self.global_targets,
-            nonlocal_targets: self
-                .nonlocal_targets
+            captured_variables: self
+                .captured_variables
                 .into_iter()
                 .map(|target| target.map_function(map))
                 .collect::<Vec<_>>(),
@@ -894,7 +894,7 @@ impl<Function: FunctionTrait> IdentifierCallees<Function> {
     fn is_empty(&self) -> bool {
         self.if_called.is_empty()
             && self.global_targets.is_empty()
-            && self.nonlocal_targets.is_empty()
+            && self.captured_variables.is_empty()
     }
 
     pub fn all_targets(&self) -> impl Iterator<Item = &CallTarget<Function>> {
@@ -905,8 +905,8 @@ impl<Function: FunctionTrait> IdentifierCallees<Function> {
         self.if_called.dedup_and_sort();
         self.global_targets.sort();
         self.global_targets.dedup();
-        self.nonlocal_targets.sort();
-        self.nonlocal_targets.dedup();
+        self.captured_variables.sort();
+        self.captured_variables.dedup();
     }
 }
 
@@ -1889,6 +1889,16 @@ impl<'a> CallGraphVisitor<'a> {
                 let str_class = self.module_context.stdlib.str().class_object();
                 call_targets_from_method_name_with_class(str_class)
             }
+            Some(Type::TypedDict(typed_dict)) | Some(Type::PartialTypedDict(typed_dict)) => {
+                match typed_dict {
+                    TypedDict::TypedDict(inner) => {
+                        call_targets_from_method_name_with_class(inner.class_object())
+                    }
+                    TypedDict::Anonymous(..) => {
+                        MaybeResolved::Unresolved(UnresolvedReason::UnexpectedDefiningClass)
+                    }
+                }
+            }
             _ => MaybeResolved::Unresolved(UnresolvedReason::UnexpectedDefiningClass),
         };
         if call_targets.is_unresolved() {
@@ -2185,6 +2195,25 @@ impl<'a> CallGraphVisitor<'a> {
                     exclude_object_methods,
                 )
             }
+            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::TypedDict(
+                typed_dict_inner,
+            ))) => {
+                let init_method = self
+                    .module_context
+                    .transaction
+                    .ad_hoc_solve(&self.module_context.handle, |solver| {
+                        solver.get_typed_dict_dunder_init(&typed_dict_inner)
+                    });
+                self.resolve_constructor_callees(
+                    init_method,
+                    /* new_method */ None,
+                    callee_expr,
+                    callee_type,
+                    return_type,
+                    callee_expr_suffix,
+                    exclude_object_methods,
+                )
+            }
             Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Union(targets)))
             | Some(CallTargetLookup::Error(targets)) => {
                 if targets.is_empty() {
@@ -2299,7 +2328,7 @@ impl<'a> CallGraphVisitor<'a> {
                 return IdentifierCallees {
                     if_called: callees,
                     global_targets: vec![],
-                    nonlocal_targets: vec![],
+                    captured_variables: vec![],
                 };
             }
         }
@@ -2326,7 +2355,7 @@ impl<'a> CallGraphVisitor<'a> {
             return IdentifierCallees {
                 if_called: CallCallees::empty(),
                 global_targets: vec![global],
-                nonlocal_targets: vec![],
+                captured_variables: vec![],
             };
         }
 
@@ -2335,26 +2364,21 @@ impl<'a> CallGraphVisitor<'a> {
             && let Some(current_module_captured_variables) = self
                 .captured_variables
                 .get_for_module(self.module_context.module_id)
-        {
-            let captured_variable = CapturedVariable {
-                name: name.id().clone(),
-            };
-            if let Some(captured) = current_module_captured_variables
+            && let Some(captured) = current_module_captured_variables
                 .get(current_function)
-                .and_then(|captured_variables| captured_variables.get(&captured_variable))
+                .and_then(|captured_variables| captured_variables.get(name.id()))
                 .cloned()
                 .map(|outer_function| CapturedVariableRef {
                     outer_function,
-                    name: captured_variable.name,
+                    name: name.id().clone(),
                 })
-            {
-                return IdentifierCallees {
-                    if_called: CallCallees::empty(),
-                    global_targets: vec![],
-                    nonlocal_targets: vec![captured],
-                };
-            }
-        };
+        {
+            return IdentifierCallees {
+                if_called: CallCallees::empty(),
+                global_targets: vec![],
+                captured_variables: vec![captured],
+            };
+        }
 
         let callee_type = self.module_context.answers.get_type_trace(name.range());
         let callee_expr = Some(AnyNodeRef::from(name));
@@ -2383,7 +2407,7 @@ impl<'a> CallGraphVisitor<'a> {
         IdentifierCallees {
             if_called: callees,
             global_targets: vec![],
-            nonlocal_targets: vec![],
+            captured_variables: vec![],
         }
     }
 
@@ -2428,6 +2452,7 @@ impl<'a> CallGraphVisitor<'a> {
                          target,
                          attr_type: callee_type,
                      }| {
+                        // TODO(T252263933): Need more precise return types for `__getitem__` in `typed_dict.py`
                         let return_type =
                             if let Some(return_type) = callee_type.callable_return_type() {
                                 ScalarTypeProperties::from_type(&return_type, self.module_context)

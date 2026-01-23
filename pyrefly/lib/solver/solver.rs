@@ -35,6 +35,7 @@ use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
+use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrSubsetError;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
@@ -60,7 +61,11 @@ use crate::types::types::Var;
 /// in the output. The usual cause is that we failed to visit all the necessary `Type` fields.
 const VAR_LEAK: &str = "Internal error: a variable has leaked from one module to another.";
 
-const INITIAL_GAS: Gas = Gas::new(1000);
+/// A number chosen such that all practical types are less than this depth,
+/// but low enough to avoid stack overflow. Rust's default stack size is 8MB,
+/// and each recursive call to is_subset_eq can use several KB of stack space
+/// due to large enums (Type) and lock guards.
+const INITIAL_GAS: Gas = Gas::new(200);
 
 #[derive(Debug)]
 enum Variable {
@@ -297,6 +302,12 @@ impl VarRecurser {
 }
 
 #[derive(Debug)]
+pub enum PinError {
+    ImplicitPartialContained(TextRange),
+    UnfinishedQuantified(Quantified),
+}
+
+#[derive(Debug)]
 pub struct Solver {
     variables: Mutex<Variables>,
     instantiation_errors: RwLock<SmallMap<Var, TypeVarSpecializationError>>,
@@ -331,13 +342,8 @@ impl Solver {
     }
 
     /// Force all non-recursive Vars in `vars`.
-    ///
-    /// Returns `Some(range)` if a `PartialContained` variable was pinned to `Any`,
-    /// where `range` is the location of the empty container literal.
-    /// This allows callers to emit errors about uninferred empty containers.
-    ///
     /// TODO: deduplicate Variable-to-gradual-type logic with `force_var`.
-    pub fn pin_placeholder_type(&self, var: Var) -> Option<TextRange> {
+    pub fn pin_placeholder_type(&self, var: Var, pin_partial_types: bool) -> Option<PinError> {
         let variables = self.variables.lock();
         let mut variable = variables.get_mut(var);
         match &mut *variable {
@@ -347,18 +353,26 @@ impl Solver {
                 None
             }
             Variable::Quantified(q) => {
+                let unfinished_quantified = q.clone();
                 *variable = Variable::Answer(q.as_gradual_type());
-                None
+                // A Variable::Quantified should always be finished (see `finish_quantified`) by
+                // the code that creates it, because we need to know when we're done collecting
+                // constraints. If we see a Quantified while pinning other placeholder types, that
+                // means we forgot to finish it.
+                Some(PinError::UnfinishedQuantified(unfinished_quantified))
             }
             Variable::PartialQuantified(q) => {
-                *variable = Variable::Answer(q.as_gradual_type());
+                if pin_partial_types {
+                    *variable = Variable::Answer(q.as_gradual_type());
+                }
                 None
             }
-            Variable::PartialContained(range) => {
+            Variable::PartialContained(range) if pin_partial_types => {
                 let range = *range;
                 *variable = Variable::Answer(Type::any_implicit());
-                Some(range)
+                Some(PinError::ImplicitPartialContained(range))
             }
+            Variable::PartialContained(_) => None,
             Variable::Unwrap => {
                 *variable = Variable::Answer(Type::any_implicit());
                 None
@@ -654,6 +668,19 @@ impl Solver {
         v
     }
 
+    fn fresh_quantified_vars(
+        &self,
+        qs: &[&Quantified],
+        uniques: &UniqueFactory,
+    ) -> QuantifiedHandle {
+        let vs = qs.map(|_| Var::new(uniques));
+        let mut lock = self.variables.lock();
+        for (v, q) in vs.iter().zip(qs.iter()) {
+            lock.insert_fresh(*v, Variable::Quantified((*q).clone()));
+        }
+        QuantifiedHandle(vs)
+    }
+
     /// Generate fresh variables and substitute them in replacing a `Forall`.
     pub fn fresh_quantified(
         &self,
@@ -665,14 +692,11 @@ impl Solver {
             return (QuantifiedHandle::empty(), t);
         }
 
-        let vs: Vec<_> = params.iter().map(|_| Var::new(uniques)).collect();
-        let ts = vs.map(|v| v.to_type());
-        let t = t.subst(&params.iter().map(|p| &p.quantified).zip(&ts).collect());
-        let mut lock = self.variables.lock();
-        for (v, param) in vs.iter().zip(params.iter()) {
-            lock.insert_fresh(*v, Variable::Quantified(param.quantified.clone()));
-        }
-        (QuantifiedHandle(vs), t)
+        let qs = params.iter().map(|p| &p.quantified).collect::<Vec<_>>();
+        let vs = self.fresh_quantified_vars(&qs, uniques);
+        let ts = vs.0.map(|v| v.to_type());
+        let t = t.subst(&qs.into_iter().zip(&ts).collect());
+        (vs, t)
     }
 
     /// Partially instantiate a generic function using the first argument.
@@ -697,7 +721,7 @@ impl Solver {
         let mut qs = Vec::new();
         self_param.for_each_quantified(&mut |q| {
             if tparams.iter().any(|tparam| tparam.quantified == *q) {
-                qs.push(q.clone());
+                qs.push(q);
             }
         });
 
@@ -706,28 +730,20 @@ impl Solver {
         }
 
         // Substitute fresh vars for the quantifieds in the self param.
-        let vs = qs.map(|_| Var::new(uniques));
-        let ts = vs.map(|v| v.to_type());
-        let mp = qs.iter().zip(&ts).collect();
+        let vs = self.fresh_quantified_vars(&qs, uniques);
+        let ts = vs.0.map(|v| v.to_type());
+        let mp = qs.into_iter().zip(&ts).collect();
         let self_param = self_param.clone().subst(&mp);
         callable.visit_mut(&mut |t| t.subst_mut(&mp));
         drop(mp);
 
-        let mut lock = self.variables.lock();
-        for (v, q) in vs.iter().zip(qs.into_iter()) {
-            lock.insert_fresh(*v, Variable::Quantified(q));
-        }
-        drop(lock);
-
-        // Solve for the vars created above. If this errors, then the definition
-        // is invalid, and we should have raised an error at the definition site.
+        // Solve for the vars created above.
         is_subset(self_obj, &self_param);
 
-        // Either we have solutions, or we fall back to Any. We don't use finish_quantified
-        // because we don't want Variable::Partial.
-        for v in vs {
-            self.force_var(v);
-        }
+        // Either we have solutions, or we fall back to Any. We don't want Variable::Partial.
+        // If this errors, then the definition is invalid, and we should have raised an error at
+        // the definition site.
+        let _specialization_errors = self.finish_quantified(vs, false);
 
         callable
     }
@@ -745,6 +761,7 @@ impl Solver {
     pub fn finish_quantified(
         &self,
         vs: QuantifiedHandle,
+        infer_with_first_use: bool,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let lock = self.variables.lock();
         let mut err = Vec::new();
@@ -759,7 +776,7 @@ impl Solver {
                     }
                 }
                 Variable::Quantified(q) => {
-                    if self.infer_with_first_use {
+                    if infer_with_first_use {
                         *e = Variable::finished(q);
                     } else {
                         *e = Variable::Answer(q.as_gradual_type())
@@ -774,20 +791,32 @@ impl Solver {
         }
     }
 
+    pub fn finish_all_quantified(&self, ty: &Type) -> Result<(), Vec1<TypeVarSpecializationError>> {
+        let vs = QuantifiedHandle(ty.collect_maybe_quantified_vars());
+        self.finish_quantified(vs, self.infer_with_first_use)
+    }
+
     /// Given targs which contain quantified (as come from `instantiate`), replace the quantifieds
     /// with fresh vars. We can avoid substitution because tparams can not appear in the bounds of
     /// another tparam. tparams can appear in the default, but those are not in quantified form yet.
-    pub fn freshen_class_targs(&self, targs: &mut TArgs, uniques: &UniqueFactory) {
+    pub fn freshen_class_targs(
+        &self,
+        targs: &mut TArgs,
+        uniques: &UniqueFactory,
+    ) -> QuantifiedHandle {
+        let mut vs = Vec::new();
         let mut lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Quantified(q) = t
                 && **q == param.quantified
             {
                 let v = Var::new(uniques);
+                vs.push(v);
                 *t = v.to_type();
                 lock.insert_fresh(v, Variable::Quantified(param.quantified.clone()));
             }
-        })
+        });
+        QuantifiedHandle(vs)
     }
 
     /// Solve each fresh var created in freshen_class_targs. If we still have a Var, we do not
@@ -802,7 +831,8 @@ impl Solver {
         let lock = self.variables.lock();
         targs.iter_paired_mut().for_each(|(param, t)| {
             if let Type::Var(v) = t
-                && !matches!(&*lock.get(*v), Variable::Answer(_))
+                && let Variable::Quantified(q) = &*lock.get(*v)
+                && *q == param.quantified
             {
                 *t = param.quantified.clone().to_type();
             }
@@ -1124,6 +1154,16 @@ pub struct TypeVarSpecializationError {
     pub error: SubsetError,
 }
 
+impl TypeVarSpecializationError {
+    pub fn to_error_msg<Ans: LookupAnswer>(self, ans: &AnswersSolver<Ans>) -> String {
+        TypeCheckKind::TypeVarSpecialization(self.name).format_error(
+            &ans.for_display(self.got),
+            &ans.for_display(self.want),
+            ans.module().name(),
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TypedDictSubsetError {
     /// TypedDict `got` is missing a field that `want` requires
@@ -1433,8 +1473,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     // The `unify` function preserves the Variable data from its second argument,
                     // so we call it with the stricter bound in the v2 position.
                     (Variable::Quantified(q1), Variable::Quantified(q2))
-                    | (Variable::PartialQuantified(q1), Variable::Quantified(q2))
-                    | (Variable::Quantified(q1), Variable::PartialQuantified(q2))
                     | (Variable::PartialQuantified(q1), Variable::PartialQuantified(q2)) => {
                         let r1 = q1.restriction().clone();
                         let r2 = q2.restriction().clone();
@@ -1480,6 +1518,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                                 }
                             }
                         }
+                        Ok(())
+                    }
+                    (_, Variable::Quantified(_)) => {
+                        drop(variable1);
+                        drop(variable2);
+                        // `unify` preserves the Variable in its second argument. When a Quantified
+                        // and a non-Quantified are unified, we preserve the non-Quantified to
+                        // avoid leaking unsolved type parameters across bindings.
+                        variables.unify(*v2, *v1);
                         Ok(())
                     }
                     (_, _) => {
@@ -1654,6 +1701,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         &self,
         vs: QuantifiedHandle,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        self.solver.finish_quantified(vs)
+        self.solver
+            .finish_quantified(vs, self.solver.infer_with_first_use)
     }
 }

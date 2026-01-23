@@ -628,3 +628,34 @@ class Column[T]:
 assert_type(Column(UUID(as_uuid=False)), Column[B])
     "#,
 );
+
+testcase!(
+    test_typevar_with_explicit_any_default,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+
+T = TypeVar("T", bound=int, default=Any)
+
+class A(Generic[T]):
+    def __new__(cls, x: T) -> A[T]: ...
+
+assert_type(A(0), A[int])
+A("oops")  # E: `str` is not assignable to upper bound `int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_typevar_with_explicit_any_default_in_nested_constructor_call,
+    r#"
+from typing import Any, assert_type
+
+class A[T = Any]:
+    def __new__(cls, x: T) -> A[T]: ...
+
+class B[T: int | A[Any] = Any]:
+    def __new__(cls, x: list[A[T]]) -> B[A[T]]: ...
+
+assert_type(B([A(0)]), B[A[int]])
+B([A("oops")])  # E: `str` is not assignable to upper bound `A[Any] | int` of type variable `T`
+    "#,
+);

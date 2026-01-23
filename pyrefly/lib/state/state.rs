@@ -355,7 +355,7 @@ pub(crate) struct TransactionData<'a> {
     /// Handles which are dirty
     dirty: Mutex<SmallSet<ArcId<ModuleDataMut>>>,
     /// Thing to tell about each action.
-    subscriber: Option<Box<dyn Subscriber>>,
+    subscriber: Option<Box<dyn Subscriber + 'a>>,
 }
 
 impl<'a> TransactionData<'a> {
@@ -1079,7 +1079,12 @@ impl<'a> Transaction<'a> {
                 if let Some(load) = load_result
                     && let Some(subscriber) = &self.data.subscriber
                 {
-                    subscriber.finish_work(&module_data.handle, &load);
+                    subscriber.finish_work(
+                        self,
+                        &module_data.handle,
+                        &load,
+                        !matches!(changed_exports, ChangedExports::NoChange),
+                    );
                 }
             }
             if todo == step {
@@ -1417,7 +1422,12 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    fn run_step(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
+    fn run_step(
+        &mut self,
+        handles: &[Handle],
+        transitive_deps_of_handles: &HashSet<Handle>,
+        require: Require,
+    ) -> Result<(), Cancelled> {
         let run_start = Instant::now();
 
         self.data.now.next();
@@ -1437,11 +1447,19 @@ impl<'a> Transaction<'a> {
                 state.require = require;
                 drop(state);
                 if (created || dirty_require) && !dirty.contains(&m) {
-                    self.data.todo.push_fifo(Step::first(), m);
+                    if transitive_deps_of_handles.contains(&m.handle) {
+                        self.data.todo.push_lifo(Step::first(), m);
+                    } else {
+                        self.data.todo.push_fifo(Step::first(), m);
+                    }
                 }
             }
-            for x in dirty {
-                self.data.todo.push_fifo(Step::first(), x);
+            for m in dirty {
+                if transitive_deps_of_handles.contains(&m.handle) {
+                    self.data.todo.push_lifo(Step::first(), m);
+                } else {
+                    self.data.todo.push_fifo(Step::first(), m);
+                }
             }
         }
 
@@ -1557,9 +1575,56 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Compute the transitive dependencies of the given handles.
+    /// Returns a set of all handles that are direct or transitive dependencies.
+    fn compute_transitive_deps(&self, handles: &[Handle]) -> HashSet<Handle> {
+        let mut visited: HashSet<Handle> = HashSet::new();
+        let mut to_visit: Vec<Handle> = handles.iter().map(|h| h.dupe()).collect();
+        while let Some(handle) = to_visit.pop() {
+            if !visited.insert(handle.dupe()) {
+                continue;
+            }
+            let deps: Vec<Handle> =
+                if let Some(module_data) = self.data.updated_modules.get(&handle) {
+                    module_data
+                        .deps
+                        .read()
+                        .values()
+                        .flat_map(|resolution| match resolution {
+                            ImportResolution::Resolved(map) => map.iter_keys().cloned().collect(),
+                            ImportResolution::Failed(_) => Vec::new(),
+                        })
+                        .map(|h| h.dupe())
+                        .collect()
+                } else if let Some(module_data) = self.readable.modules.get(&handle) {
+                    module_data
+                        .deps
+                        .values()
+                        .flat_map(|resolution| match resolution {
+                            ImportResolution::Resolved(map) => map.iter_keys().cloned().collect(),
+                            ImportResolution::Failed(_) => Vec::new(),
+                        })
+                        .map(|h| h.dupe())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+            for dep in deps {
+                if !visited.contains(&dep) {
+                    to_visit.push(dep);
+                }
+            }
+        }
+        visited
+    }
+
     fn run_internal(&mut self, handles: &[Handle], require: Require) -> Result<(), Cancelled> {
         let run_number = self.data.state.run_count.fetch_add(1, Ordering::SeqCst);
-
+        let transitive_deps_of_handles = if handles.is_empty() {
+            HashSet::new()
+        } else {
+            self.compute_transitive_deps(handles)
+        };
         // We first compute all the modules that are either new or have changed.
         // Then we repeatedly compute all the modules who depend on modules that changed.
         //
@@ -1587,7 +1652,7 @@ impl<'a> Transaction<'a> {
 
         for i in 1..=MAX_EPOCHS {
             debug!("Running epoch {i} of run {run_number}");
-            self.run_step(handles, require)?;
+            self.run_step(handles, &transitive_deps_of_handles, require)?;
             let changed = mem::take(&mut *self.data.changed.lock());
             if changed.is_empty() {
                 return Ok(());
@@ -1631,7 +1696,7 @@ impl<'a> Transaction<'a> {
                         .map(|(m, _)| (m.dupe(), ChangedExports::InvalidateAll))
                         .collect();
                     self.invalidate_rdeps(&coarse_grained_changed);
-                    return self.run_step(handles, require);
+                    return self.run_step(handles, &transitive_deps_of_handles, require);
                 }
 
                 // Merge the new exports into our tracking set
@@ -1677,7 +1742,7 @@ impl<'a> Transaction<'a> {
             .map(|(m, _)| (m.dupe(), ChangedExports::InvalidateAll))
             .collect();
         self.invalidate_rdeps(&coarse_grained_changed);
-        self.run_step(handles, require)
+        self.run_step(handles, &transitive_deps_of_handles, require)
     }
 
     pub fn run(&mut self, handles: &[Handle], require: Require) {
@@ -1943,7 +2008,7 @@ impl<'a> Transaction<'a> {
                 }
             }
             if let Some(subscriber) = &self.data.subscriber {
-                subscriber.finish_work(&m.handle, &alt.load.unwrap());
+                subscriber.finish_work(self, &m.handle, &alt.load.unwrap(), false);
             }
         }
         self.data.subscriber = None; // Finalize the progress bar before printing to stderr
@@ -2237,7 +2302,7 @@ impl State {
     pub fn new_transaction<'a>(
         &'a self,
         default_require: Require,
-        subscriber: Option<Box<dyn Subscriber>>,
+        subscriber: Option<Box<dyn Subscriber + 'a>>,
     ) -> Transaction<'a> {
         let readable = self.state.read();
         let now = readable.now;
@@ -2276,7 +2341,7 @@ impl State {
     pub fn new_committable_transaction<'a>(
         &'a self,
         default_require: Require,
-        subscriber: Option<Box<dyn Subscriber>>,
+        subscriber: Option<Box<dyn Subscriber + 'a>>,
     ) -> CommittingTransaction<'a> {
         let committing_transaction_guard = self.committing_transaction_lock.lock();
         let transaction = self.new_transaction(default_require, subscriber);
@@ -2289,7 +2354,7 @@ impl State {
     pub fn try_new_committable_transaction<'a>(
         &'a self,
         default_require: Require,
-        subscriber: Option<Box<dyn Subscriber>>,
+        subscriber: Option<Box<dyn Subscriber + 'a>>,
     ) -> Option<CommittingTransaction<'a>> {
         if let Some(committing_transaction_guard) = self.committing_transaction_lock.try_lock() {
             let transaction = self.new_transaction(default_require, subscriber);

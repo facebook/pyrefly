@@ -414,7 +414,7 @@ fn class_identifier_without_constructors(
             unresolved: Unresolved::False,
         },
         global_targets: vec![],
-        nonlocal_targets: vec![],
+        captured_variables: vec![],
     })
 }
 
@@ -507,7 +507,7 @@ fn identifier_callees(
             unresolved,
         },
         global_targets: vec![],
-        nonlocal_targets: vec![],
+        captured_variables: vec![],
     })
 }
 
@@ -523,7 +523,7 @@ fn regular_identifier_callees(
             unresolved: Unresolved::False,
         },
         global_targets: vec![],
-        nonlocal_targets: vec![],
+        captured_variables: vec![],
     })
 }
 
@@ -533,7 +533,7 @@ fn global_identifier_callees(
     ExpressionCallees::Identifier(IdentifierCallees {
         if_called: CallCallees::empty(),
         global_targets,
-        nonlocal_targets: vec![],
+        captured_variables: vec![],
     })
 }
 
@@ -544,7 +544,7 @@ fn nonlocal_identifier_callees(
     ExpressionCallees::Identifier(IdentifierCallees {
         if_called: CallCallees::empty(),
         global_targets: vec![],
-        nonlocal_targets: vec![CapturedVariableRef {
+        captured_variables: vec![CapturedVariableRef {
             outer_function: FunctionRefForTest::from_string(function),
             name: Name::new(variable_name),
         }],
@@ -982,7 +982,7 @@ def foo(c: C):
                             unresolved: Unresolved::False,
                         },
                         global_targets: vec![],
-                        nonlocal_targets: vec![],
+                        captured_variables: vec![],
                     }),
                 ),
                 ("5:4-5:17", regular_call_callees(call_targets)),
@@ -6654,7 +6654,7 @@ def caller() -> Foo:
 );
 
 call_graph_testcase!(
-    test,
+    test_decorator_with_missing_body,
     TEST_MODULE_NAME,
     r#"
 def decorator(f):
@@ -6730,6 +6730,58 @@ def bar(b):
                         create_call_target("test.foo2", TargetType::Function)
                             .with_return_type(ScalarTypeProperties::int()),
                     ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_typed_dict,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Any, TypedDict
+class SimpleTypedDict(TypedDict):
+    foo: Any
+    bar: Any
+def foo():
+    d = SimpleTypedDict(foo=1, bar=2)
+    d["foo"]
+    d["bar"]
+    d["foo"] = 0
+"#,
+    &|_context: &ModuleContext| {
+        let mapping_getitem_target = vec![
+            create_call_target("typing.Mapping.__getitem__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+        ];
+        let init_targets = vec![
+            create_call_target("test.SimpleTypedDict.__init__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+        ];
+        let new_targets = vec![
+            create_call_target("builtins.object.__new__", TargetType::Function)
+                .with_is_static_method(true),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "7:9-7:38",
+                    constructor_call_callees(init_targets, new_targets),
+                ),
+                (
+                    "8:5-8:13|artificial-call|subscript-get-item",
+                    regular_call_callees(mapping_getitem_target.clone()),
+                ),
+                (
+                    "9:5-9:13|artificial-call|subscript-get-item",
+                    regular_call_callees(mapping_getitem_target),
+                ),
+                (
+                    // TODO(T252248020): Resolve `__setitem__`
+                    "10:5-10:17|artificial-call|subscript-set-item",
+                    unresolved_expression_callees(UnresolvedReason::UnresolvedMagicDunderAttr),
                 ),
             ],
         )]

@@ -40,6 +40,8 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
+use crate::solver::solver::QuantifiedHandle;
+use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -560,6 +562,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(ret)
     }
 
+    pub fn add_specialization_errors(
+        &self,
+        specialization_errors: Vec1<TypeVarSpecializationError>,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) {
+        for e in specialization_errors {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::BadSpecialization, context),
+                e.to_error_msg(self),
+            );
+        }
+    }
+
     fn construct_class(
         &self,
         mut cls: ClassType,
@@ -572,13 +591,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
     ) -> Type {
         // Based on https://typing.readthedocs.io/en/latest/spec/constructors.html.
-        if let Some(hint) = hint {
-            self.solver()
+        let vs = if let Some(hint) = hint {
+            let vs = self
+                .solver()
                 .freshen_class_targs(cls.targs_mut(), self.uniques);
 
             self.is_subset_eq(&cls.clone().to_type(), hint.ty());
             self.solver().generalize_class_targs(cls.targs_mut());
-        }
+            vs
+        } else {
+            QuantifiedHandle::empty()
+        };
         let hint = None; // discard hint
         let class_metadata = self.get_metadata_for_class(cls.class_object());
         if let Some(ret) =
@@ -598,6 +621,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.record_resolved_trace(arguments_range, metaclass_dunder_call);
             }
             // Got something other than an instance of the class under construction.
+            if let Err(e) = self
+                .solver()
+                .finish_quantified(vs, self.solver().infer_with_first_use)
+            {
+                self.add_specialization_errors(e, arguments_range, errors, context);
+            }
             return ret;
         }
         let mut dunder_new_ret = None;
@@ -643,6 +672,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Any, using the class under construction is still more useful.
                     self.solver()
                         .finish_class_targs(cls.targs_mut(), self.uniques);
+                    if let Err(e) = self
+                        .solver()
+                        .finish_quantified(vs, self.solver().infer_with_first_use)
+                    {
+                        self.add_specialization_errors(e, arguments_range, errors, context);
+                    }
                     return ret.subst(&cls.targs().substitution_map());
                 }
                 (true, has_errors)
@@ -697,6 +732,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
+        if let Err(e) = self
+            .solver()
+            .finish_quantified(vs, self.solver().infer_with_first_use)
+        {
+            self.add_specialization_errors(e, arguments_range, errors, context);
+        }
         if let Some(mut ret) = dunder_new_ret {
             ret.subst_mut(&cls.targs().substitution_map());
             ret
@@ -715,12 +756,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
-        if let Some(hint) = hint {
-            self.solver()
+        let vs = if let Some(hint) = hint {
+            let vs = self
+                .solver()
                 .freshen_class_targs(typed_dict.targs_mut(), self.uniques);
             self.is_subset_eq(&typed_dict.clone().to_type(), hint.ty());
             self.solver().generalize_class_targs(typed_dict.targs_mut());
-        }
+            vs
+        } else {
+            QuantifiedHandle::empty()
+        };
         let hint = None; // discard hint
         let init_method = self.get_typed_dict_dunder_init(&typed_dict);
         self.call_infer(
@@ -741,6 +786,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         self.solver()
             .finish_class_targs(typed_dict.targs_mut(), self.uniques);
+        if let Err(e) = self
+            .solver()
+            .finish_quantified(vs, self.solver().infer_with_first_use)
+        {
+            self.add_specialization_errors(e, arguments_range, errors, context);
+        }
         Type::TypedDict(TypedDict::TypedDict(typed_dict))
     }
 
@@ -1256,7 +1307,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 kws = x.arguments.keywords.map(CallKeyword::new);
             }
 
-            self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
+            let result = self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                     .call_assert_type(
                         &x.arguments.args,
@@ -1340,7 +1391,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Check if this call applies a decorator with known typing effects to a function.
                 _ if let Some(ret) = self.maybe_apply_function_decorator(ty, &args, &kws, errors) => ret,
                 _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors),
-            })
+            });
+            // TypeIs and TypeGuard functions return bool at runtime
+            match result {
+                Type::TypeIs(_) | Type::TypeGuard(_) => self.stdlib.bool().clone().to_type(),
+                other => other,
+            }
         }
     }
 

@@ -212,6 +212,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.type_of_instance(cls, self.targs_of_tparams(cls))
     }
 
+    pub fn instantiate_type_var_tuple(&self) -> (TParams, Type) {
+        let quantified = Quantified::type_var_tuple(Name::new_static("Ts"), self.uniques, None);
+        let tparams = TParams::new(vec![TParam {
+            quantified: quantified.clone(),
+            variance: PreInferenceVariance::Covariant,
+        }]);
+        let tuple_ty = Type::Tuple(Tuple::Unpacked(Box::new((
+            Vec::new(),
+            Type::Quantified(Box::new(quantified)),
+            Vec::new(),
+        ))));
+        (tparams, tuple_ty)
+    }
+
     /// Gets this Class as a ClassType with its tparams as the arguments. For non-TypedDict
     /// classes, this is the type of an instance of this class. Unless you specifically need the
     /// ClassType inside the Type and know you don't have a TypedDict, you should instead use
@@ -227,30 +241,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Instantiates a class or typed dictionary with fresh variables for its type parameters.
-    pub fn instantiate_fresh_class(&self, cls: &Class) -> Type {
-        self.solver()
-            .fresh_quantified(
-                &self.get_class_tparams(cls),
-                self.instantiate(cls),
-                self.uniques,
-            )
-            .1
-    }
-
-    pub fn instantiate_fresh_tuple(&self) -> Type {
-        let quantified = Quantified::type_var_tuple(Name::new_static("Ts"), self.uniques, None);
-        let tparams = TParams::new(vec![TParam {
-            quantified: quantified.clone(),
-            variance: PreInferenceVariance::Covariant,
-        }]);
-        let tuple_ty = Type::Tuple(Tuple::Unpacked(Box::new((
-            Vec::new(),
-            Type::Quantified(Box::new(quantified)),
-            Vec::new(),
-        ))));
-        self.solver()
-            .fresh_quantified(&tparams, tuple_ty, self.uniques)
-            .1
+    pub fn instantiate_fresh_class(&self, cls: &Class) -> (QuantifiedHandle, Type) {
+        self.solver().fresh_quantified(
+            &self.get_class_tparams(cls),
+            self.instantiate(cls),
+            self.uniques,
+        )
     }
 
     pub fn instantiate_fresh_forall(&self, forall: Forall<Forallable>) -> (QuantifiedHandle, Type) {
@@ -534,6 +530,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         if arg.is_kind_param_spec() {
             arg.clone()
+        } else if arg.is_any() {
+            // Any is the universal type that is compatible with any ParamSpec.
+            // Convert it to Ellipsis, which is the gradual type for ParamSpec.
+            Type::Ellipsis
         } else {
             self.error(
                 errors,

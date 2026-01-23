@@ -409,6 +409,7 @@ impl SemanticTokenBuilder {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
                 }
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }
             Stmt::With(with) => {
                 for with_item in with.items.iter() {
@@ -416,6 +417,7 @@ impl SemanticTokenBuilder {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
                 }
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }
             Stmt::Import(StmtImport { names, .. }) => {
                 for alias in names {

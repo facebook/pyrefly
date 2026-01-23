@@ -36,6 +36,7 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -58,6 +59,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::solver::solver::QuantifiedHandle;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncFlags;
 use crate::types::callable::FuncMetadata;
@@ -1488,15 +1490,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     original_overload_func.clone()
                 }
             };
-            let impl_func = {
+            let (vs, impl_func) = {
                 let func = Function {
                     signature: impl_sig.clone(),
                     metadata: def.metadata().clone(),
                 };
                 if let Some(tparams) = all_tparams(impl_tparams) {
-                    self.instantiate_fresh_function(&tparams, func).1
+                    self.instantiate_fresh_function(&tparams, func)
                 } else {
-                    func
+                    (QuantifiedHandle::empty(), func)
                 }
             };
             // See https://typing.python.org/en/latest/spec/overload.html#implementation-consistency.
@@ -1523,6 +1525,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 &|| TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn),
             );
+            if let Err(specialization_errors) = self.solver().finish_quantified(vs, false) {
+                let mut msg = vec1![format!(
+                    "Overload signature `{}` is not consistent with implementation signature `{}`",
+                    self.for_display(Type::Callable(Box::new(
+                        original_overload_func.signature.clone()
+                    ))),
+                    self.for_display(Type::Callable(Box::new(impl_sig.clone()))),
+                )];
+                for e in specialization_errors {
+                    msg.push(e.to_error_msg(self));
+                }
+                errors.add(
+                    *range,
+                    ErrorInfo::Kind(ErrorKind::InconsistentOverload),
+                    msg,
+                );
+            }
         }
     }
 

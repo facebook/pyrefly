@@ -543,6 +543,8 @@ pub enum Key {
     /// This `Key` is *only* ever used if the variable has only a `del` but is not otherwise defined (which is
     /// always a type error, since you cannot delete an uninitialized variable).
     Delete(TextRange),
+    /// Match statement that needs type-based exhaustiveness checking
+    MatchExhaustive(TextRange),
 }
 
 impl Ranged for Key {
@@ -573,6 +575,7 @@ impl Ranged for Key {
             Self::SelfTypeLiteral(r) => *r,
             Self::PossibleLegacyTParam(r) => *r,
             Self::PatternNarrow(r) => *r,
+            Self::MatchExhaustive(r) => *r,
         }
     }
 }
@@ -618,6 +621,7 @@ impl DisplayWith<ModuleInfo> for Key {
                 write!(f, "Key::PossibleLegacyTParam({})", ctx.display(r))
             }
             Self::PatternNarrow(r) => write!(f, "Key::PatternNarrow({})", ctx.display(r)),
+            Self::MatchExhaustive(r) => write!(f, "Key::MatchExhaustive({})", ctx.display(r)),
         }
     }
 }
@@ -1344,13 +1348,16 @@ pub struct ReturnType {
     pub is_async: bool,
 }
 
-#[derive(Clone, Dupe, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum LastStmt {
     /// The last statement is an expression
     Expr,
     /// The last statement is a `with`, with the following context,
     /// which might (if exit is true) catch an exception
     With(IsAsync),
+    /// The last statement is a match that may be type-exhaustive.
+    /// Contains the match statement range to look up exhaustiveness at solve time.
+    Match(TextRange),
 }
 
 #[derive(Clone, Debug)]
@@ -1613,6 +1620,18 @@ pub enum Binding {
     /// It could either be an unbound name or a reference to an inherited attribute
     /// We'll find out which when we solve the class
     ClassBodyUnknownName(Idx<KeyClass>, Identifier, Option<Name>),
+    /// A match statement that may be type-exhaustive.
+    /// Resolves to Never if exhaustive, None otherwise.
+    /// When `exhaustiveness_info` is None, we couldn't determine narrowing info,
+    /// so we conservatively assume the match is not exhaustive.
+    MatchExhaustive {
+        subject_idx: Idx<Key>,
+        subject_range: TextRange,
+        /// Narrowing information needed to check exhaustiveness. None if we couldn't
+        /// determine the narrowing subject (e.g., complex expressions) or couldn't
+        /// accumulate narrow ops for it.
+        exhaustiveness_info: Option<(NarrowingSubject, (Box<NarrowOp>, TextRange))>,
+    },
 }
 
 impl DisplayWith<Bindings> for Binding {
@@ -1896,6 +1915,18 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, ")")
             }
+            Self::MatchExhaustive {
+                subject_idx,
+                subject_range,
+                ..
+            } => {
+                write!(
+                    f,
+                    "MatchExhaustive({}, {})",
+                    ctx.display(*subject_idx),
+                    ctx.module().display(subject_range)
+                )
+            }
         }
     }
 }
@@ -1968,7 +1999,8 @@ impl Binding {
             | Binding::CompletedPartialType(..)
             | Binding::PartialTypeWithUpstreamsCompleted(..)
             | Binding::Delete(_)
-            | Binding::ClassBodyUnknownName(_, _, _) => None,
+            | Binding::ClassBodyUnknownName(_, _, _)
+            | Binding::MatchExhaustive { .. } => None,
         }
     }
 }
@@ -2168,10 +2200,13 @@ pub enum ClassFieldDefinition {
     /// Declared with no annotation or assignment (this is impossible
     /// in a normal class, but can happen with some synthesized classes).
     DeclaredWithoutAnnotation,
-    /// Defined via assignment, possibly with an annotation
+    /// Defined via assignment, possibly with an annotation.
+    /// `alias_of` is set when the value is a simple name referring to another
+    /// field in the same class (used for enum alias detection).
     AssignedInBody {
         value: ExprOrBinding,
         annotation: Option<Idx<KeyAnnotation>>,
+        alias_of: Option<Name>,
     },
     /// Defined by a `def` form. Because of decorators it may not
     /// actually *be* a method, hence the name `MethodLike`.

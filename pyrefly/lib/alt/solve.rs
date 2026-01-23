@@ -94,6 +94,7 @@ use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::SuperStyle;
 use crate::binding::binding::TypeParameter;
 use crate::binding::binding::UnpackedPosition;
+use crate::binding::narrow::NarrowingSubject;
 use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::config::error_kind::ErrorKind;
@@ -105,6 +106,7 @@ use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
+use crate::solver::solver::PinError;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
@@ -1565,7 +1567,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Arc::new(TParams::new(tparams))
     }
 
-    pub fn solve_binding(&self, binding: &Binding, errors: &ErrorCollector) -> Arc<TypeInfo> {
+    pub fn solve_binding(
+        &self,
+        binding: &Binding,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Arc<TypeInfo> {
         // Special case for forward, as we don't want to re-expand the type
         if let Binding::Forward(fwd) = binding {
             return self.get_idx(*fwd);
@@ -1573,17 +1580,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut type_info = self.binding_to_type_info(binding, errors);
         type_info.visit_mut(&mut |ty| {
             // Skip pinning for NameAssign and PartialTypeWithUpstreamsCompleted bindings
-            // when infer_with_first_use is enabled, as these bindings can contain placeholder
+            // when infer_with_first_use is enabled, as these bindings can contain partial
             // types that should be pinned by first use. When infer_with_first_use is disabled,
             // we pin immediately since there's no first-use inference mechanism.
-            let skip_pinning = self.solver().infer_with_first_use
-                && matches!(
+            let pin_partial_types = !self.solver().infer_with_first_use
+                || !matches!(
                     binding,
                     Binding::NameAssign { .. } | Binding::PartialTypeWithUpstreamsCompleted(..)
                 );
-            if !skip_pinning {
-                self.pin_all_placeholder_types(ty, Some(errors));
-            }
+            self.pin_all_placeholder_types(ty, pin_partial_types, range, errors);
             self.expand_vars_mut(ty);
         });
         Arc::new(type_info)
@@ -2297,11 +2302,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if branches.len() == 1 {
                     self.get_idx(branches[0].value_key).arc_clone()
                 } else {
-                    // TODO(Step 9): Implement termination-based filtering
-                    let type_infos = branches
+                    // Filter branches based on type-based termination (Never/NoReturn)
+                    let live_value_keys: Vec<Idx<Key>> = branches
                         .iter()
                         .filter_map(|branch| {
-                            let t: Arc<TypeInfo> = self.get_idx(branch.value_key);
+                            match branch.termination_key {
+                                None => {
+                                    // No terminal statement, branch is live
+                                    Some(branch.value_key)
+                                }
+                                Some(term_key) => {
+                                    let term_type = self.get_idx(term_key);
+                                    if term_type.ty().is_never() {
+                                        // Branch terminated with Never/NoReturn
+                                        None
+                                    } else {
+                                        // Terminal statement doesn't return Never, branch is live
+                                        Some(branch.value_key)
+                                    }
+                                }
+                            }
+                        })
+                        .collect();
+
+                    // If all branches terminated, use all value keys (consistent with binding-time)
+                    let keys_to_use = if live_value_keys.is_empty() {
+                        branches.iter().map(|b| b.value_key).collect()
+                    } else {
+                        live_value_keys
+                    };
+
+                    let type_infos = keys_to_use
+                        .iter()
+                        .filter_map(|k| {
+                            let t: Arc<TypeInfo> = self.get_idx(*k);
                             // Filter out all `@overload`-decorated types except the one that
                             // accumulates all signatures into a Type::Overload.
                             if matches!(t.ty(), Type::Overload(_)) || !t.ty().is_overload() {
@@ -2311,6 +2345,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         })
                         .collect::<Vec<_>>();
+
                     TypeInfo::join(
                         type_infos,
                         &|ts| self.unions(ts),
@@ -2568,7 +2603,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match value {
                 ExprOrBinding::Expr(e) => self.expr(e, Some((field_ty, context)), errors),
                 ExprOrBinding::Binding(b) => {
-                    let binding_ty = self.solve_binding(b, errors).arc_clone_ty();
+                    let binding_ty = self.solve_binding(b, assign_range, errors).arc_clone_ty();
                     self.check_and_return_type(binding_ty, field_ty, assign_range, errors, context)
                 }
             }
@@ -2679,7 +2714,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 )
                             }
                             ExprOrBinding::Binding(b) => {
-                                let binding_ty = self.solve_binding(b, errors).arc_clone_ty();
+                                let binding_ty = self
+                                    .solve_binding(b, subscript.range, errors)
+                                    .arc_clone_ty();
                                 // Use the subscript's location
                                 call_setitem(CallArg::ty(&binding_ty, subscript.range));
                                 binding_ty
@@ -2809,7 +2846,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // (everything that isn't either an answer or a Recursive var).
     // If an ErrorCollector is provided and a PartialContained variable is pinned
     // to Any, an ImplicitAny error will be emitted.
-    fn pin_all_placeholder_types(&self, ty: &mut Type, errors: Option<&ErrorCollector>) {
+    fn pin_all_placeholder_types(
+        &self,
+        ty: &mut Type,
+        pin_partial_types: bool,
+        ty_range: TextRange,
+        errors: &ErrorCollector,
+    ) {
         // Expand the type, in case unexpanded `Vars` are hiding further `Var`s that
         // need to be pinned.
         self.solver().expand_vars_mut(ty);
@@ -2824,17 +2867,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         f(ty, &mut vars);
         // Pin all relevant vars and collect ranges of PartialContained vars
         for var in vars {
-            if let Some(range) = self.solver().pin_placeholder_type(var)
-                && let Some(errors) = errors
-            {
-                errors.add(
-                    range,
+            match self.solver().pin_placeholder_type(var, pin_partial_types) {
+                Some(PinError::ImplicitPartialContained(container_range)) => errors.add(
+                    container_range,
                     ErrorInfo::Kind(ErrorKind::ImplicitAny),
                     vec1![
                         "Cannot infer type of empty container; it will be treated as containing `Any`".to_owned(),
                         "Consider adding a type annotation or initializing with a non-empty value".to_owned(),
                     ],
-                );
+                ),
+                Some(PinError::UnfinishedQuantified(q)) => errors.internal_error(
+                    ty_range,
+                    vec1![format!("Unfinished Variable::Quantified: {q}")],
+                ),
+                None => {}
             }
         }
     }
@@ -2920,6 +2966,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 } else {
                     add_unknown_name_error(errors)
+                }
+            }
+            Binding::MatchExhaustive {
+                subject_idx,
+                subject_range,
+                exhaustiveness_info,
+            } => {
+                // If we couldn't determine narrowing info, conservatively assume not exhaustive
+                let Some((narrowing_subject, (op, narrow_range))) = exhaustiveness_info else {
+                    return Type::None;
+                };
+
+                let subject_info = self.get_idx(*subject_idx);
+                let mut subject_ty = subject_info.ty().clone();
+                self.expand_vars_mut(&mut subject_ty);
+
+                // Check if this type should have exhaustiveness checked
+                if !self.should_check_exhaustiveness(&subject_ty) {
+                    return Type::None; // Not exhaustible, assume fall-through
+                }
+
+                let ignore_errors = self.error_swallower();
+                let narrowing_subject_info = match narrowing_subject {
+                    NarrowingSubject::Name(_) => &subject_info,
+                    NarrowingSubject::Facets(_, facets) => {
+                        let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone())
+                        else {
+                            return Type::None;
+                        };
+                        let type_info = TypeInfo::of_ty(Type::any_implicit());
+                        &type_info.with_narrow(resolved_chain.facets(), subject_ty.clone())
+                    }
+                };
+
+                let narrowed = self.narrow(
+                    narrowing_subject_info,
+                    op.as_ref(),
+                    *narrow_range,
+                    &ignore_errors,
+                );
+
+                let mut remaining_ty = match narrowing_subject {
+                    NarrowingSubject::Name(_) => narrowed.ty().clone(),
+                    NarrowingSubject::Facets(_, facets) => {
+                        let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone())
+                        else {
+                            return Type::None;
+                        };
+                        self.get_facet_chain_type(&narrowed, &resolved_chain, *subject_range)
+                    }
+                };
+                self.expand_vars_mut(&mut remaining_ty);
+
+                // If the result is `Never` then the cases were exhaustive
+                if remaining_ty.is_never() {
+                    Type::never()
+                } else {
+                    Type::None
                 }
             }
             Binding::CompletedPartialType(unpinned_idx, first_use) => {
@@ -3469,6 +3573,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 );
                                 !context_catch(&res)
                             }
+                            LastStmt::Match(_) => {
+                                // Check if the MatchExhaustive binding at this range resolved to Never
+                                e.ty().is_never()
+                            }
                         }
                     })
                 }) {
@@ -3877,7 +3985,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn solve_decorator(&self, x: &BindingDecorator, errors: &ErrorCollector) -> Arc<Decorator> {
         let mut ty = self.expr_infer(&x.expr, errors);
-        self.pin_all_placeholder_types(&mut ty, Some(errors));
+        self.pin_all_placeholder_types(&mut ty, true, x.expr.range(), errors);
         self.expand_vars_mut(&mut ty);
         let deprecation = parse_deprecation(&x.expr);
         Arc::new(Decorator { ty, deprecation })

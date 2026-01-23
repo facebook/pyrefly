@@ -36,6 +36,7 @@ use lsp_types::notification::DidCloseNotebookDocument;
 use lsp_types::notification::DidCloseTextDocument;
 use lsp_types::notification::DidOpenNotebookDocument;
 use lsp_types::notification::DidOpenTextDocument;
+use lsp_types::notification::DidSaveTextDocument;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Initialized;
 use lsp_types::notification::Notification as _;
@@ -453,6 +454,14 @@ impl TestClient {
         }));
     }
 
+    pub fn edit_file(&self, file: &str, contents: &str) {
+        let path = self.get_root_or_panic().join(file);
+        self.did_change(file, contents);
+        std::fs::write(&path, contents).unwrap();
+        self.file_modified(file);
+        self.did_save(file);
+    }
+
     pub fn did_change(&self, file: &str, contents: &str) {
         let path = self.get_root_or_panic().join(file);
         self.send_notification::<DidChangeTextDocument>(json!({
@@ -464,6 +473,15 @@ impl TestClient {
             "contentChanges": [{
                 "text": contents.to_owned()
             }],
+        }));
+    }
+
+    pub fn did_save(&self, file: &str) {
+        let path = self.get_root_or_panic().join(file);
+        self.send_notification::<DidSaveTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&path).unwrap().to_string(),
+            },
         }));
     }
 
@@ -920,7 +938,6 @@ impl TestClient {
     }
 
     /// The next publishDiagnostics for that path should have the expected count, otherwise error
-    #[expect(dead_code)]
     pub fn expect_publish_diagnostics_must_have_error_count(
         &self,
         path: PathBuf,
@@ -1514,5 +1531,53 @@ impl LspInteraction {
                 "diagnostics": []
             }
         }))
+    }
+
+    /// Testing helper: Sets a flag on the server to prevent the next recheck from committing.
+    /// The recheck queue task will loop without committing the transaction until
+    /// `continue_recheck` is called.
+    pub fn do_not_commit_next_recheck(&self) {
+        let id = self.client.next_request_id();
+        self.client.send_message(Message::Request(Request {
+            id: id.clone(),
+            method: "testing/doNotCommitNextRecheck".to_owned(),
+            params: json!(null),
+            activity_key: None,
+        }));
+        // Wait for the response
+        self.client
+            .expect_message("Response for testing/doNotCommitNextRecheck", |msg| {
+                if let Message::Response(x) = msg
+                    && x.id == id
+                {
+                    Some(Ok(()))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+    }
+
+    /// Testing helper: Unsets the flag on the server, allowing the recheck to commit.
+    pub fn continue_recheck(&self) {
+        let id = self.client.next_request_id();
+        self.client.send_message(Message::Request(Request {
+            id: id.clone(),
+            method: "testing/continueRecheck".to_owned(),
+            params: json!(null),
+            activity_key: None,
+        }));
+        // Wait for the response
+        self.client
+            .expect_message("Response for testing/continueRecheck", |msg| {
+                if let Message::Response(x) = msg
+                    && x.id == id
+                {
+                    Some(Ok(()))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
     }
 }

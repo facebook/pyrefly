@@ -11,21 +11,24 @@ license = "MIT"
 [dependencies]
 anstream = "0.6.11"
 anyhow = "1.0.98"
-append-only-vec = "0.1.2"
+append-only-vec = "0.1.8"
 argfile = "0.2.1"
 bstr = { version = "1.10.0", features = ["serde", "std", "unicode"] }
 compact_str = "0.8.0"
 const-str = "0.4.3"
 dupe = "0.9.1"
 equivalent = "1.0"
+fxhash = "0.2.1"
 glob = "0.3.2"
+hashbrown = { version = "0.14.5", features = ["ahash", "raw", "serde"] }
 human_bytes = "0.4.3"
 ignore = "0.4"
+index_vec = "0.1.4"
 itertools = "0.14.0"
 lock_free_hashtable = "0.1.1"
 lsp-types = { git = "https://github.com/astral-sh/lsp-types", rev = "3512a9f33eadc5402cfab1b8f7340824c8ca1439" }
 memory-stats = "1.2.0"
-notify = "6.1.1"
+notify = "8.2.0"
 parse-display = "0.8.2"
 path-absolutize = { version = "3.0", features = ["use_unix_paths_on_wasm"] }
 rayon = "1.11.0"

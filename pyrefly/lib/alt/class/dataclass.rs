@@ -88,6 +88,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metadata = self.get_metadata_for_class(cls);
         let dataclass = metadata.dataclass_metadata()?;
         let mut fields = SmallMap::new();
+
+        // Compute kw_only fields once for all methods that need it
+        let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
+
         self.check_dataclass_non_data_descriptors(cls, dataclass, errors);
         self.check_dataclass_data_descriptor_defaults(cls, dataclass, errors);
         if dataclass.kws.init {
@@ -113,7 +117,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
 
                 let field_types: Vec<Type> = self
-                    .iter_fields(cls, dataclass, false)
+                    .iter_fields(cls, dataclass, false, &kw_only_by_class)
                     .into_iter()
                     .map(|(_, field, _)| field.ty())
                     .collect();
@@ -126,6 +130,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     transform_type,
                     force_optional,
                     converter_table,
+                    &kw_only_by_class,
                     errors,
                 )
             } else {
@@ -137,6 +142,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &|ty| ty,
                     false,
                     ConverterMap::new(),
+                    &kw_only_by_class,
                     errors,
                 )
             };
@@ -157,7 +163,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if dataclass.kws.match_args {
             fields.insert(
                 dunder::MATCH_ARGS,
-                self.get_dataclass_match_args(cls, dataclass),
+                self.get_dataclass_match_args(cls, dataclass, &kw_only_by_class),
             );
         }
         if dataclass.kws.slots {
@@ -171,7 +177,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     "Cannot specify both `slots=True` and `__slots__`".to_owned(),
                 );
             } else {
-                fields.insert(dunder::SLOTS, self.get_dataclass_slots(cls, dataclass));
+                fields.insert(
+                    dunder::SLOTS,
+                    self.get_dataclass_slots(cls, dataclass, &kw_only_by_class),
+                );
             }
         }
         // See rules for `__hash__` creation under "unsafe_hash":
@@ -183,7 +192,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         fields.insert(
             dunder::REPLACE,
-            self.get_dataclass_replace(cls, dataclass, errors),
+            self.get_dataclass_replace(cls, dataclass, &kw_only_by_class, errors),
         );
         Some(ClassSynthesizedFields::new(fields))
     }
@@ -369,12 +378,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         dataclass_metadata: &DataclassMetadata,
+        kw_only_by_class: &SmallMap<Class, SmallSet<Name>>,
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         let mut params = vec![self.class_self_param(cls, true)];
 
         let strict_default = dataclass_metadata.kws.strict;
-        for (name, field, field_flags) in self.iter_fields(cls, dataclass_metadata, true) {
+        for (name, field, field_flags) in
+            self.iter_fields(cls, dataclass_metadata, true, kw_only_by_class)
+        {
             if !field_flags.init {
                 continue;
             }
@@ -469,8 +481,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         // `__post_init__` is called with a dataclass's `InitVar`s, so we use the `InitVar` types
         // to generate a callable signature to check `__post_init__` against.
+        let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
         let mut params = Vec::new();
-        for (name, field, _) in self.iter_fields(cls, dataclass_metadata, true) {
+        for (name, field, _) in self.iter_fields(cls, dataclass_metadata, true, &kw_only_by_class) {
             if field.is_init_var() {
                 params.push(self.as_param(
                     &field,
@@ -715,36 +728,77 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    pub(crate) fn iter_fields(
+    pub fn compute_kw_only_fields_by_class(&self, cls: &Class) -> SmallMap<Class, SmallSet<Name>> {
+        let is_kw_only_marker = |ty: &Type| matches!(ty, Type::ClassType(cls) if cls.has_qname("dataclasses", "KW_ONLY"));
+
+        let compute_for_class = |target_cls: &Class| -> SmallSet<Name> {
+            let mut kw_only_fields = SmallSet::new();
+            let mut seen_kw_only_marker = false;
+            for name in target_cls.fields() {
+                if !target_cls.is_field_annotated(name) {
+                    continue;
+                }
+                let Some(field) =
+                    self.get_non_synthesized_field_from_current_class_only(target_cls, name)
+                else {
+                    continue;
+                };
+                if is_kw_only_marker(&field.ty()) {
+                    seen_kw_only_marker = true;
+                } else if seen_kw_only_marker {
+                    kw_only_fields.insert(name.clone());
+                }
+            }
+            kw_only_fields
+        };
+
+        let mut result: SmallMap<Class, SmallSet<Name>> = SmallMap::new();
+        result.insert(cls.clone(), compute_for_class(cls));
+
+        for ancestor in self.get_mro_for_class(cls).ancestors_no_object() {
+            let ancestor_cls = ancestor.class_object();
+            if ancestor_cls == cls {
+                continue;
+            }
+            result.insert(ancestor_cls.clone(), compute_for_class(ancestor_cls));
+        }
+        result
+    }
+
+    pub fn iter_fields(
         &self,
         cls: &Class,
         dataclass: &DataclassMetadata,
         include_initvar: bool,
+        kw_only_fields_by_class: &SmallMap<Class, SmallSet<Name>>,
     ) -> Vec<(Name, ClassField, DataclassFieldKeywords)> {
-        let mut seen_kw_only_marker = false;
         let mut positional_fields = Vec::new();
         let mut kwonly_fields = Vec::new();
         let cls_is_kw_only = dataclass.kws.kw_only;
         for name in dataclass.fields.iter() {
             match (self.get_dataclass_member(cls, name), include_initvar) {
                 (DataclassMember::KwOnlyMarker, _) => {
-                    seen_kw_only_marker = true;
+                    // KW_ONLY markers are not fields, skip them
                 }
                 (DataclassMember::NotAField, _) => {}
                 (DataclassMember::Field(field, mut keywords), _)
                 | (DataclassMember::InitVar(field, mut keywords), true) => {
                     if keywords.kw_only.is_none() {
-                        // kw_only hasn't been explicitly set on the field
-                        keywords.kw_only = Some(
-                            seen_kw_only_marker
-                                || if field.defining_class == *cls {
-                                    cls_is_kw_only
-                                } else {
-                                    self.get_metadata_for_class(&field.defining_class)
-                                        .dataclass_metadata()
-                                        .is_some_and(|m| m.kws.kw_only)
-                                },
-                        );
+                        // kw_only hasn't been explicitly set on the field.
+                        // A field is kw_only if:
+                        // 1. It appears after a KW_ONLY marker in its defining class, OR
+                        // 2. Its defining class has kw_only=True in the decorator
+                        let after_kw_only_marker = kw_only_fields_by_class
+                            .get(&field.defining_class)
+                            .is_some_and(|fields| fields.contains(name));
+                        let defining_class_is_kw_only = if field.defining_class == *cls {
+                            cls_is_kw_only
+                        } else {
+                            self.get_metadata_for_class(&field.defining_class)
+                                .dataclass_metadata()
+                                .is_some_and(|m| m.kws.kw_only)
+                        };
+                        keywords.kw_only = Some(after_kw_only_marker || defining_class_is_kw_only);
                     };
                     if keywords.is_kw_only() {
                         kwonly_fields.push((name.clone(), (*field.value).clone(), keywords))
@@ -768,11 +822,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         param_type_transform: &dyn Fn(Type) -> Type,
         force_optional: bool,
         converter_table: ConverterMap,
+        kw_only_by_class: &SmallMap<Class, SmallSet<Name>>,
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         let mut params = vec![self.class_self_param(cls, false)];
         let mut has_seen_default = false;
-        for (name, field, field_flags) in self.iter_fields(cls, dataclass, true) {
+        for (name, field, field_flags) in self.iter_fields(cls, dataclass, true, kw_only_by_class) {
             let strict = field_flags.strict.unwrap_or(strict_default);
             if field_flags.init {
                 let has_default = force_optional
@@ -848,13 +903,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         dataclass: &DataclassMetadata,
+        kw_only_by_class: &SmallMap<Class, SmallSet<Name>>,
     ) -> ClassSynthesizedField {
         // Keyword-only fields do not appear in __match_args__.
         let kw_only = dataclass.kws.kw_only;
         let ts = if kw_only {
             Vec::new()
         } else {
-            let filtered_fields = self.iter_fields(cls, dataclass, true);
+            let filtered_fields = self.iter_fields(cls, dataclass, true, kw_only_by_class);
             filtered_fields
                 .iter()
                 .filter_map(|(name, _, field_flags)| {
@@ -874,8 +930,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         dataclass: &DataclassMetadata,
+        kw_only_by_class: &SmallMap<Class, SmallSet<Name>>,
     ) -> ClassSynthesizedField {
-        let filtered_fields = self.iter_fields(cls, dataclass, false);
+        let filtered_fields = self.iter_fields(cls, dataclass, false, kw_only_by_class);
         let ts = filtered_fields
             .iter()
             .map(|(name, _, _)| Lit::Str(name.as_str().into()).to_implicit_type())

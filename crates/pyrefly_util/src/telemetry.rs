@@ -49,6 +49,7 @@ pub struct TelemetryEvent {
     pub sourcedb_rebuild_stats: Option<TelemetrySourceDbRebuildStats>,
     pub sourcedb_rebuild_instance_stats: Option<TelemetrySourceDbRebuildInstanceStats>,
     pub activity_key: Option<ActivityKey>,
+    pub canceled: bool,
 }
 
 pub struct TelemetryFileStats {
@@ -137,6 +138,7 @@ impl TelemetryEvent {
                 sourcedb_rebuild_stats: None,
                 sourcedb_rebuild_instance_stats: None,
                 activity_key: None,
+                canceled: false,
             },
             queue,
         )
@@ -162,6 +164,7 @@ impl TelemetryEvent {
             sourcedb_rebuild_stats: None,
             sourcedb_rebuild_instance_stats: None,
             activity_key: None,
+            canceled: false,
         }
     }
 

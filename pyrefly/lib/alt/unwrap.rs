@@ -15,6 +15,7 @@ use crate::types::callable::Required;
 use crate::types::class::ClassType;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
+use crate::types::types::Union;
 use crate::types::types::Var;
 
 // The error collector is None for a "soft" type hint, where we try to
@@ -125,16 +126,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_mapping(&self, ty: &Type) -> Option<(Type, Type)> {
-        let key = self.fresh_var();
-        let value = self.fresh_var();
-        let dict_type = self
-            .stdlib
-            .mapping(key.to_type(), value.to_type())
-            .to_type();
-        if self.is_subset_eq(ty, &dict_type) {
-            Some((self.resolve_var(ty, key), self.resolve_var(ty, value)))
-        } else {
-            None
+        // TODO: Ideally, we would handle this inside of the subset check
+        // Handle Type::Var and Type::Union explicitly, similar to iterate() in solve.rs.
+        match ty {
+            Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
+                self.unwrap_mapping(&self.solver().force_var(*v))
+            }
+            Type::Union(box Union { members, .. }) => {
+                let results: Option<Vec<_>> =
+                    members.iter().map(|t| self.unwrap_mapping(t)).collect();
+                let (keys, values): (Vec<_>, Vec<_>) = results?.into_iter().unzip();
+                Some((self.unions(keys), self.unions(values)))
+            }
+            _ => {
+                let key = self.fresh_var();
+                let value = self.fresh_var();
+                let dict_type = self
+                    .stdlib
+                    .mapping(key.to_type(), value.to_type())
+                    .to_type();
+                if self.is_subset_eq(ty, &dict_type) {
+                    Some((self.resolve_var(ty, key), self.resolve_var(ty, value)))
+                } else {
+                    None
+                }
+            }
         }
     }
 
