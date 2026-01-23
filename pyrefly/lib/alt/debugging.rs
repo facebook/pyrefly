@@ -117,6 +117,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 AnyIdx::KeyUndecoratedFunction(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyAnnotation(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyClassMetadata(idx) => self.show_binding_for_with(&bindings, idx),
+                AnyIdx::KeyDjangoRelations(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyClassMro(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyAbstractClassCheck(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyLegacyTypeParam(idx) => self.show_binding_for_with(&bindings, idx),

@@ -253,6 +253,13 @@ impl<'a> BindingsBuilder<'a> {
         let mut django_primary_key_field: Option<Name> = None;
         let mut fields = SmallMap::with_capacity(field_definitions.len());
         for (name, (definition, range)) in field_definitions.into_iter_hashed() {
+            let is_django_relation_candidate = matches!(
+                &definition,
+                ClassFieldDefinition::AssignedInBody {
+                    value: ExprOrBinding::Expr(expr),
+                    ..
+                } if expr.as_call_expr().is_some()
+            );
             if let ClassFieldDefinition::AssignedInBody {
                 value: ExprOrBinding::Expr(e),
                 ..
@@ -293,7 +300,10 @@ impl<'a> BindingsBuilder<'a> {
                 range,
                 definition,
             };
-            self.insert_binding(key_field, binding);
+            let field_idx = self.insert_binding(key_field, binding);
+            if is_django_relation_candidate {
+                self.record_django_relation_field(field_idx);
+            }
         }
 
         self.bind_current_as(
