@@ -60,11 +60,13 @@ use crate::base::ConfigBase;
 use crate::base::UntypedDefBehavior;
 use crate::environment::environment::PythonEnvironment;
 use crate::environment::interpreters::Interpreters;
+use crate::environment::venv;
 use crate::error::ErrorConfig;
 use crate::error::ErrorDisplayConfig;
 use crate::finder::ConfigError;
 use crate::module_wildcard::Match;
 use crate::pyproject::PyProject;
+use crate::util::ConfigOrigin;
 
 pub static GENERATED_FILE_CONFIG_OVERRIDE: LazyLock<
     RwLock<SmallMap<ModulePathBuf, ArcId<ConfigFile>>>,
@@ -1006,11 +1008,10 @@ impl ConfigFile {
             }
             match self.interpreters.find_interpreter(self.source.root()) {
                 Ok(mut interpreter) => {
-                    if !interpreter.exists() {
-                         let root = self.source.root().unwrap_or(Path::new("."));
+                    if !interpreter.exists() && let Some(root) = self.source.root() {
                          // Attempt to auto-discover .venv if the configured path is invalid
-                         if let Some(found) = crate::environment::venv::find(root) {
-                             interpreter = crate::util::ConfigOrigin::auto(found);
+                         if let Some(found) = venv::find(root) {
+                             interpreter = ConfigOrigin::fallback(found);
                          }
                     }
 
