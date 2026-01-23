@@ -1134,3 +1134,25 @@ reveal_type(Y)  # E: Ellipsis
 Y.anything  # E: `EllipsisType` has no attribute `anything`
     "#,
 );
+
+fn env_final_value() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from typing import Final
+X: Final = 42
+Y: Final[int] = 42
+"#,
+    )
+}
+
+testcase!(
+    bug = "Should not allow modifying imported Final values",
+    test_modify_imported_final_value,
+    env_final_value(),
+    r#"
+from foo import X, Y
+X = 10
+Y = 10
+"#,
+);
