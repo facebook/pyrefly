@@ -14,6 +14,7 @@ use itertools::Itertools;
 use itertools::izip;
 use pyrefly_python::dunder;
 use pyrefly_types::literal::Lit;
+use pyrefly_types::literal::Literal;
 use pyrefly_types::read_only::ReadOnlyReason;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::ExtraItem;
@@ -990,7 +991,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (t1, Type::Quantified(q)) => match q.restriction() {
                 // This only works for constraints and not bounds, because a TypeVar must resolve to exactly one of its constraints.
-                Restriction::Constraints(constraints) => all(constraints.iter(), |constraint| {
+                Restriction::Constraints(constraints) => any(constraints.iter(), |constraint| {
                     self.is_subset_eq(t1, constraint)
                 }),
                 _ => Err(SubsetError::Other),
@@ -1095,7 +1096,31 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 // Allow substituting a TypedDict for Self when we call methods
                 Ok(())
             }
-            (Type::TypedDict(td), _) => {
+            (Type::TypedDict(td @ TypedDict::Anonymous(_)), _) => {
+                let stdlib = self.type_order.stdlib();
+                self.is_subset_eq(
+                    &stdlib
+                        .dict(
+                            stdlib.str().clone().to_type(),
+                            self.type_order.get_typed_dict_value_type(td),
+                        )
+                        .to_type(),
+                    want,
+                )
+            }
+            (_, Type::TypedDict(td @ TypedDict::Anonymous(_))) => {
+                let stdlib = self.type_order.stdlib();
+                self.is_subset_eq(
+                    got,
+                    &stdlib
+                        .dict(
+                            stdlib.str().clone().to_type(),
+                            self.type_order.get_typed_dict_value_type(td),
+                        )
+                        .to_type(),
+                )
+            }
+            (Type::TypedDict(td @ TypedDict::TypedDict(_)), _) => {
                 let stdlib = self.type_order.stdlib();
                 if let Some(value_type) = self
                     .type_order
@@ -1104,16 +1129,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     self.is_subset_eq(
                         &stdlib
                             .dict(stdlib.str().clone().to_type(), value_type)
-                            .to_type(),
-                        want,
-                    )
-                } else if matches!(td, TypedDict::Anonymous(_)) {
-                    self.is_subset_eq(
-                        &stdlib
-                            .dict(
-                                stdlib.str().clone().to_type(),
-                                self.type_order.get_typed_dict_value_type(td),
-                            )
                             .to_type(),
                         want,
                     )
@@ -1186,9 +1201,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     _ => Err(SubsetError::Other),
                 }
             }
-            (Type::LiteralString | Type::Literal(Lit::Str(_)), Type::ClassType(want))
-                if want.has_qname("typing", "Container")
-                    || want.has_qname("typing", "Collection") =>
+            (
+                Type::LiteralString(_)
+                | Type::Literal(box Literal {
+                    value: Lit::Str(_), ..
+                }),
+                Type::ClassType(want),
+            ) if want.has_qname("typing", "Container")
+                || want.has_qname("typing", "Collection") =>
             {
                 // The signature of `typing.Container.__contains__` is weird.
                 // `str` matches it by direct inheritance, but we cannot convert `LiteralString` to `str`
@@ -1313,22 +1333,26 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 self.is_subset_eq(middle, want)?;
                 Ok(())
             }
-            (Type::Literal(lit), Type::LiteralString) => ok_or(lit.is_string(), SubsetError::Other),
+            (Type::Literal(lit), Type::LiteralString(_)) => {
+                ok_or(lit.value.is_string(), SubsetError::Other)
+            }
             (Type::Literal(lit), t @ Type::ClassType(_)) => self.is_subset_eq(
-                &lit.general_class_type(self.type_order.stdlib())
+                &lit.value
+                    .general_class_type(self.type_order.stdlib())
                     .clone()
                     .to_type(),
                 t,
             ),
             (Type::Literal(l_lit), Type::Literal(u_lit)) => {
-                ok_or(l_lit == u_lit, SubsetError::Other)
+                ok_or(l_lit.value == u_lit.value, SubsetError::Other)
             }
             (_, Type::SelfType(cls))
                 if got.is_literal_string() && cls == self.type_order.stdlib().str() =>
             {
                 Ok(())
             }
-            (Type::LiteralString, _) => {
+            (Type::LiteralString(_), Type::LiteralString(_)) => Ok(()),
+            (Type::LiteralString(_), _) => {
                 self.is_subset_eq(&self.type_order.stdlib().str().clone().to_type(), want)
             }
 

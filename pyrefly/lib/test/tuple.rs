@@ -368,7 +368,7 @@ def test() -> None:
     x: tuple[object, ...] = (1,)
     x += (2, "y")
     y: tuple[int, ...] = (1,)
-    y += (2, "y")  # E: Augmented assignment produces a value of type `tuple[*tuple[int, ...], Literal[2], Literal['y']]`, which is not assignable to `tuple[int, ...]`
+    y += (2, "y")  # E: Augmented assignment result `tuple[*tuple[int, ...], Literal[2], Literal['y']]` is not assignable to `tuple[int, ...]`
 "#,
 );
 

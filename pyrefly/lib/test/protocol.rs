@@ -767,6 +767,24 @@ issubclass(Impl, GenericProtocol)  # E: Runtime checkable protocol `GenericProto
 );
 
 testcase!(
+    test_runtime_checkable_protocol_bound_violation,
+    r#"
+from typing import Protocol, runtime_checkable, TypeVar
+
+T = TypeVar('T', bound=str)
+@runtime_checkable
+class GenericProtocol(Protocol[T]):
+    def get(self, x: T) -> T: ...
+
+class IntImpl:
+    def get(self, x: int) -> int:
+        return x
+
+isinstance(IntImpl(), GenericProtocol)  # E: `int` is not assignable to upper bound `str` of type variable `T`
+    "#,
+);
+
+testcase!(
     test_protocol_with_uninit_classvar,
     r#"
 from typing import Protocol, ClassVar, final

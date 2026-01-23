@@ -14,6 +14,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -43,6 +44,9 @@ use pyrefly_util::globs::Glob;
 use pyrefly_util::globs::Globs;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::telemetry::SubTaskTelemetry;
+use pyrefly_util::telemetry::TelemetryEventKind;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::telemetry::TelemetrySourceDbRebuildStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
@@ -461,6 +465,11 @@ pub struct ConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typeshed_path: Option<PathBuf>,
 
+    /// Path to baseline file for comparing type errors.
+    /// Errors matching the baseline are suppressed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<PathBuf>,
+
     /// Pyrefly's configurations around interpreter querying/finding.
     #[serde(flatten)]
     pub interpreters: Interpreters,
@@ -538,6 +547,7 @@ impl Default for ConfigFile {
             source_db: Default::default(),
             use_ignore_files: true,
             typeshed_path: None,
+            baseline: None,
             skip_lsp_config_indexing: false,
         }
     }
@@ -899,11 +909,13 @@ impl ConfigFile {
     pub fn query_source_db(
         configs_to_files: &SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>>,
         force: bool,
+        telemetry: Option<SubTaskTelemetry>,
     ) -> (
         SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>,
         TelemetrySourceDbRebuildStats,
     ) {
         let mut stats: TelemetrySourceDbRebuildStats = Default::default();
+        stats.common.forced = force;
         let mut reloaded_source_dbs = SmallSet::new();
         let mut sourcedb_configs: SmallMap<_, Vec<_>> = SmallMap::new();
         for (config, files) in configs_to_files {
@@ -920,15 +932,32 @@ impl ConfigFile {
         }
 
         stats.count = sourcedb_configs.len();
+        fn log_telemetry(
+            telemetry: &Option<SubTaskTelemetry>,
+            start: Instant,
+            instance_stats: TelemetrySourceDbRebuildInstanceStats,
+            error: Option<&anyhow::Error>,
+        ) {
+            let Some(telemetry) = telemetry else {
+                return;
+            };
+
+            let mut event_telemetry =
+                telemetry.new_task(TelemetryEventKind::SourceDbRebuildInstance, start);
+            event_telemetry.set_sourcedb_rebuild_instance_stats(instance_stats);
+            telemetry.finish_task(event_telemetry, error);
+        }
         for (source_db, configs_and_files) in sourcedb_configs {
+            let start = Instant::now();
             let all_files = configs_and_files
                 .iter()
                 .flat_map(|x| x.1.iter())
                 .map(|p| p.module_path_buf())
                 .collect::<SmallSet<_>>();
-            let (sourcedb_rebuild, _stats) = source_db.query_source_db(all_files, force);
+            let (sourcedb_rebuild, instance_stats) = source_db.query_source_db(all_files, force);
             let changed = match sourcedb_rebuild {
                 Err(error) => {
+                    log_telemetry(&telemetry, start, instance_stats, Some(&error));
                     error!("Error reloading source database for config: {error:?}");
                     stats.had_error = true;
                     continue;
@@ -955,6 +984,7 @@ impl ConfigFile {
                 );
                 reloaded_source_dbs.insert(source_db.dupe());
             }
+            log_telemetry(&telemetry, start, instance_stats, None);
         }
         (reloaded_source_dbs, stats)
     }
@@ -1075,6 +1105,7 @@ impl ConfigFile {
         };
 
         // TODO(connernilsen): remove once PyTorch performs an upgrade
+        #[allow(unexpected_cfgs)]
         if cfg!(fbcode_build) {
             let root = match &self.source {
                 ConfigSource::File(path) => {
@@ -1158,6 +1189,9 @@ impl ConfigFile {
         }
         if let Some(typeshed_path) = &self.typeshed_path {
             self.typeshed_path = Some(typeshed_path.absolutize_from(config_root));
+        }
+        if let Some(baseline) = &self.baseline {
+            self.baseline = Some(baseline.absolutize_from(config_root));
         }
         self.python_environment
             .site_package_path
@@ -1424,6 +1458,7 @@ mod tests {
                     }
                 }],
                 typeshed_path: None,
+                baseline: None,
                 skip_lsp_config_indexing: false,
             }
         );
@@ -1656,6 +1691,7 @@ mod tests {
                 settings: Default::default(),
             }],
             typeshed_path: Some(PathBuf::from(typeshed)),
+            baseline: Some(PathBuf::from("baseline.json")),
             skip_lsp_config_indexing: false,
         };
 
@@ -1714,6 +1750,7 @@ mod tests {
                 settings: Default::default(),
             }],
             typeshed_path: Some(expected_typeshed),
+            baseline: Some(test_path.join("baseline.json")),
             skip_lsp_config_indexing: false,
         };
         assert_eq!(config, expected_config);
@@ -1739,6 +1776,15 @@ mod tests {
                  "#;
         let err = ConfigFile::parse_config(config_str).unwrap_err();
         assert!(err.to_string().contains("missing field `matches`"));
+    }
+
+    #[test]
+    fn test_baseline_config_parsing() {
+        let config_str = r#"
+baseline = "baseline.json"
+"#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        assert_eq!(config.baseline, Some(PathBuf::from("baseline.json")));
     }
 
     #[test]

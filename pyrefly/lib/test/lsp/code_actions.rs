@@ -16,6 +16,7 @@ use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
@@ -155,6 +156,93 @@ fn apply_first_extract_variable_action(code: &str) -> Option<String> {
     Some(apply_refactor_edits_for_module(&module_info, edits))
 }
 
+fn cursor_selection(code: &str) -> TextRange {
+    let position = extract_cursors_for_test(code)
+        .first()
+        .copied()
+        .expect("expected cursor marker");
+    TextRange::new(position, position)
+}
+
+fn apply_first_inline_variable_action(code: &str) -> Option<String> {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .inline_variable_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
+fn apply_first_inline_method_action(code: &str) -> Option<String> {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .inline_method_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
+fn apply_first_inline_parameter_action(code: &str) -> Option<String> {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .inline_parameter_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
+fn compute_introduce_parameter_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = find_marked_range(module_info.contents());
+    let actions = transaction
+        .introduce_parameter_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_introduce_parameter_action(code: &str, index: usize) -> Option<String> {
+    let (module_info, actions, _) = compute_introduce_parameter_actions(code);
+    let edits = actions.get(index)?;
+    Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn assert_no_introduce_parameter_action(code: &str) {
+    let (_, actions, _) = compute_introduce_parameter_actions(code);
+    assert!(
+        actions.is_empty(),
+        "expected no introduce-parameter actions, found {}",
+        actions.len()
+    );
+}
+
 fn assert_no_extract_variable_action(code: &str) {
     let (_, actions, _) = compute_extract_variable_actions(code);
     assert!(
@@ -192,6 +280,60 @@ fn compute_move_actions(
     let transaction = state.transaction();
     let module_info = transaction.get_module_info(handle).unwrap();
     let actions = compute(&transaction, handle, selection).unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn compute_module_member_move_actions(
+    code_by_module: &[(&'static str, &str)],
+    module_name: &'static str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+    std::collections::HashMap<String, ModuleInfo>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(code_by_module, Require::Everything);
+    let handle = handles.get(module_name).unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let mut module_infos = std::collections::HashMap::new();
+    for (name, _) in code_by_module {
+        if let Some(handle) = handles.get(*name)
+            && let Some(info) = transaction.get_module_info(handle)
+        {
+            module_infos.insert((*name).to_owned(), info);
+        }
+    }
+    let actions = transaction
+        .move_module_member_code_actions(handle, selection, ImportFormat::Absolute)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles, module_infos)
+}
+
+fn compute_make_top_level_actions(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .make_local_function_top_level_code_actions(handle, selection, ImportFormat::Absolute)
+        .unwrap_or_default();
     let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
         actions.iter().map(|action| action.edits.clone()).collect();
     let titles = actions.iter().map(|action| action.title.clone()).collect();
@@ -1115,6 +1257,160 @@ class Child(Base):
 }
 
 #[test]
+fn move_module_member_to_sibling() {
+    let code_a = r#"
+# MOVE-START
+def foo():
+    return 1
+# MOVE-END
+"#;
+    let code_b = "";
+    let selection = find_marked_range_with(code_a, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles, module_infos) =
+        compute_module_member_move_actions(&[("a", code_a), ("b", code_b)], "a", selection);
+    assert_eq!(vec!["Move `foo` to `b`"], titles);
+    let updated_a = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let updated_b = apply_refactor_edits_for_module(
+        module_infos.get("b").expect("missing module b"),
+        &actions[0],
+    );
+    let expected_a = r#"
+# MOVE-START
+from b import foo
+# MOVE-END
+"#;
+    let expected_b = r#"
+def foo():
+    return 1
+"#;
+    assert_eq!(expected_a.trim(), updated_a.trim());
+    assert_eq!(expected_b.trim(), updated_b.trim());
+}
+
+#[test]
+fn make_local_function_top_level() {
+    let code = r#"
+def outer():
+    # MOVE-START
+    def inner(x):
+        return x + 1
+    # MOVE-END
+    return inner(1)
+"#;
+    let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles) = compute_make_top_level_actions(code, selection);
+    assert_eq!(vec!["Make `inner` top-level"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def outer():
+    # MOVE-START
+    # MOVE-END
+    return inner(1)
+def inner(x):
+    return x + 1
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn make_local_function_top_level_inserts_pass() {
+    let code = r#"
+def outer():
+    # MOVE-START
+    def inner():
+        return 1
+    # MOVE-END
+"#;
+    let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles) = compute_make_top_level_actions(code, selection);
+    assert_eq!(vec!["Make `inner` top-level"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def outer():
+    # MOVE-START
+    pass
+def inner():
+    return 1
+    # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn make_method_top_level_with_wrapper() {
+    let code = r#"
+class C:
+    # MOVE-START
+    def foo(self, x):
+        return x + 1
+    # MOVE-END
+"#;
+    let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles) = compute_make_top_level_actions(code, selection);
+    assert_eq!(vec!["Make `foo` top-level"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def foo(self, x):
+    return x + 1
+class C:
+    # MOVE-START
+    foo = foo
+    # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn make_staticmethod_top_level_with_wrapper() {
+    let code = r#"
+class C:
+    # MOVE-START
+    @staticmethod
+    def bar(x):
+        return x
+    # MOVE-END
+"#;
+    let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles) = compute_make_top_level_actions(code, selection);
+    assert_eq!(vec!["Make `bar` top-level"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def bar(x):
+    return x
+class C:
+    # MOVE-START
+    bar = staticmethod(bar)
+    # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn make_classmethod_top_level_with_wrapper() {
+    let code = r#"
+class C:
+    # MOVE-START
+    @classmethod
+    def baz(cls, x):
+        return x
+    # MOVE-END
+"#;
+    let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
+    let (module_info, actions, titles) = compute_make_top_level_actions(code, selection);
+    assert_eq!(vec!["Make `baz` top-level"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+def baz(cls, x):
+    return x
+class C:
+    # MOVE-START
+    baz = classmethod(baz)
+    # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn extract_variable_name_increments_when_taken() {
     let code = r#"
 def compute():
@@ -1131,10 +1427,10 @@ def compute():
     let expected = r#"
 def compute():
     extracted_value = 10
-    extracted_value_2 = 4 * 5
+    extracted_value_1 = 4 * 5
     result = (
         # EXTRACT-START
-        extracted_value_2
+        extracted_value_1
         # EXTRACT-END
     )
     return result
@@ -1176,6 +1472,310 @@ def sink(values):
     return value
 "#;
     assert_no_extract_variable_action(code);
+}
+
+#[test]
+fn introduce_parameter_basic_refactor() {
+    let code = r#"
+def greet(name):
+    return (
+        # EXTRACT-START
+        "Hello " + name
+        # EXTRACT-END
+    )
+
+def caller():
+    greet("Ada")
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def greet(name, param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    greet("Ada", "Hello " + ("Ada"))
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_replace_all_occurrences() {
+    let code = r#"
+def add_one(x):
+    value = (
+        # EXTRACT-START
+        x + 1
+        # EXTRACT-END
+    )
+    return x + 1
+
+def caller():
+    add_one(3)
+"#;
+    let updated = apply_introduce_parameter_action(code, 1)
+        .expect("expected introduce-parameter replace-all action");
+    let expected = r#"
+def add_one(x, param):
+    value = (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+    return param
+
+def caller():
+    add_one(3, (3) + 1)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_method_callsite_uses_receiver() {
+    let code = r#"
+class Greeter:
+    def __init__(self):
+        self.prefix = "Hi "
+
+    def greet(self, name):
+        return (
+            # EXTRACT-START
+            self.prefix + name
+            # EXTRACT-END
+        )
+
+def caller():
+    greeter = Greeter()
+    greeter.greet("Ada")
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+class Greeter:
+    def __init__(self):
+        self.prefix = "Hi "
+
+    def greet(self, name, param):
+        return (
+            # EXTRACT-START
+            param
+            # EXTRACT-END
+        )
+
+def caller():
+    greeter = Greeter()
+    greeter.greet("Ada", greeter.prefix + ("Ada"))
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_keyword_only_insertion() {
+    let code = r#"
+def mix(x, *, y):
+    return (
+        # EXTRACT-START
+        x + y
+        # EXTRACT-END
+    )
+
+def caller():
+    mix(1, y=2)
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def mix(x, *, param, y):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    mix(1, param=(1) + (2), y=2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_no_args_callsite() {
+    let code = r#"
+def magic():
+    return (
+        # EXTRACT-START
+        1 + 2
+        # EXTRACT-END
+    )
+
+def caller():
+    magic()
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def magic(param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    magic(1 + 2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_staticmethod_callsite() {
+    let code = r#"
+class Utils:
+    @staticmethod
+    def join(a, b):
+        return (
+            # EXTRACT-START
+            a + b
+            # EXTRACT-END
+        )
+
+def caller():
+    Utils.join("Hi ", "Ada")
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+class Utils:
+    @staticmethod
+    def join(a, b, param):
+        return (
+            # EXTRACT-START
+            param
+            # EXTRACT-END
+        )
+
+def caller():
+    Utils.join("Hi ", "Ada", ("Hi ") + ("Ada"))
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_mixed_args_callsite() {
+    let code = r#"
+def add(a, b):
+    return (
+        # EXTRACT-START
+        a + b
+        # EXTRACT-END
+    )
+
+def caller():
+    add(1, b=2)
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def add(a, b, param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    add(1, param=(1) + (2), b=2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_classmethod_callsite_uses_cls() {
+    let code = r#"
+class Greeter:
+    prefix = "Hi "
+
+    @classmethod
+    def greet(cls, name):
+        return (
+            # EXTRACT-START
+            cls.prefix + name
+            # EXTRACT-END
+        )
+
+def caller():
+    Greeter.greet("Ada")
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+class Greeter:
+    prefix = "Hi "
+
+    @classmethod
+    def greet(cls, name, param):
+        return (
+            # EXTRACT-START
+            param
+            # EXTRACT-END
+        )
+
+def caller():
+    Greeter.greet("Ada", Greeter.prefix + ("Ada"))
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_rejects_local_names() {
+    let code = r#"
+def combine(values):
+    offset = 2
+    return (
+        # EXTRACT-START
+        values[0] + offset
+        # EXTRACT-END
+    )
+"#;
+    assert_no_introduce_parameter_action(code);
+}
+
+#[test]
+fn introduce_parameter_rejects_star_args_callsite() {
+    let code = r#"
+def accept(value):
+    return (
+        # EXTRACT-START
+        value + 1
+        # EXTRACT-END
+    )
+
+def caller():
+    values = [1]
+    accept(*values)
+"#;
+    assert_no_introduce_parameter_action(code);
+}
+
+#[test]
+fn introduce_parameter_rejects_kwargs_callsite() {
+    let code = r#"
+def accept(value):
+    return (
+        # EXTRACT-START
+        value + 1
+        # EXTRACT-END
+    )
+
+def caller():
+    values = {"value": 1}
+    accept(**values)
+"#;
+    assert_no_introduce_parameter_action(code);
 }
 
 mod extract_field_tests {
@@ -1448,4 +2048,96 @@ def sink(values):
     # EXTRACT-END
 "#;
     assert_no_extract_action(code);
+}
+
+#[test]
+fn inline_variable_basic_refactor() {
+    let code = r#"
+def compute():
+    value = 1 + 2
+    result = value * 3
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = (1 + 2) * 3
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_method_basic_refactor() {
+    let code = r#"
+def add(a, b):
+    return a + b
+
+def compute():
+    total = add(1, 2)
+#           ^
+    return total
+"#;
+    let updated = apply_first_inline_method_action(code).expect("expected inline method action");
+    let expected = r#"
+def add(a, b):
+    return a + b
+
+def compute():
+    total = (1 + 2)
+#           ^
+    return total
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_method_preserves_needed_parens() {
+    // When an argument is a complex expression, it should be wrapped in parens
+    let code = r#"
+def mul(a, b):
+    return a * b
+
+def compute():
+    result = mul(1 + 2, 3)
+#            ^
+    return result
+"#;
+    let updated = apply_first_inline_method_action(code).expect("expected inline method action");
+    let expected = r#"
+def mul(a, b):
+    return a * b
+
+def compute():
+    result = ((1 + 2) * 3)
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_parameter_basic_refactor() {
+    let code = r#"
+def add(a, b):
+#          ^
+    return a + b
+
+def compute():
+    return add(1, 2)
+"#;
+    let updated =
+        apply_first_inline_parameter_action(code).expect("expected inline parameter action");
+    let expected = r#"
+def add(a):
+#          ^
+    return a + (2)
+
+def compute():
+    return add(1)
+"#;
+    assert_eq!(expected, updated);
 }

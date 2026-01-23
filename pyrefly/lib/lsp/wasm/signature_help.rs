@@ -37,6 +37,30 @@ use crate::types::callable::Param;
 use crate::types::callable::Params;
 use crate::types::types::Type;
 
+pub(crate) fn is_constructor_call(callee_type: Type) -> bool {
+    matches!(callee_type, Type::ClassDef(_))
+        || matches!(callee_type, Type::Type(box Type::ClassType(_)))
+}
+
+// Normally the constructor for a class returns `None`, but for hover/signature we change it to show the class for clarity
+// So the constructor for `C` would be `(self) -> C` instead of `(self) -> None`
+pub(crate) fn override_constructor_return_type(constructor_type: Type) -> Option<Type> {
+    let mut callable = constructor_type.clone().to_callable()?;
+    if !callable.ret.is_none() {
+        return None;
+    }
+    if let Params::List(ref params_list) = callable.params
+        && let Some(Param::Pos(name, self_type, _) | Param::PosOnly(Some(name), self_type, _)) =
+            params_list.items().first()
+        && (name.as_str() == "self" || name.as_str() == "cls")
+    {
+        callable.ret = self_type.clone();
+        Some(Type::Callable(Box::new(callable)))
+    } else {
+        None
+    }
+}
+
 /// The currently active argument in a function call for signature help.
 #[derive(Debug)]
 pub(crate) enum ActiveArgument {
@@ -280,11 +304,20 @@ impl Transaction<'_> {
         active_argument: &ActiveArgument,
         parameter_docs: Option<&HashMap<String, String>>,
         function_docstring: Option<&Docstring>,
+        is_constructor_call: bool,
     ) -> SignatureInformation {
         let type_ = type_.deterministic_printing();
-        let label = type_.as_lsp_string(LspDisplayMode::SignatureHelp);
+
+        // Display the return type as the class instance type instead of None
+        let display_type = if is_constructor_call {
+            override_constructor_return_type(type_.clone()).unwrap_or(type_)
+        } else {
+            type_
+        };
+
+        let label = display_type.as_lsp_string(LspDisplayMode::SignatureHelp);
         let (parameters, active_parameter) = if let Some(params) =
-            Self::normalize_singleton_function_type_into_params(type_)
+            Self::normalize_singleton_function_type_into_params(display_type)
         {
             // Create a type display context for consistent parameter formatting
             let param_types: Vec<&Type> = params.iter().map(|p| p.as_type()).collect();
@@ -335,6 +368,12 @@ impl Transaction<'_> {
             |(callables, chosen_overload_index, active_argument, callee_range)| {
                 let parameter_docs = self.parameter_documentation_for_callee(handle, callee_range);
                 let function_docstring = self.function_docstring_for_callee(handle, callee_range);
+
+                let is_constructor_call = self
+                    .get_answers(handle)
+                    .and_then(|ans| ans.get_type_trace(callee_range))
+                    .is_some_and(is_constructor_call);
+
                 let signatures = callables
                     .into_iter()
                     .map(|t| {
@@ -343,6 +382,7 @@ impl Transaction<'_> {
                             &active_argument,
                             parameter_docs.as_ref(),
                             function_docstring.as_ref(),
+                            is_constructor_call,
                         )
                     })
                     .collect_vec();

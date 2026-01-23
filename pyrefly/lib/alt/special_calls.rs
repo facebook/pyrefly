@@ -66,6 +66,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                     .promote_typevar_values(self.stdlib)
                     .explicit_any()
+                    .explicit_literals()
                     .noreturn_to_never()
                     .anon_callables()
                     .anon_typed_dicts(self.stdlib)
@@ -370,7 +371,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // fresh vars and solve them during the `is_subset_eq` check below.
                         let protocol_metadata = metadata.protocol_metadata().unwrap();
                         if let Some(object_type) = &object_type
-                            && let Type::ClassType(protocol_class_type) =
+                            && let (vs, Type::ClassType(protocol_class_type)) =
                                 self.instantiate_fresh_class(cls)
                         {
                             let mut unsafe_overlap_errors = vec![];
@@ -394,6 +395,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         "Attribute `{}` has incompatible types{}",
                                         field_name, error_msg,
                                     ));
+                                }
+                            }
+                            if let Err(specialization_errors) =
+                                self.solver().finish_quantified(vs, false)
+                            {
+                                for e in specialization_errors {
+                                    unsafe_overlap_errors.push(e.to_error_msg(self))
                                 }
                             }
                             if !unsafe_overlap_errors.is_empty() {

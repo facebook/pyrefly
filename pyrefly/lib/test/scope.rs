@@ -40,7 +40,7 @@ def f() -> int:
 testcase!(
     test_unknown_name_no_suggest_from_future_defs,
     r#"
-future_value = missing  # E: `missing` is uninitialized
+future_value = missing  # E: `missing` is uninitialized  # !E: Did you mean
 missing = 1
 "#,
 );
@@ -51,7 +51,7 @@ testcase!(
 class C:
     x = 1
     def m(self) -> int:
-        return x  # E: Could not find name `x`
+        return x  # E: Could not find name `x`  # !E: Did you mean
 "#,
 );
 
@@ -69,7 +69,7 @@ testcase!(
     r#"
 a = 1
 b = 2
-aa  # E: Could not find name `aa`
+aa  # E: Could not find name `aa`  # !E: Did you mean
 "#,
 );
 
@@ -101,8 +101,7 @@ testcase!(
     r#"
 alpha = 1
 beta = 2
-gamma = 3
-missing_completely = delta  # E: Could not find name `delta`
+missing_completely = gamma  # E: Could not find name `gamma`  # !E: Did you mean
 "#,
 );
 
@@ -788,6 +787,16 @@ class C:
 "#,
 );
 
+testcase!(
+    test_class_scope_annotation_shadows_function,
+    r#"
+class D:
+    def int(self) -> None:
+        ...
+    y: int = 0  # E: Expected a type form
+"#,
+);
+
 // Nested scopes - except for parameter scopes - cannot see a containing class
 // body. This applies not only to methods but also other scopes like lambda, inner
 // class bodies, and comprehensions. See https://github.com/facebook/pyrefly/issues/264
@@ -857,4 +866,51 @@ class C:
         def g(self, z = x):  # E: Could not find name `x`
             pass
     "#,
+);
+
+testcase!(
+    test_global_in_inner_function,
+    r#"
+from typing import assert_type
+
+x: int = 1
+
+def outer():
+    x: str = ""
+
+    def inner():
+        global x
+        assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_global_with_same_name_as_local,
+    r#"
+from typing import assert_type, Literal
+
+x = 42
+
+def f():
+    global x
+    assert_type(x, Literal[42])
+    x = "foo"
+    "#,
+);
+
+testcase!(
+    test_captured_var_in_nested_function_with_flow_merge,
+    r#"
+from typing import Any, Mapping
+def test() -> Any:
+    x: Mapping[int, int]
+    x = {}
+    def nested(a: int, bs: list[int]) -> Any:
+        if not x[0]:
+            return None
+        for b in bs:
+            break
+        return x
+    return nested
+"#,
 );

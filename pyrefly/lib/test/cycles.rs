@@ -392,3 +392,51 @@ def f(  # E: Expected `)`, found newline
 )n = min(n, size)  # E: Expected a statement # E: `n` is uninitialized # E: Could not find name `size`
 "#,
 );
+
+// Regression test for issue #2175, which was infinite recursion in is_subset_eq
+// when checking recursive type patterns. The cycle detection in is_subset_eq
+// should prevent stack overflow.
+testcase!(
+    recursive_type_subset_check_no_overflow,
+    r#"
+from typing import Protocol, TypeVar, Generic
+
+T = TypeVar("T", covariant=True)
+
+# A recursive protocol that references itself
+class Readable(Protocol[T]):
+    def read(self) -> T: ...
+
+# A class that implements the recursive protocol
+class Stream(Generic[T]):
+    def read(self) -> T: ...
+
+def consume(x: Readable[int]) -> int:
+    return x.read()
+
+s: Stream[int] = Stream()
+consume(s)  # Should not cause stack overflow
+"#,
+);
+
+// Test that mutually recursive classes don't cause infinite recursion
+testcase!(
+    mutually_recursive_classes_subset,
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class A(Generic[T]):
+    def get_b(self) -> "B[T]": ...
+
+class B(Generic[T]):
+    def get_a(self) -> "A[T]": ...
+
+def f(x: A[int]) -> B[int]:
+    return x.get_b()
+
+def g(x: B[int]) -> A[int]:
+    return x.get_a()
+"#,
+);

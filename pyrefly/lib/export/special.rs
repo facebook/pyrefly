@@ -69,6 +69,7 @@ pub enum SpecialExport {
     BuiltinsFrozenset,
     BuiltinsFloat,
     Deprecated,
+    TypingMapping,
 }
 
 impl SpecialExport {
@@ -129,6 +130,7 @@ impl SpecialExport {
             "frozenset" => Some(Self::BuiltinsFrozenset),
             "float" => Some(Self::BuiltinsFloat),
             "deprecated" => Some(Self::Deprecated),
+            "Mapping" => Some(Self::TypingMapping),
             _ => None,
         }
     }
@@ -158,7 +160,8 @@ impl SpecialExport {
             | Self::TypingType
             | Self::TypingDict
             | Self::TypingList
-            | Self::TypingTuple => {
+            | Self::TypingTuple
+            | Self::TypingMapping => {
                 matches!(m.as_str(), "typing" | "typing_extensions")
             }
             Self::CollectionsNamedTuple => matches!(m.as_str(), "collections"),

@@ -113,6 +113,27 @@ def test(o: C):
 );
 
 testcase!(
+    test_overload_method_name_matches_class,
+    r#"
+from typing import assert_type, overload
+
+class A:
+    @overload
+    def B(self, x: int) -> B: ...
+    @overload
+    def B(self, x: str) -> B: ...
+    def B(self, x):
+        return B()
+
+class B:
+    x: int
+
+assert_type(A().B(0).x, int)
+assert_type(A().B("1").x, int)
+    "#,
+);
+
+testcase!(
     test_overload_arg_errors,
     r#"
 from typing import overload, assert_type
@@ -628,6 +649,20 @@ def f(x: int) -> int: ...
 @overload
 def f(x: str) -> int: ...  # E: Implementation signature `(x: int) -> int` does not accept all arguments that overload signature `(x: str) -> int` accepts
 def f(x: int) -> int:
+    return x
+    "#,
+);
+
+testcase!(
+    test_typevar_bound_consistency,
+    r#"
+from typing import overload
+
+@overload
+def f[T: str](x: T) -> T: ...  # E: `str` is not assignable to upper bound `bytes` of type variable `T`
+@overload
+def f[T: bytes](x: T) -> T: ...
+def f[T: bytes](x: T) -> T:
     return x
     "#,
 );
@@ -1243,5 +1278,88 @@ class Foo[T]:
     @overload
     def test(self, obj: T, cls: type[T]) -> int: ...
     def test(self, obj: T | None, cls: type[T]) -> str | int: ...
+    "#,
+);
+
+testcase!(
+    test_literal_selection,
+    r#"
+import contextlib
+import os
+from typing import AnyStr, IO, Iterator, Literal, assert_type, overload
+
+@overload
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: Literal["wb", "w+b"] = ..., **kwargs
+) -> Iterator[IO[bytes]]: ...
+@overload
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: Literal["w", "w+", "wt", "w+t"], **kwargs
+) -> Iterator[IO[str]]: ...
+@overload
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: str, **kwargs
+) -> Iterator[IO[AnyStr]]: ...
+
+@contextlib.contextmanager
+def atomic_file(
+    dest: str | os.PathLike[str], mode: str = "w+b", **kwargs
+) -> Iterator[IO]:
+    ...
+
+with atomic_file("foo", "w") as f:
+    assert_type(f, IO[str])
+    "#,
+);
+
+testcase!(
+    bug = "We incorrectly match the `LiteralString` overload of `relpath`",
+    test_literalstring_or_str_overloads,
+    r#"
+from typing import Any, LiteralString, overload
+
+class PathLike[T]: ...
+
+def normpath[T](path: PathLike[T]) -> T: ...
+
+@overload
+def relpath(path: LiteralString) -> LiteralString: ...
+@overload
+def relpath(path: str) -> str: ...
+def relpath(path) -> Any: ...
+
+def f(path: Any, data: Any) -> dict[str, Any]:
+    outputs = {}
+    relative_normalized_path = relpath(normpath(path))
+    outputs[relative_normalized_path] = data
+    return outputs  # E: `dict[LiteralString, Any]` is not assignable to declared return type `dict[str, Any]`
+    "#,
+);
+
+testcase!(
+    test_one_overload_is_typeis,
+    r#"
+from typing import TypeIs, assert_type, overload
+
+@overload
+def f(x: str) -> str: ...
+@overload
+def f(x: int) -> TypeIs[bool]: ...
+def f(x):
+    if isinstance(x, str):
+        return x
+    else:
+        return isinstance(x, bool)
+
+def g(x: str, y: int):
+    assert_type(f(x), str)
+    assert_type(f(y), bool)
+    if f(x):
+        assert_type(x, str)
+    if f(y):
+        assert_type(y, bool)
     "#,
 );

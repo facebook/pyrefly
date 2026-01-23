@@ -446,6 +446,23 @@ bad2: C[int].X  # E: Generic attribute `X` of class `C` is not visible on the cl
     "#,
 );
 
+// Type alias scopes (PEP 695) should have access to enclosing class scopes,
+// similar to annotation scopes.
+testcase!(
+    test_type_alias_sees_class_scope,
+    r#"
+from typing import assert_type
+class Foo:
+    class Bar: ...
+
+    attr = Bar()
+    type Baz = Bar | None
+
+def f(x: Foo.Baz):
+    assert_type(x, Foo.Bar | None)
+    "#,
+);
+
 testcase!(
     test_union_alias,
     r#"
@@ -977,5 +994,36 @@ assert_type(x, First[int] | Second[int])
 
 y: Alias[str] = Second("hello")
 assert_type(y, First[str] | Second[str])
+    "#,
+);
+
+testcase!(
+    test_type_alias_subscript_forward_ref,
+    r#"
+from typing import TypeVar, Generic, Iterator
+
+T = TypeVar("T")
+E = TypeVar("E")
+
+class Ok(Generic[T]):
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+class Err(Generic[E]):
+    def __init__(self, error: E) -> None:
+        self.error = error
+
+Result = Ok[T] | Err[E]
+
+class CannotTransform(Exception):
+    pass
+
+TResult = Result[T, CannotTransform]
+
+class Line:
+    pass
+
+def type_alias_subscript() -> Iterator["TResult[Line]"]:
+    yield Ok(Line())
     "#,
 );

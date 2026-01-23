@@ -253,8 +253,9 @@ struct OutputArgs {
     )]
     only: Option<Vec<ErrorKind>>,
 
-    /// By default show the number of errors. Pass `--summary` to show information about lines checked and time/memory,
-    /// or `--summary=none` to hide the summary line entirely.
+    /// By default show a progress bar and the number of errors.
+    /// Pass `--summary` to additionally show information about lines checked and time/memory,
+    /// or `--summary=none` to hide the progress bar and summary line entirely.
     #[arg(
         long,
         default_missing_value = "full",
@@ -531,7 +532,7 @@ impl Handles {
         }
 
         // TODO(connernilsen): wire in force logic
-        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false).0;
+        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false, None).0;
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
@@ -649,7 +650,7 @@ impl Timings {
 
 impl CheckArgs {
     pub fn run_once(
-        self,
+        mut self,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
@@ -676,6 +677,18 @@ impl CheckArgs {
             true,
         );
         let (loaded_handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
+
+        // If CLI doesn't provide baseline, get from config
+        if self.output.baseline.is_none()
+            && let Some(handle) = loaded_handles.first()
+        {
+            let config = holder.as_ref().config_finder().python_file(
+                ModuleNameWithKind::guaranteed(handle.module()),
+                handle.path(),
+            );
+            self.output.baseline = config.baseline.clone();
+        }
+
         self.run_inner(
             timings,
             transaction.as_mut(),
@@ -686,7 +699,7 @@ impl CheckArgs {
     }
 
     pub fn run_once_with_snippet(
-        self,
+        mut self,
         code: String,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
@@ -698,12 +711,17 @@ impl CheckArgs {
         let holder = Forgetter::new(State::new(config_finder), true);
 
         // Create a single handle for the virtual module
-        let sys_info = holder
+        let config = holder
             .as_ref()
             .config_finder()
-            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path)
-            .get_sys_info();
+            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path);
+        let sys_info = config.get_sys_info();
         let handle = Handle::new(module_name, module_path.clone(), sys_info);
+
+        // If CLI doesn't provide baseline, get from config
+        if self.output.baseline.is_none() {
+            self.output.baseline = config.baseline.clone();
+        }
 
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
@@ -729,7 +747,7 @@ impl CheckArgs {
     }
 
     pub async fn run_watch(
-        self,
+        mut self,
         mut watcher: Watcher,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
@@ -740,11 +758,25 @@ impl CheckArgs {
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder);
+
+        // Track if CLI provided baseline - if so, never override it with config values
+        let cli_provided_baseline = self.output.baseline.is_some();
+
         let mut transaction = state.new_committable_transaction(require_levels.default, None);
         loop {
             let timings = Timings::new();
             let (loaded_handles, reloaded_configs, sourcedb_errors) =
                 handles.all(state.config_finder());
+
+            // If CLI didn't provide baseline, get from config on every iteration
+            // to pick up config file changes
+            if !cli_provided_baseline && let Some(handle) = loaded_handles.first() {
+                let config = state.config_finder().python_file(
+                    ModuleNameWithKind::guaranteed(handle.module()),
+                    handle.path(),
+                );
+                self.output.baseline = config.baseline.clone();
+            }
             let mut_transaction = transaction.as_mut();
             mut_transaction.invalidate_find_for_configs(reloaded_configs);
             let res = self.run_inner(
@@ -807,9 +839,13 @@ impl CheckArgs {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         let type_check_start = Instant::now();
-        transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+        if self.output.summary != Summary::None {
+            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+        }
         transaction.run(handles, require);
-        transaction.set_subscriber(None);
+        if self.output.summary != Summary::None {
+            transaction.set_subscriber(None);
+        }
 
         let loads = if self.behavior.check_all {
             transaction.get_all_errors()

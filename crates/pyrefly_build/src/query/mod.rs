@@ -12,6 +12,8 @@ use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Context as _;
 use dupe::Dupe as _;
@@ -57,31 +59,42 @@ impl Include {
     }
 }
 
+pub struct QueryResult {
+    pub db: anyhow::Result<TargetManifestDatabase>,
+    pub build_id: Option<String>,
+    pub build_duration: Option<Duration>,
+    pub parse_duration: Option<Duration>,
+    pub stdout_size: Option<usize>,
+}
+
 pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
     /// Query the sourcedb for the set of files provided, running from the CWD.
     /// Returns the parsed source database or any errors that occurred, and an
     /// optional string representing a unique ID from the build system,
     /// if available and applicable.
-    fn query_source_db(
-        &self,
-        files: &SmallSet<Include>,
-        cwd: &Path,
-    ) -> (anyhow::Result<TargetManifestDatabase>, Option<String>) {
+    fn query_source_db(&self, files: &SmallSet<Include>, cwd: &Path) -> QueryResult {
         if files.is_empty() {
-            return (
-                Ok(TargetManifestDatabase {
+            return QueryResult {
+                db: Ok(TargetManifestDatabase {
                     db: SmallMap::new(),
                     root: cwd.to_path_buf(),
                 }),
-                None,
-            );
+                build_id: None,
+                build_duration: None,
+                parse_duration: None,
+                stdout_size: None,
+            };
         }
 
         let build_id_file = NamedTempFile::with_prefix("pyrefly_build_id_")
             .inspect_err(|e| error!("Failed to create build ID tempfile: {e:#?}"))
             .ok();
 
-        let result = (|| {
+        let mut build_duration = None;
+        let mut parse_duration = None;
+        let mut stdout_size = None;
+
+        let db = (|| {
             let mut argfile =
                 NamedTempFile::with_prefix("pyrefly_build_query_").with_context(|| {
                     "Failed to create temporary argfile for querying source DB".to_owned()
@@ -97,11 +110,14 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
                 .write_all(argfile_args.as_encoded_bytes())
                 .with_context(|| "Could not write to argfile when querying source DB".to_owned())?;
 
+            let build_start = Instant::now();
             let mut cmd = self.construct_command(build_id_file.as_ref().map(|b| b.path()));
             cmd.arg(format!("@{}", argfile.path().display()));
             cmd.current_dir(cwd);
 
             let result = cmd.output()?;
+            let parse_start = Instant::now();
+            build_duration = Some(parse_start - build_start);
             if !result.status.success() {
                 let stdout = String::from_utf8(result.stdout)
                     .unwrap_or_else(|_| "<Failed to parse stdout from source DB query>".to_owned());
@@ -113,8 +129,9 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
                     "Source DB query failed...\nSTDOUT: {stdout}\nSTDERR: {stderr}"
                 ));
             }
+            stdout_size = Some(result.stdout.len());
 
-            match serde_json::from_slice(&result.stdout)
+            let parse_result = match serde_json::from_slice(&result.stdout)
                 .with_context(|| {
                     format!(
                         "Failed to construct valid `TargetManifestDatabase` from querier result. Command run: {} {}",
@@ -146,7 +163,9 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
                         Err(e)
                     },
                     ok => ok,
-            }
+            };
+            parse_duration = Some(parse_start.elapsed());
+            parse_result
         })();
 
         let build_id = (|| {
@@ -166,7 +185,13 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
             info!("Source DB build ID: {build_id}");
         }
 
-        (result, build_id)
+        QueryResult {
+            db,
+            build_id,
+            build_duration,
+            parse_duration,
+            stdout_size,
+        }
     }
 
     fn construct_command(&self, build_id_file: Option<&Path>) -> Command;

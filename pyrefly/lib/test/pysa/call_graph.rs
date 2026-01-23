@@ -27,6 +27,8 @@ use crate::report::pysa::call_graph::FunctionTrait;
 use crate::report::pysa::call_graph::HigherOrderParameter;
 use crate::report::pysa::call_graph::IdentifierCallees;
 use crate::report::pysa::call_graph::ImplicitReceiver;
+use crate::report::pysa::call_graph::ReturnShimArgumentMapping;
+use crate::report::pysa::call_graph::ReturnShimCallees;
 use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::Unresolved;
 use crate::report::pysa::call_graph::UnresolvedReason;
@@ -412,7 +414,7 @@ fn class_identifier_without_constructors(
             unresolved: Unresolved::False,
         },
         global_targets: vec![],
-        nonlocal_targets: vec![],
+        captured_variables: vec![],
     })
 }
 
@@ -505,7 +507,7 @@ fn identifier_callees(
             unresolved,
         },
         global_targets: vec![],
-        nonlocal_targets: vec![],
+        captured_variables: vec![],
     })
 }
 
@@ -521,7 +523,7 @@ fn regular_identifier_callees(
             unresolved: Unresolved::False,
         },
         global_targets: vec![],
-        nonlocal_targets: vec![],
+        captured_variables: vec![],
     })
 }
 
@@ -531,7 +533,7 @@ fn global_identifier_callees(
     ExpressionCallees::Identifier(IdentifierCallees {
         if_called: CallCallees::empty(),
         global_targets,
-        nonlocal_targets: vec![],
+        captured_variables: vec![],
     })
 }
 
@@ -542,7 +544,7 @@ fn nonlocal_identifier_callees(
     ExpressionCallees::Identifier(IdentifierCallees {
         if_called: CallCallees::empty(),
         global_targets: vec![],
-        nonlocal_targets: vec![CapturedVariableRef {
+        captured_variables: vec![CapturedVariableRef {
             outer_function: FunctionRefForTest::from_string(function),
             name: Name::new(variable_name),
         }],
@@ -601,6 +603,16 @@ fn unresolved_format_string_stringify_callees(
     ExpressionCallees::FormatStringStringify(FormatStringStringifyCallees {
         targets: vec![],
         unresolved: Unresolved::True(reason),
+    })
+}
+
+fn return_shim_callees(
+    call_targets: Vec<CallTarget<FunctionRefForTest>>,
+    arguments: Vec<ReturnShimArgumentMapping>,
+) -> ExpressionCallees<FunctionRefForTest> {
+    ExpressionCallees::Return(ReturnShimCallees {
+        targets: call_targets,
+        arguments,
     })
 }
 
@@ -970,7 +982,7 @@ def foo(c: C):
                             unresolved: Unresolved::False,
                         },
                         global_targets: vec![],
-                        nonlocal_targets: vec![],
+                        captured_variables: vec![],
                     }),
                 ),
                 ("5:4-5:17", regular_call_callees(call_targets)),
@@ -3155,7 +3167,7 @@ def g() -> A:
   return A()
 def id(arg):
   return arg
-def foo(l0: typing.AsyncIterator[int], l1: typing.List[int], l2: typing.AsyncIterable[int]):
+async def foo(l0: typing.AsyncIterator[int], l1: typing.List[int], l2: typing.AsyncIterable[int]):
   x = [x async for x in l0]
   x = [x for x in l1]  # List comprehension
   x = [x async for x in l2]  # List comprehension
@@ -6324,6 +6336,452 @@ def foo(d: dict[str, int], k: str, v: int):
                             .with_receiver_class_for_test("builtins.dict", context)
                             .with_return_type(ScalarTypeProperties::int()),
                     ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_abs,
+    TEST_MODULE_NAME,
+    r#"
+def foo(x: int):
+  return abs(x)
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:10-3:16",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.abs", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+                (
+                    "3:10-3:16|artificial-call|abs-call",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.int.__abs__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.int", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    iter_iter_next,
+    TEST_MODULE_NAME,
+    r#"
+def foo(x: list[int]):
+  return next(iter(x))
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:15-3:22",
+                    regular_call_callees(vec![create_call_target(
+                        "builtins.iter",
+                        TargetType::Function,
+                    )]),
+                ),
+                (
+                    "3:10-3:23",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.next", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+                (
+                    "3:15-3:22|artificial-call|iter-call",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.list.__iter__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.list", context),
+                    ]),
+                ),
+                (
+                    "3:10-3:23|artificial-call|next-call",
+                    regular_call_callees(vec![
+                        create_call_target("typing.Iterator.__next__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("typing.Iterator", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_return_shim_callees,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, Any
+def decorator_1(callable: Callable[[Any], Any]) -> Callable[[Any], Any]:
+  return callable
+def decorator_2(callable: Callable[[Any, int], int]) -> Callable[[Any, int], int]:
+  return callable
+def decorator_3(callable: Callable[[Any, int], int]) -> Callable[[Any, int], int]:
+  return callable
+class Foo:
+  @decorator_2
+  def callee_1(self, x: int) -> int:
+    return x
+  @decorator_2
+  def callee_2(self, x: int) -> int:
+    return x
+  def not_callee_1(self, x: int) -> int:
+    return x
+  @decorator_3
+  def not_callee_2(self, x: int) -> int:
+    return x
+@decorator_1
+def caller(foo: Foo) -> Foo:  # Test return callees
+  return foo
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.caller",
+            vec![(
+                "23:3-23:13",
+                return_shim_callees(
+                    vec![
+                        create_call_target("test.Foo.callee_1", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                        create_call_target("test.Foo.callee_2", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                    ],
+                    /* arguments */ vec![ReturnShimArgumentMapping::ReturnExpression],
+                ),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_return_shim_callees_in_list,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, List, Any
+def decorator_1(callable: Callable[[Any], Any]) -> Callable[[Any], Any]:
+  return callable
+def decorator_2(callable: Callable[[Any, int], int]) -> Callable[[Any, int], int]:
+  return callable
+class Foo:
+  @decorator_2
+  def callee(self, x: int) -> int:
+    return x
+@decorator_1
+def caller(foo: Foo) -> List[Foo]:  # Test stripping
+  return [foo]
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.caller",
+            vec![(
+                "13:3-13:15",
+                return_shim_callees(
+                    vec![
+                        create_call_target("test.Foo.callee", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                    ],
+                    vec![ReturnShimArgumentMapping::ReturnExpressionElement],
+                ),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_return_shim_callees_in_sequence,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, Sequence, Any
+def decorator_1(callable: Callable[[Any], Any]) -> Callable[[Any], Any]:
+  return callable
+def decorator_2(callable: Callable[[Any, int], int]) -> Callable[[Any, int], int]:
+  return callable
+class Foo:
+  @decorator_2
+  def callee(self, x: int) -> int:
+    return x
+@decorator_1
+def caller(foo: Foo) -> Sequence[Foo]:  # Test stripping
+  return [foo]
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.caller",
+            vec![(
+                "13:3-13:15",
+                return_shim_callees(
+                    vec![
+                        create_call_target("test.Foo.callee", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                    ],
+                    vec![ReturnShimArgumentMapping::ReturnExpressionElement],
+                ),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_return_shim_callees_in_set,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, Set, Any
+def decorator_1(callable: Callable[[Any], Any]) -> Callable[[Any], Any]:
+  return callable
+def decorator_2(callable: Callable[[Any, int], int]) -> Callable[[Any, int], int]:
+  return callable
+class Foo:
+  @decorator_2
+  def callee(self, x: int) -> int:
+    return x
+@decorator_1
+def caller(foo: Foo) -> Set[Foo]:  # Test stripping
+  return {foo}
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.caller",
+            vec![(
+                "13:3-13:15",
+                return_shim_callees(
+                    vec![
+                        create_call_target("test.Foo.callee", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                    ],
+                    vec![ReturnShimArgumentMapping::ReturnExpressionElement],
+                ),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_return_shim_callees_in_optional,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable, Optional, Any
+def decorator_1(callable: Callable[[Any], Any]) -> Callable[[Any], Any]:
+  return callable
+def decorator_2(callable: Callable[[Any, int], int]) -> Callable[[Any, int], int]:
+  return callable
+class Foo:
+  @decorator_2
+  def callee(self, x: int) -> int:
+    return x
+@decorator_1
+def caller(foo: Optional[Foo]) -> Optional[Foo]:  # Test stripping
+  return foo
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.caller",
+            vec![(
+                "13:3-13:13",
+                return_shim_callees(
+                    vec![
+                        create_call_target("test.Foo.callee", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                    ],
+                    vec![ReturnShimArgumentMapping::ReturnExpression],
+                ),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_return_shim_multiple_callees,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Callable
+def decorator_1(callable: Callable[[Any], Any]) -> Callable[[Any], Any]:
+  return callable
+def decorator_2(callable: Callable[[Any, int], int]) -> Callable[[Any, int], int]:
+  return callable
+class Foo:
+  @decorator_2
+  def callee(self, x: int) -> int:
+    return x
+@decorator_1
+def caller() -> Foo:
+  return Foo()  # Test co-existence of return callees and expression callees
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.caller",
+            vec![
+                (
+                    "13:10-13:15",
+                    constructor_call_callees(
+                        vec![
+                            create_call_target("builtins.object.__init__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                                .with_receiver_class_for_test("test.Foo", context),
+                        ],
+                        vec![
+                            create_call_target("builtins.object.__new__", TargetType::Function)
+                                .with_is_static_method(true),
+                        ],
+                    ),
+                ),
+                (
+                    "13:3-13:15",
+                    return_shim_callees(
+                        vec![
+                            create_call_target("test.Foo.callee", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                        ],
+                        vec![ReturnShimArgumentMapping::ReturnExpression],
+                    ),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_decorator_with_missing_body,
+    TEST_MODULE_NAME,
+    r#"
+def decorator(f):
+  def inner():
+    return 0
+  return inner
+@decorator
+def foo1():
+  ...  # Not considered as being decorated due to missing the body
+@decorator
+def foo2():
+  return 0
+def identity(x):
+  return x
+def bar(b):
+  if b:
+    return identity(foo1)  # Redirect actual parameters
+  else:
+    return identity(foo2)
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.bar",
+            vec![
+                (
+                    "16:12-16:26",
+                    call_callees(
+                        /* call_targets */
+                        vec![create_call_target("test.identity", TargetType::Function)],
+                        /* init_targets */ vec![],
+                        /* new_targets */ vec![],
+                        /* higher_order_parameters */
+                        vec![(
+                            0,
+                            vec![
+                                create_call_target("test.foo1", TargetType::Function)
+                                    .with_return_type(ScalarTypeProperties::int()),
+                            ],
+                            Unresolved::False,
+                        )],
+                        Unresolved::False,
+                    ),
+                ),
+                (
+                    "16:21-16:25|identifier|foo1",
+                    regular_identifier_callees(vec![
+                        create_call_target("test.foo1", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+                (
+                    "18:12-18:26",
+                    call_callees(
+                        /* call_targets */
+                        vec![create_call_target("test.identity", TargetType::Function)],
+                        /* init_targets */ vec![],
+                        /* new_targets */ vec![],
+                        /* higher_order_parameters */
+                        vec![(
+                            0,
+                            vec![
+                                create_call_target("test.foo2", TargetType::Function)
+                                    .with_return_type(ScalarTypeProperties::int()),
+                            ],
+                            Unresolved::False,
+                        )],
+                        Unresolved::False,
+                    ),
+                ),
+                (
+                    "18:21-18:25|identifier|foo2",
+                    regular_identifier_callees(vec![
+                        create_call_target("test.foo2", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_typed_dict,
+    TEST_MODULE_NAME,
+    r#"
+from typing import Any, TypedDict
+class SimpleTypedDict(TypedDict):
+    foo: Any
+    bar: Any
+def foo():
+    d = SimpleTypedDict(foo=1, bar=2)
+    d["foo"]
+    d["bar"]
+    d["foo"] = 0
+"#,
+    &|_context: &ModuleContext| {
+        let mapping_getitem_target = vec![
+            create_call_target("typing.Mapping.__getitem__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+        ];
+        let init_targets = vec![
+            create_call_target("test.SimpleTypedDict.__init__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+        ];
+        let new_targets = vec![
+            create_call_target("builtins.object.__new__", TargetType::Function)
+                .with_is_static_method(true),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "7:9-7:38",
+                    constructor_call_callees(init_targets, new_targets),
+                ),
+                (
+                    "8:5-8:13|artificial-call|subscript-get-item",
+                    regular_call_callees(mapping_getitem_target.clone()),
+                ),
+                (
+                    "9:5-9:13|artificial-call|subscript-get-item",
+                    regular_call_callees(mapping_getitem_target),
+                ),
+                (
+                    // TODO(T252248020): Resolve `__setitem__`
+                    "10:5-10:17|artificial-call|subscript-set-item",
+                    unresolved_expression_callees(UnresolvedReason::UnresolvedMagicDunderAttr),
                 ),
             ],
         )]

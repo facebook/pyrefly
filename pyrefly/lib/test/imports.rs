@@ -501,21 +501,21 @@ x = foo.bar  # E: No attribute `bar` in module `foo`
 testcase!(
     test_missing_import_named,
     r#"
-from foo import bar  # E: Could not find import of `foo`
+from foo import bar  # E: Cannot find module `foo`
 "#,
 );
 
 testcase!(
     test_missing_import_star,
     r#"
-from foo import *  # E: Could not find import of `foo`
+from foo import *  # E: Cannot find module `foo`
 "#,
 );
 
 testcase!(
     test_missing_import_module,
     r#"
-import foo, bar.baz  # E: Could not find import of `foo`  # E: Could not find import of `bar.baz`
+import foo, bar.baz  # E: Cannot find module `foo`  # E: Cannot find module `bar.baz`
 "#,
 );
 
@@ -765,7 +765,7 @@ def test2() -> Literal[foo.F.Y]: ... # E: `foo.F.Y` is not a valid enum member
 testcase!(
     test_relative_import_missing_module_attribute,
     r#"
-from . import foo  # E: Could not find import of `.`
+from . import foo  # E: Cannot find module `.`
     "#,
 );
 

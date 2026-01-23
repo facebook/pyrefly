@@ -430,3 +430,62 @@ class A(ABC):
 a = A()
 "#,
 );
+
+testcase!(
+    test_abstract_method_abc,
+    r#"
+from abc import ABC
+
+class A(ABC):
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    def foo(self):
+        x = 1
+        print(x)
+"#,
+);
+
+testcase!(
+    test_abstract_method_abc_transitive,
+    r#"
+from abc import ABC
+
+class A(ABC):
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    def bar(self):
+        raise NotImplementedError()
+
+class C(B):
+    def foo(self):
+        pass
+    def bar(self):
+        pass
+"#,
+);
+
+testcase!(
+    test_abstract_method_simple_assignment,
+    r#"
+from abc import ABC, abstractmethod
+
+def concrete_impl(self: "Base") -> int:
+    return 42
+
+class Base(ABC):
+    @abstractmethod
+    def method(self) -> int:
+        pass
+
+class Child(Base):
+    # This assignment should implement the abstract method
+    method = concrete_impl
+
+# This should work - abstract method is implemented via assignment
+x = Child()
+"#,
+);

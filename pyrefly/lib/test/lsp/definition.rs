@@ -1758,14 +1758,14 @@ Definition Result:
 }
 
 #[test]
-fn goto_def_on_import_different_name_alias_first_token_test() {
+fn goto_def_on_import_different_name_alias_test() {
     let lib = r#"
 def bar():
     pass
 "#;
     let code = r#"
 from lib import bar as baz
-#                ^
+#                ^      ^
 "#;
     let report =
         get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
@@ -1778,29 +1778,6 @@ Definition Result:
 2 | def bar():
         ^^^
 
-
-# lib.py
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
-fn goto_def_on_import_different_name_alias_second_token_test() {
-    let lib = r#"
-def bar():
-    pass
-"#;
-    let code = r#"
-from lib import bar as baz
-#                       ^
-"#;
-    let report =
-        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
-    assert_eq!(
-        r#"
-# main.py
 2 | from lib import bar as baz
                             ^
 Definition Result:
@@ -1818,6 +1795,7 @@ Definition Result:
 #[test]
 fn submodule_access_test() {
     let code_torch_init = r#"# torch/__init__.py
+from torch import autograd as autograd
 "#;
     let code_autograd_init = r#"# torch/autograd/__init__.py
 class Function:
@@ -2004,5 +1982,61 @@ from mymod.submod.deep import Bar
     assert!(
         report.contains("Definition Result:") && report.contains("None"),
         "Expected no definition when clicking on 'submod' if mymod/submod/__init__.py doesn't exist, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_in_membership_operator() {
+    let code = r#"
+class Container:
+    def __contains__(self, item: int) -> bool: ...
+
+c = Container()
+1 in c
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("__contains__"),
+        "Expected definition to jump to __contains__ method, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_in_iteration_for_loop() {
+    let code = r#"
+from typing import Iterator
+
+class MyIterable:
+    def __iter__(self) -> Iterator[int]: ...
+
+it = MyIterable()
+for x in it:
+#     ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("__iter__"),
+        "Expected definition to jump to __iter__ method, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_in_iteration_comprehension() {
+    let code = r#"
+from typing import Iterator
+
+class MyIterable:
+    def __iter__(self) -> Iterator[int]: ...
+
+it = MyIterable()
+result = [x for x in it]
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("__iter__"),
+        "Expected definition to jump to __iter__ method in comprehension, got: {report}"
     );
 }

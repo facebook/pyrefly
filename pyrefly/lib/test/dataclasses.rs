@@ -24,6 +24,36 @@ assert_type(Data, type[Data])
 );
 
 testcase!(
+    test_kw_only_sentinel_deep_inheritance,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+
+@dataclass
+class A:
+    _: KW_ONLY
+    a: int = 0
+
+@dataclass
+class B(A):
+    b: int = 1
+
+@dataclass
+class C(B):
+    _: KW_ONLY
+    c: int = 2
+
+@dataclass
+class D(C):
+    d: int = 3
+
+D()
+D(4)
+D(4, 5)
+D(4, 5, 6) # E: Expected 2 positional arguments, got 3 in function `D.__init__`
+    "#,
+);
+
+testcase!(
     test_fields,
     r#"
 from typing import assert_type
@@ -1487,7 +1517,7 @@ class Desc:
     def __set__(self, obj, value: str) -> None: ...
 @dataclass
 class C:
-    x: Desc = Desc()
+    x: Desc = Desc()  # E: Data descriptor `x` has incompatible default
 c = C('')
 assert_type(c.x, int)
 c.x = 'cat'
@@ -1507,6 +1537,25 @@ class C1:
 class C2(C1):
     c: float
 C2('', 0.2, b=3)
+    "#,
+);
+
+testcase!(
+    test_kw_only_sentinel_inheritance,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+
+@dataclass
+class Foo:
+    _: KW_ONLY
+    option: int | None = None
+
+@dataclass
+class Bar(Foo):
+    arg: str
+
+Bar("arg")
+Bar(arg="arg")
     "#,
 );
 
@@ -1579,5 +1628,69 @@ from dataclasses import dataclass, field
 class C:
     x: int = field(default_factory=42) # E:
 C()
+    "#,
+);
+
+testcase!(
+    test_non_data_descriptor_in_dataclass,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type, Self
+
+# Non-data descriptors (only __get__, no __set__) in dataclasses are unsound:
+# The dataclass __init__ writes to the instance dict, shadowing the class-level
+# descriptor. This means the static type (from __get__) doesn't match the runtime
+# type (the raw descriptor object in the instance dict).
+class DescA:
+    def __get__(self, obj, cls) -> int: ...
+    # No __set__ - non-data descriptor
+
+# If the result of `__get__` is `Self`, then the shadowing described above doesn't cause
+# any static typing issues. Because this pattern does sometimes occur (e.g. Pytorch Device is a
+# Self-returning descriptor), we allow it.
+class DescB:
+    def __get__(self, obj, cls) -> Self: ...
+    # No __set__ - non-data descriptor, but __get__ returns Self
+
+@dataclass
+class C:
+    x: DescA = DescA()  # E: Non-data descriptor `x` in dataclass is unsound. The dataclass __init__ writes to the instance dict, shadowing the descriptor. Add a __set__ method to make it a data descriptor.
+    y: DescB = DescB()
+
+# Regardless of any errors, any descriptors assigned in the class body do have default values.
+c = C()
+    "#,
+);
+
+testcase!(
+    test_data_descriptor_in_dataclass,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+# Data descriptors (have __set__) in dataclasses may work correctly because
+# assignments go through the descriptor protocol rather than shadowing.
+class DescA:
+    def __get__(self, obj, cls) -> int: ...
+    def __set__(self, obj, value: int) -> None: ...
+
+# But if the `__get__` type does not match `__set__` then the default is
+# incorrectly typed.
+class DescB:
+    def __get__(self, obj, cls) -> int: ...
+    def __set__(self, obj, value: str) -> None: ...
+
+@dataclass
+class C:
+    x: DescA = DescA()
+    y: DescB = DescB()  # E: Data descriptor `y` has incompatible default: `__get__` returns `int` which is not assignable to `__set__` value type `str`. The class-level descriptor value cannot be used as a default.
+
+# The field has a default, and accepts the `__set__` type if provided.
+c = C()
+c = C(x=42, y='42')
+
+# Reading should return the __get__ return type
+assert_type(c.x, int)
+assert_type(c.y, int)
     "#,
 );

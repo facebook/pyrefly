@@ -32,7 +32,6 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::display::LspDisplayMode;
-use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::prelude::SliceExt;
@@ -41,6 +40,7 @@ use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Alias;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
@@ -85,7 +85,7 @@ use crate::types::types::Type;
 mod dict_completions;
 mod quick_fixes;
 
-pub(crate) use self::quick_fixes::extract_function::LocalRefactorCodeAction;
+pub(crate) use self::quick_fixes::types::LocalRefactorCodeAction;
 
 #[derive(Debug)]
 pub(crate) enum CalleeKind {
@@ -505,6 +505,20 @@ impl<'a> Transaction<'a> {
     fn get_chosen_overload_trace(&self, handle: &Handle, range: TextRange) -> Option<Type> {
         let ans = self.get_answers(handle)?;
         ans.get_chosen_overload_trace(range)
+    }
+
+    fn import_handle_with_preference(
+        &self,
+        handle: &Handle,
+        module: ModuleName,
+        preference: FindPreference,
+    ) -> Option<Handle> {
+        match preference.prefer_pyi {
+            true => self.import_handle(handle, module, None).finding(),
+            false => self
+                .import_handle_prefer_executable(handle, module, None)
+                .finding(),
+        }
     }
 
     fn type_from_expression_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
@@ -940,12 +954,7 @@ impl<'a> Transaction<'a> {
         let mut gas = RESOLVE_EXPORT_INITIAL_GAS;
         let mut name = name;
         while !gas.stop() {
-            let handle = match preference.prefer_pyi {
-                true => self.import_handle(handle, m, None).finding()?,
-                false => self
-                    .import_handle_prefer_executable(handle, m, None)
-                    .finding()?,
-            };
+            let handle = self.import_handle_with_preference(handle, m, preference)?;
             match self.get_exports(&handle).get(&name) {
                 Some(ExportLocation::ThisModule(export)) => {
                     return Some((handle.clone(), export.clone()));
@@ -953,6 +962,22 @@ impl<'a> Transaction<'a> {
                 Some(ExportLocation::OtherModule(module, aliased_name)) => {
                     if let Some(aliased_name) = aliased_name {
                         name = aliased_name.clone();
+                    }
+                    if *module == m && handle.path().is_init() {
+                        let submodule = m.append(&name);
+                        let sub_handle =
+                            self.import_handle_with_preference(&handle, submodule, preference)?;
+                        let docstring_range = self.get_module_docstring_range(&sub_handle);
+                        return Some((
+                            sub_handle,
+                            Export {
+                                location: TextRange::default(),
+                                symbol_kind: Some(SymbolKind::Module),
+                                docstring_range,
+                                deprecation: None,
+                                special_export: None,
+                            },
+                        ));
                     }
                     m = *module;
                 }
@@ -1023,12 +1048,7 @@ impl<'a> Transaction<'a> {
                         },
                     ));
                 }
-                let handle = match preference.prefer_pyi {
-                    true => self.import_handle(handle, name, None).finding()?,
-                    false => self
-                        .import_handle_prefer_executable(handle, name, None)
-                        .finding()?,
-                };
+                let handle = self.import_handle_with_preference(handle, name, preference)?;
                 let docstring_range = self.get_module_docstring_range(&handle);
                 Some((
                     handle,
@@ -1297,6 +1317,15 @@ impl<'a> Transaction<'a> {
             covering_nodes.iter().find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
                     for op in &compare.ops {
+                        // Handle membership test operators (in/not in) - uses __contains__ on the right operand
+                        if matches!(op, CmpOp::In | CmpOp::NotIn)
+                            && let Some(answers) = self.get_answers(handle)
+                            && let Some(right_type) =
+                                answers.get_type_trace(compare.comparators.first()?.range())
+                        {
+                            return Some((right_type, dunder::CONTAINS));
+                        }
+                        // Handle rich comparison operators
                         if let Some(dunder_name) = dunder::rich_comparison_dunder(*op)
                             && let Some(answers) = self.get_answers(handle)
                             && let Some(left_type) = answers.get_type_trace(compare.left.range())
@@ -1345,6 +1374,24 @@ impl<'a> Transaction<'a> {
                     }
                     None
                 }
+                // Handle iteration `in` keyword in for loops
+                AnyNodeRef::StmtFor(stmt_for) => {
+                    if let Some(answers) = self.get_answers(handle)
+                        && let Some(iter_type) = answers.get_type_trace(stmt_for.iter.range())
+                    {
+                        return Some((iter_type, dunder::ITER));
+                    }
+                    None
+                }
+                // Handle iteration `in` keyword in comprehensions
+                AnyNodeRef::Comprehension(comp) => {
+                    if let Some(answers) = self.get_answers(handle)
+                        && let Some(iter_type) = answers.get_type_trace(comp.iter.range())
+                    {
+                        return Some((iter_type, dunder::ITER));
+                    }
+                    None
+                }
                 _ => None,
             })
         else {
@@ -1383,12 +1430,7 @@ impl<'a> Transaction<'a> {
         preference: FindPreference,
     ) -> Option<FindDefinitionItemWithDocstring> {
         // TODO: Handle relative import (via ModuleName::new_maybe_relative)
-        let handle = match preference.prefer_pyi {
-            true => self.import_handle(handle, module_name, None).finding()?,
-            false => self
-                .import_handle_prefer_executable(handle, module_name, None)
-                .finding()?,
-        };
+        let handle = self.import_handle_with_preference(handle, module_name, preference)?;
         // if the module is not yet loaded, force loading by asking for exports
         // necessary for imports that are not in tdeps (e.g. .py when there is also a .pyi)
         // todo(kylei): better solution
@@ -1947,6 +1989,66 @@ impl<'a> Transaction<'a> {
         quick_fixes::move_members::push_members_down_code_actions(self, handle, selection)
     }
 
+    pub fn move_module_member_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+        import_format: ImportFormat,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_module::move_module_member_code_actions(
+            self,
+            handle,
+            selection,
+            import_format,
+        )
+    }
+
+    pub fn make_local_function_top_level_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+        import_format: ImportFormat,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::move_module::make_local_function_top_level_code_actions(
+            self,
+            handle,
+            selection,
+            import_format,
+        )
+    }
+
+    pub fn inline_variable_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::inline_variable::inline_variable_code_actions(self, handle, selection)
+    }
+
+    pub fn inline_method_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::inline_method::inline_method_code_actions(self, handle, selection)
+    }
+
+    pub fn inline_parameter_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::inline_parameter::inline_parameter_code_actions(self, handle, selection)
+    }
+
+    pub fn introduce_parameter_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::introduce_parameter::introduce_parameter_code_actions(self, handle, selection)
+    }
+
     /// Determines whether a module is a third-party package.
     ///
     /// Checks if the module's path is located within any of the configured
@@ -2395,26 +2497,6 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn add_magic_method_completions(
-        &self,
-        identifier: &Identifier,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        let typed = identifier.as_str();
-        if !typed.is_empty() && !typed.starts_with("__") {
-            return;
-        }
-        for name in dunder::MAGIC_METHOD_NAMES {
-            if name.starts_with(typed) {
-                completions.push(CompletionItem {
-                    label: (*name).to_owned(),
-                    kind: Some(CompletionItemKind::METHOD),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-
     fn add_builtins_autoimport_completions(
         &self,
         handle: &Handle,
@@ -2713,41 +2795,6 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn add_literal_completions_from_type(
-        param_type: &Type,
-        completions: &mut Vec<CompletionItem>,
-        in_string_literal: bool,
-    ) {
-        match param_type {
-            Type::Literal(lit) => {
-                // TODO: Pass the flag correctly for whether literal string is single quoted or double quoted
-                let label = lit.to_string_escaped(true);
-                let insert_text = if in_string_literal {
-                    if let Lit::Str(s) = lit {
-                        s.to_string()
-                    } else {
-                        label.clone()
-                    }
-                } else {
-                    label.clone()
-                };
-                completions.push(CompletionItem {
-                    label,
-                    kind: Some(CompletionItemKind::VALUE),
-                    detail: Some(format!("{param_type}")),
-                    insert_text: Some(insert_text),
-                    ..Default::default()
-                });
-            }
-            Type::Union(box Union { members, .. }) => {
-                for member in members {
-                    Self::add_literal_completions_from_type(member, completions, in_string_literal);
-                }
-            }
-            _ => {}
-        }
-    }
-
     // Kept for backwards compatibility - used by external callers (lsp/server.rs, playground.rs)
     // who don't need the is_incomplete flag
     pub fn completion(
@@ -2926,7 +2973,7 @@ impl<'a> Transaction<'a> {
                 context,
             }) => {
                 if matches!(context, IdentifierContext::MethodDef { .. }) {
-                    self.add_magic_method_completions(&identifier, &mut result);
+                    Self::add_magic_method_completions(&identifier, &mut result);
                 }
                 self.add_kwargs_completions(handle, position, &mut result);
                 self.add_keyword_completions(handle, &mut result);

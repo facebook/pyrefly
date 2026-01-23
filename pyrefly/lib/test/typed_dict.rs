@@ -523,7 +523,7 @@ x |= y
 
 assert_type((x["a"]), int | str)
 
-x |= {} # E: Augmented assignment produces a value of type `dict[str, object]`, which is not assignable to `TD`
+x |= {} # E: Augmented assignment result `dict[str, object]` is not assignable to `TD`
 
 x: TD = {"a": 1, "b": 2}
 x.__ior__(y)

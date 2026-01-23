@@ -41,6 +41,7 @@ use vec1::Vec1;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::expr::Usage;
 use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
@@ -86,6 +87,10 @@ pub enum AtomicNarrowOp {
     LenGte(Expr),
     LenLt(Expr),
     LenLte(Expr),
+    /// Narrowing for sequence pattern matching - confirms the subject is a sequence type
+    IsSequence,
+    /// Negation of IsSequence - confirms the subject is NOT a sequence type
+    IsNotSequence,
     /// (func, args) for a function call that may narrow the type of its first argument.
     Call(Box<Expr>, Arguments),
     NotCall(Box<Expr>, Arguments),
@@ -164,6 +169,8 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::LenGte(expr) => write!(f, "LenGte({})", expr.display_with(ctx)),
             AtomicNarrowOp::LenLt(expr) => write!(f, "LenLt({})", expr.display_with(ctx)),
             AtomicNarrowOp::LenLte(expr) => write!(f, "LenLte({})", expr.display_with(ctx)),
+            AtomicNarrowOp::IsSequence => write!(f, "IsSequence"),
+            AtomicNarrowOp::IsNotSequence => write!(f, "IsNotSequence"),
             AtomicNarrowOp::Call(expr, arguments) => write!(
                 f,
                 "Call({}, {})",
@@ -233,6 +240,8 @@ impl AtomicNarrowOp {
             Self::LenLte(v) => Self::LenGt(v.clone()),
             Self::LenLt(v) => Self::LenGte(v.clone()),
             Self::LenNotEq(v) => Self::LenEq(v.clone()),
+            Self::IsSequence => Self::IsNotSequence,
+            Self::IsNotSequence => Self::IsSequence,
             Self::TypeGuard(ty, args) => Self::NotTypeGuard(ty.clone(), args.clone()),
             Self::NotTypeGuard(ty, args) => Self::TypeGuard(ty.clone(), args.clone()),
             Self::TypeIs(ty, args) => Self::NotTypeIs(ty.clone(), args.clone()),
@@ -419,7 +428,8 @@ impl NarrowOps {
             seen.insert(name.clone());
             self.and(name, op, range);
         }
-        // For names present in `self` but not `other`, `And` their narrows with a placeholder
+        // For names present in `self` but not `other`, `And` their narrows with a placeholder.
+        // This ensures that if a sub-pattern can't prove something, we don't claim we proved it.
         let unmerged_names: Vec<_> = self
             .0
             .keys()
@@ -837,7 +847,9 @@ impl NarrowOps {
         builder: &'a BindingsBuilder,
         name: &Name,
     ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
-        let name_read_info = builder.scopes.look_up_name_for_read(Hashed::new(name));
+        let name_read_info = builder
+            .scopes
+            .look_up_name_for_read(Hashed::new(name), &Usage::Narrowing(None));
         match name_read_info {
             NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
             _ => None,

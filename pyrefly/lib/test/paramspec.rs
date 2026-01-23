@@ -564,3 +564,19 @@ def caller(
 caller([], T.c1)
 "#,
 );
+
+testcase!(
+    test_paramspec_any,
+    r#"
+from typing import Callable, Any, ParamSpec, Generic
+
+P = ParamSpec('P')
+
+class Task(Generic[P]):
+    __call__: Callable[P, None]
+
+# Any should be accepted as a valid ParamSpec argument
+def foo(task: Task[Any]) -> None:
+    pass
+"#,
+);

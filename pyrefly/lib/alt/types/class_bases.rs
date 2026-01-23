@@ -299,6 +299,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         }
                     }
+                    (Type::Type(box Type::Any(_)), range) => {
+                        // `type[Any]` is equivalent to `type` or `Type`
+                        let class = self.stdlib.builtins_type().clone();
+                        let bases = self
+                            .get_base_types_for_class(self.stdlib.builtins_type().class_object());
+                        Some((class, bases, range))
+                    }
                     (_, _) => None,
                 }
             })
@@ -308,14 +315,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .into_iter()
             .map(|(base_class_type, base_class_bases, range)| {
                 if is_new_type
-                    && base_class_type.targs().as_slice().iter().any(|ty| {
-                        ty.any(|ty| {
-                            matches!(
-                                ty,
-                                Type::TypeVar(_) | Type::TypeVarTuple(_) | Type::ParamSpec(_)
-                            )
-                        })
-                    })
+                    && base_class_type
+                        .targs()
+                        .as_slice()
+                        .iter()
+                        .any(|ty| ty.any(|ty| ty.is_raw_legacy_type_variable()))
                 {
                     self.error(
                         errors,

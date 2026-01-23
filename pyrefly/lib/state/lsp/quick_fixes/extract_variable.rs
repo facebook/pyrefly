@@ -14,11 +14,12 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
-use crate::state::lsp::quick_fixes::extract_function::LocalRefactorCodeAction;
 use crate::state::lsp::quick_fixes::extract_shared::is_exact_expression;
 use crate::state::lsp::quick_fixes::extract_shared::line_indent_and_start;
 use crate::state::lsp::quick_fixes::extract_shared::split_selection;
+use crate::state::lsp::quick_fixes::extract_shared::unique_name;
 
 const DEFAULT_VARIABLE_PREFIX: &str = "extracted_value";
 
@@ -50,7 +51,12 @@ pub(crate) fn extract_variable_code_actions(
     let statement_range = find_enclosing_statement_range(ast.as_ref(), expression_range)?;
     let (statement_indent, insert_position) =
         line_indent_and_start(module_info.contents(), statement_range.start())?;
-    let variable_name = generate_variable_name(module_info.contents());
+    let source = module_info.contents();
+    let variable_name = unique_name(DEFAULT_VARIABLE_PREFIX, |name| {
+        let check_space = format!("{name} =");
+        let check_tab = format!("{name}\t=");
+        source.contains(&check_space) || source.contains(&check_tab)
+    });
     let assignment = format!("{statement_indent}{variable_name} = {expression_text}\n");
     let replacement_text = format!("{leading_ws}{variable_name}{trailing_ws}");
     let insert_edit = (
@@ -77,21 +83,4 @@ fn find_enclosing_statement_range(ast: &ModModule, selection: TextRange) -> Opti
         }
     }
     None
-}
-
-fn generate_variable_name(source: &str) -> String {
-    let mut counter = 1;
-    loop {
-        let candidate = if counter == 1 {
-            DEFAULT_VARIABLE_PREFIX.to_owned()
-        } else {
-            format!("{DEFAULT_VARIABLE_PREFIX}_{counter}")
-        };
-        let check_space = format!("{candidate} =");
-        let check_tab = format!("{candidate}\t=");
-        if !source.contains(&check_space) && !source.contains(&check_tab) {
-            return candidate;
-        }
-        counter += 1;
-    }
 }

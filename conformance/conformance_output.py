@@ -216,7 +216,7 @@ def get_conformance_output(
         for file in files:
             if file.endswith(".py") and not is_excluded(file):
                 files_to_check.append(os.path.join(root, file))
-    outputs = defaultdict(lambda: [])
+    outputs: dict[str, list[dict[str, Any]]] = defaultdict(list)
     with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp_file:
         cmd = (
             get_pyrefly_command(executable)

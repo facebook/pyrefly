@@ -36,6 +36,7 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -58,6 +59,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::solver::solver::QuantifiedHandle;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncFlags;
 use crate::types::callable::FuncMetadata;
@@ -704,7 +706,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 true
             }
             SpecialDecorator::PropertyDeleter(decorator) => {
-                flags.property_metadata = decorator.property_metadata();
+                flags.property_metadata = decorator.property_metadata().cloned();
                 true
             }
             SpecialDecorator::DataclassTransformCall(kws) => {
@@ -752,7 +754,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (Type, Required) {
         // We only want to use self for the first param, so take & replace with None
         let self_type = std::mem::take(self_type);
-        let (ty, required) = match self.bindings().get_function_param(name) {
+        let (ty, mut required) = match self.bindings().get_function_param(name) {
             FunctionParameter::Annotated(idx) => {
                 // If the parameter is annotated, we check the default value against the annotation
                 let param_ty = self.get_idx(*idx).annotation.get_type().clone();
@@ -783,13 +785,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         *var,
                         self.union(
                             Type::any_implicit(),
-                            default_ty.clone().promote_literals(self.stdlib),
+                            default_ty.clone().promote_implicit_literals(self.stdlib),
                         ),
                     );
                 }
                 (self.solver().force_var(*var), required)
             }
         };
+        if let Required::Optional(Some(default)) = required {
+            // Mark literals as explicit so we don't promote them.
+            // This has to happen after the param type has been computed because we do
+            // want to promote literals while inferring the type.
+            required = Required::Optional(Some(default.explicit_literals()));
+        }
         (ty, required)
     }
 
@@ -1482,15 +1490,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     original_overload_func.clone()
                 }
             };
-            let impl_func = {
+            let (vs, impl_func) = {
                 let func = Function {
                     signature: impl_sig.clone(),
                     metadata: def.metadata().clone(),
                 };
                 if let Some(tparams) = all_tparams(impl_tparams) {
-                    self.instantiate_fresh_function(&tparams, func).1
+                    self.instantiate_fresh_function(&tparams, func)
                 } else {
-                    func
+                    (QuantifiedHandle::empty(), func)
                 }
             };
             // See https://typing.python.org/en/latest/spec/overload.html#implementation-consistency.
@@ -1517,6 +1525,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 &|| TypeCheckContext::of_kind(TypeCheckKind::OverloadReturn),
             );
+            if let Err(specialization_errors) = self.solver().finish_quantified(vs, false) {
+                let mut msg = vec1![format!(
+                    "Overload signature `{}` is not consistent with implementation signature `{}`",
+                    self.for_display(Type::Callable(Box::new(
+                        original_overload_func.signature.clone()
+                    ))),
+                    self.for_display(Type::Callable(Box::new(impl_sig.clone()))),
+                )];
+                for e in specialization_errors {
+                    msg.push(e.to_error_msg(self));
+                }
+                errors.add(
+                    *range,
+                    ErrorInfo::Kind(ErrorKind::InconsistentOverload),
+                    msg,
+                );
+            }
         }
     }
 

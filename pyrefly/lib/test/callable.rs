@@ -54,9 +54,43 @@ testcase!(
 from typing import Callable, TypeVar, reveal_type
 T = TypeVar("T", bound=int)
 f: Callable[[T], T] = lambda x: x
-reveal_type(f)  # E: revealed type: [T](T) -> T
+reveal_type(f)  # E: revealed type: [T: int](T) -> T
 reveal_type(f(1))  # E: revealed type: int
 f("hello")  # E: `str` is not assignable to upper bound `int` of type variable `T`
+"#,
+);
+
+testcase!(
+    test_list_of_callables_variable_typevar_annotation,
+    r#"
+from typing import Callable, TypeVar, assert_type, reveal_type
+T = TypeVar("T")
+f: list[Callable[[T], T]] = [lambda x: x]
+reveal_type(f)  # E: revealed type: list[[T](T) -> T]
+assert_type(f[0](1), int)
+"#,
+);
+
+testcase!(
+    test_callable_of_list_variable_typevar_annotation,
+    r#"
+from typing import Callable, TypeVar, assert_type, reveal_type
+T = TypeVar("T")
+f: Callable[[list[T]], list[T]] = lambda x: x
+reveal_type(f)  # E: revealed type: [T](list[T]) -> list[T]
+assert_type(f([1]), list[int])
+f(1)  # E: not assignable
+"#,
+);
+
+testcase!(
+    test_callable_returns_callable_variable_typevar_annotation,
+    r#"
+from typing import Callable, TypeVar, assert_type, reveal_type
+T = TypeVar("T")
+f: Callable[[], Callable[[T], T]] = lambda: lambda x: x
+reveal_type(f)  # E: revealed type: () -> [T](T) -> T
+assert_type(f()(1), int)
 "#,
 );
 
@@ -959,7 +993,7 @@ class C(B): ...
 
 def f[T: B](x: T) -> T: ...
 
-c1: Callable[[A], A] = f # E: `[T](x: T) -> T` is not assignable to `(A) -> A`
+c1: Callable[[A], A] = f # E: `[T: B](x: T) -> T` is not assignable to `(A) -> A`
 c2: Callable[[B], B] = f # OK
 c3: Callable[[C], C] = f # OK
     "#,
@@ -1197,5 +1231,33 @@ f = lambda: A.x
 class A:
     x: int = 0
 assert_type(f(), int)
+    "#,
+);
+
+testcase!(
+    test_preserve_param_default,
+    r#"
+from typing import reveal_type
+
+def f(x: bool = True) -> bool:
+    return x
+
+def g[T](f: T) -> T:
+    return f
+
+reveal_type(g(f))  # E: (x: bool = True) -> bool
+    "#,
+);
+
+testcase!(
+    test_lambda_matches_generic_callable,
+    r#"
+from typing import Callable, List, TypeVar
+T = TypeVar("T")
+def f(x):
+    return x
+def wrap(fn: Callable[[List[T]], T]): ...
+def g():
+    return wrap(lambda x: f(x))
     "#,
 );

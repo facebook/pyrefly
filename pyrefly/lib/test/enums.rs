@@ -702,3 +702,47 @@ class E2(E1):
 assert_type(E2.X(), int)
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/755
+testcase!(
+    test_access_value_on_mixed_type_enum,
+    r#"
+from enum import Enum
+
+class StrEnum(str, Enum):
+    FOO = "FOO"
+    DEFAULT = "DEFAULT"
+
+    @classmethod
+    def normalize(cls, val: str) -> str:
+        try:
+            return cls(val).value
+        except ValueError:
+            return cls.DEFAULT.value
+
+class IntEnum(int, Enum):
+    FOO = 1
+    DEFAULT = 0
+
+    @classmethod
+    def normalize(cls, val: int) -> int:
+        try:
+            return cls(val).value
+        except ValueError:
+            return cls.DEFAULT.value
+    "#,
+);
+
+testcase!(
+    test_enum_alias,
+    r#"
+from typing import assert_type, Literal
+from enum import Enum
+
+class TrafficLight(Enum):
+    YELLOW = 3
+    AMBER = YELLOW  # Alias for YELLOW
+
+assert_type(TrafficLight.AMBER, Literal[TrafficLight.YELLOW])
+    "#,
+);

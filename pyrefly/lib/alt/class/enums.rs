@@ -250,6 +250,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         direct_annotation: Option<&Annotation>,
         ty: &Type,
+        alias_of: Option<&Name>,
         is_initialized_on_class_body: bool,
         is_descriptor: bool,
         range: TextRange,
@@ -275,11 +276,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 self.check_enum_value_annotation(ty, &enum_value_ty, name, range, errors);
             }
-            Some(Type::Literal(Lit::Enum(Box::new(LitEnum {
-                class: enum_.cls.clone(),
-                member: name.clone(),
-                ty: ty.clone(),
-            }))))
+            // If this field is an alias (value is a simple name referring to another field),
+            // look up the aliased member and return its type instead of creating a new enum literal.
+            if let Some(aliased_name) = alias_of
+                && let Some(aliased_member_lit) = self.get_enum_member(class, aliased_name)
+            {
+                return Some(aliased_member_lit.to_implicit_type());
+            }
+            Some(
+                Lit::Enum(Box::new(LitEnum {
+                    class: enum_.cls.clone(),
+                    member: name.clone(),
+                    ty: ty.clone(),
+                }))
+                .to_implicit_type(),
+            )
         } else {
             None
         }

@@ -17,8 +17,10 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
-use super::extract_function::LocalRefactorCodeAction;
 use super::extract_shared::line_indent_and_start;
+use super::extract_shared::member_name_from_stmt;
+use super::extract_shared::selection_anchor;
+use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 
 const DEFAULT_INDENT: &str = "    ";
@@ -159,27 +161,6 @@ fn find_member_context<'a>(
     None
 }
 
-/// Anchor the selection to the first non-whitespace character for member lookup.
-fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
-    if selection.is_empty() {
-        return selection.start();
-    }
-    let start = selection.start().to_usize().min(source.len());
-    let end = selection.end().to_usize().min(source.len());
-    if start >= end {
-        return selection.start();
-    }
-    if let Some(offset) = source[start..end]
-        .char_indices()
-        .find(|(_, ch)| !matches!(ch, ' ' | '\t' | '\n' | '\r'))
-        .map(|(idx, _)| idx)
-    {
-        TextSize::try_from(start + offset).unwrap_or(selection.start())
-    } else {
-        selection.start()
-    }
-}
-
 /// Search within a class body (recursing into nested classes) for a member
 /// statement that contains the selection.
 fn find_member_in_class<'a>(
@@ -207,31 +188,6 @@ fn is_member_stmt(stmt: &Stmt) -> bool {
         stmt,
         Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Assign(_) | Stmt::AnnAssign(_)
     )
-}
-
-fn member_name_from_stmt(stmt: &Stmt) -> Option<String> {
-    match stmt {
-        Stmt::FunctionDef(func_def) => Some(func_def.name.id.to_string()),
-        Stmt::ClassDef(class_def) => Some(class_def.name.id.to_string()),
-        Stmt::Assign(assign) => {
-            if assign.targets.len() != 1 {
-                return None;
-            }
-            if let Expr::Name(name) = &assign.targets[0] {
-                Some(name.id.to_string())
-            } else {
-                None
-            }
-        }
-        Stmt::AnnAssign(assign) => {
-            if let Expr::Name(name) = assign.target.as_ref() {
-                Some(name.id.to_string())
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
 }
 
 fn class_has_member_named(class_def: &StmtClassDef, name: &str) -> bool {

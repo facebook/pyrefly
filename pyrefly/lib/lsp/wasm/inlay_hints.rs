@@ -9,10 +9,12 @@ use std::iter::once;
 use std::sync::Arc;
 
 use pyrefly_build::handle::Handle;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::LitEnum;
+use pyrefly_types::literal::Literal;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -28,6 +30,7 @@ use ruff_text_size::TextSize;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
+use crate::binding::binding::UnpackedPosition;
 use crate::state::lsp::AllOffPartial;
 use crate::state::lsp::InlayHintConfig;
 use crate::state::state::CancellableTransaction;
@@ -103,7 +106,11 @@ impl<'a> Transaction<'a> {
                     }
                     Expr::Attribute(ExprAttribute {
                         box value, attr, ..
-                    }) if let Type::Literal(Lit::Enum(box LitEnum { class, member, .. })) = ty => {
+                    }) if let Type::Literal(box Literal {
+                        value: Lit::Enum(box LitEnum { class, member, .. }),
+                        ..
+                    }) = ty =>
+                    {
                         // Exclude enum literals
                         match value {
                             Expr::Name(object) => {
@@ -160,14 +167,21 @@ impl<'a> Transaction<'a> {
                     if inlay_hint_config.variable_types
                         && let Some(ty) = self.get_type(handle, key) =>
                 {
-                    let e = match bindings.get(idx) {
+                    // For unpacked values, extract the element expression if available
+                    let (e, is_unpacked) = match bindings.get(idx) {
                         Binding::NameAssign {
                             annotation: None,
                             expr: e,
                             ..
-                        } => Some(&**e),
-                        Binding::Expr(None, e) => Some(e),
-                        _ => None,
+                        } => (Some(&**e), false),
+                        Binding::Expr(None, e) => (Some(e), false),
+                        Binding::UnpackedValue(None, unpack_idx, _, pos) => {
+                            // Try to get the element expression from the unpacked source
+                            let element_expr =
+                                Self::get_unpacked_element_expr(&bindings, *unpack_idx, *pos);
+                            (element_expr, true)
+                        }
+                        _ => (None, false),
                     };
                     // If the inferred type is a class type w/ no type arguments and the
                     // RHS is a call to a function that's the same name as the inferred class,
@@ -179,9 +193,17 @@ impl<'a> Transaction<'a> {
                     } else {
                         None
                     };
-                    if let Some(e) = e
-                        && is_interesting(e, &ty, class_name)
-                    {
+                    // For unpacked values without a known element expression (e.g., from
+                    // function calls or nested unpacking), show the hint if the type is not Any.
+                    // For regular assignments, require the expression to be interesting.
+                    let should_show = if let Some(e) = e {
+                        is_interesting(e, &ty, class_name)
+                    } else {
+                        // For unpacked values where we couldn't extract the element,
+                        // show hint if type is not Any
+                        is_unpacked && !ty.is_any()
+                    };
+                    if should_show {
                         // Use get_types_with_locations to get type parts with location info
                         let type_parts = ty.get_types_with_locations(Some(&stdlib));
                         let label_parts = once((": ".to_owned(), None))
@@ -207,6 +229,43 @@ impl<'a> Transaction<'a> {
         }
 
         Some(res)
+    }
+
+    /// Helper to extract the element expression from an unpacked source.
+    /// Returns the expression at the given position if the source is a tuple or list literal.
+    /// For nested unpacking or function calls, returns None (caller should fall back to
+    /// showing hints based on type information alone).
+    fn get_unpacked_element_expr<'b>(
+        bindings: &'b crate::binding::bindings::Bindings,
+        unpack_idx: Idx<Key>,
+        pos: UnpackedPosition,
+    ) -> Option<&'b Expr> {
+        // Get the binding for the unpacked source
+        let source_binding = bindings.get(unpack_idx);
+        // For top-level unpacking, the source is Binding::Expr containing the RHS.
+        // For nested unpacking, it's Binding::UnpackedValue - we return None in that case.
+        let source_expr = match source_binding {
+            Binding::Expr(_, e) => Some(e),
+            _ => None,
+        }?;
+
+        // Try to extract elements from tuple or list literals
+        let elts = match source_expr {
+            Expr::Tuple(tup) => Some(&tup.elts),
+            Expr::List(lst) => Some(&lst.elts),
+            _ => None,
+        }?;
+
+        // Extract the element at the given position
+        // This mirrors the logic in solve.rs for Binding::UnpackedValue
+        match pos {
+            UnpackedPosition::Index(i) => elts.get(i),
+            UnpackedPosition::ReverseIndex(i) => {
+                elts.len().checked_sub(i).and_then(|idx| elts.get(idx))
+            }
+            // For slices (starred unpacking), we can't return a single element
+            UnpackedPosition::Slice(_, _) => None,
+        }
     }
 
     fn collect_function_calls_from_ast(module: Arc<ModModule>) -> Vec<ExprCall> {

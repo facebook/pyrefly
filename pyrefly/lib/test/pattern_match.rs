@@ -266,3 +266,336 @@ def describe_ok_2(x: X):
             print("default")
 "#,
 );
+
+testcase!(
+    test_sequence_pattern_star_capture,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type
+
+def test_seq_pattern(x: Sequence[int]) -> None:
+    match x:
+        case [*values]:
+            assert_type(values, list[int])
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_union,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type
+
+def test_union_seq(x: int | Sequence[int]) -> None:
+    match x:
+        case int(value):
+            assert_type(value, int)
+        case [*values]:
+            assert_type(values, list[int])
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_fixed_length,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type
+
+def test_fixed_len(x: Sequence[int]) -> None:
+    match x:
+        case [a, b]:
+            assert_type(a, int)
+            assert_type(b, int)
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_mixed,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type
+
+def test_mixed(x: Sequence[int]) -> None:
+    match x:
+        case [first, *middle, last]:
+            assert_type(first, int)
+            assert_type(middle, list[int])
+            assert_type(last, int)
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_str_excluded,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type
+
+def test_str_not_sequence(x: str | Sequence[int]) -> None:
+    # str is NOT matched by sequence patterns per PEP 634
+    match x:
+        case [*values]:
+            # If we get here, x must be Sequence[int], not str
+            assert_type(values, list[int])
+        case _:
+            # This is str since sequences are matched by the first case
+            assert_type(x, str)
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_list,
+    r#"
+from typing import assert_type
+
+def test_list_pattern(x: list[int]) -> None:
+    match x:
+        case [*values]:
+            assert_type(values, list[int])
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_tuple,
+    r#"
+from typing import assert_type
+
+def test_tuple_pattern(x: tuple[int, ...]) -> None:
+    match x:
+        case [*values]:
+            assert_type(values, list[int])
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_exhaustive_assert_never,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type, assert_never
+
+def test_seq_pattern(x: Sequence[int]) -> None:
+    match x:
+        case [*values]:
+            assert_type(values, list[int])
+        case _:
+            # This should be unreachable since all sequences match [*values]
+            assert_never(x)
+"#,
+);
+
+testcase!(
+    test_sequence_pattern_union_exhaustive,
+    r#"
+from collections.abc import Sequence
+from typing import assert_type, assert_never
+
+def test_seq_pat_with_union(x: int | Sequence[int]) -> None:
+    match x:
+        case int(value):
+            assert_type(value, int)
+        case [*values]:
+            assert_type(values, list[int])
+        case _:
+            # This should be unreachable since we've covered int and Sequence[int]
+            assert_never(x)
+"#,
+);
+
+testcase!(
+    test_exhaustive_bool_match_warning,
+    r#"
+def describe(flag: bool):
+    match flag:
+        case True:
+            return "yes"
+        case False:
+            return "no"
+    # This should NOT warn about missing return (Phase 2 will fix this)
+    # For now, we're just ensuring the NonExhaustiveMatch error doesn't fire
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_bool_match_warning,
+    r#"
+def describe(flag: bool):
+    match flag: # E: Match on `bool` is not exhaustive
+        case True:
+            pass
+    # Missing False case
+"#,
+);
+
+testcase!(
+    test_exhaustive_union_with_none,
+    r#"
+def process(x: int | None):
+    match x:
+        case int():
+            pass
+        case None:
+            pass
+    # Should not warn - union is exhausted
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_union_with_none,
+    r#"
+from typing import final
+
+@final
+class A:
+    pass
+
+@final
+class B:
+    pass
+
+def process(x: A | B | None):
+    match x: # E: Match on `A | B | None` is not exhaustive
+        case A():
+            pass
+        case B():
+            pass
+    # Missing None case
+"#,
+);
+
+testcase!(
+    test_exhaustive_enum_no_missing_return,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+    BLUE = "blue"
+
+def describe(color: Color) -> str:
+    match color:
+        case Color.RED:
+            return "It's red"
+        case Color.BLUE:
+            return "It's blue"
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_enum_missing_return,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+    BLUE = "blue"
+    GREEN = "green"
+
+def describe(color: Color) -> str: # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    match color: # E: Match on `Color` is not exhaustive
+        case Color.RED:
+            return "It's red"
+        case Color.BLUE:
+            return "It's blue"
+    #   (Missing GREEN case here)
+"#,
+);
+
+testcase!(
+    test_exhaustive_literal_union_no_missing_return,
+    r#"
+from typing import Literal
+
+def describe(status: Literal["pending", "done"]) -> str:
+    match status:
+        case "pending":
+            return "Still working"
+        case "done":
+            return "Finished"
+"#,
+);
+
+// Test that an exhaustive match with a branch that doesn't return is correctly
+// identified as having an implicit None return.
+testcase!(
+    test_exhaustive_enum_with_branch_missing_return,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+    BLUE = "blue"
+
+def describe(color: Color) -> str: # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    match color:
+        case Color.RED:
+            return "It's red"
+        case Color.BLUE:
+            pass  # Exhaustive but no return here
+"#,
+);
+
+testcase!(
+    test_exhaustive_literal_with_branch_missing_return,
+    r#"
+from typing import Literal
+
+def describe(status: Literal["pending", "done"]) -> str: # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    match status:
+        case "pending":
+            return "Still working"
+        case "done":
+            pass  # Exhaustive but no return here
+"#,
+);
+
+// Regression test: match on a complex expression (not a name) should not cause
+// an internal error when checking for implicit returns. The subject `1 + 1` is
+// a BinOp which cannot be converted to a narrowing subject.
+testcase!(
+    test_match_on_complex_expr_no_internal_error,
+    r#"
+def foo() -> str: # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    match 1 + 1:
+        case 2:
+            return "two"
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_match_shows_missing_none,
+    r#"
+from typing import final
+
+@final
+class A:
+    pass
+
+def process(x: A | None):
+    match x: # E: Match on `A | None` is not exhaustive
+        case A():
+            pass
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_match_shows_missing_class,
+    r#"
+from typing import final
+
+@final
+class A:
+    pass
+
+@final
+class B:
+    pass
+
+@final
+class C:
+    pass
+
+def process(x: A | B | C):
+    match x: # E: Match on `A | B | C` is not exhaustive
+        case A():
+            pass
+"#,
+);

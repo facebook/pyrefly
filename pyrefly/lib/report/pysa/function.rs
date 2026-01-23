@@ -45,7 +45,7 @@ use crate::binding::binding::KeyDecoratedFunction;
 use crate::report::pysa::ModuleContext;
 use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::resolve_decorator_callees;
-use crate::report::pysa::captured_variable::CapturedVariable;
+use crate::report::pysa::captured_variable::CapturedVariableRef;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::get_all_classes;
@@ -238,7 +238,7 @@ pub struct FunctionDefinition {
     pub base: FunctionBaseDefinition,
     pub undecorated_signatures: Vec<FunctionSignature>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub captured_variables: Vec<CapturedVariable>,
+    pub captured_variables: Vec<CapturedVariableRef<FunctionRef>>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub decorator_callees: HashMap<PysaLocation, Vec<Target<FunctionRef>>>,
 }
@@ -878,7 +878,7 @@ pub fn export_all_functions(
 
 pub fn export_function_definitions(
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
-    captured_variables: &HashMap<FunctionRef, Vec<CapturedVariable>>,
+    captured_variables: &HashMap<FunctionRef, Vec<CapturedVariableRef<FunctionRef>>>,
     context: &ModuleContext,
 ) -> ModuleFunctionDefinitions<FunctionDefinition> {
     let mut function_definitions = ModuleFunctionDefinitions::new();

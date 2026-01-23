@@ -177,6 +177,9 @@ struct PyreflyClientConfig {
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
     disabled_language_services: Option<DisabledLanguageServices>,
+    // This is a global config that's read separately
+    #[allow(dead_code)]
+    stream_diagnostics: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -340,10 +343,14 @@ impl Workspaces {
     pub fn changed(&self, event: WorkspaceFoldersChangeEvent) {
         let mut workspaces = self.workspaces.write();
         for x in event.removed {
-            workspaces.shift_remove(&x.uri.to_file_path().unwrap());
+            if let Ok(path) = x.uri.to_file_path() {
+                workspaces.shift_remove(&path);
+            }
         }
         for x in event.added {
-            workspaces.insert(x.uri.to_file_path().unwrap(), Workspace::new());
+            if let Ok(path) = x.uri.to_file_path() {
+                workspaces.insert(path, Workspace::new());
+            }
         }
     }
 
@@ -402,7 +409,9 @@ impl Workspaces {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
-                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
                     workspace.disable_language_services = disable_language_services;
                 }
             }
@@ -419,7 +428,9 @@ impl Workspaces {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
-                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
                     workspace.disabled_language_services = Some(disabled_language_services);
                 }
             }
@@ -439,7 +450,9 @@ impl Workspaces {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
-                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
                     *modified = true;
                     workspace.display_type_errors = display_type_errors;
                 }
@@ -460,7 +473,9 @@ impl Workspaces {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
-                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
                     *modified = true;
                     workspace.lsp_analysis_config = Some(lsp_analysis_config);
                 }
@@ -480,8 +495,9 @@ impl Workspaces {
         let python_info = Some(PythonInfo::new(interpreter));
         match scope_uri {
             Some(scope_uri) => {
-                let workspace_path = scope_uri.to_file_path().unwrap();
-                if let Some(workspace) = workspaces.get_mut(&workspace_path) {
+                if let Ok(workspace_path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&workspace_path)
+                {
                     *modified = true;
                     workspace.python_info = python_info;
                 }
@@ -503,8 +519,9 @@ impl Workspaces {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
-                let workspace_path = scope_uri.to_file_path().unwrap();
-                if let Some(workspace) = workspaces.get_mut(&workspace_path) {
+                if let Ok(workspace_path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&workspace_path)
+                {
                     *modified = true;
                     workspace.search_path = Some(search_paths);
                 }

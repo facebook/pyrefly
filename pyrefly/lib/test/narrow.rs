@@ -1019,6 +1019,29 @@ def f(x: int):
 );
 
 testcase!(
+    test_issubclass_bare_type,
+    r#"
+from typing import assert_type, Any
+
+class Foo: ...
+
+def test_bare_type(x: type) -> None:
+    # `type` is equivalent to `type[Any]`, so issubclass can narrow it
+    if issubclass(x, Foo):
+        assert_type(x, type[Foo])
+
+def test_type_any(x: type[Any]) -> None:
+    if issubclass(x, Foo):
+        assert_type(x, type[Foo])
+
+def test_isinstance_then_issubclass(x: object) -> None:
+    # Common pattern: check if x is a class, then check if it's a subclass of Foo
+    if isinstance(x, type) and issubclass(x, Foo):
+        assert_type(x, type[Foo])
+    "#,
+);
+
+testcase!(
     test_issubclass_typevar_object,
     r#"
 from typing import TypeVar
@@ -1504,6 +1527,26 @@ def test(x: Literal["foo", 1] | Color | bool | None, y: object, z: Literal["f", 
 );
 
 testcase!(
+    test_narrow_in_with_starred,
+    r#"
+from typing import Literal, assert_type
+
+def test(x: Literal["a", "b", "c", "d"]) -> None:
+    y = ["a", "b"]
+    # Starred expressions in `in` checks should not cause type errors,
+    # and should not narrow (since we can't know all values at compile time)
+    if x in [*y, "c"]:
+        assert_type(x, Literal["a", "b", "c", "d"])
+    if x not in [*y, "c"]:
+        assert_type(x, Literal["a", "b", "c", "d"])
+
+    # Also test in ternary expression
+    z = "yes" if x in [*y, "c"] else "no"
+    assert_type(z, Literal["yes", "no"])
+"#,
+);
+
+testcase!(
     test_narrow_len,
     r#"
 from typing import assert_type, Never, NamedTuple
@@ -1583,6 +1626,19 @@ def test(x: tuple[int, int], y: tuple[int, *tuple[int, ...], int], z: tuple[int,
     else:
         assert_type(u, tuple[int, int] | tuple[int, *tuple[int, ...], int] | tuple[int, ...])
 "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1616
+testcase!(
+    test_dict_literal_key_isinstance_narrowing,
+    r#"
+from typing import Literal, reveal_type
+def get_value(x: dict[Literal["value"], int] | int) -> int | None:
+    if isinstance(x, dict):
+        return x.get("value")
+    reveal_type(x) # E: revealed type: int
+    return x
+    "#,
 );
 
 testcase!(
@@ -2318,6 +2374,30 @@ class X:
 );
 
 testcase!(
+    test_typeis_return_type,
+    r#"
+from typing import TypeIs, assert_type
+
+def is_bool(x: int) -> TypeIs[bool]:
+    return isinstance(x, bool)
+
+assert_type(is_bool(0), bool)
+    "#,
+);
+
+testcase!(
+    test_typeguard_return_type,
+    r#"
+from typing import TypeGuard, assert_type
+
+def is_str(x: object) -> TypeGuard[str]:
+    return isinstance(x, str)
+
+assert_type(is_str("hello"), bool)
+    "#,
+);
+
+testcase!(
     test_isinstance_invalid_special_form,
     r#"
 from typing import Final
@@ -2335,5 +2415,18 @@ from typing import Protocol
 def f(x: object):
     if isinstance(x, Protocol):
         pass  # No error - Protocol is valid for isinstance
+    "#,
+);
+
+testcase!(
+    test_narrow_to_unknown_name,
+    r#"
+class C:
+    # expected error, leading to Unknown type
+    x: XXX | None  # E: Could not find name `XXX`
+
+def f(o: C):
+    if o.x is not None:
+        o.x.foo
     "#,
 );

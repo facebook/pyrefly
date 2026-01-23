@@ -623,10 +623,12 @@ impl<'a> BindingsBuilder<'a> {
                 (Some(value), _) => ClassFieldDefinition::AssignedInBody {
                     value: ExprOrBinding::Expr(value),
                     annotation,
+                    alias_of: None,
                 },
                 (None, true) => ClassFieldDefinition::AssignedInBody {
                     value: ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
                     annotation,
+                    alias_of: None,
                 },
                 (None, false) => match annotation {
                     Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation { annotation },
