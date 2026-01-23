@@ -206,7 +206,6 @@ impl<'a> BindingsBuilder<'a> {
             Pattern::MatchMapping(x) => {
                 let mut narrow_ops = NarrowOps::new();
                 let mut subject_idx = subject_idx;
-                // Narrow the match subject to mapping types (filters out None, etc.)
                 if let Some(subject) = &match_subject {
                     let narrow_op = AtomicNarrowOp::IsMapping;
                     subject_idx = self.insert_binding(
