@@ -170,6 +170,7 @@ fn create_intermediate_definition_from(
                     symbol_kind: Some(symbol_kind),
                     docstring_range: func.docstring_range,
                     deprecation: None,
+                    is_final: false,
                     special_export: None,
                 }));
             }
@@ -181,6 +182,7 @@ fn create_intermediate_definition_from(
                             symbol_kind: Some(SymbolKind::Class),
                             docstring_range: None,
                             deprecation: None,
+                            is_final: false,
                             special_export: None,
                         }))
                     }
@@ -193,6 +195,7 @@ fn create_intermediate_definition_from(
                         symbol_kind: Some(SymbolKind::Class),
                         docstring_range: *docstring_range,
                         deprecation: None,
+                        is_final: false,
                         special_export: None,
                     })),
                 };
@@ -203,6 +206,7 @@ fn create_intermediate_definition_from(
                     symbol_kind: current_binding.symbol_kind(),
                     docstring_range: None,
                     deprecation: None,
+                    is_final: false,
                     special_export: None,
                 }));
             }

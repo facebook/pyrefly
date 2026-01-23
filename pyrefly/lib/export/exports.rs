@@ -70,6 +70,8 @@ pub struct Export {
     pub symbol_kind: Option<SymbolKind>,
     pub docstring_range: Option<TextRange>,
     pub deprecation: Option<Deprecation>,
+    /// Whether the exported symbol is marked with the `Final` special form.
+    pub is_final: bool,
     pub special_export: Option<SpecialExport>,
 }
 
@@ -341,6 +343,7 @@ impl Exports {
             for (name, definition) in self.0.definitions.definitions.iter_hashed() {
                 let deprecation = self.0.definitions.deprecated.get_hashed(name).cloned();
                 let special_export = self.0.definitions.special_exports.get_hashed(name).copied();
+                let is_final = self.0.definitions.final_names.contains_hashed(name);
                 let export = match &definition.style {
                     DefinitionStyle::Annotated(symbol_kind, ..)
                     | DefinitionStyle::Unannotated(symbol_kind) => {
@@ -349,6 +352,7 @@ impl Exports {
                             symbol_kind: Some(*symbol_kind),
                             docstring_range: definition.docstring_range,
                             deprecation,
+                            is_final,
                             special_export,
                         })
                     }
@@ -363,6 +367,7 @@ impl Exports {
                         symbol_kind: None,
                         docstring_range: definition.docstring_range,
                         deprecation,
+                        is_final,
                         special_export,
                     }),
                     DefinitionStyle::ImplicitGlobal => ExportLocation::ThisModule(Export {
@@ -370,6 +375,7 @@ impl Exports {
                         symbol_kind: Some(SymbolKind::Constant),
                         docstring_range: None,
                         deprecation,
+                        is_final,
                         special_export,
                     }),
                     DefinitionStyle::ImportAs(from, name) => {

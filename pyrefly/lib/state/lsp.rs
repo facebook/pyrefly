@@ -997,6 +997,7 @@ impl<'a> Transaction<'a> {
                                 symbol_kind: Some(SymbolKind::Module),
                                 docstring_range,
                                 deprecation: None,
+                                is_final: false,
                                 special_export: None,
                             },
                         ));
@@ -1066,6 +1067,7 @@ impl<'a> Transaction<'a> {
                             symbol_kind: Some(SymbolKind::Module),
                             docstring_range: None,
                             deprecation: None,
+                            is_final: false,
                             special_export: None,
                         },
                     ));
@@ -1079,6 +1081,7 @@ impl<'a> Transaction<'a> {
                         symbol_kind: Some(SymbolKind::Module),
                         docstring_range,
                         deprecation: None,
+                        is_final: false,
                         special_export: None,
                     },
                 ))

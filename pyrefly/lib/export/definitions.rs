@@ -21,6 +21,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Pattern;
@@ -152,6 +153,8 @@ pub struct Definitions {
     pub implicitly_imported_submodules: SmallSet<Name>,
     /// Deprecated names that are defined in this module.
     pub deprecated: SmallMap<Name, Deprecation>,
+    /// Names that are marked `Final`
+    pub final_names: SmallSet<Name>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
 }
@@ -527,6 +530,14 @@ impl<'a> DefinitionsBuilder<'a> {
                         entries: DunderAllEntry::as_list(v.as_ref()),
                     };
                 }
+                let has_final_annotation = match &x.annotation {
+                    &box Expr::Name(ref name)
+                    | &box Expr::Subscript(ExprSubscript {
+                        value: box Expr::Name(ref name),
+                        ..
+                    }) if name.id.as_str() == "Final" => true,
+                    _ => false,
+                };
                 match &*x.target {
                     Expr::Name(x) => {
                         self.add_name(
@@ -537,6 +548,9 @@ impl<'a> DefinitionsBuilder<'a> {
                                 ShortIdentifier::expr_name(x),
                             ),
                         );
+                        if has_final_annotation {
+                            self.inner.final_names.insert(x.id.clone());
+                        }
                     }
                     _ => self.expr_lvalue(&x.target),
                 }
