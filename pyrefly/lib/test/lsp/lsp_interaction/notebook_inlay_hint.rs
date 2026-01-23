@@ -35,33 +35,10 @@ fn test_inlay_hints() {
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0)
         .expect_response_with(|result| {
-            let hints = match result {
-                Some(hints) => hints,
-                None => return false,
-            };
-            if hints.len() != 1 {
-                return false;
-            }
-            let hint = &hints[0];
-            if hint.position.line != 0 || hint.position.character != 21 {
-                return false;
-            }
-            check_inlay_hint_label_values(
-                hint,
-                &[
-                    (" -> ", false),
-                    ("tuple", true),
-                    ("[", false),
-                    ("Literal", true),
-                    ("[", false),
-                    ("1", false),
-                    ("]", false),
-                    (", ", false),
-                    ("Literal", true),
-                    ("[", false),
-                    ("2", false),
-                    ("]", false),
-                    ("]", false),
+            let expected = [ExpectedInlayHint {
+                labels: &[
+                    " -> ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]",
+                    "]",
                 ],
                 position: (0, 21),
                 text_edit: ExpectedTextEdit {
@@ -77,33 +54,10 @@ fn test_inlay_hints() {
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0)
         .expect_response_with(|result| {
-            let hints = match result {
-                Some(hints) => hints,
-                None => return false,
-            };
-            if hints.len() != 1 {
-                return false;
-            }
-            let hint = &hints[0];
-            if hint.position.line != 0 || hint.position.character != 6 {
-                return false;
-            }
-            check_inlay_hint_label_values(
-                hint,
-                &[
-                    (": ", false),
-                    ("tuple", true),
-                    ("[", false),
-                    ("Literal", true),
-                    ("[", false),
-                    ("1", false),
-                    ("]", false),
-                    (", ", false),
-                    ("Literal", true),
-                    ("[", false),
-                    ("2", false),
-                    ("]", false),
-                    ("]", false),
+            let expected = [ExpectedInlayHint {
+                labels: &[
+                    ": ", "tuple", "[", "Literal", "[", "1", "]", ", ", "Literal", "[", "2", "]",
+                    "]",
                 ],
                 position: (0, 6),
                 text_edit: ExpectedTextEdit {
@@ -119,27 +73,16 @@ fn test_inlay_hints() {
     interaction
         .inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0)
         .expect_response_with(|result| {
-            let hints = match result {
-                Some(hints) => hints,
-                None => return false,
-            };
-            if hints.len() != 1 {
-                return false;
-            }
-            let hint = &hints[0];
-            if hint.position.line != 0 || hint.position.character != 15 {
-                return false;
-            }
-            check_inlay_hint_label_values(
-                hint,
-                &[
-                    (" -> ", false),
-                    ("Literal", true),
-                    ("[", false),
-                    ("0", false),
-                    ("]", false),
-                ],
-            )
+            let expected = [ExpectedInlayHint {
+                labels: &[" -> ", "Literal", "[", "0", "]"],
+                position: (0, 15),
+                text_edit: ExpectedTextEdit {
+                    new_text: " -> Literal[0]",
+                    range_start: (0, 15),
+                    range_end: (0, 15),
+                },
+            }];
+            inlay_hints_match_expected(result, &expected)
         })
         .unwrap();
 
