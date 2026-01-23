@@ -560,8 +560,7 @@ fn insertion_test_duplicate_imports() {
         ],
         get_test_report,
     );
-    // The insertion won't attempt to merge imports from the same module.
-    // It's not illegal, but it would be nice if we do merge.
+    // When another import from the same module already exists, we should append to it.
     assert_eq!(
         r#"
 # a.py
@@ -577,8 +576,7 @@ from a import another_thing
 my_export
 # ^
 ## After:
-from a import my_export
-from a import another_thing
+from a import another_thing, my_export
 my_export
 # ^
 "#

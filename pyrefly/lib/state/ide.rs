@@ -15,6 +15,8 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::gas::Gas;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -33,6 +35,14 @@ use crate::export::exports::Export;
 use crate::state::lsp::ImportFormat;
 
 const KEY_TO_DEFINITION_INITIAL_GAS: Gas = Gas::new(100);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportEdit {
+    pub position: TextSize,
+    pub insert_text: String,
+    pub display_text: String,
+    pub module_name: String,
+}
 
 pub enum IntermediateDefinition {
     Local(Export),
@@ -218,7 +228,7 @@ pub fn insert_import_edit(
     handle_to_import_from: Handle,
     export_name: &str,
     import_format: ImportFormat,
-) -> (TextSize, String, String) {
+) -> ImportEdit {
     let use_absolute_import = match import_format {
         ImportFormat::Absolute => true,
         ImportFormat::Relative => {
@@ -231,6 +241,7 @@ pub fn insert_import_edit(
         handle_to_import_from,
         export_name,
         use_absolute_import,
+        true,
     )
 }
 
@@ -255,12 +266,8 @@ pub fn insert_import_edit_with_forced_import_format(
     handle_to_import_from: Handle,
     export_name: &str,
     use_absolute_import: bool,
-) -> (TextSize, String, String) {
-    let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
-        first_stmt.range().start()
-    } else {
-        ast.range.end()
-    };
+    merge_with_existing: bool,
+) -> ImportEdit {
     let module_name_to_import = if use_absolute_import {
         handle_to_import_from.module()
     } else if let Some(relative_module) = ModuleName::relative_module_name_between(
@@ -271,12 +278,38 @@ pub fn insert_import_edit_with_forced_import_format(
     } else {
         handle_to_import_from.module()
     };
+    let display_text = format!(
+        "from {} import {}",
+        module_name_to_import.as_str(),
+        export_name
+    );
+    if merge_with_existing
+        && let Some(edit) = try_extend_existing_from_import(
+            ast,
+            module_name_to_import.as_str(),
+            export_name,
+            display_text.clone(),
+            module_name_to_import.as_str(),
+        )
+    {
+        return edit;
+    }
+    let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
+        first_stmt.range().start()
+    } else {
+        ast.range.end()
+    };
     let insert_text = format!(
         "from {} import {}\n",
         module_name_to_import.as_str(),
         export_name
     );
-    (position, insert_text, module_name_to_import.to_string())
+    ImportEdit {
+        position,
+        insert_text,
+        display_text,
+        module_name: module_name_to_import.to_string(),
+    }
 }
 
 /// Some handles must be imported in absolute style,
@@ -299,4 +332,49 @@ fn handle_require_absolute_import(config_finder: &ConfigFinder, handle: &Handle)
         || config
             .site_package_path()
             .any(|search_path| handle.path().as_path().starts_with(search_path))
+}
+
+fn try_extend_existing_from_import(
+    ast: &ModModule,
+    target_module_name: &str,
+    export_name: &str,
+    display_text: String,
+    module_name: &str,
+) -> Option<ImportEdit> {
+    for stmt in &ast.body {
+        if let Stmt::ImportFrom(import_from) = stmt
+            && import_from_module_name(import_from) == target_module_name
+        {
+            if import_from
+                .names
+                .iter()
+                .any(|alias| alias.asname.is_none() && alias.name.as_str() == export_name)
+            {
+                // Already imported; don't propose a duplicate edit.
+                return None;
+            }
+            if let Some(last_alias) = import_from.names.last() {
+                let position = last_alias.range.end();
+                let insert_text = format!(", {}", export_name);
+                return Some(ImportEdit {
+                    position,
+                    insert_text,
+                    display_text,
+                    module_name: module_name.to_owned(),
+                });
+            }
+        }
+    }
+    None
+}
+
+fn import_from_module_name(import_from: &StmtImportFrom) -> String {
+    let mut module_name = String::new();
+    if import_from.level > 0 {
+        module_name.push_str(&".".repeat(import_from.level as usize));
+    }
+    if let Some(module) = &import_from.module {
+        module_name.push_str(module.as_str());
+    }
+    module_name
 }
