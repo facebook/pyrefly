@@ -25,6 +25,7 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::EnumMetadata;
+use crate::binding::binding::AnyExportedKey;
 use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyClassBaseType;
 use crate::binding::binding::KeyClassField;
@@ -102,23 +103,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn get_metadata_for_class(&self, cls: &Class) -> Arc<ClassMetadata> {
-        self.get_from_class(cls, &KeyClassMetadata(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassMetadata::recursive()))
+        let key = KeyClassMetadata(cls.index());
+        self.get_from_class(cls, &key).unwrap_or_else(|| {
+            self.exports
+                .record_failed_export(cls.module_name(), AnyExportedKey::KeyClassMetadata(key));
+            Arc::new(ClassMetadata::recursive())
+        })
     }
 
     pub fn get_abstract_members_for_class(&self, cls: &Class) -> Arc<AbstractClassMembers> {
-        self.get_from_class(cls, &KeyAbstractClassCheck(cls.index()))
-            .unwrap_or_else(|| Arc::new(AbstractClassMembers::recursive()))
+        let key = KeyAbstractClassCheck(cls.index());
+        self.get_from_class(cls, &key).unwrap_or_else(|| {
+            self.exports.record_failed_export(
+                cls.module_name(),
+                AnyExportedKey::KeyAbstractClassCheck(key),
+            );
+            Arc::new(AbstractClassMembers::recursive())
+        })
     }
 
     pub fn get_base_types_for_class(&self, cls: &Class) -> Arc<ClassBases> {
-        self.get_from_class(cls, &KeyClassBaseType(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassBases::recursive()))
+        let key = KeyClassBaseType(cls.index());
+        self.get_from_class(cls, &key).unwrap_or_else(|| {
+            self.exports
+                .record_failed_export(cls.module_name(), AnyExportedKey::KeyClassBaseType(key));
+            Arc::new(ClassBases::recursive())
+        })
     }
 
     pub fn get_mro_for_class(&self, cls: &Class) -> Arc<ClassMro> {
-        self.get_from_class(cls, &KeyClassMro(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassMro::recursive()))
+        let key = KeyClassMro(cls.index());
+        self.get_from_class(cls, &key).unwrap_or_else(|| {
+            self.exports
+                .record_failed_export(cls.module_name(), AnyExportedKey::KeyClassMro(key));
+            Arc::new(ClassMro::recursive())
+        })
     }
 
     pub fn get_class_field_map(&self, cls: &Class) -> SmallMap<Name, Arc<ClassField>> {

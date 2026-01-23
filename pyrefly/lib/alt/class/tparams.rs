@@ -21,6 +21,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::solve::TypeFormContext;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
+use crate::binding::binding::AnyExportedKey;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTParams;
 use crate::config::error_kind::ErrorKind;
@@ -163,9 +164,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_class_tparams(&self, class: &Class) -> Arc<TParams> {
         match class.precomputed_tparams() {
             Some(tparams) => tparams.dupe(),
-            None => self
-                .get_from_class(class, &KeyTParams(class.index()))
-                .unwrap_or_default(),
+            None => {
+                let key = KeyTParams(class.index());
+                match self.get_from_class(class, &key) {
+                    Some(tparams) => tparams,
+                    None => {
+                        self.exports.record_failed_export(
+                            class.module_name(),
+                            AnyExportedKey::KeyTParams(key),
+                        );
+                        Arc::default()
+                    }
+                }
+            }
         }
     }
 }

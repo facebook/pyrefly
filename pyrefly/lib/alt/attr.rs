@@ -32,7 +32,9 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::expr::TypeOrExpr;
+use crate::binding::binding::AnyExportedKey;
 use crate::binding::binding::ExprOrBinding;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyExport;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -558,6 +560,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         for err in not_found {
+            match &err {
+                NotFoundOn::ClassInstance(class, _) | NotFoundOn::ClassObject(class, _) => {
+                    self.exports.record_failed_export(
+                        class.module_name(),
+                        AnyExportedKey::KeyClassField(KeyClassField(
+                            class.index(),
+                            attr_name.clone(),
+                        )),
+                    );
+                }
+                NotFoundOn::Module(_) => {
+                    // Module attribute failures are handled in stmt.rs via KeyExport
+                }
+            }
             error_messages.push(err.to_error_msg(attr_name));
             success = false;
         }

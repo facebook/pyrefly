@@ -32,6 +32,7 @@ use starlark_map::small_set::SmallSet;
 
 use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationTarget;
+use crate::binding::binding::AnyExportedKey;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExpect;
@@ -40,6 +41,7 @@ use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
+use crate::binding::binding::KeyExport;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::RaisedException;
@@ -1153,6 +1155,11 @@ impl<'a> BindingsBuilder<'a> {
                             ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
                             format!("Could not import `{name}` from `{m}`"),
                         );
+                        // Record the failed export for incremental invalidation.
+                        self.lookup.record_failed_export(
+                            m,
+                            AnyExportedKey::KeyExport(KeyExport(x.name.id.clone())),
+                        );
                         Binding::Type(Type::any_error())
                     };
                     let key = self.insert_binding(key, val);
@@ -1216,6 +1223,12 @@ impl<'a> BindingsBuilder<'a> {
                             x.range,
                             ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
                             format!("Could not import `{}` from `{m}`", x.name.id),
+                        );
+                        // Record the failed export for incremental invalidation.
+                        // When the module later exports this name, we'll be invalidated.
+                        self.lookup.record_failed_export(
+                            m,
+                            AnyExportedKey::KeyExport(KeyExport(x.name.id.clone())),
                         );
                         Binding::Type(Type::any_error())
                     } else {

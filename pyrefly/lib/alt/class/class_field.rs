@@ -54,6 +54,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::binding::binding::AnyExportedKey;
 use crate::binding::binding::Binding;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
@@ -3308,12 +3309,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         name: &Name,
     ) -> Option<Arc<ClassField>> {
-        Some(
-            self.get_from_class(cls, &KeyClassSynthesizedFields(cls.index()))?
-                .get(name)?
-                .inner
-                .dupe(),
-        )
+        let key = KeyClassSynthesizedFields(cls.index());
+        let synthesized_fields = match self.get_from_class(cls, &key) {
+            Some(fields) => fields,
+            None => {
+                // Record the failed export for incremental invalidation.
+                self.exports.record_failed_export(
+                    cls.module_name(),
+                    AnyExportedKey::KeyClassSynthesizedFields(key),
+                );
+                return None;
+            }
+        };
+        Some(synthesized_fields.get(name)?.inner.dupe())
     }
 
     /// This function does not return fields defined in parent classes
