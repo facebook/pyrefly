@@ -374,7 +374,9 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
     let mut all_ignores: SmallMap<&PathBuf, &Ignore> = SmallMap::new();
     for (module_path, ignore) in loads.collect_ignores() {
         if let ModulePathDetails::FileSystem(path) = module_path.details() {
-            all_ignores.insert(path, ignore);
+            if !ignore.is_empty() {
+                all_ignores.insert(path, ignore);
+            }
         }
     }
 
@@ -490,10 +492,12 @@ pub fn remove_unused_ignores(loads: &Errors, all: bool) -> usize {
                 buf.push_str(line);
                 buf.push_str(line_ending);
             }
-            if let Err(e) = fs_anyhow::write(path, buf) {
-                error!("Failed to remove unused error suppressions in {} files:", e);
-            } else if unused_ignore_count > 0 {
-                removed_ignores.insert(path, unused_ignore_count);
+            if unused_ignore_count > 0 {
+                if let Err(e) = fs_anyhow::write(path, buf) {
+                    error!("Failed to remove unused error suppressions in {} files:", e);
+                } else {
+                    removed_ignores.insert(path, unused_ignore_count);
+                }
             }
         }
     }
@@ -912,10 +916,24 @@ def f() -> int:
     fn test_no_remove_suppression() {
         let input = r#"
 def g() -> int:
-    return "hello" # pyrefly: ignore [bad-return]
-"#;
+    return "hello" # pyrefly: ignore [bad-return]"#;
+        // No trailing newline on purpose.
+        // Ensures files with only used suppressions are not rewritten (no newline added).
+        // https://github.com/facebook/pyrefly/issues/2185
         assert_remove_ignores(input, input, false, 0);
     }
+
+    #[test]
+    fn test_remove_unused_ignores_no_ignores() {
+        let input = r#"
+def f(x: int) -> int:
+    return x + 1"#;
+        // No trailing newline on purpose.
+        // Ensures files without suppressions are not rewritten (no newline added).
+        // https://github.com/facebook/pyrefly/issues/2185
+        assert_remove_ignores(input, input, false, 0);
+    }
+
     #[test]
     fn test_remove_generic_suppression() {
         let before = r#"
