@@ -367,7 +367,7 @@ The following configuration options are IDE-specific and exposed as VSCode setti
 - Control hover tooltip links
   - `python.analysis.showHoverGoToLinks` [boolean: true]: Controls whether hover tooltips include "Go to definition" and "Go to type definition" navigation links. Set to `false` for cleaner tooltips with only type information.
 - Control comment section folding
-  - `commentFoldingRanges` [boolean: false]: Controls whether comment section folding ranges are included in the editor. When `true`, comments following the pattern `# Section Name ----` (with 4+ trailing dashes) create collapsible regions, similar to R's code section convention. Set to `true` to enable this feature.
+  - `pyrefly.commentFoldingRanges` [boolean: false]: Controls whether comment section folding ranges are included in the editor. When `true`, comments following the pattern `# Section Name ----` (with 4+ trailing dashes) create collapsible regions, similar to R's code section convention. Set to `true` to enable this feature.
 
 When used with non-VSCode editors, these options can also be configured by sending them via `initializationOptions` in the LSP [initialization](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#initialize) request.
 
@@ -2846,6 +2846,23 @@ def f(x, *args: P1.args, **kwargs: P2.kwargs) -> None:
 ```
 
 Here, `P1.args` and `P2.kwargs` can't be used together; `*args` and `**kwargs` must come from the same `ParamSpec`.
+
+## invalid-pattern
+
+This error is reported when a pattern is invalid at runtime. For example, enum members are values,
+so they must be matched as value patterns (without `()`), not class patterns:
+
+```python
+from enum import Enum
+
+class Color(Enum):
+  RED = "red"
+
+def describe(color: Color) -> None:
+  match color:
+    case Color.RED():  # Invalid pattern: use `Color.RED` (without parentheses)
+      pass
+```
 
 ## invalid-self-type
 
