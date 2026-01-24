@@ -426,6 +426,7 @@ fn attribute_access_callees(
     property_getters: Vec<CallTarget<FunctionRefForTest>>,
     higher_order_parameters: Vec<(u32, Vec<CallTarget<FunctionRefForTest>>, Unresolved)>,
     unresolved: Unresolved,
+    is_attribute: bool,
 ) -> ExpressionCallees<FunctionRefForTest> {
     ExpressionCallees::AttributeAccess(AttributeAccessCallees {
         if_called: CallCallees {
@@ -438,6 +439,7 @@ fn attribute_access_callees(
         property_setters,
         property_getters,
         global_targets: vec![],
+        is_attribute,
     })
 }
 
@@ -449,6 +451,7 @@ fn global_attribute_access_callees(
         property_setters: vec![],
         property_getters: vec![],
         global_targets,
+        is_attribute: true,
     })
 }
 
@@ -460,6 +463,7 @@ fn property_getter_callees(
         property_setters: vec![],
         property_getters,
         global_targets: vec![],
+        is_attribute: false,
     })
 }
 
@@ -471,6 +475,7 @@ fn property_setter_callees(
         property_setters,
         property_getters: vec![],
         global_targets: vec![],
+        is_attribute: false,
     })
 }
 
@@ -488,6 +493,7 @@ fn regular_attribute_access_callees(
         property_setters: vec![],
         property_getters: vec![],
         global_targets: vec![],
+        is_attribute: true,
     })
 }
 
@@ -2810,7 +2816,19 @@ def baz(x: CallViaGetattr) -> None:
         ];
         vec![(
             "test.baz",
-            vec![("10:7-10:18", regular_attribute_access_callees(call_targets))],
+            vec![(
+                "10:7-10:18",
+                attribute_access_callees(
+                    call_targets,
+                    /* init_targets */ vec![],
+                    /* new_targets */ vec![],
+                    /* property_setters */ vec![],
+                    /* property_getters */ vec![],
+                    /* higher_order_parameters */ vec![],
+                    Unresolved::False,
+                    /* is_attribute */ false,
+                ),
+            )],
         )]
     }
 );
@@ -2895,6 +2913,7 @@ def foo(obj: Token):
                         property_setters: vec![],
                         property_getters: vec![],
                         global_targets: vec![],
+                        is_attribute: false, // TODO: This should be true
                     }),
                 ),
             ],
@@ -4178,6 +4197,7 @@ def foo(x: Union[A, B]):
                         /* property_getters */ vec![],
                         /* higher_order_parameters */ vec![],
                         /* unresolved */ Unresolved::False,
+                        /* is_attribute */ true,
                     ),
                 ),
                 // TODO: Handle `object.__class__`
@@ -4267,6 +4287,7 @@ def foo(x: A):
                         /* property_getters */ vec![],
                         /* higher_order_parameters */ vec![],
                         /* unresolved */ Unresolved::False,
+                        /* is_attribute */ true,
                     ),
                 ),
                 (
@@ -6607,7 +6628,7 @@ call_graph_testcase!(
     test_return_shim_multiple_callees,
     TEST_MODULE_NAME,
     r#"
-from typing import Callable
+from typing import Callable, Any
 def decorator_1(callable: Callable[[Any], Any]) -> Callable[[Any], Any]:
   return callable
 def decorator_2(callable: Callable[[Any, int], int]) -> Callable[[Any, int], int]:

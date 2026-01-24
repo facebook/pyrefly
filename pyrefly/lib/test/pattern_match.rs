@@ -213,6 +213,38 @@ def describe_ok(color: Literal["red", "blue"]):
 );
 
 testcase!(
+    test_enum_member_as_class_pattern,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+
+def describe(color: Color) -> None:
+    match color:  # E: Match on `Color` is not exhaustive
+        case Color.RED():  # E: Expected class object, got `Literal[Color.RED]`
+            pass
+"#,
+);
+
+testcase!(
+    test_protocol_class_pattern,
+    r#"
+from typing import Protocol
+
+class Drawable(Protocol):
+    def draw(self) -> None: ...
+
+def describe(x: object) -> None:
+    match x:
+        case Drawable():  # E: Protocol `Drawable` is not decorated with @runtime_checkable and cannot be used with isinstance()
+            pass
+        case _:
+            pass
+"#,
+);
+
+testcase!(
     test_non_exhaustive_enum_match_facet_subject,
     r#"
 from enum import Enum

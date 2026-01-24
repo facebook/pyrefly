@@ -1185,7 +1185,7 @@ function getMonacoButtons(
                 createNewFile,
                 setActiveFileName
             ),
-            getGitHubIssuesButton(model, pythonVersion),
+            getGitHubIssuesButton(models, activeFileName, pythonVersion),
         ];
     }
 
@@ -1229,14 +1229,23 @@ function getShareUrlButton(
 }
 
 function getGitHubIssuesButton(
-    model: editor.ITextModel | null,
+    models: Map<string, editor.ITextModel>,
+    activeFileName: string,
     pythonVersion: string
 ): React.ReactElement {
     return (
         <MonacoEditorButton
             id="github-issues-button"
             onClick={() => {
+                // Update URL with current state before generating issue link
+                const allFiles: Record<string, string> = {};
+                models.forEach((model, filename) => {
+                    allFiles[filename] = model.getValue();
+                });
+                updateURL(allFiles, activeFileName);
+
                 const sandboxURL = window.location.href;
+                const model = models.get(activeFileName);
                 const code = model ? model.getValue() : '';
 
                 const title = 'Bug Report';

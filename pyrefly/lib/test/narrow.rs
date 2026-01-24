@@ -675,6 +675,109 @@ def f(x):
 );
 
 testcase!(
+    test_isinstance_tuple_union_multiple,
+    r#"
+from typing import assert_type
+
+def make_it() -> int | tuple[int, str] | tuple[bool] | tuple[str]:
+    assert False
+
+def test():
+    c = make_it()
+    if isinstance(c, tuple):
+        assert_type(c, tuple[int, str] | tuple[bool] | tuple[str])
+    else:
+        assert_type(c, int)
+
+def test_negative():
+    c = make_it()
+    if not isinstance(c, tuple):
+        assert_type(c, int)
+    else:
+        assert_type(c, tuple[int, str] | tuple[bool] | tuple[str])
+"#,
+);
+
+testcase!(
+    test_isinstance_list_union_multiple,
+    r#"
+from typing import assert_type
+
+def make_it() -> int | list[int] | list[bool] | list[str]:
+    assert False
+
+def test():
+    c = make_it()
+    if isinstance(c, list):
+        assert_type(c, list[int] | list[bool] | list[str])
+    else:
+        assert_type(c, int)
+
+def test_negative():
+    c = make_it()
+    if not isinstance(c, list):
+        assert_type(c, int)
+    else:
+        assert_type(c, list[int] | list[bool] | list[str])
+"#,
+);
+
+testcase!(
+    test_isinstance_iterable_union_multiple,
+    r#"
+from typing import assert_type, Iterable
+
+def make_it() -> int | tuple[int, str] | list[bool] | list[str]:
+    assert False
+
+def test():
+    c = make_it()
+    if isinstance(c, Iterable):
+        assert_type(c, list[bool] | list[str] | tuple[int, str])
+    else:
+        assert_type(c, int)
+
+def test_negative():
+    c = make_it()
+    if not isinstance(c, Iterable):
+        assert_type(c, int)
+    else:
+        assert_type(c, list[bool] | list[str] | tuple[int, str])
+"#,
+);
+
+testcase!(
+    test_isinstance_mapping_list,
+    r#"
+from typing import Mapping, assert_type
+def test(
+    response: Mapping[str, object] | list[Mapping[str, object]],
+) -> dict[str, object]:
+    if isinstance(response, list):
+        assert_type(response, list[Mapping[str, object]])
+        return {
+            "result": [
+                {
+                    "node_id": item["id"],
+                    "node": item,
+                }
+                for item in response
+            ]
+        }
+    else:
+        assert_type(response, Mapping[str, object])
+        return {
+            "result": [
+                {
+                    "node_id": response["id"],
+                    "node": response,
+                }
+            ]
+        }
+"#,
+);
+
+testcase!(
     test_isinstance_of_none,
     r#"
 from typing import assert_type

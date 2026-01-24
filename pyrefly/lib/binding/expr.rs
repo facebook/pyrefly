@@ -52,6 +52,7 @@ use crate::binding::bindings::LegacyTParamId;
 use crate::binding::bindings::NameLookupResult;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::narrow::NarrowSource;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
@@ -159,7 +160,7 @@ impl TestAssertion {
             {
                 Some(NarrowOps::from_single_narrow_op(
                     arg0,
-                    AtomicNarrowOp::IsInstance(arg1.clone()),
+                    AtomicNarrowOp::IsInstance(arg1.clone(), NarrowSource::Call),
                     arg0.range(),
                 ))
             }
@@ -169,7 +170,7 @@ impl TestAssertion {
             {
                 Some(NarrowOps::from_single_narrow_op(
                     arg0,
-                    AtomicNarrowOp::IsNotInstance(arg1.clone()),
+                    AtomicNarrowOp::IsNotInstance(arg1.clone(), NarrowSource::Call),
                     arg0.range(),
                 ))
             }

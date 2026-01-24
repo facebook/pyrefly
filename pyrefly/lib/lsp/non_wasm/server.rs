@@ -323,6 +323,8 @@ pub trait TspInterface: Send + Sync {
 
     fn lsp_queue(&self) -> &LspQueue;
 
+    fn uris_pending_close(&self) -> &Mutex<HashMap<String, usize>>;
+
     /// Get access to the recheck queue for async task processing
     fn run_recheck_queue(&self, telemetry: &impl Telemetry);
 
@@ -501,6 +503,9 @@ pub struct Server {
     /// we rely on file watchers to catch up.
     indexed_workspaces: Mutex<HashSet<PathBuf>>,
     cancellation_handles: Mutex<HashMap<RequestId, CancellationHandle>>,
+    /// URIs we have received a didClose notification for, mapped to the number of didClose
+    /// operations we have yet to process.
+    uris_pending_close: Mutex<HashMap<String, usize>>,
     workspaces: Arc<Workspaces>,
     outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
@@ -684,7 +689,11 @@ pub fn initialize_finish(
 /// - priority_events includes those that should be handled as soon as possible (e.g. know that a
 ///   request is cancelled)
 /// - queued_events includes most of the other events.
-pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: &LspQueue) {
+pub fn dispatch_lsp_events(
+    connection: &Connection,
+    lsp_queue: &LspQueue,
+    close_pending_uris: &Mutex<HashMap<String, usize>>,
+) {
     for msg in &connection.receiver {
         match msg {
             Message::Request(x) => {
@@ -709,6 +718,11 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: &LspQueue) {
                 } else if let Some(Ok(params)) = as_notification::<DidChangeTextDocument>(&x) {
                     lsp_queue.send(LspEvent::DidChangeTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidCloseTextDocument>(&x) {
+                    close_pending_uris
+                        .lock()
+                        .entry(params.text_document.uri.path().to_owned())
+                        .and_modify(|pending| *pending += 1)
+                        .or_insert(1);
                     lsp_queue.send(LspEvent::DidCloseTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidSaveTextDocument>(&x) {
                     lsp_queue.send(LspEvent::DidSaveTextDocument(params))
@@ -717,6 +731,11 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: &LspQueue) {
                 } else if let Some(Ok(params)) = as_notification::<DidChangeNotebookDocument>(&x) {
                     lsp_queue.send(LspEvent::DidChangeNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidCloseNotebookDocument>(&x) {
+                    close_pending_uris
+                        .lock()
+                        .entry(params.notebook_document.uri.path().to_owned())
+                        .and_modify(|pending| *pending += 1)
+                        .or_insert(1);
                     lsp_queue.send(LspEvent::DidCloseNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidSaveNotebookDocument>(&x) {
                     lsp_queue.send(LspEvent::DidSaveNotebookDocument(params))
@@ -906,7 +925,11 @@ pub fn lsp_loop(
     );
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            dispatch_lsp_events(&server.connection.0, &server.lsp_queue);
+            dispatch_lsp_events(
+                &server.connection.0,
+                &server.lsp_queue,
+                &server.uris_pending_close,
+            );
         });
         scope.spawn(|| {
             server.recheck_queue.run_until_stopped(&server, telemetry);
@@ -1000,6 +1023,18 @@ impl Server {
         }
     }
 
+    fn decrement_uri_pending_close(&self, uri: &Url) {
+        let mut uris_pending_close = self.uris_pending_close.lock();
+        let Some(count) = uris_pending_close.get_mut(uri.path()) else {
+            return;
+        };
+
+        *count -= 1;
+        if *count == 0 {
+            uris_pending_close.remove(uri.path());
+        }
+    }
+
     /// Process the event and return next step.
     fn process_event<'a>(
         &'a self,
@@ -1050,16 +1085,20 @@ impl Server {
                     uri, version, text, ..
                 } = text_document;
                 self.set_file_stats(uri.clone(), telemetry_event);
-                let contents = Arc::new(LspFile::from_source(text));
-                self.did_open(
-                    ide_transaction_manager,
-                    telemetry,
-                    telemetry_event,
-                    subsequent_mutation,
-                    uri,
-                    version,
-                    contents,
-                )?;
+                if self.uris_pending_close.lock().contains_key(uri.path()) {
+                    telemetry_event.canceled = true;
+                } else {
+                    let contents = Arc::new(LspFile::from_source(text));
+                    self.did_open(
+                        ide_transaction_manager,
+                        telemetry,
+                        telemetry_event,
+                        subsequent_mutation,
+                        uri,
+                        version,
+                        contents,
+                    )?;
+                }
             }
             LspEvent::DidChangeTextDocument(params) => {
                 self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
@@ -1071,13 +1110,10 @@ impl Server {
                 )?;
             }
             LspEvent::DidCloseTextDocument(params) => {
-                self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
-                self.did_close(
-                    params.text_document.uri,
-                    DidCloseKind::TextDocument,
-                    telemetry,
-                    telemetry_event,
-                );
+                let uri = params.text_document.uri;
+                self.set_file_stats(uri.clone(), telemetry_event);
+                self.decrement_uri_pending_close(&uri);
+                self.did_close(uri, DidCloseKind::TextDocument, telemetry, telemetry_event);
             }
             LspEvent::DidSaveTextDocument(params) => {
                 self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
@@ -1086,35 +1122,40 @@ impl Server {
             LspEvent::DidOpenNotebookDocument(params) => {
                 let url = params.notebook_document.uri.clone();
                 self.set_file_stats(url.clone(), telemetry_event);
-                let version = params.notebook_document.version;
-                let notebook_document = params.notebook_document.clone();
-                let cell_contents: HashMap<Url, String> = params
-                    .cell_text_documents
-                    .iter()
-                    .map(|doc| (doc.uri.clone(), doc.text.clone()))
-                    .collect();
-                let ruff_notebook = params.notebook_document.to_ruff_notebook(&cell_contents)?;
-                let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
-                let notebook_path = url.to_file_path().map_err(|_| {
-                    anyhow::anyhow!(
-                        "Could not convert uri to filepath: {}, expected a notebook",
-                        url
-                    )
-                })?;
-                for cell_url in lsp_notebook.cell_urls() {
-                    self.open_notebook_cells
-                        .write()
-                        .insert(cell_url.clone(), notebook_path.clone());
+                if self.uris_pending_close.lock().contains_key(url.path()) {
+                    telemetry_event.canceled = true;
+                } else {
+                    let version = params.notebook_document.version;
+                    let notebook_document = params.notebook_document.clone();
+                    let cell_contents: HashMap<Url, String> = params
+                        .cell_text_documents
+                        .iter()
+                        .map(|doc| (doc.uri.clone(), doc.text.clone()))
+                        .collect();
+                    let ruff_notebook =
+                        params.notebook_document.to_ruff_notebook(&cell_contents)?;
+                    let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
+                    let notebook_path = url.to_file_path().map_err(|_| {
+                        anyhow::anyhow!(
+                            "Could not convert uri to filepath: {}, expected a notebook",
+                            url
+                        )
+                    })?;
+                    for cell_url in lsp_notebook.cell_urls() {
+                        self.open_notebook_cells
+                            .write()
+                            .insert(cell_url.clone(), notebook_path.clone());
+                    }
+                    self.did_open(
+                        ide_transaction_manager,
+                        telemetry,
+                        telemetry_event,
+                        subsequent_mutation,
+                        url,
+                        version,
+                        Arc::new(LspFile::Notebook(Arc::new(lsp_notebook))),
+                    )?;
                 }
-                self.did_open(
-                    ide_transaction_manager,
-                    telemetry,
-                    telemetry_event,
-                    subsequent_mutation,
-                    url,
-                    version,
-                    Arc::new(LspFile::Notebook(Arc::new(lsp_notebook))),
-                )?;
             }
             LspEvent::DidChangeNotebookDocument(params) => {
                 self.set_file_stats(params.notebook_document.uri.clone(), telemetry_event);
@@ -1126,9 +1167,11 @@ impl Server {
                 )?;
             }
             LspEvent::DidCloseNotebookDocument(params) => {
-                self.set_file_stats(params.notebook_document.uri.clone(), telemetry_event);
+                let uri = params.notebook_document.uri;
+                self.set_file_stats(uri.clone(), telemetry_event);
+                self.decrement_uri_pending_close(&uri);
                 self.did_close(
-                    params.notebook_document.uri,
+                    uri,
                     DidCloseKind::NotebookDocument,
                     telemetry,
                     telemetry_event,
@@ -1711,6 +1754,7 @@ impl Server {
             indexed_configs: Mutex::new(HashSet::new()),
             indexed_workspaces: Mutex::new(HashSet::new()),
             cancellation_handles: Mutex::new(HashMap::new()),
+            uris_pending_close: Mutex::new(HashMap::new()),
             workspaces,
             outgoing_request_id: AtomicI32::new(1),
             outgoing_requests: Mutex::new(HashMap::new()),
@@ -2004,6 +2048,7 @@ impl Server {
                 diags.entry(path.to_owned()).or_default().push(diag);
             }
         }
+        drop(open_files);
         for (path, diagnostics) in diags.iter_mut() {
             for diagnostic in diagnostics.iter_mut() {
                 diagnostic.data = serde_json::to_value(source).ok()
@@ -4185,6 +4230,10 @@ impl TspInterface for Server {
 
     fn lsp_queue(&self) -> &LspQueue {
         &self.lsp_queue
+    }
+
+    fn uris_pending_close(&self) -> &Mutex<HashMap<String, usize>> {
+        &self.uris_pending_close
     }
 
     fn run_recheck_queue(&self, telemetry: &impl Telemetry) {

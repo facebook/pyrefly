@@ -469,6 +469,10 @@ pub struct DjangoModelMetadata {
     /// The name of the field that has primary_key=True, if any.
     /// If None, the model uses the default auto-generated `id` field.
     pub custom_primary_key_field: Option<Name>,
+    /// Names of ForeignKey fields
+    pub foreign_key_fields: Vec<Name>,
+    /// Names of fields with choices=...
+    pub fields_with_choices: Vec<Name>,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

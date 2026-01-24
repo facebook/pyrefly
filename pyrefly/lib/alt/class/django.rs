@@ -514,9 +514,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
     ) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
-        if !metadata.is_django_model() {
-            return None;
-        }
+        let django_metadata = metadata.django_model_metadata()?;
 
         let mut fields = SmallMap::new();
 
@@ -528,23 +526,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fields.insert(PK, ClassSynthesizedField::new(pk_type));
         }
 
-        // Synthesize `<field_name>_id` fields for ForeignKey fields
-        // and `get_<field_name>_display()` methods for fields with choices
-        for field_name in cls.fields() {
-            let Some(class_field) = self.get_field_from_current_class_only(cls, field_name) else {
-                continue;
-            };
-            if let Some(fk_id_type) = self.get_foreign_key_id_type(&class_field) {
+        // Synthesize `<field_name>_id` fields for ForeignKey fields.
+        // We use field names cached in metadata (detected during binding phase)
+        // to avoid triggering type resolution during synthesis, which can cause cycles.
+        for field_name in &django_metadata.foreign_key_fields {
+            if let Some(class_field) = self.get_field_from_current_class_only(cls, field_name)
+                && let Some(fk_id_type) = self.get_foreign_key_id_type(&class_field)
+            {
                 let id_field_name = Name::new(format!("{}_id", field_name));
                 fields.insert(id_field_name, ClassSynthesizedField::new(fk_id_type));
             }
-            if class_field.has_choices() {
-                let method_name = Name::new(format!("get_{}_display", field_name));
-                fields.insert(
-                    method_name.clone(),
-                    self.get_display_method(cls, &method_name),
-                );
-            }
+        }
+
+        // Synthesize `get_<field_name>_display()` methods for fields with choices.
+        // Same caching strategy as FK fields above.
+        for field_name in &django_metadata.fields_with_choices {
+            let method_name = Name::new(format!("get_{}_display", field_name));
+            fields.insert(
+                method_name.clone(),
+                self.get_display_method(cls, &method_name),
+            );
         }
 
         Some(ClassSynthesizedFields::new(fields))

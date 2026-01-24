@@ -67,6 +67,7 @@ use crate::binding::binding::KeyVariance;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
+use crate::binding::django::DjangoFieldInfo;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::scope::ClassIndices;
 use crate::binding::scope::FlowStyle;
@@ -263,6 +264,8 @@ impl<'a> BindingsBuilder<'a> {
         let field_definitions = self.scopes.finish_class_and_get_field_definitions();
 
         let mut django_primary_key_field: Option<Name> = None;
+        let mut django_foreign_key_fields: Vec<Name> = Vec::new();
+        let mut django_fields_with_choices: Vec<Name> = Vec::new();
         let mut fields = SmallMap::with_capacity(field_definitions.len());
         for (name, (definition, range)) in field_definitions.into_iter_hashed() {
             if let ClassFieldDefinition::AssignedInBody {
@@ -274,6 +277,14 @@ impl<'a> BindingsBuilder<'a> {
 
                 if self.extract_django_primary_key(e) {
                     django_primary_key_field = Some(name.clone().into_key());
+                }
+
+                if self.extract_django_foreign_key(e) {
+                    django_foreign_key_fields.push(name.clone().into_key());
+                }
+
+                if self.extract_django_choices(e) {
+                    django_fields_with_choices.push(name.clone().into_key());
                 }
             }
             let (is_initialized_on_class, is_annotated) = match &definition {
@@ -376,7 +387,11 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: decorators.into_boxed_slice(),
                 is_new_type: false,
                 pydantic_config_dict,
-                django_primary_key_field,
+                django_field_info: Box::new(DjangoFieldInfo {
+                    primary_key_field: django_primary_key_field,
+                    foreign_key_fields: django_foreign_key_fields,
+                    fields_with_choices: django_fields_with_choices,
+                }),
             },
         );
         self.insert_binding_idx(
@@ -549,7 +564,7 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: Box::new([]),
                 is_new_type,
                 pydantic_config_dict: PydanticConfigDict::default(),
-                django_primary_key_field: None,
+                django_field_info: Box::default(),
             },
         );
         self.insert_binding_idx(

@@ -32,6 +32,7 @@ use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::narrow::NarrowSource;
 use crate::binding::narrow::NarrowingSubject;
 use crate::binding::narrow::expr_to_subjects;
 use crate::binding::scope::FlowStyle;
@@ -242,7 +243,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             Pattern::MatchClass(mut x) => {
                 self.ensure_expr(&mut x.cls, narrowing_usage);
-                let narrow_op = AtomicNarrowOp::IsInstance((*x.cls).clone());
+                let narrow_op = AtomicNarrowOp::IsInstance((*x.cls).clone(), NarrowSource::Pattern);
                 // Redefining subject_idx to apply the class level narrowing,
                 // which is used for additional narrowing for attributes below.
                 let subject_idx = self.insert_binding(

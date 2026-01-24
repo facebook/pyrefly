@@ -18,6 +18,7 @@ use pyrefly_types::facet::UnresolvedFacetKind;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
@@ -41,6 +42,7 @@ use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::FacetOrigin;
 use crate::binding::narrow::FacetSubject;
 use crate::binding::narrow::NarrowOp;
+use crate::binding::narrow::NarrowSource;
 use crate::binding::narrow::NarrowingSubject;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
@@ -196,9 +198,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if args.args.len() > 1 {
             let second_arg = &args.args[1];
             let op = match func_ty.callee_kind() {
-                Some(CalleeKind::Function(FunctionKind::IsInstance)) => {
-                    Some(AtomicNarrowOp::IsInstance(second_arg.clone()))
-                }
+                Some(CalleeKind::Function(FunctionKind::IsInstance)) => Some(
+                    AtomicNarrowOp::IsInstance(second_arg.clone(), NarrowSource::Call),
+                ),
                 Some(CalleeKind::Function(FunctionKind::IsSubclass)) => {
                     Some(AtomicNarrowOp::IsSubclass(second_arg.clone()))
                 }
@@ -220,18 +222,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn narrow_isinstance(&self, left: &Type, right: &Type) -> Type {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
-            if let Some((tparams, right)) = self.unwrap_class_object_silently(&right) {
-                let (vs, right) = self
-                    .solver()
-                    .fresh_quantified(&tparams, right, self.uniques);
-                res.push(self.intersect_with_fallback(left, &right, &|| right.clone()));
-                // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
-                // * If `left` is an invalid specialization, the error has already been reported at its definition site.
-                // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.
-                let _specialization_errors = self.solver().finish_quantified(vs, false);
-            } else {
-                res.push(left.clone());
-            }
+            res.push(self.distribute_over_union(left, |l| {
+                if let Some((tparams, right)) = self.unwrap_class_object_silently(&right) {
+                    let (vs, right) = self
+                        .solver()
+                        .fresh_quantified(&tparams, right, self.uniques);
+                    let result = self.intersect_with_fallback(l, &right, &|| {
+                        // TODO: falling back to Never when the lhs is a union is a hack to get
+                        // reasonable behavior in cases like this:
+                        //     def f(x: int | list[int]):
+                        //         if isinstance(x, Iterable):
+                        //             reveal_type(x)
+                        // We want to narrow x to just `list[int]`, rather than `(int & Iterable[Unknown]) | list[int]`
+                        if left.is_union() {
+                            Type::never()
+                        } else {
+                            right.clone()
+                        }
+                    });
+                    // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
+                    // * If `left` is an invalid specialization, the error has already been reported at its definition site.
+                    // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.
+                    let _specialization_errors = self.solver().finish_quantified(vs, false);
+                    result
+                } else {
+                    l.clone()
+                }
+            }));
         }
         self.unions(res)
     }
@@ -239,18 +256,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn narrow_is_not_instance(&self, left: &Type, right: &Type) -> Type {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
-            if let Some((tparams, right)) = self.unwrap_class_object_silently(&right) {
-                let (vs, right) = self
-                    .solver()
-                    .fresh_quantified(&tparams, right, self.uniques);
-                res.push(self.subtract(left, &right));
-                // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
-                // * If `left` is an invalid specialization, the error has already been reported at its definition site.
-                // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.
-                let _specialization_errors = self.solver().finish_quantified(vs, false);
-            } else {
-                res.push(left.clone())
-            }
+            res.push(self.distribute_over_union(left, |l| {
+                if let Some((tparams, right)) = self.unwrap_class_object_silently(&right) {
+                    let (vs, right) = self
+                        .solver()
+                        .fresh_quantified(&tparams, right, self.uniques);
+                    let result = self.subtract(l, &right);
+                    // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
+                    // * If `left` is an invalid specialization, the error has already been reported at its definition site.
+                    // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.
+                    let _specialization_errors = self.solver().finish_quantified(vs, false);
+                    result
+                } else {
+                    l.clone()
+                }
+            }));
         }
         self.intersects(&res)
     }
@@ -677,79 +697,124 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
             }
             AtomicNarrowOp::In(v) => {
+                // First, check for List, Tuple, and Set literal expressions (syntactic check,
+                // avoids type inference on the container itself)
                 let exprs = match v {
                     Expr::List(list) => Some(list.elts.clone()),
                     Expr::Tuple(tuple) => Some(tuple.elts.clone()),
                     Expr::Set(set) => Some(set.elts.clone()),
                     _ => None,
                 };
-                let Some(exprs) = exprs else {
-                    return ty.clone();
-                };
-                // Bail out if any element is a starred expression (e.g., `x in [*y, 1]`).
-                // We can't know all values at compile time when unpacking occurs.
-                if exprs.iter().any(|e| matches!(e, Expr::Starred(_))) {
-                    return ty.clone();
-                }
-                let mut literal_types = Vec::new();
-                for expr in exprs {
-                    let expr_ty = self.expr_infer(&expr, errors);
-                    if matches!(expr_ty, Type::Literal(_) | Type::None) {
-                        literal_types.push(expr_ty);
-                    } else {
+                if let Some(exprs) = exprs {
+                    // Bail out if any element is a starred expression (e.g., `x in [*y, 1]`).
+                    // We can't know all values at compile time when unpacking occurs.
+                    if exprs.iter().any(|e| matches!(e, Expr::Starred(_))) {
                         return ty.clone();
                     }
-                }
-                self.intersect(ty, &self.unions(literal_types))
-            }
-            AtomicNarrowOp::NotIn(v) => {
-                let exprs = match v {
-                    Expr::List(list) => Some(list.elts.clone()),
-                    Expr::Tuple(tuple) => Some(tuple.elts.clone()),
-                    Expr::Set(set) => Some(set.elts.clone()),
-                    _ => None,
-                };
-                let Some(exprs) = exprs else {
-                    return ty.clone();
-                };
-                // Bail out if any element is a starred expression (e.g., `x not in [*y, 1]`).
-                // We can't know all values at compile time when unpacking occurs.
-                if exprs.iter().any(|e| matches!(e, Expr::Starred(_))) {
-                    return ty.clone();
-                }
-                let mut literal_types = Vec::new();
-                for expr in exprs {
-                    let expr_ty = self.expr_infer(&expr, errors);
-                    if matches!(expr_ty, Type::Literal(_) | Type::None) {
-                        literal_types.push(expr_ty);
-                    } else {
-                        return ty.clone();
-                    }
-                }
-                self.distribute_over_union(ty, |t| {
-                    let mut result = t.clone();
-                    for right in &literal_types {
-                        match (t, right) {
-                            (_, _) if self.literal_equal(t, right) => {
-                                result = Type::never();
-                            }
-                            (Type::ClassType(cls), Type::Literal(lit))
-                                if cls.is_builtin("bool")
-                                    && let Lit::Bool(b) = &lit.value =>
-                            {
-                                result = Lit::Bool(!b).to_implicit_type();
-                            }
-                            (Type::ClassType(left_cls), Type::Literal(right))
-                                if let Lit::Enum(right) = &right.value
-                                    && left_cls == &right.class =>
-                            {
-                                result = self.subtract_enum_member(left_cls, &right.member);
-                            }
-                            _ => {}
+                    let mut literal_types = Vec::new();
+                    for expr in exprs {
+                        let expr_ty = self.expr_infer(&expr, errors);
+                        if matches!(expr_ty, Type::Literal(_) | Type::None) {
+                            literal_types.push(expr_ty);
+                        } else {
+                            return ty.clone();
                         }
                     }
-                    result
-                })
+                    return self.intersect(ty, &self.unions(literal_types));
+                }
+
+                // Check if the right operand is a TypedDict.
+                // If so, we can narrow the left operand to the union of the TypedDict's keys.
+                let right_ty = self.expr_infer(v, errors);
+                if let Type::TypedDict(typed_dict) = &right_ty {
+                    let fields = self.typed_dict_fields(typed_dict);
+                    if fields.is_empty() {
+                        // Empty TypedDict - the `in` check is always false
+                        return Type::never();
+                    }
+                    let key_types: Vec<Type> = fields
+                        .keys()
+                        .map(|name| Lit::Str(name.as_str().into()).to_implicit_type())
+                        .collect();
+                    return self.intersect(ty, &self.unions(key_types));
+                }
+
+                ty.clone()
+            }
+            AtomicNarrowOp::NotIn(v) => {
+                // First, check for List, Tuple, and Set literal expressions (syntactic check,
+                // avoids type inference on the container itself)
+                let exprs = match v {
+                    Expr::List(list) => Some(list.elts.clone()),
+                    Expr::Tuple(tuple) => Some(tuple.elts.clone()),
+                    Expr::Set(set) => Some(set.elts.clone()),
+                    _ => None,
+                };
+                if let Some(exprs) = exprs {
+                    // Bail out if any element is a starred expression (e.g., `x not in [*y, 1]`).
+                    // We can't know all values at compile time when unpacking occurs.
+                    if exprs.iter().any(|e| matches!(e, Expr::Starred(_))) {
+                        return ty.clone();
+                    }
+                    let mut literal_types = Vec::new();
+                    for expr in exprs {
+                        let expr_ty = self.expr_infer(&expr, errors);
+                        if matches!(expr_ty, Type::Literal(_) | Type::None) {
+                            literal_types.push(expr_ty);
+                        } else {
+                            return ty.clone();
+                        }
+                    }
+                    return self.distribute_over_union(ty, |t| {
+                        let mut result = t.clone();
+                        for right in &literal_types {
+                            match (t, right) {
+                                (_, _) if self.literal_equal(t, right) => {
+                                    result = Type::never();
+                                }
+                                (Type::ClassType(cls), Type::Literal(lit))
+                                    if cls.is_builtin("bool")
+                                        && let Lit::Bool(b) = &lit.value =>
+                                {
+                                    result = Lit::Bool(!b).to_implicit_type();
+                                }
+                                (Type::ClassType(left_cls), Type::Literal(right))
+                                    if let Lit::Enum(right) = &right.value
+                                        && left_cls == &right.class =>
+                                {
+                                    result = self.subtract_enum_member(left_cls, &right.member);
+                                }
+                                _ => {}
+                            }
+                        }
+                        result
+                    });
+                }
+
+                // Check if the right operand is a TypedDict.
+                // If so, we can narrow the left operand if it's exactly one of the TypedDict's keys.
+                let right_ty = self.expr_infer(v, errors);
+                if let Type::TypedDict(typed_dict) = &right_ty {
+                    let fields = self.typed_dict_fields(typed_dict);
+                    if fields.is_empty() {
+                        // Empty TypedDict - the `not in` check is always true
+                        return ty.clone();
+                    }
+                    let key_types: Vec<Type> = fields
+                        .keys()
+                        .map(|name| Lit::Str(name.as_str().into()).to_implicit_type())
+                        .collect();
+                    return self.distribute_over_union(ty, |t| {
+                        for key_type in &key_types {
+                            if self.literal_equal(t, key_type) {
+                                return Type::never();
+                            }
+                        }
+                        t.clone()
+                    });
+                }
+
+                ty.clone()
             }
             AtomicNarrowOp::Is(v) => {
                 let right = self.expr_infer(v, errors);
@@ -786,11 +851,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 })
             }
-            AtomicNarrowOp::IsInstance(v) => {
+            AtomicNarrowOp::IsInstance(v, source) => {
                 let right = self.expr_infer(v, errors);
+                // For patterns, validation happens here since there's no call site.
+                // For calls, validation already happened in special_calls.rs.
+                if matches!(source, NarrowSource::Pattern) {
+                    let mut contains_subscript = false;
+                    v.visit(&mut |e| {
+                        if matches!(e, Expr::Subscript(_)) {
+                            contains_subscript = true;
+                        }
+                    });
+                    self.check_type_is_class_object(
+                        right.clone(),
+                        Some(ty.clone()),
+                        contains_subscript,
+                        v.range(),
+                        &FunctionKind::IsInstance,
+                        errors,
+                        ErrorKind::InvalidPattern,
+                    );
+                }
                 self.narrow_isinstance(ty, &right)
             }
-            AtomicNarrowOp::IsNotInstance(v) => {
+            AtomicNarrowOp::IsNotInstance(v, _source) => {
                 let right = self.expr_infer(v, errors);
                 self.narrow_is_not_instance(ty, &right)
             }

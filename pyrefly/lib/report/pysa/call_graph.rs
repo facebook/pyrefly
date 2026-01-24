@@ -812,6 +812,10 @@ pub struct AttributeAccessCallees<Function: FunctionTrait> {
     pub(crate) property_getters: Vec<CallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) global_targets: Vec<GlobalVariableRef>,
+    /// True if that there is at least one case (i.e., execution flow) where this is a regular
+    /// attribute access. For instance, if the object has type `Union[A, B]` where only `A` defines a property.
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    pub(crate) is_attribute: bool,
 }
 
 impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
@@ -834,6 +838,7 @@ impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
             property_setters: map_call_targets(self.property_setters),
             property_getters: map_call_targets(self.property_getters),
             global_targets: self.global_targets,
+            is_attribute: self.is_attribute,
         }
     }
 
@@ -2517,6 +2522,7 @@ impl<'a> CallGraphVisitor<'a> {
             property_setters: vec![],
             property_getters: vec![],
             global_targets: vec![],
+            is_attribute: *attribute == dunder::CLASS, // Hardcode for `__class__`
         }
     }
 
@@ -2634,6 +2640,7 @@ impl<'a> CallGraphVisitor<'a> {
                     _ => false,
                 })
         });
+        let has_non_property_callees = !non_property_callees.is_empty();
         // Go-to-definition always resolves to the property getters, even when used as a left hand side of an
         // assignment. Therefore we use heuristics to differentiate setters from getters.
         let (property_setters, property_getters) = if in_assignment_lhs {
@@ -2708,6 +2715,8 @@ impl<'a> CallGraphVisitor<'a> {
                     })
                     .collect::<Vec<_>>()
             },
+            // TODO: Should be `false` if `non_property_callees` are non-empty but are functions, since functions rarely propagate taint.
+            is_attribute: has_non_property_callees || !global_targets.is_empty(),
             global_targets,
         }
     }

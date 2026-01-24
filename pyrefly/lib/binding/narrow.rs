@@ -52,14 +52,26 @@ use crate::types::types::Type;
 assert_words!(AtomicNarrowOp, 11);
 assert_words!(NarrowOp, 13);
 
+/// Indicates where an isinstance-style narrow operation originated from.
+/// This determines whether validation needs to happen during narrowing.
+#[derive(Clone, Copy, Debug)]
+pub enum NarrowSource {
+    /// From an isinstance() call - validation already happened in special_calls.rs.
+    Call,
+    /// From a match pattern - needs validation during narrowing.
+    Pattern,
+}
+
 #[derive(Clone, Debug)]
 pub enum AtomicNarrowOp {
     Is(Expr),
     IsNot(Expr),
     Eq(Expr),
     NotEq(Expr),
-    IsInstance(Expr),
-    IsNotInstance(Expr),
+    /// The source indicates whether this came from an isinstance() call (already validated)
+    /// or a match pattern (needs validation during narrowing).
+    IsInstance(Expr, NarrowSource),
+    IsNotInstance(Expr, NarrowSource),
     IsSubclass(Expr),
     IsNotSubclass(Expr),
     HasAttr(Name),
@@ -119,9 +131,24 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::IsNot(expr) => write!(f, "IsNot({})", expr.display_with(ctx)),
             AtomicNarrowOp::Eq(expr) => write!(f, "Eq({})", expr.display_with(ctx)),
             AtomicNarrowOp::NotEq(expr) => write!(f, "NotEq({})", expr.display_with(ctx)),
-            AtomicNarrowOp::IsInstance(expr) => write!(f, "IsInstance({})", expr.display_with(ctx)),
-            AtomicNarrowOp::IsNotInstance(expr) => {
-                write!(f, "IsNotInstance({})", expr.display_with(ctx))
+            AtomicNarrowOp::IsInstance(expr, source) => {
+                let source_str = match source {
+                    NarrowSource::Call => "Call",
+                    NarrowSource::Pattern => "Pattern",
+                };
+                write!(f, "IsInstance({}, {})", expr.display_with(ctx), source_str)
+            }
+            AtomicNarrowOp::IsNotInstance(expr, source) => {
+                let source_str = match source {
+                    NarrowSource::Call => "Call",
+                    NarrowSource::Pattern => "Pattern",
+                };
+                write!(
+                    f,
+                    "IsNotInstance({}, {})",
+                    expr.display_with(ctx),
+                    source_str
+                )
             }
             AtomicNarrowOp::IsSubclass(expr) => write!(f, "IsSubclass({})", expr.display_with(ctx)),
             AtomicNarrowOp::IsNotSubclass(expr) => {
@@ -220,8 +247,8 @@ impl AtomicNarrowOp {
         match self {
             Self::Is(v) => Self::IsNot(v.clone()),
             Self::IsNot(v) => Self::Is(v.clone()),
-            Self::IsInstance(v) => Self::IsNotInstance(v.clone()),
-            Self::IsNotInstance(v) => Self::IsInstance(v.clone()),
+            Self::IsInstance(v, source) => Self::IsNotInstance(v.clone(), *source),
+            Self::IsNotInstance(v, source) => Self::IsInstance(v.clone(), *source),
             Self::IsSubclass(v) => Self::IsNotSubclass(v.clone()),
             Self::IsNotSubclass(v) => Self::IsSubclass(v.clone()),
             Self::HasAttr(attr) => Self::NotHasAttr(attr.clone()),
