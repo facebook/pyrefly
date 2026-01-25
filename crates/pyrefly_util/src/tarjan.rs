@@ -202,9 +202,7 @@ impl<T> NodeVec<T> {
     }
 
     fn push(&self, value: (T, Option<TarjanNode>)) -> NodeIdx {
-        let idx = NodeIdx::new(self.0.len());
-        self.0.push(value);
-        idx
+        NodeIdx::new(self.0.push(value))
     }
 }
 
