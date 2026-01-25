@@ -1040,3 +1040,64 @@ def f[T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]: ...
 reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/2221
+// Tests that constrained TypeVars are correctly inferred when checking Var <: ConcreteType.
+// When AnyStr (constrained to str | bytes) is checked against Buffer,
+// we should find that bytes <: Buffer and infer AnyStr = bytes,
+// rather than trying to assign Buffer to AnyStr directly.
+testcase!(
+    test_constrained_typevar_protocol_inference,
+    r#"
+import shutil
+import urllib.request as request
+
+# urlopen returns Any, so the first argument contributes no constraint
+# BufferedWriter.write accepts Buffer, and bytes <: Buffer
+# So AnyStr should be inferred as bytes (not Buffer), and this should not error
+with request.urlopen("https://example.com") as remote, open("out.html", 'wb') as local:
+    shutil.copyfileobj(remote, local)
+"#,
+);
+
+// Same test but more minimal - directly using Any
+testcase!(
+    test_constrained_typevar_with_any_argument,
+    r#"
+from typing import Any, TypeVar, Protocol
+from typing_extensions import Buffer
+
+AnyStr = TypeVar("AnyStr", str, bytes)
+
+class SupportsRead(Protocol[AnyStr]):
+    def read(self, length: int = ...) -> AnyStr: ...
+
+class SupportsWrite(Protocol[AnyStr]):
+    def write(self, s: AnyStr) -> object: ...
+
+def copyfileobj(fsrc: SupportsRead[AnyStr], fdst: SupportsWrite[AnyStr]) -> None: ...
+
+def test(remote: Any, local: Any) -> None:
+    # Both are Any, so no constraint inference happens
+    copyfileobj(remote, local)
+"#,
+);
+
+// Test that errors are still reported when no constraint satisfies the subtype relationship
+testcase!(
+    test_constrained_typevar_no_valid_constraint,
+    r#"
+from typing import TypeVar
+
+T = TypeVar("T", str, int)
+
+def accept_t(x: T) -> T:
+    return x
+
+def get_float() -> float:
+    return 1.0
+
+# Neither str nor int is a subtype of float, so this should error
+accept_t(get_float())  # E: `float` is not assignable to upper bound `int | str` of type variable `T`
+"#,
+);
