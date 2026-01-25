@@ -227,19 +227,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
-                    let result = self.intersect_with_fallback(l, &right, &|| {
-                        // TODO: falling back to Never when the lhs is a union is a hack to get
-                        // reasonable behavior in cases like this:
-                        //     def f(x: int | list[int]):
-                        //         if isinstance(x, Iterable):
-                        //             reveal_type(x)
-                        // We want to narrow x to just `list[int]`, rather than `(int & Iterable[Unknown]) | list[int]`
-                        if left.is_union() {
-                            Type::never()
-                        } else {
-                            right.clone()
-                        }
-                    });
+                    // When the isinstance target has type parameters and we're in a union context,
+                    // check if the union member is a proper supertype of the isinstance target.
+                    // If so, return Never to avoid fabricating types via type variable unification.
+                    // Example: Mapping[str, int] | Iterable[tuple[str, int]] with isinstance(x, Mapping)
+                    // - Mapping[str, int] is kept (it's a subtype of Mapping)
+                    // - Iterable[tuple[str, int]] becomes Never (it's a supertype of Mapping,
+                    //   and narrowing it to Mapping[tuple[str, int], Unknown] would be incorrect)
+                    let is_supertype_in_union = !tparams.is_empty()
+                        && left.is_union()
+                        && self.is_subset_eq(&right, l)
+                        && !self.is_subset_eq(l, &right);
+                    let result = if is_supertype_in_union {
+                        Type::never()
+                    } else {
+                        self.intersect_with_fallback(l, &right, &|| {
+                            if left.is_union() {
+                                Type::never()
+                            } else {
+                                right.clone()
+                            }
+                        })
+                    };
                     // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
                     // * If `left` is an invalid specialization, the error has already been reported at its definition site.
                     // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.

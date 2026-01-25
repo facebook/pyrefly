@@ -2533,3 +2533,27 @@ def f(o: C):
         o.x.foo
     "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/2169
+// When narrowing a union with isinstance, if a union member is a supertype
+// of the isinstance target (e.g., Iterable is a supertype of Mapping), we should
+// not narrow that member to the isinstance target.
+testcase!(
+    test_isinstance_mapping_iterable_union,
+    r#"
+from collections.abc import Iterable, Mapping
+from typing import assert_type
+
+def test1(arg: Mapping[str, int] | Iterable[tuple[str, int]]) -> None:
+    if isinstance(arg, Mapping):
+        assert_type(arg, Mapping[str, int])
+    else:
+        assert_type(arg, Iterable[tuple[str, int]])
+
+def test2(arg: Mapping[str, int] | Iterable[tuple[str, int]]) -> None:
+    if not isinstance(arg, Mapping):
+        assert_type(arg, Iterable[tuple[str, int]])
+    else:
+        assert_type(arg, Mapping[str, int])
+    "#,
+);
