@@ -659,3 +659,30 @@ assert_type(B([A(0)]), B[A[int]])
 B([A("oops")])  # E: `str` is not assignable to upper bound `A[Any] | int` of type variable `T`
     "#,
 );
+
+testcase!(
+    test_init_overload_with_self,
+    r#"
+from typing import Generic, TypeVar, overload, Callable
+T = TypeVar("T")
+class C(Generic[T]):
+    @overload
+    def __init__(self: "C[int]", x: int) -> None:
+        ...
+    @overload
+    def __init__(self: "C[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        ...
+
+def takes_Cint(x: Callable[[int], C[int]]) -> None:
+    pass
+def takes_Cstr(x: Callable[[str], C[str]]) -> None:
+    pass
+def takes_Cstr_wrong(x: Callable[[str], C[int]]) -> None:
+    pass
+takes_Cint(C)
+takes_Cstr(C)
+takes_Cstr_wrong(C) # E: Argument `type[C]` is not assignable to parameter `x` with type `(str) -> C[int]` in function `takes_Cstr_wrong`
+    "#,
+);

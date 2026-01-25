@@ -3224,8 +3224,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (x: int) -> Class7[Unknown]",
-      "description": "revealed type: (x: int) -> Class7[Unknown]",
+      "concise_description": "revealed type: (x: int) -> Class7[int]",
+      "description": "revealed type: (x: int) -> Class7[int]",
       "line": 161,
       "name": "reveal-type",
       "severity": "info",
@@ -3235,19 +3235,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(Class7[Any], Class7[int]) failed",
-      "description": "assert_type(Class7[Any], Class7[int]) failed",
-      "line": 164,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 32,
-      "stop_line": 164
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Class7[Any], Class7[str]) failed",
-      "description": "assert_type(Class7[Any], Class7[str]) failed",
+      "concise_description": "assert_type(Class7[int], Class7[str]) failed",
+      "description": "assert_type(Class7[int], Class7[str]) failed",
       "line": 165,
       "name": "assert-type",
       "severity": "error",
@@ -3773,6 +3762,17 @@
       "severity": "error",
       "stop_column": 55,
       "stop_line": 49
+    },
+    {
+      "code": -2,
+      "column": 52,
+      "concise_description": "Argument `type[dict]` is not assignable to parameter `converter` with type `(Any) -> dict[str, str]` in function `model_field`",
+      "description": "Argument `type[dict]` is not assignable to parameter `converter` with type `(Any) -> dict[str, str]` in function `model_field`",
+      "line": 104,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 56,
+      "stop_line": 104
     },
     {
       "code": -2,
