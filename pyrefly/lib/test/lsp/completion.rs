@@ -19,6 +19,7 @@ use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
+use crate::test::util::TestEnv;
 
 // Some assertions compare literal completion dumps. pretty_assertions decorates
 // diffs with ANSI escapes, so we strip them to keep the expected strings stable.
@@ -178,6 +179,72 @@ Completion Results:
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn cython_attribute_completion_for_structs_and_extension_types() {
+    let code = r#"
+cdef struct Point:
+    int x
+    int y
+
+cdef class Foo:
+    cdef int bar
+    cdef int baz
+
+cdef Point p
+cdef Foo f
+
+p.x
+# ^
+f.b
+# ^
+"#;
+    let mut env = TestEnv::new();
+    env.add_with_path("main", "main.pyx", code);
+    let (state, handle) = env.to_state();
+    let handle = handle("main");
+    let positions = extract_cursors_for_test(code);
+    assert_eq!(2, positions.len());
+    let completion_items =
+        |position| state.transaction().completion(&handle, position, ImportFormat::Absolute, true);
+    let fields_for = |position| {
+        completion_items(position)
+            .into_iter()
+            .filter(|item| item.kind == Some(CompletionItemKind::FIELD))
+            .map(|item| item.label)
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let p_fields = fields_for(positions[0]);
+    assert!(p_fields.contains("x"), "missing struct field x: {p_fields:?}");
+    assert!(p_fields.contains("y"), "missing struct field y: {p_fields:?}");
+    let f_fields = fields_for(positions[1]);
+    assert!(f_fields.contains("bar"), "missing class field bar: {f_fields:?}");
+    assert!(f_fields.contains("baz"), "missing class field baz: {f_fields:?}");
+}
+
+#[test]
+fn cython_keyword_completion() {
+    let code = r#"
+  x
+# ^
+"#;
+    let mut env = TestEnv::new();
+    env.add_with_path("main", "main.pyx", code);
+    let (state, handle) = env.to_state();
+    let handle = handle("main");
+    let positions = extract_cursors_for_test(code);
+    assert_eq!(1, positions.len());
+    let labels = state
+        .transaction()
+        .completion(&handle, positions[0], ImportFormat::Absolute, true)
+        .into_iter()
+        .filter(|item| item.kind == Some(CompletionItemKind::KEYWORD))
+        .map(|item| item.label)
+        .collect::<std::collections::BTreeSet<_>>();
+    for keyword in ["cdef", "cpdef", "cimport"] {
+        assert!(labels.contains(keyword), "missing keyword {keyword}: {labels:?}");
+    }
 }
 
 #[test]

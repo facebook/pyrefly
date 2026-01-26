@@ -2877,6 +2877,11 @@ impl<'a> Transaction<'a> {
         import_format: ImportFormat,
         supports_completion_item_details: bool,
     ) -> (Vec<CompletionItem>, bool) {
+        if let Some(module) = self.get_module_info(handle)
+            && crate::cython::is_cython_module(&module)
+        {
+            return (crate::cython::completion_items(&module, position), false);
+        }
         let mut result = Vec::new();
         let mut is_incomplete = false;
         match self.identifier_at(handle, position) {

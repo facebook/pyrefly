@@ -7,9 +7,11 @@
 
 use pyrefly_build::handle::Handle;
 
+use crate::config::error_kind::ErrorKind;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::mk_multi_file_state;
+use crate::test::util::TestEnv;
 
 fn get_unused_import_diagnostics(state: &State, handle: &Handle) -> String {
     let transaction = state.transaction();
@@ -77,6 +79,35 @@ def foo() -> str:
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "Import `os` is unused");
+}
+
+#[test]
+fn test_cython_parse_error_diagnostic() {
+    let code = r#"
+cdef struct Point
+    int x
+"#;
+    let mut env = TestEnv::new();
+    env.add_with_path("main", "main.pyx", code);
+    let (state, handle) = env.to_state();
+    let handle = handle("main");
+    let errors = state
+        .transaction()
+        .get_errors(&[handle])
+        .collect_errors()
+        .shown;
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.error_kind() == ErrorKind::ParseError),
+        "expected parse error diagnostic, got: {errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.msg_header() == "Cython parse error"),
+        "expected Cython parse error message, got: {errors:?}"
+    );
 }
 
 #[test]
