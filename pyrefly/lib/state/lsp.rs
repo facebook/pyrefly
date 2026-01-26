@@ -2163,17 +2163,35 @@ impl<'a> Transaction<'a> {
                 };
 
                 if direct_url.dir_info.editable
-                    && let Some(source_path) = direct_url.url.strip_prefix("file://")
+                    && let Some(source_path) = Self::file_url_to_path(&direct_url.url)
+                    && source_path.is_dir()
                 {
-                    let source_path = PathBuf::from(source_path);
-                    if source_path.is_dir() {
-                        editable_paths.push(source_path);
-                    }
+                    editable_paths.push(source_path);
                 }
             }
         }
 
         editable_paths
+    }
+
+    /// Convert a file:// URL to a PathBuf.
+    /// Handles both Unix (file:///path) and Windows (file:///C:/path) formats.
+    #[allow(dead_code)]
+    fn file_url_to_path(url: &str) -> Option<PathBuf> {
+        let path_str = url.strip_prefix("file://")?;
+
+        // On Windows, file URLs look like file:///C:/path
+        // After stripping "file://", we get "/C:/path"
+        // We need to remove the leading "/" to get "C:/path"
+        #[cfg(windows)]
+        let path_str = path_str.strip_prefix('/').unwrap_or(path_str);
+
+        // Decode percent-encoded characters (e.g., %20 -> space)
+        let decoded = percent_encoding::percent_decode_str(path_str)
+            .decode_utf8()
+            .ok()?;
+
+        Some(PathBuf::from(decoded.as_ref()))
     }
 
     /// Get editable source paths for the given site-packages, using cache.
@@ -3553,9 +3571,11 @@ mod tests {
         let source_dir = temp_dir.path().join("mypackage_source");
         fs::create_dir(&source_dir).unwrap();
 
+        // Use Url::from_file_path to construct a proper file URL that works on all platforms
+        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
         let direct_url_content = format!(
-            r#"{{"url": "file://{}", "dir_info": {{"editable": true}}}}"#,
-            source_dir.display()
+            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
+            source_url.as_str()
         );
         fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
 
@@ -3578,9 +3598,11 @@ mod tests {
         let source_dir = temp_dir.path().join("requests_source");
         fs::create_dir(&source_dir).unwrap();
 
+        // Use Url::from_file_path to construct a proper file URL that works on all platforms
+        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
         let direct_url_content = format!(
-            r#"{{"url": "file://{}", "dir_info": {{"editable": false}}}}"#,
-            source_dir.display()
+            r#"{{"url": "{}", "dir_info": {{"editable": false}}}}"#,
+            source_url.as_str()
         );
         fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
 
@@ -3614,9 +3636,11 @@ mod tests {
 
         let nonexistent_path = temp_dir.path().join("does_not_exist");
 
+        // Use Url::from_file_path to construct a proper file URL that works on all platforms
+        let nonexistent_url = lsp_types::Url::from_file_path(&nonexistent_path).unwrap();
         let direct_url_content = format!(
-            r#"{{"url": "file://{}", "dir_info": {{"editable": true}}}}"#,
-            nonexistent_path.display()
+            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
+            nonexistent_url.as_str()
         );
         fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
 
