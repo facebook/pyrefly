@@ -15,6 +15,7 @@ use pyrefly_util::display::count;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
@@ -1003,7 +1004,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // By invariant, hint will be None if we are calling a constructor.
             if let Some(hint) = hint {
                 let (qs, callable_) = self.instantiate_fresh_callable(tparams, callable.clone());
-                if self.is_subset_eq(&callable_.ret, hint.ty())
+                // Check for "slack variables" - type vars that only appear in return type, not in
+                // params. These variables should NOT be bound during hint matching because they're
+                // meant to absorb extra types from the assignment context.
+                // See https://github.com/facebook/pyrefly/issues/2220
+                let param_vars: SmallSet<_> = {
+                    let mut vars = Vec::new();
+                    callable_.params.visit(&mut |ty: &Type| {
+                        vars.extend(ty.collect_maybe_quantified_vars());
+                    });
+                    vars.into_iter().collect()
+                };
+                let ret_vars: SmallSet<_> = callable_
+                    .ret
+                    .collect_maybe_quantified_vars()
+                    .into_iter()
+                    .collect();
+                // A "slack variable" is a var that appears in return but not in params.
+                // If there are slack variables, skip hint matching to allow arguments to
+                // constrain the param vars first, then slack vars can be inferred later.
+                let has_slack_vars = ret_vars.iter().any(|v| !param_vars.contains(v));
+
+                if !has_slack_vars
+                    && self.is_subset_eq(&callable_.ret, hint.ty())
                     && !self.solver().has_instantiation_errors(&qs)
                 {
                     (qs, callable_)
@@ -1137,6 +1160,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         if let Some(targs) = ctor_targs {
             self.solver().generalize_class_targs(targs);
+        }
+        // Slack variable inference: After argument checking, if we have a hint and there are
+        // still unbound type vars in the return type (slack vars), try to infer them from the
+        // hint. This enables patterns like `def f[T1, T2, _T_slack=Never](...) -> T1 | T2 | _T_slack`
+        // where _T_slack can absorb extra types from the assignment target.
+        // See https://github.com/facebook/pyrefly/issues/2220
+        if let Some(hint) = hint {
+            // Check if there are still unbound vars in the return type
+            let ret_vars = callable.ret.collect_maybe_quantified_vars();
+            if !ret_vars.is_empty() {
+                // Try to match the return type against the hint. This will bind any
+                // still-unbound slack vars to satisfy the hint constraint.
+                let _ = self.is_subset_eq(&callable.ret, hint.ty());
+            }
         }
         let mut errors = self
             .solver()
