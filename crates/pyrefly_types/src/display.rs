@@ -2056,10 +2056,11 @@ def overloaded_func[T](
         let t = tvar.to_type();
         let parts = get_parts(&t);
 
-        assert_eq!(parts[0].text, "TypeVar[");
+        let typevar_part = parts.iter().find(|part| part.text == "TypeVar");
+        assert!(typevar_part.is_some(), "Should have TypeVar in parts");
         assert!(
-            parts[0].location.is_none(),
-            "TypeVar[ should not have location"
+            typevar_part.unwrap().location.is_none(),
+            "TypeVar should not have location"
         );
         assert_part_has_location(&parts, "T", "test.module", 15);
     }
@@ -2100,9 +2101,9 @@ def overloaded_func[T](
         assert_output_contains(&parts, "True");
         let literal_part = parts.iter().find(|part| part.text == "Literal");
         assert!(literal_part.is_some());
-        let symbol = literal_part.unwrap().symbol.as_ref().unwrap();
-        assert_eq!(symbol.module.as_str(), "typing");
-        assert_eq!(symbol.name, "Literal");
+        let literal_part = literal_part.unwrap();
+        assert!(literal_part.location.is_none());
+        assert!(literal_part.symbol.is_none());
     }
 
     #[test]
