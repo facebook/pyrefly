@@ -10,8 +10,8 @@ use pyrefly_python::sys_info::PythonVersion;
 use ruff_python_ast::ModModule;
 use vec1::vec1;
 
-use crate::cython;
 use crate::config::error_kind::ErrorKind;
+use crate::cython;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::module::module_info::ModuleInfo;

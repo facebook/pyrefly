@@ -10,8 +10,8 @@ use pyrefly_build::handle::Handle;
 use crate::config::error_kind::ErrorKind;
 use crate::state::require::Require;
 use crate::state::state::State;
-use crate::test::util::mk_multi_file_state;
 use crate::test::util::TestEnv;
+use crate::test::util::mk_multi_file_state;
 
 fn get_unused_import_diagnostics(state: &State, handle: &Handle) -> String {
     let transaction = state.transaction();

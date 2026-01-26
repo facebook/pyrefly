@@ -322,24 +322,8 @@ fn is_ident_char(byte: u8) -> bool {
 
 fn keyword_completion_items() -> Vec<CompletionItem> {
     const KEYWORDS: &[&str] = &[
-        "cdef",
-        "cpdef",
-        "cimport",
-        "ctypedef",
-        "cclass",
-        "nogil",
-        "gil",
-        "inline",
-        "extern",
-        "public",
-        "api",
-        "readonly",
-        "fused",
-        "except",
-        "noexcept",
-        "struct",
-        "union",
-        "cppclass",
+        "cdef", "cpdef", "cimport", "ctypedef", "cclass", "nogil", "gil", "inline", "extern",
+        "public", "api", "readonly", "fused", "except", "noexcept", "struct", "union", "cppclass",
         "enum",
     ];
     KEYWORDS
@@ -371,5 +355,6 @@ fn first_identifier_child(source: &str, node: Node<'_>) -> Option<String> {
 
 fn first_child_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut cursor = node.walk();
-    node.children(&mut cursor).find(|child| child.kind() == kind)
+    node.children(&mut cursor)
+        .find(|child| child.kind() == kind)
 }
