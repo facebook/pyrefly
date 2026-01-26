@@ -1,0 +1,93 @@
+{
+  "name": "Cython",
+  "scopeName": "source.cython",
+  "patterns": [
+    {"include": "#comments"},
+    {"include": "#strings"},
+    {"include": "#numbers"},
+    {"include": "#decorators"},
+    {"include": "#cython-types"},
+    {"include": "#cython-keywords"},
+    {"include": "#python-keywords"}
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.cython",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.double.cython",
+          "begin": "\"\"\"",
+          "end": "\"\"\""
+        },
+        {
+          "name": "string.quoted.triple.single.cython",
+          "begin": "'''",
+          "end": "'''"
+        },
+        {
+          "name": "string.quoted.double.cython",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {"name": "constant.character.escape.cython", "match": "\\\\."}
+          ]
+        },
+        {
+          "name": "string.quoted.single.cython",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {"name": "constant.character.escape.cython", "match": "\\\\."}
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.cython",
+          "match": "\\b(0[xX][0-9A-Fa-f]+|0[bB][01]+|0[oO][0-7]+|\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?j?)\\b"
+        }
+      ]
+    },
+    "decorators": {
+      "patterns": [
+        {
+          "name": "meta.annotation.cython",
+          "match": "^\\s*@[_A-Za-z][_A-Za-z0-9.]*"
+        }
+      ]
+    },
+    "cython-types": {
+      "patterns": [
+        {
+          "name": "storage.type.cython",
+          "match": "\\b(void|char|short|int|long|float|double|bint|Py_ssize_t|size_t|ssize_t|unsigned|signed|const|volatile)\\b"
+        }
+      ]
+    },
+    "cython-keywords": {
+      "patterns": [
+        {
+          "name": "keyword.other.cython",
+          "match": "\\b(cdef|cpdef|cimport|ctypedef|cclass|nogil|gil|inline|extern|public|api|readonly|fused|except|noexcept)\\b"
+        }
+      ]
+    },
+    "python-keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.cython",
+          "match": "\\b(and|as|assert|async|await|break|class|continue|def|del|elif|else|except|False|finally|for|from|global|if|import|in|is|lambda|None|nonlocal|not|or|pass|raise|return|True|try|while|with|yield|match|case)\\b"
+        }
+      ]
+    }
+  }
+}
