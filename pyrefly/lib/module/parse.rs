@@ -8,21 +8,32 @@
 use pyrefly_python::ast::Ast;
 use pyrefly_python::sys_info::PythonVersion;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::PySourceType;
 use vec1::vec1;
 
+use crate::cython;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
+use crate::module::module_info::ModuleInfo;
 
 pub fn module_parse(
+    module_info: &ModuleInfo,
     contents: &str,
     version: PythonVersion,
-    source_type: PySourceType,
     errors: &ErrorCollector,
 ) -> ModModule {
+    if cython::is_cython_module(module_info) {
+        for range in cython::syntax_error_ranges(contents) {
+            errors.add(
+                range,
+                ErrorInfo::Kind(ErrorKind::ParseError),
+                vec1!["Cython parse error".to_owned()],
+            );
+        }
+        return Ast::parse_with_version("", version, module_info.source_type()).0;
+    }
     let (module, parse_errors, unsupported_syntax_errors) =
-        Ast::parse_with_version(contents, version, source_type);
+        Ast::parse_with_version(contents, version, module_info.source_type());
     for err in parse_errors {
         errors.add(
             err.location,

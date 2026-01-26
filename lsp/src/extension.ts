@@ -131,12 +131,15 @@ export async function activate(context: ExtensionContext) {
     // Register the server for Python documents
     documentSelector: [
       {scheme: 'file', language: 'python'},
+      {scheme: 'file', language: 'cython'},
       // Support for unsaved/untitled files
       {scheme: 'untitled', language: 'python'},
+      {scheme: 'untitled', language: 'cython'},
       // Support for notebook cells
       {scheme: 'vscode-notebook-cell', language: 'python'},
       // Support for in-memory documents like the Positron Console
       {scheme: 'inmemory', language: 'python'},
+      {scheme: 'inmemory', language: 'cython'},
     ],
     // Support for notebooks
     // @ts-ignore

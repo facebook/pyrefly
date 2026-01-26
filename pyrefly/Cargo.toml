@@ -59,6 +59,8 @@ tempfile = "3.22"
 tokio = { version = "1.47.1", features = ["macros", "rt"] }
 toml = { version = "0.9.11", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
+tree-sitter = "0.22.6"
+tree-sitter-cython = { git = "https://github.com/b0o/tree-sitter-cython", rev = "d1144e7a96cd581a99ca654a27a8047d082ae8e2" }
 tsp_types = { path = "../crates/tsp_types" }
 uuid = { version = "1.17", features = ["js", "rng-getrandom", "v4"] }
 vec1 = { version = "1", features = ["serde"] }

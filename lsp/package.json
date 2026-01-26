@@ -34,6 +34,7 @@
     "main": "./dist/extension",
     "activationEvents": [
         "onLanguage:python",
+        "onLanguage:cython",
         "onNotebook:jupyter-notebook"
     ],
     "contributes": {

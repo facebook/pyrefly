@@ -2076,6 +2076,8 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tree-sitter",
+ "tree-sitter-cython",
  "tsp_types",
  "uuid",
  "vec1",
@@ -3384,6 +3386,25 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "tree-sitter"
+version = "0.22.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df7cc499ceadd4dcdf7ec6d4cbc34ece92c3fa07821e287aedecd4416c516dca"
+dependencies = [
+ "cc",
+ "regex",
+]
+
+[[package]]
+name = "tree-sitter-cython"
+version = "1.2.0"
+source = "git+https://github.com/b0o/tree-sitter-cython?rev=d1144e7a96cd581a99ca654a27a8047d082ae8e2#d1144e7a96cd581a99ca654a27a8047d082ae8e2"
+dependencies = [
+ "cc",
+ "tree-sitter",
 ]
 
 [[package]]
