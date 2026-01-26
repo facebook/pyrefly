@@ -3208,6 +3208,8 @@ impl Server {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
         if let Some(refactors) = transaction.convert_star_import_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }

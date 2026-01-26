@@ -22,12 +22,12 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
-use super::extract_function::LocalRefactorCodeAction;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::selection_anchor;
 use crate::binding::binding::Key;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::key_to_intermediate_definition;
+use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 
 fn rewrite_kind() -> CodeActionKind {
