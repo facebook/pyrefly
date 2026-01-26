@@ -1365,8 +1365,8 @@ impl Server {
                 // we really don't want to implicitly cancel those.
                 const ONLY_ONCE: &[&str] = &[
                     Completion::METHOD,
-                    SignatureHelpRequest::METHOD,
                     ResolveCompletionItem::METHOD,
+                    SignatureHelpRequest::METHOD,
                     GotoDefinition::METHOD,
                     ProvideType::METHOD,
                 ];
