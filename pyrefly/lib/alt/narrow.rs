@@ -228,16 +228,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
                     // When the isinstance target has type parameters and we're in a union context,
-                    // check if the union member is a proper supertype of the isinstance target.
-                    // If so, return Never to avoid fabricating types via type variable unification.
+                    // check if the union member's class is a proper superclass of the isinstance
+                    // target's class. If so, return Never to avoid fabricating type arguments.
                     // Example: Mapping[str, int] | Iterable[tuple[str, int]] with isinstance(x, Mapping)
-                    // - Mapping[str, int] is kept (it's a subtype of Mapping)
-                    // - Iterable[tuple[str, int]] becomes Never (it's a supertype of Mapping,
+                    // - Mapping[str, int] is kept (its class equals the isinstance target class)
+                    // - Iterable[tuple[str, int]] becomes Never (Iterable is a superclass of Mapping,
                     //   and narrowing it to Mapping[tuple[str, int], Unknown] would be incorrect)
                     let is_supertype_in_union = !tparams.is_empty()
                         && left.is_union()
-                        && self.is_subset_eq(&right, l)
-                        && !self.is_subset_eq(l, &right);
+                        && match (&right, l) {
+                            (Type::ClassType(right_cls), Type::ClassType(l_cls)) => {
+                                let right_class = right_cls.class_object();
+                                let l_class = l_cls.class_object();
+                                // Check if isinstance target class is a PROPER subclass of union member class
+                                right_class != l_class
+                                    && self.type_order().has_superclass(right_class, l_class)
+                            }
+                            _ => false,
+                        };
                     let result = if is_supertype_in_union {
                         Type::never()
                     } else {

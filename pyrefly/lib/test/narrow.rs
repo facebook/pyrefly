@@ -2557,3 +2557,62 @@ def test2(arg: Mapping[str, int] | Iterable[tuple[str, int]]) -> None:
         assert_type(arg, Mapping[str, int])
     "#,
 );
+
+// Additional edge cases for isinstance narrowing with class hierarchies
+testcase!(
+    test_isinstance_subclass_in_union,
+    r#"
+from collections.abc import Mapping
+from typing import assert_type
+
+# When union member is a subclass of isinstance target, it should be kept
+def test_dict_mapping(arg: dict[str, int] | list[int]) -> None:
+    if isinstance(arg, Mapping):
+        # dict is a subclass of Mapping, so it passes isinstance check
+        assert_type(arg, dict[str, int])
+    else:
+        assert_type(arg, list[int])
+    "#,
+);
+
+testcase!(
+    test_isinstance_collection_mapping,
+    r#"
+from collections.abc import Collection, Mapping
+from typing import assert_type
+
+# Collection is a superclass of Mapping, so Collection[X] should become Never
+def test(arg: Mapping[str, int] | Collection[tuple[str, int]]) -> None:
+    if isinstance(arg, Mapping):
+        assert_type(arg, Mapping[str, int])
+    "#,
+);
+
+testcase!(
+    test_isinstance_unrelated_classes,
+    r#"
+from collections.abc import Sequence, Mapping
+from typing import assert_type
+
+# Sequence and Mapping are unrelated - neither is subclass of the other
+def test(arg: Sequence[int] | Mapping[str, int]) -> None:
+    if isinstance(arg, Mapping):
+        assert_type(arg, Mapping[str, int])
+    else:
+        assert_type(arg, Sequence[int])
+    "#,
+);
+
+testcase!(
+    test_isinstance_with_iterable_target,
+    r#"
+from collections.abc import Iterable, Mapping
+from typing import assert_type
+
+# When isinstance target is the superclass, both should be kept
+def test(arg: Mapping[str, int] | Iterable[tuple[str, int]]) -> None:
+    if isinstance(arg, Iterable):  # E: Runtime checkable protocol `Iterable` has an unsafe overlap
+        # Both Mapping and Iterable are Iterables, so both kept
+        assert_type(arg, Mapping[str, int] | Iterable[tuple[str, int]])
+    "#,
+);
