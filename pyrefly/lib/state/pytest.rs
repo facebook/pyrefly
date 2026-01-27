@@ -272,7 +272,7 @@ pub(crate) fn pytest_fixture_definitions_for_parameter(
             AnyNodeRef::StmtClassDef(stmt) => Some(stmt),
             _ => None,
         })
-        .map(is_pytest_test_class);
+        .map(|class_def| is_pytest_test_class(*class_def));
 
     if !is_pytest_fixture_or_test_function(function_def, module_info.aliases(), class_context) {
         return None;
