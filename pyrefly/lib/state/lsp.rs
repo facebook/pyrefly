@@ -75,12 +75,8 @@ use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::lsp_attributes::AttributeContext;
-use crate::state::pytest::PytestAliases;
-use crate::state::pytest::collect_pytest_fixture_definitions;
-use crate::state::pytest::collect_pytest_fixture_parameter_ranges;
-use crate::state::pytest::is_pytest_fixture_function;
-use crate::state::pytest::is_pytest_test_class;
-use crate::state::pytest::is_pytest_test_function;
+use crate::state::pytest::pytest_fixture_definitions_for_parameter as pytest_fixture_definitions_for_parameter_in_module;
+use crate::state::pytest::pytest_fixture_parameter_references as pytest_fixture_parameter_references_in_module;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
@@ -1566,39 +1562,11 @@ impl<'a> Transaction<'a> {
         covering_nodes: &[AnyNodeRef],
     ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
         let mod_module = self.get_ast(handle)?;
-        let aliases = PytestAliases::from_module(mod_module.as_ref());
-        if aliases.is_empty() {
-            return None;
-        }
-
-        let function_def = covering_nodes.iter().find_map(|node| match node {
-            AnyNodeRef::StmtFunctionDef(stmt) => Some(stmt),
-            _ => None,
-        })?;
-        let class_context = covering_nodes
-            .iter()
-            .find_map(|node| match node {
-                AnyNodeRef::StmtClassDef(stmt) => Some(stmt),
-                _ => None,
-            })
-            .map(|class_def| is_pytest_test_class(class_def));
-
-        if !is_pytest_fixture_function(function_def, &aliases)
-            && !is_pytest_test_function(function_def, class_context)
-        {
-            return None;
-        }
-
-        let mut fixtures = Vec::new();
-        collect_pytest_fixture_definitions(&mod_module.body, &aliases, &mut fixtures);
-        let matches: Vec<_> = fixtures
-            .into_iter()
-            .filter(|fixture| fixture.name == *identifier.id())
-            .collect();
-        if matches.is_empty() {
-            return None;
-        }
-
+        let matches = pytest_fixture_definitions_for_parameter_in_module(
+            mod_module.as_ref(),
+            identifier,
+            covering_nodes,
+        )?;
         let module_info = self.get_module_info(handle)?;
         Some(
             matches
@@ -2618,29 +2586,11 @@ impl<'a> Transaction<'a> {
         expected_name: &Name,
     ) -> Option<Vec<TextRange>> {
         let mod_module = self.get_ast(handle)?;
-        let aliases = PytestAliases::from_module(mod_module.as_ref());
-        if aliases.is_empty() {
-            return None;
-        }
-
-        let mut fixtures = Vec::new();
-        collect_pytest_fixture_definitions(&mod_module.body, &aliases, &mut fixtures);
-        if !fixtures
-            .iter()
-            .any(|fixture| fixture.name == *expected_name && fixture.range == definition_range)
-        {
-            return None;
-        }
-
-        let mut references = Vec::new();
-        collect_pytest_fixture_parameter_ranges(
-            &mod_module.body,
-            &aliases,
+        pytest_fixture_parameter_references_in_module(
+            mod_module.as_ref(),
+            definition_range,
             expected_name,
-            &mut references,
-            None,
-        );
-        Some(references)
+        )
     }
 
     fn local_variable_references_from_local_definition(

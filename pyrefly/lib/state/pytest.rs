@@ -6,8 +6,12 @@
  */
 
 use pyrefly_python::docstring::Docstring;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
+use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::ParameterWithDefault;
+use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFunctionDef;
@@ -18,13 +22,13 @@ use ruff_text_size::TextRange;
 
 // Tracks local names that refer to pytest so we can resolve @pytest.fixture and fixture aliases.
 #[derive(Default)]
-pub(crate) struct PytestAliases {
+struct PytestAliases {
     pytest_module_aliases: Vec<String>,
     fixture_aliases: Vec<String>,
 }
 
 impl PytestAliases {
-    pub(crate) fn from_module(module: &ModModule) -> Self {
+    fn from_module(module: &ModModule) -> Self {
         let mut aliases = Self::default();
         for stmt in &module.body {
             match stmt {
@@ -62,17 +66,17 @@ impl PytestAliases {
         aliases
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.pytest_module_aliases.is_empty() && self.fixture_aliases.is_empty()
     }
 
-    pub(crate) fn is_pytest_module_alias(&self, name: &Name) -> bool {
+    fn is_pytest_module_alias(&self, name: &Name) -> bool {
         self.pytest_module_aliases
             .iter()
             .any(|alias| alias == name.as_str())
     }
 
-    pub(crate) fn is_fixture_alias(&self, name: &Name) -> bool {
+    fn is_fixture_alias(&self, name: &Name) -> bool {
         self.fixture_aliases
             .iter()
             .any(|alias| alias == name.as_str())
@@ -84,6 +88,43 @@ pub(crate) struct PytestFixtureDefinition {
     pub(crate) name: Name,
     pub(crate) range: TextRange,
     pub(crate) docstring_range: Option<TextRange>,
+}
+
+// Aggregates pytest-related data for a module to avoid repeated scans.
+struct PytestModuleInfo {
+    aliases: PytestAliases,
+    fixtures: Vec<PytestFixtureDefinition>,
+}
+
+impl PytestModuleInfo {
+    /// Collects pytest aliases and fixture definitions for a module.
+    fn from_module(module: &ModModule) -> Option<Self> {
+        let aliases = PytestAliases::from_module(module);
+        if aliases.is_empty() {
+            return None;
+        }
+        let mut fixtures = Vec::new();
+        collect_pytest_fixture_definitions(&module.body, &aliases, &mut fixtures);
+        Some(Self { aliases, fixtures })
+    }
+
+    fn aliases(&self) -> &PytestAliases {
+        &self.aliases
+    }
+
+    fn fixture_definitions_for_name(&self, name: &Name) -> Vec<PytestFixtureDefinition> {
+        self.fixtures
+            .iter()
+            .filter(|fixture| fixture.name == *name)
+            .cloned()
+            .collect()
+    }
+
+    fn has_fixture_definition(&self, name: &Name, range: TextRange) -> bool {
+        self.fixtures
+            .iter()
+            .any(|fixture| fixture.name == *name && fixture.range == range)
+    }
 }
 
 fn is_pytest_fixture_decorator(expr: &Expr, aliases: &PytestAliases) -> bool {
@@ -98,20 +139,14 @@ fn is_pytest_fixture_decorator(expr: &Expr, aliases: &PytestAliases) -> bool {
     }
 }
 
-pub(crate) fn is_pytest_fixture_function(
-    function_def: &StmtFunctionDef,
-    aliases: &PytestAliases,
-) -> bool {
+fn is_pytest_fixture_function(function_def: &StmtFunctionDef, aliases: &PytestAliases) -> bool {
     function_def
         .decorator_list
         .iter()
         .any(|decorator| is_pytest_fixture_decorator(&decorator.expression, aliases))
 }
 
-pub(crate) fn is_pytest_test_function(
-    function_def: &StmtFunctionDef,
-    class_context: Option<bool>,
-) -> bool {
+fn is_pytest_test_function(function_def: &StmtFunctionDef, class_context: Option<bool>) -> bool {
     let name = function_def.name.id.as_str();
     if !name.starts_with("test_") {
         return false;
@@ -122,12 +157,21 @@ pub(crate) fn is_pytest_test_function(
     }
 }
 
-pub(crate) fn is_pytest_test_class(class_def: &StmtClassDef) -> bool {
+fn is_pytest_test_class(class_def: &StmtClassDef) -> bool {
     class_def.name.id.as_str().starts_with("Test")
 }
 
+fn is_pytest_fixture_or_test_function(
+    function_def: &StmtFunctionDef,
+    aliases: &PytestAliases,
+    class_context: Option<bool>,
+) -> bool {
+    is_pytest_fixture_function(function_def, aliases)
+        || is_pytest_test_function(function_def, class_context)
+}
+
 // Collects pytest fixture definitions in a module/class body.
-pub(crate) fn collect_pytest_fixture_definitions(
+fn collect_pytest_fixture_definitions(
     stmts: &[Stmt],
     aliases: &PytestAliases,
     fixtures: &mut Vec<PytestFixtureDefinition>,
@@ -151,8 +195,34 @@ pub(crate) fn collect_pytest_fixture_definitions(
     }
 }
 
+fn maybe_add_fixture_param_reference(
+    param: &ParameterWithDefault,
+    fixture_name: &Name,
+    references: &mut Vec<TextRange>,
+) {
+    let param_name = param.name();
+    if param_name != "self" && param_name != "cls" && param_name.id() == fixture_name {
+        references.push(param_name.range());
+    }
+}
+
+fn collect_fixture_param_ranges_from_parameters(
+    parameters: &Parameters,
+    fixture_name: &Name,
+    references: &mut Vec<TextRange>,
+) {
+    for param in parameters
+        .posonlyargs
+        .iter()
+        .chain(parameters.args.iter())
+        .chain(parameters.kwonlyargs.iter())
+    {
+        maybe_add_fixture_param_reference(param, fixture_name, references);
+    }
+}
+
 // Collects parameter ranges in test/fixture functions that reference a fixture by name.
-pub(crate) fn collect_pytest_fixture_parameter_ranges(
+fn collect_pytest_fixture_parameter_ranges(
     stmts: &[Stmt],
     aliases: &PytestAliases,
     fixture_name: &Name,
@@ -162,33 +232,12 @@ pub(crate) fn collect_pytest_fixture_parameter_ranges(
     for stmt in stmts {
         match stmt {
             Stmt::FunctionDef(function_def) => {
-                let is_fixture = is_pytest_fixture_function(function_def, aliases);
-                let is_test = is_pytest_test_function(function_def, class_context);
-                if is_fixture || is_test {
-                    for param in function_def.parameters.posonlyargs.iter() {
-                        if param.name() != "self"
-                            && param.name() != "cls"
-                            && param.name().id() == fixture_name
-                        {
-                            references.push(param.name().range());
-                        }
-                    }
-                    for param in function_def.parameters.args.iter() {
-                        if param.name() != "self"
-                            && param.name() != "cls"
-                            && param.name().id() == fixture_name
-                        {
-                            references.push(param.name().range());
-                        }
-                    }
-                    for param in function_def.parameters.kwonlyargs.iter() {
-                        if param.name() != "self"
-                            && param.name() != "cls"
-                            && param.name().id() == fixture_name
-                        {
-                            references.push(param.name().range());
-                        }
-                    }
+                if is_pytest_fixture_or_test_function(function_def, aliases, class_context) {
+                    collect_fixture_param_ranges_from_parameters(
+                        &function_def.parameters,
+                        fixture_name,
+                        references,
+                    );
                 }
             }
             Stmt::ClassDef(class_def) => {
@@ -204,4 +253,55 @@ pub(crate) fn collect_pytest_fixture_parameter_ranges(
             _ => {}
         }
     }
+}
+
+/// Returns fixture definitions for a parameter when the cursor is in a pytest test/fixture.
+pub(crate) fn pytest_fixture_definitions_for_parameter(
+    module: &ModModule,
+    identifier: &Identifier,
+    covering_nodes: &[AnyNodeRef],
+) -> Option<Vec<PytestFixtureDefinition>> {
+    let module_info = PytestModuleInfo::from_module(module)?;
+    let function_def = covering_nodes.iter().find_map(|node| match node {
+        AnyNodeRef::StmtFunctionDef(stmt) => Some(stmt),
+        _ => None,
+    })?;
+    let class_context = covering_nodes
+        .iter()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtClassDef(stmt) => Some(stmt),
+            _ => None,
+        })
+        .map(is_pytest_test_class);
+
+    if !is_pytest_fixture_or_test_function(function_def, module_info.aliases(), class_context) {
+        return None;
+    }
+
+    let matches = module_info.fixture_definitions_for_name(identifier.id());
+    if matches.is_empty() {
+        return None;
+    }
+    Some(matches)
+}
+
+/// Returns all parameter ranges that reference the fixture definition in this module.
+pub(crate) fn pytest_fixture_parameter_references(
+    module: &ModModule,
+    definition_range: TextRange,
+    expected_name: &Name,
+) -> Option<Vec<TextRange>> {
+    let module_info = PytestModuleInfo::from_module(module)?;
+    if !module_info.has_fixture_definition(expected_name, definition_range) {
+        return None;
+    }
+    let mut references = Vec::new();
+    collect_pytest_fixture_parameter_ranges(
+        &module.body,
+        module_info.aliases(),
+        expected_name,
+        &mut references,
+        None,
+    );
+    Some(references)
 }
