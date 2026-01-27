@@ -75,8 +75,6 @@ use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::lsp_attributes::AttributeContext;
-use crate::state::pytest::pytest_fixture_definitions_for_parameter as pytest_fixture_definitions_for_parameter_in_module;
-use crate::state::pytest::pytest_fixture_parameter_references as pytest_fixture_parameter_references_in_module;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
@@ -86,6 +84,7 @@ use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
 mod dict_completions;
+mod pytest;
 mod quick_fixes;
 
 pub(crate) use self::quick_fixes::types::LocalRefactorCodeAction;
@@ -1555,33 +1554,6 @@ impl<'a> Transaction<'a> {
             .collect()
     }
 
-    fn pytest_fixture_definitions_for_parameter(
-        &self,
-        handle: &Handle,
-        identifier: &Identifier,
-        covering_nodes: &[AnyNodeRef],
-    ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
-        let mod_module = self.get_ast(handle)?;
-        let matches = pytest_fixture_definitions_for_parameter_in_module(
-            mod_module.as_ref(),
-            identifier,
-            covering_nodes,
-        )?;
-        let module_info = self.get_module_info(handle)?;
-        Some(
-            matches
-                .into_iter()
-                .map(|fixture| FindDefinitionItemWithDocstring {
-                    metadata: DefinitionMetadata::Variable(Some(SymbolKind::Function)),
-                    definition_range: fixture.range,
-                    module: module_info.clone(),
-                    docstring_range: fixture.docstring_range,
-                    display_name: Some(fixture.name.as_str().to_owned()),
-                })
-                .collect(),
-        )
-    }
-
     /// Find the definition, metadata and optionally the docstring for the given position.
     pub fn find_definition(
         &self,
@@ -2577,20 +2549,6 @@ impl<'a> Transaction<'a> {
         }
 
         Some(references)
-    }
-
-    fn local_pytest_fixture_parameter_references(
-        &self,
-        handle: &Handle,
-        definition_range: TextRange,
-        expected_name: &Name,
-    ) -> Option<Vec<TextRange>> {
-        let mod_module = self.get_ast(handle)?;
-        pytest_fixture_parameter_references_in_module(
-            mod_module.as_ref(),
-            definition_range,
-            expected_name,
-        )
     }
 
     fn local_variable_references_from_local_definition(
