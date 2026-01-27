@@ -38,6 +38,7 @@ use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
+use crate::lsp::wasm::signature_help::ActiveArgument;
 use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -332,27 +333,46 @@ impl Transaction<'_> {
         position: TextSize,
         completions: &mut Vec<RankedCompletion>,
     ) {
-        if let Some((callables, overload_idx, _, _)) =
+        if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(overload_idx).cloned()
-            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
         {
-            for param in params {
-                match param {
-                    Param::Pos(name, ty, _)
-                    | Param::PosOnly(Some(name), ty, _)
-                    | Param::KwOnly(name, ty, _)
-                    | Param::VarArg(Some(name), ty) => {
-                        if name.as_str() != "self" {
-                            completions.push(RankedCompletion::new(CompletionItem {
-                                label: format!("{}=", name.as_str()),
-                                detail: Some(ty.to_string()),
-                                kind: Some(CompletionItemKind::VARIABLE),
-                                ..Default::default()
-                            }));
+            // When args have been provided that narrow down the overload, use only
+            // the closest matching overload. Otherwise show params from all overloads.
+            let has_existing_args = !matches!(active_argument, ActiveArgument::Next(0));
+            let selected: Vec<Type> = if has_existing_args && let Some(idx) = chosen_overload_index
+            {
+                callables.into_iter().nth(idx).into_iter().collect()
+            } else {
+                callables
+            };
+            let mut seen = SmallSet::new();
+            for callable in selected {
+                if let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
+                {
+                    for param in params {
+                        match param {
+                            Param::Pos(name, ty, _)
+                            | Param::PosOnly(Some(name), ty, _)
+                            | Param::KwOnly(name, ty, _)
+                            | Param::VarArg(Some(name), ty) => {
+                                let label = format!("{}=", name.as_str());
+                                let detail = ty.to_string();
+                                if name.as_str() != "self"
+                                    && seen.insert((label.clone(), detail.clone()))
+                                {
+                                    completions.push(RankedCompletion::new(CompletionItem {
+                                        label,
+                                        detail: Some(detail),
+                                        kind: Some(CompletionItemKind::VARIABLE),
+                                        ..Default::default()
+                                    }));
+                                }
+                            }
+                            Param::VarArg(None, _)
+                            | Param::Kwargs(_, _)
+                            | Param::PosOnly(None, _, _) => {}
                         }
                     }
-                    Param::VarArg(None, _) | Param::Kwargs(_, _) | Param::PosOnly(None, _, _) => {}
                 }
             }
         }
@@ -545,19 +565,24 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
     ) {
-        if let Some((callables, chosen_overload_index, active_argument, _)) =
+        if let Some((callables, _, active_argument, _)) =
             self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(chosen_overload_index)
-            && let Some(params) =
-                Self::normalize_singleton_function_type_into_params(callable.clone())
-            && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
-            && let Some(param) = params.get(arg_index)
         {
-            Self::add_literal_completions_from_type(
-                param.as_type(),
-                completions,
-                in_string_literal,
-            );
+            // Show literal completions from all overloads. Ideally we would filter
+            // to only compatible overloads, but that requires type compatibility checks.
+            for callable in callables {
+                if let Some(params) =
+                    Self::normalize_singleton_function_type_into_params(callable.clone())
+                    && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
+                    && let Some(param) = params.get(arg_index)
+                {
+                    Self::add_literal_completions_from_type(
+                        param.as_type(),
+                        completions,
+                        in_string_literal,
+                    );
+                }
+            }
         }
     }
 

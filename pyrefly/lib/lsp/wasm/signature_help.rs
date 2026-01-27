@@ -163,12 +163,16 @@ impl Transaction<'_> {
             .or(Some(0))
     }
 
-    /// Finds the callable(s) (multiple if overloads exist) at position in document, returning them, chosen overload index, and arg index
+    /// Finds the callable(s) (multiple if overloads exist) at position in document.
+    /// Returns (callables, chosen_overload_index, active_argument, callee_range).
+    /// `chosen_overload_index` is `Some` when a specific overload was matched
+    /// (e.g. a resolved call or a closest match among candidates), and `None`
+    /// when overloads were expanded from a type without call-site analysis.
     pub(crate) fn get_callables_from_call(
         &self,
         handle: &Handle,
         position: TextSize,
-    ) -> Option<(Vec<Type>, usize, ActiveArgument, TextRange)> {
+    ) -> Option<(Vec<Type>, Option<usize>, ActiveArgument, TextRange)> {
         let mod_module = self.get_ast(handle)?;
         let mut res = None;
         mod_module.visit(&mut |x| Self::visit_finding_signature_range(x, position, &mut res));
@@ -189,7 +193,7 @@ impl Transaction<'_> {
             let callables = overloads.into_map(|callable| Type::Callable(Box::new(callable)));
             Some((
                 callables,
-                chosen_overload_index.unwrap_or_default(),
+                chosen_overload_index,
                 active_argument,
                 callee_range,
             ))
@@ -204,9 +208,9 @@ impl Transaction<'_> {
                         .into_iter()
                         .map(|s| s.as_type())
                         .collect();
-                    (callables, 0, active_argument, callee_range)
+                    (callables, None, active_argument, callee_range)
                 } else {
-                    (vec![coerced], 0, active_argument, callee_range)
+                    (vec![coerced], Some(0), active_argument, callee_range)
                 }
             })
         }
@@ -386,12 +390,13 @@ impl Transaction<'_> {
                         )
                     })
                     .collect_vec();
+                let chosen = chosen_overload_index.unwrap_or_default();
                 let active_parameter = signatures
-                    .get(chosen_overload_index)
+                    .get(chosen)
                     .and_then(|info| info.active_parameter);
                 SignatureHelp {
                     signatures,
-                    active_signature: Some(chosen_overload_index as u32),
+                    active_signature: Some(chosen as u32),
                     active_parameter,
                 }
             },
