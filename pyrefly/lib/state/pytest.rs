@@ -91,14 +91,14 @@ pub(crate) struct PytestFixtureDefinition {
 }
 
 // Aggregates pytest-related data for a module to avoid repeated scans.
-struct PytestModuleInfo {
+pub(crate) struct PytestModuleInfo {
     aliases: PytestAliases,
     fixtures: Vec<PytestFixtureDefinition>,
 }
 
 impl PytestModuleInfo {
     /// Collects pytest aliases and fixture definitions for a module.
-    fn from_module(module: &ModModule) -> Option<Self> {
+    pub(crate) fn from_module(module: &ModModule) -> Option<Self> {
         let aliases = PytestAliases::from_module(module);
         if aliases.is_empty() {
             return None;
@@ -257,11 +257,10 @@ fn collect_pytest_fixture_parameter_ranges(
 
 /// Returns fixture definitions for a parameter when the cursor is in a pytest test/fixture.
 pub(crate) fn pytest_fixture_definitions_for_parameter(
-    module: &ModModule,
+    module_info: &PytestModuleInfo,
     identifier: &Identifier,
     covering_nodes: &[AnyNodeRef],
 ) -> Option<Vec<PytestFixtureDefinition>> {
-    let module_info = PytestModuleInfo::from_module(module)?;
     let function_def = covering_nodes.iter().find_map(|node| match node {
         AnyNodeRef::StmtFunctionDef(stmt) => Some(stmt),
         _ => None,
@@ -288,10 +287,10 @@ pub(crate) fn pytest_fixture_definitions_for_parameter(
 /// Returns all parameter ranges that reference the fixture definition in this module.
 pub(crate) fn pytest_fixture_parameter_references(
     module: &ModModule,
+    module_info: &PytestModuleInfo,
     definition_range: TextRange,
     expected_name: &Name,
 ) -> Option<Vec<TextRange>> {
-    let module_info = PytestModuleInfo::from_module(module)?;
     if !module_info.has_fixture_definition(expected_name, definition_range) {
         return None;
     }
