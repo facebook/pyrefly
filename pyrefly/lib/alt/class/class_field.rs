@@ -3359,7 +3359,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    fn get_class_member_with_defining_class(
+    pub(crate) fn get_class_member_with_defining_class(
         &self,
         cls: &Class,
         name: &Name,

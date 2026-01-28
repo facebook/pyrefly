@@ -18,6 +18,7 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
+use crate::test::util::mk_multi_file_state;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn apply_patch(info: &ModuleInfo, range: TextRange, patch: String) -> (String, String) {
@@ -364,6 +365,49 @@ fn compute_push_down_actions(
     compute_move_actions(code, selection, |transaction, handle, selection| {
         transaction.push_members_down_code_actions(handle, selection)
     })
+}
+
+fn compute_implement_abstract_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = find_marked_range_with(code, "# ACTION-START", "# ACTION-END");
+    let actions = transaction
+        .implement_abstract_members_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn compute_implement_abstract_actions_allow_errors(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Everything, false);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = find_marked_range_with(code, "# ACTION-START", "# ACTION-END");
+    let actions = transaction
+        .implement_abstract_members_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
 }
 
 #[test]
@@ -977,25 +1021,29 @@ class Sub(Super):
 #[test]
 fn push_member_down_basic() {
     let code = r#"
+from abc import ABC
+
 class Base:
     # MOVE-START
     def foo(self):
         pass
     # MOVE-END
 
-class Child(Base):
+class Child(Base, ABC):
     pass
 "#;
     let (module_info, actions, titles) = compute_push_down_actions(code);
     assert_eq!(vec!["Push `foo` down to `Child`"], titles);
     let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
     let expected = r#"
+from abc import ABC
+
 class Base:
     # MOVE-START
     pass
     # MOVE-END
 
-class Child(Base):
+class Child(Base, ABC):
     def foo(self):
         pass
 "#;
@@ -1285,6 +1333,118 @@ def foo():
 "#;
     assert_eq!(expected_a.trim(), updated_a.trim());
     assert_eq!(expected_b.trim(), updated_b.trim());
+}
+
+#[test]
+fn implement_abstract_members_inserts_stubs() {
+    let code = r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        ...
+
+    @property
+    @abstractmethod
+    def bar(self) -> int:
+        """Bar doc."""
+        ...
+
+class Child(Base):
+    # ACTION-START
+    pass
+    # ACTION-END
+"#;
+    let (module_info, actions, titles) = compute_implement_abstract_actions(code);
+    assert_eq!(vec!["Implement abstract members"], titles);
+    let edits = actions.first().expect("missing abstract member edits");
+    let after = apply_refactor_edits_for_module(&module_info, edits);
+    assert_eq!(
+        r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        ...
+
+    @property
+    @abstractmethod
+    def bar(self) -> int:
+        """Bar doc."""
+        ...
+
+class Child(Base):
+    # ACTION-START
+    @property
+    def bar(self) -> int:
+        """Bar doc."""
+        raise NotImplementedError
+
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        raise NotImplementedError
+    # ACTION-END
+"#,
+        after
+    );
+}
+
+#[test]
+fn implement_protocol_members_inserts_stubs() {
+    let code = r#"
+from typing import Protocol
+
+class Proto(Protocol):
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        ...
+
+    @property
+    def bar(self) -> int:
+        """Bar doc."""
+        ...
+
+class Impl(Proto):
+    # ACTION-START
+    pass
+    # ACTION-END
+"#;
+    let (module_info, actions, titles) = compute_implement_abstract_actions_allow_errors(code);
+    assert_eq!(vec!["Implement abstract members"], titles);
+    let edits = actions.first().expect("missing protocol member edits");
+    let after = apply_refactor_edits_for_module(&module_info, edits);
+    assert_eq!(
+        r#"
+from typing import Protocol
+
+class Proto(Protocol):
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        ...
+
+    @property
+    def bar(self) -> int:
+        """Bar doc."""
+        ...
+
+class Impl(Proto):
+    # ACTION-START
+    @property
+    def bar(self) -> int:
+        """Bar doc."""
+        raise NotImplementedError
+
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        raise NotImplementedError
+    # ACTION-END
+"#,
+        after
+    );
 }
 
 #[test]
