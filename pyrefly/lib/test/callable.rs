@@ -61,6 +61,30 @@ f("hello")  # E: `str` is not assignable to upper bound `int` of type variable `
 );
 
 testcase!(
+    test_callable_annotation_only_typevar,
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+from collections.abc import Callable
+from typing import Any, TypeVar
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+require_GET: Callable[[F], F]
+"#
+    ),
+    r#"
+from typing import reveal_type
+from foo import require_GET
+def view() -> None:
+    return None
+reveal_type(require_GET)  # E: revealed type: [F: (...) -> Any](F) -> F
+reveal_type(require_GET(view))  # E: revealed type: () -> None
+"#,
+);
+
+testcase!(
     test_list_of_callables_variable_typevar_annotation,
     r#"
 from typing import Callable, TypeVar, assert_type, reveal_type

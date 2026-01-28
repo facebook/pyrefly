@@ -3846,8 +3846,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::ClassDef(cls.dupe())
                 }
             },
-            Binding::AnnotatedType(ann, val) => match &self.get_idx(*ann).ty(self.stdlib) {
-                Some(ty) => (*ty).clone(),
+            Binding::AnnotatedType(ann, val) => match self.get_idx(*ann).ty(self.stdlib) {
+                Some(ty) => self.wrap_callable_legacy_typevars(ty),
                 None => self.binding_to_type(val, errors),
             },
             Binding::Type(x) => x.clone(),
