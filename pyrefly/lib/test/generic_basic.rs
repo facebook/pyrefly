@@ -604,5 +604,8 @@ assert(list[int].__parameters__, tuple)
 
 # No error for accessing methods on `list`
 list[int].__add__
+
+# No error for comparing two `GenericAlias`
+list[int] == list[str]
 "#,
 );

@@ -1806,8 +1806,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
                     // Since GenericAlias also exposes all class attributes, we need to intersect the two bases
                     acc.push(AttributeBase1::Intersect(
-                        vec![generic_alias_base, class_base.clone()],
-                        vec![class_base],
+                        vec![generic_alias_base.clone(), class_base],
+                        vec![generic_alias_base],
                     ));
                 } else {
                     acc.push(class_base)
