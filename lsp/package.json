@@ -34,6 +34,7 @@
     "main": "./dist/extension",
     "activationEvents": [
         "onLanguage:python",
+        "onLanguage:cython",
         "onNotebook:jupyter-notebook"
     ],
     "contributes": {
@@ -47,6 +48,25 @@
                     ".py",
                     ".pyi"
                 ]
+            },
+            {
+                "id": "cython",
+                "aliases": [
+                    "Cython"
+                ],
+                "extensions": [
+                    ".pyx",
+                    ".pxd",
+                    ".pxi"
+                ],
+                "configuration": "./language-configuration/cython.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "cython",
+                "scopeName": "source.cython",
+                "path": "./syntaxes/cython.tmLanguage.json"
             }
         ],
         "commands": [

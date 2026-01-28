@@ -220,7 +220,12 @@ impl TestEnv {
 
     pub fn add_with_path(&mut self, name: &str, path: &str, code: &str) {
         assert!(
-            path.ends_with(".py") || path.ends_with(".pyi") || path.ends_with(".rs"),
+            path.ends_with(".py")
+                || path.ends_with(".pyi")
+                || path.ends_with(".pyx")
+                || path.ends_with(".pxd")
+                || path.ends_with(".pxi")
+                || path.ends_with(".rs"),
             "{path} doesn't look like a reasonable path"
         );
         self.modules.push((

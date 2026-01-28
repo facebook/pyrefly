@@ -32,6 +32,7 @@ mod binding;
 #[cfg(not(target_arch = "wasm32"))]
 mod commands;
 mod compat;
+mod cython;
 mod error;
 mod export;
 mod lsp;
