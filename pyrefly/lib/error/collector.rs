@@ -144,13 +144,18 @@ impl ErrorCollector {
             "Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself"
                 .to_owned(),
         );
-        if cfg!(fbcode_build) {
-            msg.push("Please report the bug at https://fb.workplace.com/groups/pyreqa".to_owned());
-        } else {
-            msg.push(
-                "Please report the bug at https://github.com/facebook/pyrefly/issues/new"
-                    .to_owned(),
-            );
+        // Only ask for bug reports in non-debug builds.
+        if !cfg!(debug_assertions) {
+            if cfg!(fbcode_build) {
+                msg.push(
+                    "Please report the bug at https://fb.workplace.com/groups/pyreqa".to_owned(),
+                );
+            } else {
+                msg.push(
+                    "Please report the bug at https://github.com/facebook/pyrefly/issues/new"
+                        .to_owned(),
+                );
+            }
         }
         self.add(range, ErrorInfo::Kind(ErrorKind::InternalError), msg);
     }
