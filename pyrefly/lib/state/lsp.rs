@@ -2819,7 +2819,7 @@ impl<'a> Transaction<'a> {
     ) {
         if let Some((callables, chosen_overload_index, active_argument, _)) =
             self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(chosen_overload_index)
+            && let Some(callable) = callables.get(chosen_overload_index.unwrap_or_default())
             && let Some(params) =
                 Self::normalize_singleton_function_type_into_params(callable.clone())
             && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
