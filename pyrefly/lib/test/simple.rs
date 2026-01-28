@@ -674,7 +674,7 @@ class B[T]:
     pass
 for x in A[str]:
     assert_type(x, int)
-for _ in B[str]:  # E: Type `type[B[str]]` is not iterable
+for _ in B[str]:
     pass
     "#,
 );
@@ -750,7 +750,7 @@ testcase!(
 class A[T]:
     def __getitem__(self, i: int) -> int: ...
 def f(x: type[A[int]]):
-    for a in x:  # E: Type `type[A[int]]` is not iterable
+    for a in x:  # E: Type `type[A[int]]` is not iterable # E: Type `type[A[int]]` is not iterable
         pass
     "#,
 );
