@@ -991,6 +991,7 @@ impl<'a> Transaction<'a> {
                     .untyped_def_behavior(module_data.handle.path().as_path()),
                 infer_with_first_use: config
                     .infer_with_first_use(module_data.handle.path().as_path()),
+                get_idx_depth_limit: config.get_idx_depth_limit(),
             });
             {
                 let mut to_drop = None;
@@ -1392,7 +1393,8 @@ impl<'a> Transaction<'a> {
 
     fn compute_stdlib(&mut self, sys_infos: SmallSet<SysInfo>) {
         let loader = self.get_cached_loader(&BundledTypeshedStdlib::config());
-        let thread_state = ThreadState::new();
+        // Use defaults (disabled) for stdlib - depth limiting is for user code
+        let thread_state = ThreadState::new(None);
         for k in sys_infos.into_iter_hashed() {
             self.data
                 .stdlib
@@ -1761,7 +1763,8 @@ impl<'a> Transaction<'a> {
         let (bindings, answers) = steps.answers.as_deref().as_ref()?;
         let stdlib = self.get_stdlib(handle);
         let recurser = VarRecurser::new();
-        let thread_state = ThreadState::new();
+        let config = module_data.config.read();
+        let thread_state = ThreadState::new(config.get_idx_depth_limit());
         let solver = AnswersSolver::new(
             &lookup,
             answers,
@@ -1991,6 +1994,7 @@ impl<'a> Transaction<'a> {
                 lookup: &self.lookup(m.dupe()),
                 untyped_def_behavior: config.untyped_def_behavior(m.handle.path().as_path()),
                 infer_with_first_use: config.infer_with_first_use(m.handle.path().as_path()),
+                get_idx_depth_limit: config.get_idx_depth_limit(),
             };
             let mut step = Step::Load; // Start at AST (Load.next)
             alt.load = lock.steps.load.dupe();

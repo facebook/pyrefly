@@ -17,6 +17,8 @@ use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display;
 
+use crate::base::GetIdxDepthLimitConfig;
+use crate::base::GetIdxOverflowHandler;
 use crate::base::UntypedDefBehavior;
 use crate::config::ConfigFile;
 use crate::config::validate_path;
@@ -168,6 +170,13 @@ pub struct ConfigOverrideArgs {
     /// Force this rule to emit an info-level diagnostic. Can be passed multiple times or as a comma-separated list.
     #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     info: Vec<ErrorKind>,
+    /// Maximum number of concurrent get_idx calls before triggering overflow protection.
+    /// Set to 0 to disable (default). This helps detect potential stack overflow situations.
+    #[arg(long)]
+    get_idx_depth_limit: Option<u32>,
+    /// How to handle when get_idx depth limit is exceeded.
+    #[arg(long)]
+    get_idx_overflow_handler: Option<GetIdxOverflowHandler>,
 }
 
 impl ConfigOverrideArgs {
@@ -341,6 +350,21 @@ impl ConfigOverrideArgs {
         if let Some(x) = &self.infer_with_first_use {
             config.root.infer_with_first_use = Some(*x);
         }
+        // Combine depth limit and handler into a single config struct
+        if self.get_idx_depth_limit.is_some() || self.get_idx_overflow_handler.is_some() {
+            let existing = config
+                .root
+                .get_idx_depth_limit
+                .unwrap_or(GetIdxDepthLimitConfig {
+                    limit: 0,
+                    handler: GetIdxOverflowHandler::BreakWithPlaceholder,
+                });
+            config.root.get_idx_depth_limit = Some(GetIdxDepthLimitConfig {
+                limit: self.get_idx_depth_limit.unwrap_or(existing.limit),
+                handler: self.get_idx_overflow_handler.unwrap_or(existing.handler),
+            });
+        }
+        dbg!(config.root.get_idx_depth_limit);
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             for error_kind in &self.error {
                 error_config.set_error_severity(*error_kind, Severity::Error);

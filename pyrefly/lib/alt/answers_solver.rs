@@ -48,6 +48,8 @@ use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
+use crate::config::base::GetIdxDepthLimitConfig;
+use crate::config::base::GetIdxOverflowHandler;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
@@ -145,8 +147,12 @@ impl CalcStack {
         self.0.borrow().clone()
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0.borrow().is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.borrow().len()
     }
 
     /// Return the current cycle, if we are at a (module, idx) that we've already seen in this thread.
@@ -419,14 +425,17 @@ pub struct ThreadState {
     stack: CalcStack,
     /// For debugging only: thread-global that allows us to control debug logging across components.
     debug: RefCell<bool>,
+    /// Configuration for get_idx depth limiting. None means disabled.
+    get_idx_depth_limit: Option<GetIdxDepthLimitConfig>,
 }
 
 impl ThreadState {
-    pub fn new() -> Self {
+    pub fn new(get_idx_depth_limit: Option<GetIdxDepthLimitConfig>) -> Self {
         Self {
             cycles: Cycles::new(),
             stack: CalcStack::new(),
             debug: RefCell::new(false),
+            get_idx_depth_limit,
         }
     }
 }
@@ -506,6 +515,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self.thread_state.cycles
     }
 
+    fn get_idx_depth_limit_config(&self) -> Option<GetIdxDepthLimitConfig> {
+        self.thread_state.get_idx_depth_limit
+    }
+
     pub fn for_display(&self, t: Type) -> Type {
         self.solver().for_display(t)
     }
@@ -533,6 +546,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let current = CalcId(self.bindings().dupe(), K::to_anyidx(idx));
         let calculation = self.get_calculation(idx);
         self.stack().push(current.dupe());
+
+        // Check depth limit before any calculation
+        if let Some(config) = self.get_idx_depth_limit_config()
+            && self.stack().len() > config.limit as usize
+        {
+            let result = self.handle_depth_overflow(idx, calculation, config);
+            self.stack().pop();
+            return result;
+        }
+
         let result = match self.cycles().pre_calculate_state(&current) {
             CycleState::NoDetectedCycle => match calculation.propose_calculation() {
                 ProposalResult::Calculated(v) => v,
@@ -702,6 +725,97 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Ok(v)
             }
         }
+    }
+
+    /// Handle depth overflow based on the configured handler.
+    fn handle_depth_overflow<K: Solve<Ans>>(
+        &self,
+        idx: Idx<K>,
+        calculation: &Calculation<Arc<K::Answer>, Var>,
+        config: GetIdxDepthLimitConfig,
+    ) -> Arc<K::Answer>
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        match config.handler {
+            GetIdxOverflowHandler::BreakWithPlaceholder => {
+                self.handle_depth_overflow_break_with_placeholder(idx, calculation, config.limit)
+            }
+            GetIdxOverflowHandler::PanicWithDebugInfo => {
+                self.handle_depth_overflow_panic_with_debug_info(idx, config.limit)
+            }
+        }
+    }
+
+    /// BreakWithPlaceholder handler: emit an internal error and return a recursive placeholder.
+    fn handle_depth_overflow_break_with_placeholder<K: Solve<Ans>>(
+        &self,
+        idx: Idx<K>,
+        calculation: &Calculation<Arc<K::Answer>, Var>,
+        limit: u32,
+    ) -> Arc<K::Answer>
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        let range = self.bindings().idx_to_key(idx).range();
+        self.base_errors.add(
+            range,
+            ErrorInfo::Kind(ErrorKind::InternalError),
+            vec1![format!(
+                "get_idx depth limit ({}) exceeded; possible stack overflow prevented",
+                limit
+            )],
+        );
+        // Return recursive placeholder (same pattern as cycle handling)
+        self.attempt_to_unwind_cycle_from_here(idx, calculation)
+            .unwrap_or_else(|r| Arc::new(K::promote_recursive(r)))
+    }
+
+    /// PanicWithDebugInfo handler: dump debug info to stderr and panic.
+    fn handle_depth_overflow_panic_with_debug_info<K: Solve<Ans>>(
+        &self,
+        idx: Idx<K>,
+        limit: u32,
+    ) -> !
+    where
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        eprintln!("=== GET_IDX DEPTH OVERFLOW DEBUG ===");
+        eprintln!("Depth limit: {}", limit);
+        eprintln!("Current depth: {}", self.stack().len());
+
+        // Dump CalcStack (top 10)
+        eprintln!("\n--- CalcStack ---");
+        let stack_vec = self.stack().into_vec();
+        for (i, calc_id) in stack_vec.iter().rev().enumerate() {
+            eprintln!("  [{}] {}", i, calc_id);
+        }
+
+        // Dump full stack size
+        eprintln!("\n--- Full stack size: {} ---", self.stack().len());
+
+        // Dump Cycles (note: cycles are not fully inspectable, just show status)
+        eprintln!("\n--- Active Cycles ---");
+        if self.cycles().is_empty() {
+            eprintln!("  None");
+        } else {
+            for cycle in self.cycles().0.borrow().iter().rev() {
+                eprintln!("  {}", cycle);
+            }
+        }
+
+        // Current idx details with text range
+        eprintln!("\n--- Triggering Idx Details ---");
+        let key = self.bindings().idx_to_key(idx);
+        let range = key.range();
+        let display_range = self.bindings().module().display_range(range);
+        eprintln!("  Module: {}", self.module().name());
+        eprintln!("  Range: {}", display_range);
+        eprintln!("  Key: {}", key.display_with(self.bindings().module()));
+
+        panic!("get_idx depth limit exceeded - stack overflow prevented");
     }
 
     fn get_from_module<K: Solve<Ans> + Exported>(

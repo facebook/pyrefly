@@ -57,6 +57,7 @@ use tracing::debug;
 use tracing::error;
 
 use crate::base::ConfigBase;
+use crate::base::GetIdxDepthLimitConfig;
 use crate::base::UntypedDefBehavior;
 use crate::environment::environment::PythonEnvironment;
 use crate::environment::interpreters::Interpreters;
@@ -817,6 +818,12 @@ impl ConfigFile {
                  self.root.enabled_ignores.as_ref().unwrap())
     }
 
+    /// Get the get_idx depth limit configuration.
+    /// Returns None if not set (disabled).
+    pub fn get_idx_depth_limit(&self) -> Option<GetIdxDepthLimitConfig> {
+        self.root.get_idx_depth_limit
+    }
+
     pub fn get_error_config(&self, path: &Path) -> ErrorConfig<'_> {
         ErrorConfig::new(
             self.errors(path),
@@ -1429,6 +1436,7 @@ mod tests {
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     permissive_ignores: None,
                     enabled_ignores: None,
+                    get_idx_depth_limit: None,
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
@@ -1447,6 +1455,7 @@ mod tests {
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         permissive_ignores: None,
                         enabled_ignores: None,
+                        get_idx_depth_limit: None,
                     }
                 }],
                 typeshed_path: None,
@@ -1829,6 +1838,7 @@ baseline = "baseline.json"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                get_idx_depth_limit: None,
             },
             sub_configs: vec![
                 SubConfig {
@@ -2136,6 +2146,7 @@ baseline = "baseline.json"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                get_idx_depth_limit: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -2168,6 +2179,7 @@ baseline = "baseline.json"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                get_idx_depth_limit: None,
             },
             sub_configs: vec![],
             ..Default::default()

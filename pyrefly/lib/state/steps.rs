@@ -21,6 +21,7 @@ use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::binding::bindings::Bindings;
+use crate::config::base::GetIdxDepthLimitConfig;
 use crate::config::base::UntypedDefBehavior;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::Exports;
@@ -43,6 +44,7 @@ pub struct Context<'a, Lookup> {
     pub lookup: &'a Lookup,
     pub untyped_def_behavior: UntypedDefBehavior,
     pub infer_with_first_use: bool,
+    pub get_idx_depth_limit: Option<GetIdxDepthLimitConfig>,
 }
 
 #[derive(Debug, Default, Dupe, Clone)]
@@ -206,6 +208,7 @@ impl Step {
             ctx.require.compute_errors()
                 || ctx.require.keep_answers_trace()
                 || ctx.require.keep_answers(),
+            ctx.get_idx_depth_limit,
         );
         Arc::new(solutions)
     }
