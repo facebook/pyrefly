@@ -468,6 +468,10 @@ impl Stdlib {
         Self::apply(&self.mapping, vec![key, value])
     }
 
+    pub fn mapping_object(&self) -> &Class {
+        &Self::unwrap(&self.mapping).0
+    }
+
     pub fn set(&self, x: Type) -> ClassType {
         Self::apply(&self.set, vec![x])
     }
