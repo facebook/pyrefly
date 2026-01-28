@@ -26,7 +26,7 @@ Not seeing inlay hints in VS Code? Try setting `editor.inlayHints.enabled` to `t
 :::
 
 :::tip
-Want type error squiggles to show up in VS Code? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your VS Code settings, or create a `pyrefly.toml` file in your project root.
+Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
 :::
 
 ## Customization
@@ -246,6 +246,23 @@ require("mason-lspconfig").setup {
         :::tip
         [This Youtube tutorial](https://youtu.be/IZnhl121yo0?si=VINhYDEySX48_8GY) explains setting up a language server in more depth and with a more organized setup, so check it out if you want to learn more.
         :::
+
+        :::info
+        Want type error squiggles to show up in your editor by default? You can create a `pyrefly.toml` in your project root, add a `[tool.pyrefly]` section in your `pyproject.toml`, or add the following to the config object passed into `vim.lsp.config`.
+
+        ```
+        {
+            settings = {
+                python = {
+                    pyrefly = {
+                        displayTypeError = 'force-on'
+                    }
+                }
+            }
+        }
+        ```
+        :::
+
 
     </details>
 

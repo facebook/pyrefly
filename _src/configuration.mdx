@@ -31,6 +31,10 @@ name with the `--config`/`-c` flag, but they will not be automatically found by
 
 Both absolute and config-relative paths are supported.
 
+:::info
+Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+:::
+
 ## Simple Configuration Example
 
 Here's an example of a simple config. To see more complex examples,
@@ -427,6 +431,10 @@ types (like `object`, `str`, ...) and types/type signatures from stdlib modules.
 ### `errors`
 
 Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
+
+:::info
+Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+:::
 
 - Type: Table of [error code](./error-kinds.mdx) to boolean representing enabled status
 - Default: `errors = {}`/`[errors]`

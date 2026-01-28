@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.bd4087df.js" defer="defer"></script>
-<script src="/assets/js/main.efd2a154.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.2510ee80.js" defer="defer"></script>
+<script src="/assets/js/main.400d9672.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -54,6 +54,7 @@ section. Other config names can be used when explicitly passing in the config fi
 name with the <code>--config</code>/<code>-c</code> flag, but they will not be automatically found by
 <a href="#configuration-finding">Configuration Finding</a>.</p>
 <p>Both absolute and config-relative paths are supported.</p>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>Want type error squiggles to show up in your editor by default? Try setting <code>python.pyrefly.displayTypeErrors</code> to <code>&quot;force-on&quot;</code> in your editor settings, create a <code>pyrefly.toml</code> file in your project root, or add a <code>[tool.pyrefly]</code> section to your <code>pyproject.toml</code> (can be empty).</p></div></div>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="simple-configuration-example">Simple Configuration Example<a href="#simple-configuration-example" class="hash-link" aria-label="Direct link to Simple Configuration Example" title="Direct link to Simple Configuration Example">​</a></h2>
 <p>Here&#x27;s an example of a simple config. To see more complex examples,
 including in a <code>pyproject.toml</code>, look at
@@ -431,6 +432,7 @@ types (like <code>object</code>, <code>str</code>, ...) and types/type signature
 </ul>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="errors"><code>errors</code><a href="#errors" class="hash-link" aria-label="Direct link to errors" title="Direct link to errors">​</a></h3>
 <p>Configure the severity for each kind of error that Pyrefly emits: <code>error</code>, <code>warn</code>, <code>ignore</code>.</p>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>Want type error squiggles to show up in your editor by default? Try setting <code>python.pyrefly.displayTypeErrors</code> to <code>&quot;force-on&quot;</code> in your editor settings, create a <code>pyrefly.toml</code> file in your project root, or add a <code>[tool.pyrefly]</code> section to your <code>pyproject.toml</code> (can be empty).</p></div></div>
 <ul>
 <li>Type: Table of <a href="/en/docs/error-kinds/">error code</a> to boolean representing enabled status</li>
 <li>Default: <code>errors = {}</code>/<code>[errors]</code></li>
