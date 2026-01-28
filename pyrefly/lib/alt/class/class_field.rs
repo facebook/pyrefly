@@ -16,6 +16,7 @@ use pyrefly_derive::VisitMut;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncFlags;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
@@ -1567,6 +1568,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let binding = Binding::Forward(*definition);
                 let value_ty =
                     Arc::unwrap_or_clone(self.solve_binding(&binding, range, errors)).into_ty();
+
+                if name == &dunder::INIT {
+                    // Validate __init__ self type, ensure that it does not contain class-scoped type variables
+                    if let Type::Function(box Function {
+                        signature:
+                            Callable {
+                                params: Params::List(param_list),
+                                ..
+                            },
+                        ..
+                    }) = &value_ty
+                        && let Some(Param::Pos(_, self_ty, _)) = param_list.items().first()
+                    {
+                        match &self_ty {
+                            Type::ClassType(cls_ty) if cls_ty.name() == class.name() => {
+                                let tparams_names = cls_ty
+                                    .tparams()
+                                    .as_vec()
+                                    .iter()
+                                    .map(|tp| tp.name())
+                                    .collect::<SmallSet<_>>();
+                                let class_scoped_tvars = cls_ty
+                                    .targs()
+                                    .iter_paired()
+                                    .filter_map(|(_, ty)| {
+                                        if let Type::Quantified(box Quantified {
+                                            name: arg_name,
+                                            ..
+                                        }) = ty
+                                            && tparams_names.contains(&arg_name)
+                                        {
+                                            Some(arg_name)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect::<SmallSet<_>>();
+                                if !class_scoped_tvars.is_empty() {
+                                    let targs = class_scoped_tvars
+                                        .iter()
+                                        .map(|name| name.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join("`, `");
+                                    errors.add(
+                                        range,
+                                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                                        vec1![format!("`__init__` method self type cannot reference class type parameter `{targs}`")]
+                                    );
+                                }
+                            }
+                            // We could consider report errors for
+                            // non-compatible self types (e.g. not the current
+                            // class, or other non-class types) here, but this
+                            // is not required by the spec.
+                            _ => {}
+                        }
+                    }
+                }
                 (
                     initialization,
                     !has_return_annotation,
