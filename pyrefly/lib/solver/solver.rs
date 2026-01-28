@@ -50,6 +50,7 @@ use crate::types::module::ModuleType;
 use crate::types::simplify::simplify_tuples;
 use crate::types::simplify::unions;
 use crate::types::simplify::unions_with_literals;
+use crate::types::type_var::Restriction;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -1552,20 +1553,61 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     Variable::Quantified(q) | Variable::PartialQuantified(q) => {
                         let name = q.name.clone();
-                        let bound = q.restriction().as_type(self.type_order.stdlib());
+                        let restriction = q.restriction().clone();
                         drop(v1_ref);
-                        variables.update(*v1, Variable::Answer(t2.clone()));
-                        drop(variables);
-                        if let Err(e) = self.is_subset_eq(t2, &bound) {
-                            self.solver.instantiation_errors.write().insert(
-                                *v1,
-                                TypeVarSpecializationError {
-                                    name,
-                                    got: t2.clone(),
-                                    want: bound,
-                                    error: e,
-                                },
-                            );
+
+                        // Per PEP 484, constrained TypeVars must be inferred to exactly one of
+                        // their constraint types. When checking `Var(TypeVar) <: ConcreteType`,
+                        // we find a constraint that satisfies this relationship.
+                        //
+                        // Example: For `AnyStr = TypeVar("AnyStr", str, bytes)` checking
+                        // `AnyStr <: Buffer`, we find `bytes <: Buffer` succeeds, so we
+                        // infer `AnyStr = bytes` rather than the invalid `AnyStr = Buffer`.
+                        //
+                        // See: https://github.com/facebook/pyrefly/issues/2221
+                        match &restriction {
+                            Restriction::Constraints(constraints) => {
+                                // Find a constraint C such that C <: t2
+                                let valid_constraint = constraints
+                                    .iter()
+                                    .find(|c| self.is_subset_eq(c, t2).is_ok());
+
+                                if let Some(constraint) = valid_constraint {
+                                    variables.update(*v1, Variable::Answer(constraint.clone()));
+                                    drop(variables);
+                                } else {
+                                    // No constraint satisfies the relationship - record error
+                                    let bound = restriction.as_type(self.type_order.stdlib());
+                                    variables.update(*v1, Variable::Answer(t2.clone()));
+                                    drop(variables);
+                                    self.solver.instantiation_errors.write().insert(
+                                        *v1,
+                                        TypeVarSpecializationError {
+                                            name,
+                                            got: t2.clone(),
+                                            want: bound,
+                                            error: SubsetError::Other,
+                                        },
+                                    );
+                                }
+                            }
+                            Restriction::Bound(_) | Restriction::Unrestricted => {
+                                // For bounded or unrestricted TypeVars, check t2 against bound
+                                let bound = restriction.as_type(self.type_order.stdlib());
+                                variables.update(*v1, Variable::Answer(t2.clone()));
+                                drop(variables);
+                                if let Err(e) = self.is_subset_eq(t2, &bound) {
+                                    self.solver.instantiation_errors.write().insert(
+                                        *v1,
+                                        TypeVarSpecializationError {
+                                            name,
+                                            got: t2.clone(),
+                                            want: bound,
+                                            error: e,
+                                        },
+                                    );
+                                }
+                            }
                         }
                         Ok(())
                     }
