@@ -1798,9 +1798,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypeAlias(ta) => self.as_attribute_base1(ta.as_value(self.stdlib), acc),
             Type::Type(box Type::Tuple(tuple)) => self
                 .as_attribute_base1(Type::type_form(self.erase_tuple_type(tuple).to_type()), acc),
-            Type::Type(box Type::ClassType(class)) => acc.push(AttributeBase1::ClassObject(
-                ClassBase::ClassType(class.clone()),
-            )),
+            Type::Type(box Type::ClassType(class)) => {
+                let class_base = AttributeBase1::ClassObject(ClassBase::ClassType(class.clone()));
+                if !class.targs().is_empty() {
+                    // If the class type has type arguments, at runtime it's also a GenericAlias
+                    let generic_alias_base =
+                        AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
+                    // Since GenericAlias also exposes all class attributes, we need to intersect the two bases
+                    acc.push(AttributeBase1::Intersect(
+                        vec![generic_alias_base, class_base.clone()],
+                        vec![class_base],
+                    ));
+                } else {
+                    acc.push(class_base)
+                }
+            }
             Type::QuantifiedValue(q) => acc.push(AttributeBase1::QuantifiedValue(*q)),
             Type::Type(box Type::Quantified(quantified)) => match quantified.restriction() {
                 Restriction::Bound(ty) => {
