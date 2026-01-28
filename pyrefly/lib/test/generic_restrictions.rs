@@ -1040,3 +1040,152 @@ def f[T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]: ...
 reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]
 "#,
 );
+
+// Slack variable support - allow TypeVar with default to be inferred from assignment context.
+// This test matches the exact example from https://github.com/facebook/pyrefly/issues/2220
+testcase!(
+    test_slack_variable_issue_2220,
+    r#"
+from typing import Never, assert_type
+
+class Vec[T]:
+    def _items(self) -> list[T]: ...
+    def _append(self, item: T) -> None: ...
+
+def concat_vecs[T1, T2, _T_slack = Never](
+    left: Vec[T1],
+    right: Vec[T2],
+) -> Vec[T1 | T2 | _T_slack]:
+    return Vec()
+
+class A: ...
+class B: ...
+class C: ...
+
+def test_vec_concat(left: Vec[A], right: Vec[B]) -> None:
+    # without outer context, the type is precise
+    assert_type(concat_vecs(left, right), Vec[A | B])
+    # outer context allows widening due to slack variables
+    _0: Vec[A | B] = concat_vecs(left, right)
+    _1: Vec[A | B | C] = concat_vecs(left, right)
+    _2: Vec[object] = concat_vecs(left, right)
+    "#,
+);
+
+// Additional slack variable tests
+testcase!(
+    test_slack_variable_default_never,
+    r#"
+from typing import Never
+
+class Vec[T]: ...
+
+class A: ...
+class B: ...
+
+def concat_vecs[T1, T2, _T_slack = Never](
+    left: Vec[T1],
+    right: Vec[T2],
+) -> Vec[T1 | T2 | _T_slack]:
+    return Vec()
+
+left: Vec[A] = Vec()
+right: Vec[B] = Vec()
+
+# When assigning to Vec[A | B], _T_slack should be inferred as Never (its default)
+_0: Vec[A | B] = concat_vecs(left, right)
+    "#,
+);
+
+testcase!(
+    test_slack_variable_infer_from_target,
+    r#"
+from typing import Never
+
+class Vec[T]: ...
+
+class A: ...
+class B: ...
+class C: ...
+
+def concat_vecs[T1, T2, _T_slack = Never](
+    left: Vec[T1],
+    right: Vec[T2],
+) -> Vec[T1 | T2 | _T_slack]:
+    return Vec()
+
+left: Vec[A] = Vec()
+right: Vec[B] = Vec()
+
+# When assigning to Vec[A | B | C], _T_slack is inferred to satisfy the constraint
+_1: Vec[A | B | C] = concat_vecs(left, right)
+
+# When assigning to Vec[object], _T_slack is inferred as object
+_2: Vec[object] = concat_vecs(left, right)
+    "#,
+);
+
+// Test that slack variable detection works correctly with non-Never defaults
+testcase!(
+    test_slack_variable_non_never_default,
+    r#"
+from typing import assert_type
+
+class Vec[T]: ...
+
+class A: ...
+class B: ...
+
+# Slack variable with a non-Never default (int)
+def transform[T, _T_extra = int](x: Vec[T]) -> Vec[T | _T_extra]:
+    return Vec()
+
+v: Vec[A] = Vec()
+
+# When assigning to Vec[A | int], _T_extra should use its default (int)
+result: Vec[A | int] = transform(v)
+    "#,
+);
+
+// Test that functions without slack variables still use contextual typing
+testcase!(
+    test_no_slack_variable_contextual_typing,
+    r#"
+class Vec[T]: ...
+
+class A: ...
+class B(A): ...
+
+# No slack variable - all type vars appear in params
+def identity[T](x: Vec[T]) -> Vec[T]:
+    return x
+
+v: Vec[B] = Vec()
+
+# Contextual typing should still work - hint guides T to A
+result: Vec[A] = identity(Vec())
+    "#,
+);
+
+// Test with covariant return type (list is covariant in its element type for reading)
+testcase!(
+    test_slack_variable_with_list,
+    r#"
+from typing import Never
+
+class A: ...
+class B: ...
+
+def concat_lists[T1, T2, _T_slack = Never](
+    left: list[T1],
+    right: list[T2],
+) -> list[T1 | T2 | _T_slack]:
+    return []
+
+left: list[A] = []
+right: list[B] = []
+
+# Should work because list is covariant for reading purposes
+result: list[A | B] = concat_lists(left, right)
+    "#,
+);
