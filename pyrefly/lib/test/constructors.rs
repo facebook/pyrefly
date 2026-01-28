@@ -686,3 +686,35 @@ takes_Cstr(C)
 takes_Cstr_wrong(C) # E: Argument `type[C]` is not assignable to parameter `x` with type `(str) -> C[int]` in function `takes_Cstr_wrong`
     "#,
 );
+
+testcase!(
+    test_constructor_typevar_scope,
+    r#"
+from typing import Generic, TypeVar
+T = TypeVar("T")
+class Ok1(Generic[T]):
+    def __init__(self: "Ok1[int]") -> None:
+        pass
+class Ok2[T]:
+    def __init__(self: "Ok2[int]") -> None:
+        pass
+class Ok3(Generic[T]):
+    def __init__(self) -> None:
+        pass
+class Ok4[T]:
+    def __init__(self) -> None:
+        pass
+class Ok5(Generic[T]):
+    def __init__[V](self: "Ok5[V]", arg: V) -> None:
+        pass
+class Ok6[T]:
+    def __init__[V](self: "Ok6[V]", arg: V) -> None:
+        pass
+class Bad1(Generic[T]):
+    def __init__(self: "Bad1[T]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+class Bad2[T]:
+    def __init__(self: "Bad2[T]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+"#,
+);
