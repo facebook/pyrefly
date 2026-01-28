@@ -28,8 +28,8 @@ use super::extract_shared::first_parameter_name;
 use super::extract_shared::is_static_or_class_method;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::validate_non_empty_selection;
-use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 
 const HELPER_INDENT: &str = "    ";
