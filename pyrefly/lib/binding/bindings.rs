@@ -468,7 +468,7 @@ impl Bindings {
         }
     }
 
-    fn is_pytest_test_class(&self, class_key: &Idx<KeyClass>) -> bool {
+    fn is_pytest_test_class(&self, class_key: Idx<KeyClass>) -> bool {
         match self.get(*class_key) {
             BindingClass::ClassDef(class_binding) => {
                 class_binding.def.name.id.as_str().starts_with("Test")
