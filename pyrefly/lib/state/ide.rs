@@ -285,7 +285,10 @@ pub fn insert_import_edit_with_forced_import_format(
 /// For now, we use the following criteria:
 /// 1. Bundled typeshed
 /// 2. In search path or site packages
-fn handle_require_absolute_import(config_finder: &ConfigFinder, handle: &Handle) -> bool {
+pub(crate) fn handle_require_absolute_import(
+    config_finder: &ConfigFinder,
+    handle: &Handle,
+) -> bool {
     if matches!(
         handle.path().details(),
         ModulePathDetails::BundledTypeshed(_)

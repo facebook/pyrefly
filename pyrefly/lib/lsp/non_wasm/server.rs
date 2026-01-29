@@ -803,6 +803,7 @@ pub fn capabilities(
             code_action_kinds: Some(vec![
                 CodeActionKind::QUICKFIX,
                 CodeActionKind::REFACTOR_EXTRACT,
+                CodeActionKind::REFACTOR_REWRITE,
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
             ]),
@@ -3204,6 +3205,9 @@ impl Server {
         if let Some(refactors) =
             transaction.make_local_function_top_level_code_actions(&handle, range, import_format)
         {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.convert_import_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
