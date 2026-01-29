@@ -220,7 +220,7 @@ pub(crate) fn pytest_fixture_definitions_for_parameter(
         AnyNodeRef::StmtClassDef(stmt) => Some(stmt),
         _ => None,
     });
-    let class_is_test = class_def.map(|def| is_pytest_test_class(*def));
+    let class_is_test = class_def.map(|def| is_pytest_test_class(def));
     let class_key = class_def.and_then(|def| class_key_for_definition(bindings, def));
 
     if !is_pytest_fixture_function(function_def, class_key, pytest_info)
