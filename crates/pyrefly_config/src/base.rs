@@ -25,6 +25,30 @@ pub enum UntypedDefBehavior {
     SkipAndInferReturnAny,
 }
 
+/// How to handle when get_idx depth limit is exceeded.
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
+#[derive(ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum GetIdxOverflowHandler {
+    /// Return a placeholder type and emit an internal error. Safe for IDE use.
+    #[default]
+    BreakWithPlaceholder,
+    /// Dump debug info to stderr and panic. For debugging stack overflow issues.
+    PanicWithDebugInfo,
+}
+
+/// Configuration for get_idx depth limiting to prevent stack overflow.
+/// When set, limits the number of concurrent get_idx calls on the stack.
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub struct GetIdxDepthLimitConfig {
+    /// Maximum number of concurrent get_idx calls before triggering overflow protection.
+    pub limit: u32,
+    /// How to handle when the depth limit is exceeded.
+    #[serde(default)]
+    pub handler: GetIdxOverflowHandler,
+}
+
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ConfigBase {
@@ -86,6 +110,12 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_with_first_use: Option<bool>,
 
+    /// Configuration for get_idx depth limiting to prevent stack overflow.
+    /// When set, limits the number of concurrent get_idx calls on the stack.
+    /// Example: `get-idx-depth-limit = { limit = 500, handler = "break-with-placeholder" }`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub get_idx_depth_limit: Option<GetIdxDepthLimitConfig>,
+
     /// Any unknown config items
     #[serde(default, flatten)]
     pub(crate) extras: ExtraConfigs,
@@ -142,5 +172,9 @@ impl ConfigBase {
 
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
         base.enabled_ignores.as_ref()
+    }
+
+    pub fn get_get_idx_depth_limit(base: &Self) -> Option<GetIdxDepthLimitConfig> {
+        base.get_idx_depth_limit
     }
 }

@@ -41,6 +41,7 @@ use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
+use crate::config::base::GetIdxDepthLimitConfig;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
@@ -530,6 +531,7 @@ impl Answers {
         stdlib: &Stdlib,
         uniques: &UniqueFactory,
         compute_everything: bool,
+        get_idx_depth_limit: Option<GetIdxDepthLimitConfig>,
     ) -> Solutions {
         let mut res = SolutionsTable::default();
 
@@ -560,7 +562,7 @@ impl Answers {
             }
         }
         let recurser = &VarRecurser::new();
-        let thread_state = &ThreadState::new();
+        let thread_state = &ThreadState::new(get_idx_depth_limit);
         let answers_solver = AnswersSolver::new(
             answers,
             self,
