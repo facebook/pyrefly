@@ -45,6 +45,10 @@ pub(crate) enum ConfigOrigin<T> {
     #[serde(skip)]
     Auto(T),
 
+    /// This value was auto-discovered as a fallback when configured path was invalid.
+    #[serde(skip)]
+    Fallback(T),
+
     /// This value was explicitly provided by the IDE using "workspace.configuration" using LSP protocol.
     #[serde(skip)]
     Lsp(T),
@@ -88,6 +92,7 @@ impl<T> Deref for ConfigOrigin<T> {
             Self::CommandLine(value)
             | Self::ConfigFile(value)
             | Self::Auto(value)
+            | Self::Fallback(value)
             | Self::Lsp(value) => value,
         }
     }
@@ -99,6 +104,7 @@ impl<T> DerefMut for ConfigOrigin<T> {
             Self::CommandLine(value)
             | Self::ConfigFile(value)
             | Self::Auto(value)
+            | Self::Fallback(value)
             | Self::Lsp(value) => value,
         }
     }
@@ -126,6 +132,11 @@ impl<T> ConfigOrigin<T> {
         Self::Auto(value)
     }
 
+    /// Construct a new [`ConfigOrigin::Fallback`] with the given value.
+    pub(crate) fn fallback(value: T) -> Self {
+        Self::Fallback(value)
+    }
+
     /// Construct a new [`ConfigOrigin::Lsp`] with the given value.
     pub(crate) fn lsp(value: T) -> Self {
         Self::Lsp(value)
@@ -142,6 +153,7 @@ impl<T> ConfigOrigin<T> {
             ConfigOrigin::ConfigFile(value) => ConfigOrigin::ConfigFile(f(value)),
             ConfigOrigin::CommandLine(value) => ConfigOrigin::CommandLine(f(value)),
             ConfigOrigin::Auto(value) => ConfigOrigin::Auto(f(value)),
+            ConfigOrigin::Fallback(value) => ConfigOrigin::Fallback(f(value)),
             ConfigOrigin::Lsp(value) => ConfigOrigin::Lsp(f(value)),
         }
     }
@@ -151,6 +163,7 @@ impl<T> ConfigOrigin<T> {
             ConfigOrigin::ConfigFile(ref value) => ConfigOrigin::ConfigFile(value),
             ConfigOrigin::CommandLine(ref value) => ConfigOrigin::CommandLine(value),
             ConfigOrigin::Auto(ref value) => ConfigOrigin::Auto(value),
+            ConfigOrigin::Fallback(ref value) => ConfigOrigin::Fallback(value),
             ConfigOrigin::Lsp(ref value) => ConfigOrigin::Lsp(value),
         }
     }
@@ -171,10 +184,12 @@ impl<T, E> ConfigOrigin<Result<T, E>> {
             ConfigOrigin::ConfigFile(Ok(value)) => Ok(ConfigOrigin::ConfigFile(value)),
             ConfigOrigin::CommandLine(Ok(value)) => Ok(ConfigOrigin::CommandLine(value)),
             ConfigOrigin::Auto(Ok(value)) => Ok(ConfigOrigin::Auto(value)),
+            ConfigOrigin::Fallback(Ok(value)) => Ok(ConfigOrigin::Fallback(value)),
             ConfigOrigin::Lsp(Ok(value)) => Ok(ConfigOrigin::Lsp(value)),
             ConfigOrigin::ConfigFile(Err(err))
             | ConfigOrigin::CommandLine(Err(err))
             | ConfigOrigin::Auto(Err(err))
+            | ConfigOrigin::Fallback(Err(err))
             | ConfigOrigin::Lsp(Err(err)) => Err(err),
         }
     }
