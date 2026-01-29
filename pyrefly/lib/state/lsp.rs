@@ -18,6 +18,7 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemTag;
+use lsp_types::InsertTextFormat;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -2744,6 +2745,25 @@ impl<'a> Transaction<'a> {
         import_format: ImportFormat,
         supports_completion_item_details: bool,
     ) -> (Vec<CompletionItem>, bool) {
+        self.completion_with_incomplete_with_function_parens(
+            handle,
+            position,
+            import_format,
+            supports_completion_item_details,
+            false,
+            false,
+        )
+    }
+
+    pub fn completion_with_incomplete_with_function_parens(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        import_format: ImportFormat,
+        supports_completion_item_details: bool,
+        complete_function_parens: bool,
+        supports_snippets: bool,
+    ) -> (Vec<CompletionItem>, bool) {
         // Check if position is in a disabled range (comments)
         if let Some(module) = self.get_module_info(handle) {
             let disabled_ranges = Self::comment_ranges_for_module(&module);
@@ -2757,6 +2777,8 @@ impl<'a> Transaction<'a> {
             position,
             import_format,
             supports_completion_item_details,
+            complete_function_parens,
+            supports_snippets,
         );
         results.sort_by(|item1, item2| {
             item1
@@ -2792,9 +2814,12 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         import_format: ImportFormat,
         supports_completion_item_details: bool,
+        complete_function_parens: bool,
+        supports_snippets: bool,
     ) -> (Vec<CompletionItem>, bool) {
         let mut result = Vec::new();
         let mut is_incomplete = false;
+        let mut allow_function_call_parens = false;
         match self.identifier_at(handle, position) {
             Some(IdentifierWithContext {
                 identifier,
@@ -2853,6 +2878,7 @@ impl<'a> Transaction<'a> {
                 identifier: _,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
+                allow_function_call_parens = true;
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
                 {
@@ -2899,6 +2925,12 @@ impl<'a> Transaction<'a> {
                 identifier,
                 context,
             }) => {
+                if matches!(
+                    context,
+                    IdentifierContext::Expr(ExprContext::Load | ExprContext::Invalid)
+                ) {
+                    allow_function_call_parens = true;
+                }
                 if matches!(context, IdentifierContext::MethodDef { .. }) {
                     Self::add_magic_method_completions(&identifier, &mut result);
                 }
@@ -2963,6 +2995,9 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
+        if complete_function_parens && allow_function_call_parens {
+            Self::add_function_call_parens(&mut result, supports_snippets);
+        }
         for item in &mut result {
             let sort_text = if item
                 .tags
@@ -2986,6 +3021,27 @@ impl<'a> Transaction<'a> {
             item.sort_text = Some(sort_text);
         }
         (result, is_incomplete)
+    }
+
+    fn add_function_call_parens(completions: &mut [CompletionItem], supports_snippets: bool) {
+        for item in completions {
+            if item.insert_text.is_some() || item.text_edit.is_some() {
+                continue;
+            }
+            if !matches!(
+                item.kind,
+                Some(CompletionItemKind::FUNCTION | CompletionItemKind::METHOD)
+            ) {
+                continue;
+            }
+
+            if supports_snippets {
+                item.insert_text = Some(format!("{}($0)", item.label));
+                item.insert_text_format = Some(InsertTextFormat::SNIPPET);
+            } else {
+                item.insert_text = Some(format!("{}()", item.label));
+            }
+        }
     }
 
     fn export_from_location(
