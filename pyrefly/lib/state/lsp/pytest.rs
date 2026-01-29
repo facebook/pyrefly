@@ -14,7 +14,6 @@ use ruff_text_size::TextRange;
 
 use super::DefinitionMetadata;
 use super::FindDefinitionItemWithDocstring;
-use crate::state::pytest::PytestModuleInfo;
 use crate::state::pytest::pytest_fixture_definitions_for_parameter as pytest_fixture_definitions_for_parameter_in_module;
 use crate::state::pytest::pytest_fixture_parameter_references as pytest_fixture_parameter_references_in_module;
 use crate::state::state::Transaction;
@@ -27,11 +26,10 @@ impl<'a> Transaction<'a> {
         covering_nodes: &[AnyNodeRef],
     ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
         let mod_module = self.get_ast(handle)?;
-        let module_info = self.get_pytest_module_info_cached(handle, || {
-            PytestModuleInfo::from_module(mod_module.as_ref())
-        })?;
+        let bindings = self.get_bindings(handle)?;
         let matches = pytest_fixture_definitions_for_parameter_in_module(
-            module_info.as_ref(),
+            mod_module.as_ref(),
+            &bindings,
             identifier,
             covering_nodes,
         )?;
@@ -57,12 +55,10 @@ impl<'a> Transaction<'a> {
         expected_name: &Name,
     ) -> Option<Vec<TextRange>> {
         let mod_module = self.get_ast(handle)?;
-        let module_info = self.get_pytest_module_info_cached(handle, || {
-            PytestModuleInfo::from_module(mod_module.as_ref())
-        })?;
+        let bindings = self.get_bindings(handle)?;
         pytest_fixture_parameter_references_in_module(
             mod_module.as_ref(),
-            module_info.as_ref(),
+            &bindings,
             definition_range,
             expected_name,
         )
