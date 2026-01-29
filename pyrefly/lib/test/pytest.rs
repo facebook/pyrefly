@@ -55,3 +55,19 @@ def test_data(sample_data):
     reveal_type(sample_data)  # E: revealed type: Literal[42]
 "#,
 );
+
+testcase!(
+    test_pytest_fixture_async_parameter_type,
+    env_pytest_fixture(),
+    r#"
+import pytest
+from typing import reveal_type
+
+@pytest.fixture
+async def sample_data() -> int:
+    return 42
+
+async def test_data(sample_data):
+    reveal_type(sample_data)  # E: revealed type: int
+"#,
+);

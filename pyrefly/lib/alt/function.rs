@@ -824,6 +824,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         yield_ty
                     } else if let Some((yield_ty, _)) = self.decompose_async_generator(&return_ty) {
                         yield_ty
+                    } else if let Some((_, _, coroutine_return_ty)) =
+                        self.unwrap_coroutine(&return_ty)
+                    {
+                        coroutine_return_ty
                     } else {
                         return_ty
                     }
