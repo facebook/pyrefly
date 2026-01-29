@@ -815,6 +815,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut paramspec_args = None;
         let mut paramspec_kwargs = None;
         let mut params = Vec::with_capacity(def.parameters.len());
+        let fixture_hint = |name: &Identifier| {
+            self.bindings()
+                .pytest_fixture_param_hint(def, class_key, name)
+                .map(|key| {
+                    let return_ty = self.get(&Key::ReturnType(key)).arc_clone_ty();
+                    if let Some((yield_ty, _, _)) = self.unwrap_generator(&return_ty) {
+                        yield_ty
+                    } else if let Some((yield_ty, _)) = self.decompose_async_generator(&return_ty) {
+                        yield_ty
+                    } else {
+                        return_ty
+                    }
+                })
+        };
         params.extend(def.parameters.posonlyargs.iter().map(|x| {
             let decorator_hint = decorator_param_hints
                 .as_mut()
@@ -826,10 +840,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .as_mut()
                     .and_then(|hint| hint.take_posonly())
             };
-            let fixture_hint = self
-                .bindings()
-                .pytest_fixture_param_hint(def, class_key, &x.parameter.name)
-                .map(|key| self.get(&Key::ReturnType(key)).arc_clone_ty());
+            let fixture_hint = fixture_hint(&x.parameter.name);
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
@@ -857,10 +868,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .as_mut()
                     .and_then(|hint| hint.take_positional())
             };
-            let fixture_hint = self
-                .bindings()
-                .pytest_fixture_param_hint(def, class_key, &x.parameter.name)
-                .map(|key| self.get(&Key::ReturnType(key)).arc_clone_ty());
+            let fixture_hint = fixture_hint(&x.parameter.name);
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
@@ -926,10 +934,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let parent_hint = parent_param_hints
                 .as_mut()
                 .and_then(|hint| hint.take_kwonly(&x.parameter.name));
-            let fixture_hint = self
-                .bindings()
-                .pytest_fixture_param_hint(def, class_key, &x.parameter.name)
-                .map(|key| self.get(&Key::ReturnType(key)).arc_clone_ty());
+            let fixture_hint = fixture_hint(&x.parameter.name);
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),

@@ -39,3 +39,19 @@ def test_foo(my_fixture):
     reveal_type(my_fixture)  # E: revealed type: int
 "#,
 );
+
+testcase!(
+    test_pytest_fixture_yield_parameter_type,
+    env_pytest_fixture(),
+    r#"
+import pytest
+from typing import reveal_type
+
+@pytest.fixture
+def sample_data():
+    yield 42
+
+def test_data(sample_data):
+    reveal_type(sample_data)  # E: revealed type: Literal[42]
+"#,
+);
