@@ -250,6 +250,7 @@ use crate::lsp::non_wasm::will_rename_files::will_rename_files;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
+use crate::lsp::wasm::completion::supports_snippet_completions;
 use crate::lsp::wasm::hover::get_hover;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
@@ -2003,17 +2004,6 @@ impl Server {
             .unwrap_or(false)
     }
 
-    fn supports_snippet_completions(&self) -> bool {
-        self.initialize_params
-            .capabilities
-            .text_document
-            .as_ref()
-            .and_then(|t| t.completion.as_ref())
-            .and_then(|c| c.completion_item.as_ref())
-            .and_then(|ci| ci.snippet_support)
-            .unwrap_or(false)
-    }
-
     /// Helper to append all additional diagnostics (unreachable, unused parameters/imports/variables)
     fn append_ide_specific_diagnostics(
         transaction: &Transaction<'_>,
@@ -3102,7 +3092,7 @@ impl Server {
                     import_format,
                     self.supports_completion_item_details(),
                     complete_function_parens,
-                    self.supports_snippet_completions(),
+                    supports_snippet_completions(&self.initialize_params.capabilities),
                 )
             })
             .unwrap_or_default();

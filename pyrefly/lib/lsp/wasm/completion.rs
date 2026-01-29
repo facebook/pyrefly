@@ -10,6 +10,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemTag;
+use lsp_types::InsertTextFormat;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
@@ -29,6 +30,17 @@ use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::types::Type;
+
+/// Returns true if the client supports snippet completions in completion items.
+pub(crate) fn supports_snippet_completions(capabilities: &lsp_types::ClientCapabilities) -> bool {
+    capabilities
+        .text_document
+        .as_ref()
+        .and_then(|t| t.completion.as_ref())
+        .and_then(|c| c.completion_item.as_ref())
+        .and_then(|ci| ci.snippet_support)
+        .unwrap_or(false)
+}
 
 impl Transaction<'_> {
     /// Adds completion items for literal types (e.g., `Literal["foo", "bar"]`).
@@ -98,6 +110,31 @@ impl Transaction<'_> {
                     ..Default::default()
                 })
             });
+    }
+
+    /// Adds function/method completion inserts with parentheses, using snippets when supported.
+    pub(crate) fn add_function_call_parens(
+        completions: &mut [CompletionItem],
+        supports_snippets: bool,
+    ) {
+        for item in completions {
+            if item.insert_text.is_some() || item.text_edit.is_some() {
+                continue;
+            }
+            if !matches!(
+                item.kind,
+                Some(CompletionItemKind::FUNCTION | CompletionItemKind::METHOD)
+            ) {
+                continue;
+            }
+
+            if supports_snippets {
+                item.insert_text = Some(format!("{}($0)", item.label));
+                item.insert_text_format = Some(InsertTextFormat::SNIPPET);
+            } else {
+                item.insert_text = Some(format!("{}()", item.label));
+            }
+        }
     }
 
     /// Retrieves documentation for an export to display in completion items.

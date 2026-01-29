@@ -18,7 +18,6 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemTag;
-use lsp_types::InsertTextFormat;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -3021,27 +3020,6 @@ impl<'a> Transaction<'a> {
             item.sort_text = Some(sort_text);
         }
         (result, is_incomplete)
-    }
-
-    fn add_function_call_parens(completions: &mut [CompletionItem], supports_snippets: bool) {
-        for item in completions {
-            if item.insert_text.is_some() || item.text_edit.is_some() {
-                continue;
-            }
-            if !matches!(
-                item.kind,
-                Some(CompletionItemKind::FUNCTION | CompletionItemKind::METHOD)
-            ) {
-                continue;
-            }
-
-            if supports_snippets {
-                item.insert_text = Some(format!("{}($0)", item.label));
-                item.insert_text_format = Some(InsertTextFormat::SNIPPET);
-            } else {
-                item.insert_text = Some(format!("{}()", item.label));
-            }
-        }
     }
 
     fn export_from_location(
