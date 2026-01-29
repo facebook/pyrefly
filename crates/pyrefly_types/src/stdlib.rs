@@ -120,6 +120,7 @@ pub struct Stdlib {
     union_type: Option<StdlibResult<ClassType>>,
     /// QNames for special forms (Literal, Any, Never, etc.) to enable go-to-definition for inlay hints.
     special_form_qnames: SmallMap<&'static str, QName>,
+    generic_alias: StdlibResult<ClassType>,
 }
 
 impl Stdlib {
@@ -259,6 +260,7 @@ impl Stdlib {
                 .at_least(3, 10)
                 .then(|| lookup_concrete(types, "UnionType")),
             special_form_qnames,
+            generic_alias: lookup_concrete(types, "GenericAlias"),
         }
     }
 
@@ -577,5 +579,9 @@ impl Stdlib {
 
     pub fn special_form_qname(&self, name: &str) -> Option<&QName> {
         self.special_form_qnames.get(name)
+    }
+
+    pub fn generic_alias(&self) -> &ClassType {
+        Self::primitive(&self.generic_alias)
     }
 }
