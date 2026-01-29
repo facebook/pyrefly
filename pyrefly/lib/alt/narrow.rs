@@ -212,6 +212,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
+    fn is_ellipsis_class_type(&self, ty: &Type) -> bool {
+        let Type::ClassType(class) = ty else {
+            return false;
+        };
+        self.stdlib
+            .ellipsis_type()
+            .is_some_and(|ellipsis| ellipsis == class)
+    }
+
     fn original_binding_for_idx(&self, mut idx: Idx<Key>) -> Option<(Idx<Key>, &Binding)> {
         let mut gas = 100;
         loop {
@@ -533,6 +542,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     match right {
                         Type::None
+                        | Type::Ellipsis
                         | Type::Literal(box Literal {
                             value: Lit::Bool(_) | Lit::Enum(_) | Lit::Sentinel(_),
                             ..
@@ -561,16 +571,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     match (&facet_ty, &right) {
                         (
                             Type::None
+                            | Type::Ellipsis
                             | Type::Literal(box Literal {
                                 value: Lit::Bool(_) | Lit::Enum(_) | Lit::Sentinel(_),
                                 ..
                             }),
                             Type::None
+                            | Type::Ellipsis
                             | Type::Literal(box Literal {
                                 value: Lit::Bool(_) | Lit::Enum(_) | Lit::Sentinel(_),
                                 ..
                             }),
-                        ) if self.literal_equal(&right, &facet_ty) => Type::never(),
+                        ) if self.literal_equal(&right, &facet_ty)
+                            || matches!((&right, &facet_ty), (Type::Ellipsis, Type::Ellipsis))
+                            || (matches!(right, Type::Ellipsis)
+                                && self.is_ellipsis_class_type(&facet_ty)) =>
+                        {
+                            Type::never()
+                        }
                         _ => t.clone(),
                     }
                 }))
@@ -585,7 +603,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                     );
                     match right {
-                        Type::None | Type::Literal(_) => {
+                        Type::None | Type::Ellipsis | Type::Literal(_) => {
                             if self.is_subset_eq(&right, &facet_ty) {
                                 t.clone()
                             } else {
@@ -609,6 +627,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         (Type::None | Type::Literal(_), Type::None | Type::Literal(_))
                             if self.literal_equal(&right, &facet_ty) =>
                         {
+                            Type::never()
+                        }
+                        (Type::Ellipsis, Type::Ellipsis) => Type::never(),
+                        (facet_ty, Type::Ellipsis) if self.is_ellipsis_class_type(facet_ty) => {
                             Type::never()
                         }
                         _ => t.clone(),
@@ -956,11 +978,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         (
                             _,
                             Type::None
+                            | Type::Ellipsis
                             | Type::Literal(box Literal {
                                 value: Lit::Bool(_) | Lit::Enum(_) | Lit::Sentinel(_),
                                 ..
                             }),
-                        ) if self.literal_equal(t, &right) => Type::never(),
+                        ) if self.literal_equal(t, &right)
+                            || matches!((t, &right), (Type::Ellipsis, Type::Ellipsis))
+                            || (matches!(right, Type::Ellipsis)
+                                && self.is_ellipsis_class_type(t)) =>
+                        {
+                            Type::never()
+                        }
                         (Type::ClassType(cls), Type::Literal(lit))
                             if cls.is_builtin("bool")
                                 && let Lit::Bool(b) = &lit.value =>
@@ -1116,7 +1145,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::Eq(v) => {
                 let right = self.expr_infer(v, errors);
-                if matches!(right, Type::Literal(_) | Type::None) {
+                if matches!(right, Type::Literal(_) | Type::None | Type::Ellipsis) {
                     self.intersect(ty, &right)
                 } else {
                     ty.clone()
@@ -1124,9 +1153,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::NotEq(v) => {
                 let right = self.expr_infer(v, errors);
-                if matches!(right, Type::Literal(_) | Type::None) {
+                if matches!(right, Type::Literal(_) | Type::None | Type::Ellipsis) {
                     self.distribute_over_union(ty, |t| match (t, &right) {
                         (_, _) if self.literal_equal(t, &right) => Type::never(),
+                        (Type::Ellipsis, Type::Ellipsis) => Type::never(),
+                        (t, Type::Ellipsis) if self.is_ellipsis_class_type(t) => Type::never(),
                         (Type::ClassType(cls), Type::Literal(lit))
                             if cls.is_builtin("bool")
                                 && let Lit::Bool(b) = &lit.value =>

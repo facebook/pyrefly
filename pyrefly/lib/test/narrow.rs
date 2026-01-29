@@ -181,6 +181,28 @@ def f(x: Sentinel | int):
 );
 
 testcase!(
+    test_ellipsis_is,
+    r#"
+from types import EllipsisType
+def f(x: object):
+    if x is ...:
+        y: EllipsisType = x
+    "#,
+);
+
+testcase!(
+    test_ellipsis_eq,
+    r#"
+from types import EllipsisType
+def f(x: int | EllipsisType):
+    if x == ...:
+        y_ellipsis: EllipsisType = x
+    if x != ...:
+        y_int: int = x
+    "#,
+);
+
+testcase!(
     test_tri_enum,
     r#"
 from typing import assert_type, Literal
