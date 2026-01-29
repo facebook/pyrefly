@@ -3142,6 +3142,13 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Suggest Literal values when completing inside a `match` value pattern.
+    ///
+    /// We can't reuse the call-argument literal completion path here because
+    /// `case <value>:` isn't a call site, so we never get parameter types to
+    /// infer literals from. Instead, we look for a match value/singleton
+    /// pattern at the cursor and pull the `match` subject's type to surface
+    /// its Literal members.
     fn add_match_literal_completions(
         &self,
         handle: &Handle,
@@ -3149,13 +3156,6 @@ impl<'a> Transaction<'a> {
         completions: &mut Vec<CompletionItem>,
         in_string_literal: bool,
     ) {
-        /// Suggest Literal values when completing inside a `match` value pattern.
-        ///
-        /// We can't reuse the call-argument literal completion path here because
-        /// `case <value>:` isn't a call site, so we never get parameter types to
-        /// infer literals from. Instead, we look for a match value/singleton
-        /// pattern at the cursor and pull the `match` subject's type to surface
-        /// its Literal members.
         let mut is_match_value_pattern = false;
         let mut subject = None;
         for node in covering_nodes {
