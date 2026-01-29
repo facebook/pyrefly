@@ -84,8 +84,12 @@ impl LitInt {
         }
     }
 
-    pub fn to_type(self) -> Type {
-        Type::Literal(Lit::Int(self))
+    pub fn to_implicit_type(self) -> Type {
+        Lit::Int(self).to_implicit_type()
+    }
+
+    pub fn to_explicit_type(self) -> Type {
+        Lit::Int(self).to_explicit_type()
     }
 
     fn new_big(x: BigInt) -> Self {

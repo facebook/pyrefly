@@ -85,7 +85,13 @@ fn compute_errors(sys_info: SysInfo, sourcedb: impl SourceDatabase + 'static) ->
     let config = ArcId::new(config);
 
     let state = State::new(ConfigFinder::new_constant(config));
-    state.run(&modules_to_check, Require::Errors, Require::Exports, None);
+    state.run(
+        &modules_to_check,
+        Require::Errors,
+        Require::Exports,
+        None,
+        None,
+    );
     let transaction = state.transaction();
     transaction
         .get_errors(&modules_to_check)

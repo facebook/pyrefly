@@ -69,6 +69,14 @@ class C[T](Generic[T]):  # E: Redundant
 );
 
 testcase!(
+    test_class_type_params_can_reference_class,
+    r#"
+class C[T: C](set[object]):
+    pass
+    "#,
+);
+
+testcase!(
     test_type_argument_error_default,
     r#"
 from typing import Any, assert_type
@@ -257,7 +265,7 @@ class A[*Ps, *Qs = *Ps]: # E: may not have more than one TypeVarTuple
 testcase!(
     test_specialize_error,
     r#"
-from nowhere import BrokenGeneric, BrokenTypeVar # E: Could not find import of `nowhere`
+from nowhere import BrokenGeneric, BrokenTypeVar # E: Cannot find module `nowhere`
 
 class MyClass(BrokenGeneric[BrokenTypeVar]):
     pass
@@ -284,6 +292,25 @@ _b = TypeVar("_b", bool, int)
 class F(Generic[_b]):
     def f(self, b: _b = True) -> _b: ...
     "#,
+);
+
+testcase!(
+    bug = "conformance: Constrained TypeVar with subtype should resolve to constraint, not subtype",
+    test_constrained_typevar_subtype_resolves_to_constraint,
+    r#"
+from typing import TypeVar, assert_type
+
+AnyStr = TypeVar("AnyStr", str, bytes)
+
+def concat(x: AnyStr, y: AnyStr) -> AnyStr:
+    return x + y  # E: `+` is not supported  # E: `+` is not supported
+
+class MyStr(str): ...
+
+def test(m: MyStr, s: str):
+    assert_type(concat(m, m), str)  # E: assert_type(MyStr, str) failed
+    assert_type(concat(m, s), str)  # E: assert_type(MyStr, str) failed  # E: Argument `str` is not assignable to parameter `y` with type `MyStr`
+"#,
 );
 
 testcase!(
@@ -524,4 +551,42 @@ def _to_list[T](
 
 def to_type[T](value: Any, kind: TypeForm[T]) -> T: ...
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1970
+testcase!(
+    test_implicit_any_for_special_forms,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import Callable, Type
+
+def f(
+    x: list,      # E: Cannot determine the type parameter `_T` for generic class `list`
+    y: tuple,     # E: Cannot determine the type parameter for generic class `tuple`
+    z: Callable,  # E: Cannot determine the type parameter for generic class `Callable`
+    w: Type,      # E: Cannot determine the type parameter for generic class `type`
+):
+    pass
+
+# Note: bare builtin `type` annotation doesn't trigger implicit-any yet because
+# the `type` class is not defined as generic in typeshed. `typing.Type` works
+# because it's handled as a special form.
+def g(t: type):
+    pass
+    "#,
+);
+
+testcase!(
+    bug = "conformance: Should error on inconsistent type variable ordering in base classes",
+    test_inconsistent_type_var_ordering_in_bases,
+    r#"
+from typing import Generic, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+
+class Grandparent(Generic[T1, T2]): ...
+class Parent(Grandparent[T1, T2]): ...
+class BadChild(Parent[T1, T2], Grandparent[T2, T1]): ...  # should be an error
+"#,
 );

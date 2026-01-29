@@ -14,6 +14,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -29,6 +30,7 @@ use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::PythonPlatform;
@@ -42,6 +44,10 @@ use pyrefly_util::globs::Glob;
 use pyrefly_util::globs::Globs;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::telemetry::SubTaskTelemetry;
+use pyrefly_util::telemetry::TelemetryEventKind;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Serialize;
@@ -459,6 +465,11 @@ pub struct ConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typeshed_path: Option<PathBuf>,
 
+    /// Path to baseline file for comparing type errors.
+    /// Errors matching the baseline are suppressed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<PathBuf>,
+
     /// Pyrefly's configurations around interpreter querying/finding.
     #[serde(flatten)]
     pub interpreters: Interpreters,
@@ -504,17 +515,6 @@ pub struct ConfigFile {
     #[derivative(PartialEq = "ignore")]
     pub source_db: Option<ArcId<Box<dyn SourceDatabase>>>,
 
-    /// Skips the check to ensure any `-stubs` `site_package_path` entries have an
-    /// installed non-stubs package.
-    #[serde(
-                     default = "ConfigFile::default_true",
-                     skip_serializing_if = "crate::util::skip_default_true",
-                     // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
-                     // alias while we migrate existing fields from snake case to kebab case.
-                     alias = "ignore_missing_source",
-                 )]
-    pub ignore_missing_source: bool,
-
     /// Should we let Pyrefly try to index the project's files? Disabling this
     /// may speed up LSP operations on large projects.
     #[serde(default, skip_serializing_if = "crate::util::skip_default_false")]
@@ -546,8 +546,8 @@ impl Default for ConfigFile {
             build_system: Default::default(),
             source_db: Default::default(),
             use_ignore_files: true,
-            ignore_missing_source: true,
             typeshed_path: None,
+            baseline: None,
             skip_lsp_config_indexing: false,
         }
     }
@@ -822,7 +822,6 @@ impl ConfigFile {
             self.errors(path),
             self.ignore_errors_in_generated_code(path),
             self.enabled_ignores(path).clone(),
-            self.ignore_missing_source,
         )
     }
 
@@ -843,13 +842,13 @@ impl ConfigFile {
     }
 
     pub fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
-        self.handle_from_module_path_with_fallback(module_path, std::iter::empty())
+        self.handle_from_module_path_with_fallback(module_path, &FallbackSearchPath::Empty)
     }
 
-    pub fn handle_from_module_path_with_fallback<'a>(
-        &'a self,
+    pub fn handle_from_module_path_with_fallback(
+        &self,
         module_path: ModulePath,
-        fallback_search_paths: impl Iterator<Item = &'a PathBuf>,
+        fallback_search_path: &FallbackSearchPath,
     ) -> Handle {
         match &self
             .source_db
@@ -858,12 +857,21 @@ impl ConfigFile {
         {
             Some(handle) => handle.dupe(),
             None => {
-                let name = ModuleName::from_path(
-                    module_path.as_path(),
-                    self.search_path().chain(fallback_search_paths),
-                )
-                .unwrap_or_else(ModuleName::unknown);
-                Handle::new(name, module_path, self.get_sys_info())
+                let module_kind = if fallback_search_path.is_empty() {
+                    let name = ModuleName::from_path(module_path.as_path(), self.search_path())
+                        .unwrap_or_else(ModuleName::unknown);
+                    ModuleNameWithKind::guaranteed(name)
+                } else {
+                    let fallback_paths =
+                        fallback_search_path.for_directory(Some(module_path.as_path()));
+                    ModuleName::from_path_with_fallback(
+                        module_path.as_path(),
+                        self.search_path(),
+                        fallback_paths.iter(),
+                    )
+                    .unwrap_or(ModuleNameWithKind::guaranteed(ModuleName::unknown()))
+                };
+                Handle::from_with_module_name_kind(module_kind, module_path, self.get_sys_info())
             }
         }
     }
@@ -901,8 +909,14 @@ impl ConfigFile {
     pub fn query_source_db(
         configs_to_files: &SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>>,
         force: bool,
-    ) -> SmallSet<ArcId<ConfigFile>> {
-        let mut reloaded_configs = SmallSet::new();
+        telemetry: Option<SubTaskTelemetry>,
+    ) -> (
+        SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>,
+        TelemetrySourceDbRebuildStats,
+    ) {
+        let mut stats: TelemetrySourceDbRebuildStats = Default::default();
+        stats.common.forced = force;
+        let mut reloaded_source_dbs = SmallSet::new();
         let mut sourcedb_configs: SmallMap<_, Vec<_>> = SmallMap::new();
         for (config, files) in configs_to_files {
             let Some(source_db) = &config.source_db else {
@@ -912,17 +926,40 @@ impl ConfigFile {
                 .entry(source_db)
                 .or_default()
                 .push((config, files));
+            // Files can be uniquely tied to a config, so we will be counting each file at most
+            // once here.
+            stats.common.files += files.len();
         }
 
+        stats.count = sourcedb_configs.len();
+        fn log_telemetry(
+            telemetry: &Option<SubTaskTelemetry>,
+            start: Instant,
+            instance_stats: TelemetrySourceDbRebuildInstanceStats,
+            error: Option<&anyhow::Error>,
+        ) {
+            let Some(telemetry) = telemetry else {
+                return;
+            };
+
+            let mut event_telemetry =
+                telemetry.new_task(TelemetryEventKind::SourceDbRebuildInstance, start);
+            event_telemetry.set_sourcedb_rebuild_instance_stats(instance_stats);
+            telemetry.finish_task(event_telemetry, error);
+        }
         for (source_db, configs_and_files) in sourcedb_configs {
+            let start = Instant::now();
             let all_files = configs_and_files
                 .iter()
                 .flat_map(|x| x.1.iter())
                 .map(|p| p.module_path_buf())
                 .collect::<SmallSet<_>>();
-            let reloaded = match source_db.query_source_db(all_files, force) {
+            let (sourcedb_rebuild, instance_stats) = source_db.query_source_db(all_files, force);
+            let changed = match sourcedb_rebuild {
                 Err(error) => {
+                    log_telemetry(&telemetry, start, instance_stats, Some(&error));
                     error!("Error reloading source database for config: {error:?}");
+                    stats.had_error = true;
                     continue;
                 }
                 Ok(r) => r,
@@ -936,7 +973,8 @@ impl ConfigFile {
                     write.insert(file, first_config.dupe());
                 }
             }
-            if reloaded {
+            if changed {
+                stats.common.changed = true;
                 debug!(
                     "Performed grouped source db query for configs at {:?}",
                     configs_and_files
@@ -944,12 +982,11 @@ impl ConfigFile {
                         .filter_map(|x| x.0.source.root())
                         .collect::<Vec<_>>(),
                 );
-                for (config, _) in configs_and_files {
-                    reloaded_configs.insert(config.dupe());
-                }
+                reloaded_source_dbs.insert(source_db.dupe());
             }
+            log_telemetry(&telemetry, start, instance_stats, None);
         }
-        reloaded_configs
+        (reloaded_source_dbs, stats)
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,
@@ -1060,6 +1097,7 @@ impl ConfigFile {
         };
 
         // TODO(connernilsen): remove once PyTorch performs an upgrade
+        #[allow(unexpected_cfgs)]
         if cfg!(fbcode_build) {
             let root = match &self.source {
                 ConfigSource::File(path) => {
@@ -1144,6 +1182,9 @@ impl ConfigFile {
         if let Some(typeshed_path) = &self.typeshed_path {
             self.typeshed_path = Some(typeshed_path.absolutize_from(config_root));
         }
+        if let Some(baseline) = &self.baseline {
+            self.baseline = Some(baseline.absolutize_from(config_root));
+        }
         self.python_environment
             .site_package_path
             .iter_mut()
@@ -1226,10 +1267,7 @@ impl ConfigFile {
             (config, errors)
         }
         let config_path = config_path.absolutize();
-        let (config, mut errors) = f(&config_path);
-        if !config.ignore_missing_source {
-            errors.push(ConfigError::warn(anyhow!("`ignore-missing-source` is deprecated and will be removed in a future version. Please enable the `missing-source` error instead.")))
-        }
+        let (config, errors) = f(&config_path);
         let errors = errors.into_map(|err| err.context(format!("{}", config_path.display())));
         (config, errors)
     }
@@ -1411,8 +1449,8 @@ mod tests {
                         enabled_ignores: None,
                     }
                 }],
-                ignore_missing_source: true,
                 typeshed_path: None,
+                baseline: None,
                 skip_lsp_config_indexing: false,
             }
         );
@@ -1431,7 +1469,6 @@ mod tests {
              python-interpreter-path = "venv/my/python"
              replace_imports_with_any = ["fibonacci"]
              ignore_errors_in_generated_code = true
-             ignore_missing_source = true
 
              [errors]
              assert-type = "error"
@@ -1645,8 +1682,8 @@ mod tests {
                 matches: Glob::new("sub/project/**".to_owned()).unwrap(),
                 settings: Default::default(),
             }],
-            ignore_missing_source: false,
             typeshed_path: Some(PathBuf::from(typeshed)),
+            baseline: Some(PathBuf::from("baseline.json")),
             skip_lsp_config_indexing: false,
         };
 
@@ -1704,8 +1741,8 @@ mod tests {
                 matches: sub_config_matches,
                 settings: Default::default(),
             }],
-            ignore_missing_source: false,
             typeshed_path: Some(expected_typeshed),
+            baseline: Some(test_path.join("baseline.json")),
             skip_lsp_config_indexing: false,
         };
         assert_eq!(config, expected_config);
@@ -1731,6 +1768,15 @@ mod tests {
                  "#;
         let err = ConfigFile::parse_config(config_str).unwrap_err();
         assert!(err.to_string().contains("missing field `matches`"));
+    }
+
+    #[test]
+    fn test_baseline_config_parsing() {
+        let config_str = r#"
+baseline = "baseline.json"
+"#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        assert_eq!(config.baseline, Some(PathBuf::from("baseline.json")));
     }
 
     #[test]

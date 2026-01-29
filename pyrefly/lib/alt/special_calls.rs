@@ -66,6 +66,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                     .promote_typevar_values(self.stdlib)
                     .explicit_any()
+                    .explicit_literals()
                     .noreturn_to_never()
                     .anon_callables()
                     .anon_typed_dicts(self.stdlib)
@@ -97,7 +98,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 ErrorInfo::Kind(ErrorKind::BadArgumentCount),
                 format!(
-                    "assert_type needs 2 positional arguments, got {:#?}",
+                    "assert_type needs 2 positional arguments, got {}",
                     args.len()
                 ),
             );
@@ -297,7 +298,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.stdlib.bool().clone().to_type()
     }
 
-    fn check_type_is_class_object(
+    pub(crate) fn check_type_is_class_object(
         &self,
         ty: Type,
         object_type: Option<Type>,
@@ -305,6 +306,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         func_kind: &FunctionKind,
         errors: &ErrorCollector,
+        error_kind: ErrorKind,
     ) {
         for ty in self.as_class_info(ty) {
             if let Type::ClassDef(cls) = &ty {
@@ -312,7 +314,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorInfo::Kind(error_kind),
                         "Expected class object, got `Any`".to_owned(),
                     );
                 }
@@ -322,7 +324,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorInfo::Kind(error_kind),
                         format!("NewType `{}` not allowed in {}", cls.name(), func_display(),),
                     );
                 }
@@ -331,7 +333,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorInfo::Kind(error_kind),
                         format!(
                             "TypedDict `{}` not allowed as second argument to {}",
                             cls.name(),
@@ -340,12 +342,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 // Check if this is a protocol that needs @runtime_checkable
-                if metadata.is_protocol() {
+                if metadata.is_protocol() && !metadata.is_typed_dict() {
                     if !metadata.is_runtime_checkable_protocol() {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            ErrorInfo::Kind(error_kind),
                             format!("Protocol `{}` is not decorated with @runtime_checkable and cannot be used with {}", cls.name(), func_display()),
                         );
                     } else {
@@ -357,22 +359,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                ErrorInfo::Kind(error_kind),
                                 format!("Protocol `{}` has non-method members and cannot be used with issubclass()", cls.name()),
                             );
                         }
                         // Check for unsafe overlap:
                         // https://typing.python.org/en/latest/spec/protocol.html#runtime-checkable-decorator-and-narrowing-types-by-isinstance
-                        // We need to check if there is any field with
-                        // unassignable types, since the `isinstance` check only
-                        // checks for the presence of the fields, not their
-                        // types.
-                        let protocol_metadata = metadata.protocol_metadata().unwrap();
-                        // Use the protocol class type to instantiate bound methods.
+                        // We need to check if there is any field with unassignable types, since the `isinstance` check only
+                        // checks for the presence of the fields, not their types.
+                        //
                         // Type arguments for the protocol are not provided, so we'll use
-                        // fresh vars and solve them during the is_subset_eq check below.
-                        let protocol_instance_ty = self.instantiate_fresh_class(cls);
-                        if let Some(object_type) = &object_type {
+                        // fresh vars and solve them during the `is_subset_eq` check below.
+                        let protocol_metadata = metadata.protocol_metadata().unwrap();
+                        if let Some(object_type) = &object_type
+                            && let (vs, Type::ClassType(protocol_class_type)) =
+                                self.instantiate_fresh_class(cls)
+                        {
                             let mut unsafe_overlap_errors = vec![];
                             for field_name in &protocol_metadata.members {
                                 if !self.has_attr(object_type, field_name) {
@@ -380,31 +382,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     // we only care about unsafe overlaps
                                     continue;
                                 }
-                                let field_ty = self.type_of_attr_get(
+                                if let Err(subset_err) = self.is_protocol_subset_at_attr(
                                     object_type,
+                                    &protocol_class_type,
                                     field_name,
-                                    range,
-                                    &self.error_swallower(),
-                                    None,
-                                    "runtime_checkable_protocol_unsafe_overlap",
-                                );
-                                let protocol_field_ty = self.type_of_attr_get(
-                                    &protocol_instance_ty,
-                                    field_name,
-                                    range,
-                                    &self.error_swallower(),
-                                    None,
-                                    "runtime_checkable_protocol_unsafe_overlap",
-                                );
-                                if !self.is_subset_eq(&field_ty, &protocol_field_ty) {
-                                    unsafe_overlap_errors.push(
-                                        format!(
-                                            "Attribute `{}` has incompatible types: expected `{}`, got `{}`",
-                                            field_name,
-                                            self.for_display(protocol_field_ty),
-                                            self.for_display(field_ty),
-                                        ),
-                                    );
+                                    &mut |x, y| self.is_subset_eq_with_reason(x, y),
+                                ) {
+                                    let error_msg = subset_err
+                                        .to_error_msg()
+                                        .map(|msg| format!(": {msg}"))
+                                        .unwrap_or_default();
+                                    unsafe_overlap_errors.push(format!(
+                                        "Attribute `{}` has incompatible types{}",
+                                        field_name, error_msg,
+                                    ));
+                                }
+                            }
+                            if let Err(specialization_errors) =
+                                self.solver().finish_quantified(vs, false)
+                            {
+                                for e in specialization_errors {
+                                    unsafe_overlap_errors.push(e.to_error_msg(self))
                                 }
                             }
                             if !unsafe_overlap_errors.is_empty() {
@@ -416,7 +414,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 full_msg.extend(unsafe_overlap_errors);
                                 errors.add(
                                     range,
-                                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                    ErrorInfo::Kind(ErrorKind::UnsafeOverlap),
                                     full_msg,
                                 );
                             }
@@ -432,17 +430,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorInfo::Kind(error_kind),
                     format!(
                         "Expected class object, got parameterized generic type: `{}`",
                         self.for_display(ty)
                     ),
                 );
+            } else if let Type::Type(box Type::SpecialForm(special_form)) = &ty {
+                if !special_form.isinstance_safe() {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorInfo::Kind(error_kind),
+                        format!("Expected class object, got special form `{}`", special_form),
+                    );
+                }
             } else if self.unwrap_class_object_silently(&ty).is_none() {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorInfo::Kind(error_kind),
                     format!("Expected class object, got `{}`", self.for_display(ty)),
                 );
             } else {
@@ -535,6 +542,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             classinfo_expr.range(),
             func_kind,
             errors,
+            ErrorKind::InvalidArgument,
         );
     }
 

@@ -34,7 +34,6 @@ mod commands;
 mod compat;
 mod error;
 mod export;
-mod graph;
 mod lsp;
 mod module;
 pub mod playground;

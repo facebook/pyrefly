@@ -114,6 +114,155 @@ imported = ssl.VerifyMode.CERT_NONE
 }
 
 #[test]
+fn test_tuple_unpacking_inlay_hint() {
+    let code = r#"
+a = 1
+b = 1
+
+x, y = (a, b)
+z = a
+"#;
+    // Individual hints for each unpacked variable
+    assert_eq!(
+        r#"
+# main.py
+5 | x, y = (a, b)
+     ^ inlay-hint: `: Literal[1]`
+
+5 | x, y = (a, b)
+        ^ inlay-hint: `: Literal[1]`
+
+6 | z = a
+     ^ inlay-hint: `: Literal[1]`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
+fn test_tuple_unpacking_from_function_call() {
+    let code = r#"
+def f() -> tuple[int, str]:
+    return (1, "test")
+
+x, y = f()
+"#;
+    // Individual hints for unpacked values from function calls
+    assert_eq!(
+        r#"
+# main.py
+5 | x, y = f()
+     ^ inlay-hint: `: int`
+
+5 | x, y = f()
+        ^ inlay-hint: `: str`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
+fn test_tuple_unpacking_no_hint_for_literals() {
+    let code = r#"
+x, y = (1, 2)
+"#;
+    // No hints when unpacking literal values
+    assert_eq!(
+        r#"
+# main.py
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
+fn test_tuple_unpacking_with_prior_annotation() {
+    let code = r#"
+x: int
+y: str
+x, y = (1, "test")
+"#;
+    // No hints because variables already have annotations
+    assert_eq!(
+        r#"
+# main.py
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
+fn test_nested_tuple_unpacking() {
+    let code = r#"
+def f() -> tuple[int, str]:
+    return (1, "test")
+
+(a, b), c = f(), 3
+"#;
+    // Individual hints for nested unpacked values from function call.
+    // No hint for c because it's unpacked from a literal (3).
+    assert_eq!(
+        r#"
+# main.py
+5 | (a, b), c = f(), 3
+      ^ inlay-hint: `: int`
+
+5 | (a, b), c = f(), 3
+         ^ inlay-hint: `: str`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
+fn test_starred_unpacking_from_function() {
+    let code = r#"
+def get_list() -> list[int]:
+    return [1, 2, 3, 4]
+
+a, *b, c = get_list()
+"#;
+    // All variables get hints since we can't determine if elements are literals
+    assert_eq!(
+        r#"
+# main.py
+5 | a, *b, c = get_list()
+     ^ inlay-hint: `: int`
+
+5 | a, *b, c = get_list()
+         ^ inlay-hint: `: list[int]`
+
+5 | a, *b, c = get_list()
+            ^ inlay-hint: `: int`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
+fn test_starred_unpacking_from_literal() {
+    let code = r#"
+a, *b, c = [1, 2, 3, 4]
+"#;
+    // No hints for a and c (literals), but b gets hint since we can't extract slice elements
+    assert_eq!(
+        r#"
+# main.py
+2 | a, *b, c = [1, 2, 3, 4]
+         ^ inlay-hint: `: list[int]`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
 fn test_parameter_name_hints() {
     let code = r#"
 def my_function(x: int, y: str, z: bool) -> None:
@@ -265,4 +414,71 @@ foo("hello", 1, 2, 3, 5, a=1, b=2, t=4)
         )
         .trim()
     );
+}
+
+/// todo(jvansch): Update test once parameter hints have locations.
+#[test]
+fn test_parameter_hints_do_not_have_locations() {
+    let code = r#"
+class MyType:
+    pass
+
+def my_function(x: MyType, y: str) -> None:
+    pass
+
+result = my_function(MyType(), "hello")
+"#;
+
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::indexing());
+    let handle = handles.get("main").unwrap();
+
+    let hints = state
+        .transaction()
+        .inlay_hints(
+            handle,
+            InlayHintConfig {
+                call_argument_names: AllOffPartial::All,
+                variable_types: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let x_hint = hints
+        .iter()
+        .find(|(_, parts)| parts.iter().any(|(text, _)| text == "x= "));
+
+    assert!(x_hint.is_some(), "Should have hint for parameter x");
+
+    if let Some((_, parts)) = x_hint {
+        let x_part = parts.iter().find(|(text, _)| text == "x= ");
+        assert!(x_part.is_some());
+
+        if let Some((text, location)) = x_part {
+            assert_eq!(text, "x= ");
+            assert!(
+                location.is_none(),
+                "Parameter hints should not have locations yet"
+            );
+        }
+    }
+
+    let y_hint = hints
+        .iter()
+        .find(|(_, parts)| parts.iter().any(|(text, _)| text == "y= "));
+
+    assert!(y_hint.is_some(), "Should have hint for parameter y");
+
+    if let Some((_, parts)) = y_hint {
+        let y_part = parts.iter().find(|(text, _)| text == "y= ");
+        assert!(y_part.is_some());
+
+        if let Some((_, location)) = y_part {
+            assert!(
+                location.is_none(),
+                "Parameter hints should not have locations yet"
+            );
+        }
+    }
 }

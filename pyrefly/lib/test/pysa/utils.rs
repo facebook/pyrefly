@@ -44,7 +44,7 @@ pub fn get_handle_for_module_name(module_name: &str, transaction: &Transaction) 
         .handles()
         .into_iter()
         .find(|handle| handle.module().as_str() == module_name)
-        .expect("valid module name")
+        .unwrap_or_else(|| panic!("expected valid module name, got `{module_name}`"))
 }
 
 pub fn get_class(module_name: &str, class_name: &str, context: &ModuleContext) -> Class {
@@ -57,7 +57,7 @@ pub fn get_class(module_name: &str, class_name: &str, context: &ModuleContext) -
         .keys::<KeyClass>()
         .map(|idx| answers.get_idx(idx).unwrap().0.clone().unwrap())
         .find(|class| class.name() == class_name)
-        .expect("valid class name")
+        .unwrap_or_else(|| panic!("expected valid class name, got `{module_name}.{class_name}`"))
 }
 
 pub fn get_class_ref(module_name: &str, class_name: &str, context: &ModuleContext) -> ClassRef {
@@ -86,7 +86,9 @@ pub fn get_function_ref(
     get_all_functions(&context)
         .filter(|function| function.should_export(&context))
         .find(|function| function.name().as_str() == function_name)
-        .expect("valid function name")
+        .unwrap_or_else(|| {
+            panic!("expected valid function name, got `{module_name}.{function_name}`")
+        })
         .as_function_ref(&context)
 }
 
@@ -113,7 +115,9 @@ pub fn get_method_ref(
                 class.name().as_str() == class_name && name.as_str() == function_name
             }
         })
-        .expect("valid method name")
+        .unwrap_or_else(|| {
+            panic!("expected valid method name, got `{module_name}.{class_name}.{function_name}`")
+        })
         .as_function_ref(&context)
 }
 

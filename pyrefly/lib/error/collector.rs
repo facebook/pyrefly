@@ -139,6 +139,22 @@ impl ErrorCollector {
         self.errors.lock().push(err);
     }
 
+    pub fn internal_error(&self, range: TextRange, mut msg: Vec1<String>) {
+        msg.push(
+            "Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself"
+                .to_owned(),
+        );
+        if cfg!(fbcode_build) {
+            msg.push("Please report the bug at https://fb.workplace.com/groups/pyreqa".to_owned());
+        } else {
+            msg.push(
+                "Please report the bug at https://github.com/facebook/pyrefly/issues/new"
+                    .to_owned(),
+            );
+        }
+        self.add(range, ErrorInfo::Kind(ErrorKind::InternalError), msg);
+    }
+
     pub fn module(&self) -> &ModuleInfo {
         &self.module_info
     }
@@ -162,18 +178,7 @@ impl ErrorCollector {
                 if err.is_ignored(&error_config.enabled_ignores) {
                     result.suppressed.push(err.clone());
                 } else {
-                    let kind = err.error_kind();
-                    let raw_severity = error_config.display_config.severity(kind);
-                    let severity = match (kind, raw_severity, error_config.ignore_missing_source) {
-                        // If missing-source is set to Ignore (the default), and
-                        // ignore-missing-source is  to false (the default is true, so false must
-                        // have been explicitly set by the user), enable missing-source. Note that
-                        // this means that if `missing-source` and `--ignore-missing-source` are in
-                        // conflict,  the error is enabled if either setting says it should be.
-                        (ErrorKind::MissingSource, Severity::Ignore, false) => Severity::Error,
-                        _ => raw_severity,
-                    };
-                    match severity {
+                    match error_config.display_config.severity(err.error_kind()) {
                         Severity::Error => result.shown.push(err.with_severity(Severity::Error)),
                         Severity::Warn => result.shown.push(err.with_severity(Severity::Warn)),
                         Severity::Info => result.shown.push(err.with_severity(Severity::Info)),
@@ -259,7 +264,6 @@ mod tests {
                     &ErrorDisplayConfig::default(),
                     false,
                     Tool::default_enabled(),
-                    true,
                 ))
                 .shown
                 .map(|x| x.msg()),
@@ -311,7 +315,7 @@ mod tests {
             (ErrorKind::BadAssignment, Severity::Ignore),
             (ErrorKind::NotIterable, Severity::Ignore),
         ]));
-        let config = ErrorConfig::new(&display_config, false, Tool::default_enabled(), true);
+        let config = ErrorConfig::new(&display_config, false, Tool::default_enabled());
 
         assert_eq!(
             errors.collect(&config).shown.map(|x| x.msg()),
@@ -335,10 +339,10 @@ mod tests {
         );
 
         let display_config = ErrorDisplayConfig::default();
-        let config0 = ErrorConfig::new(&display_config, false, Tool::default_enabled(), true);
+        let config0 = ErrorConfig::new(&display_config, false, Tool::default_enabled());
         assert_eq!(errors.collect(&config0).shown.map(|x| x.msg()), vec!["a"]);
 
-        let config1 = ErrorConfig::new(&display_config, true, Tool::default_enabled(), true);
+        let config1 = ErrorConfig::new(&display_config, true, Tool::default_enabled());
         assert!(errors.collect(&config1).shown.map(|x| x.msg()).is_empty());
     }
 
@@ -368,7 +372,6 @@ mod tests {
                     &ErrorDisplayConfig::default(),
                     false,
                     Tool::default_enabled(),
-                    true,
                 ))
                 .shown
                 .map(|x| x.msg()),

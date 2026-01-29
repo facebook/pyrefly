@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::cmp::min;
 use std::collections::HashMap;
 
 use ruff_python_ast::Expr;
@@ -66,24 +65,30 @@ impl Docstring {
                 if i == 0 {
                     line.to_owned()
                 } else {
-                    let trimmed = &line[min(min_indent, line.len())..];
-                    let mut without_blockquote = trimmed;
-                    while let Some(rest) = without_blockquote.strip_prefix('>') {
-                        without_blockquote = rest.strip_prefix(' ').unwrap_or(rest);
+                    let trimmed = &line[min_indent.min(line.len())..];
+                    let mut content = trimmed;
+
+                    // Handle potential leading blockquote (`> `) for non-doctest lines
+                    let is_doctest_prompt = {
+                        let t = trimmed.trim_start();
+                        t.starts_with(">>>") && t.as_bytes().get(3).is_none_or(|b| *b != b'>')
+                    };
+                    if !is_doctest_prompt {
+                        while let Some(rest) = content.strip_prefix('>') {
+                            content = rest.strip_prefix(' ').unwrap_or(rest);
+                        }
                     }
+
                     // Replace remaining leading spaces with &nbsp; or they might be ignored in markdown parsers
-                    let leading_spaces = without_blockquote
-                        .bytes()
-                        .take_while(|&c| c == b' ')
-                        .count();
+                    let leading_spaces = content.bytes().take_while(|&c| c == b' ').count();
                     if leading_spaces > 0 {
                         format!(
                             "{}{}",
                             "&nbsp;".repeat(leading_spaces),
-                            &without_blockquote[leading_spaces..]
+                            &content[leading_spaces..]
                         )
                     } else {
-                        without_blockquote.to_owned()
+                        content.to_owned()
                     }
                 }
             })
@@ -129,6 +134,34 @@ fn dedented_lines_for_parsing(docstring: &str) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// Dedent a block of text while preserving blank lines, similar to how we handle docstrings.
+pub fn dedent_block_preserving_layout(text: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let min_indent = minimal_indentation(lines.iter().copied());
+    let mut dedented = String::new();
+    for line in lines {
+        if line.trim().is_empty() {
+            dedented.push('\n');
+            continue;
+        }
+        let start = min_indent.min(line.len());
+        dedented.push_str(&line[start..]);
+        dedented.push('\n');
+    }
+    if !text.ends_with('\n') {
+        dedented.push('\n');
+    }
+    Some(dedented)
 }
 
 fn leading_space_count(line: &str) -> usize {
@@ -426,6 +459,15 @@ mod tests {
             "hello  \nworld  \ntest"
         );
     }
+
+    #[test]
+    fn test_docstring_preserves_doctest_prompt() {
+        assert_eq!(
+            Docstring::clean("\"\"\"Example\n>>> foo()\"\"\"").as_str(),
+            "Example  \n>>> foo()"
+        );
+    }
+
     #[test]
     fn test_parse_sphinx_param_docs() {
         let doc = r#"

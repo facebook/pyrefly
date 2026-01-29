@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::iter::once;
 use std::path::Path;
 use std::path::PathBuf;
@@ -14,17 +15,16 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
+use std::thread::JoinHandle;
 use std::time::Instant;
 
+use crossbeam_channel::Receiver;
+use crossbeam_channel::Sender;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
 use itertools::Itertools;
-use lsp_server::Connection;
 use lsp_server::ErrorCode;
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_server::ResponseError;
 use lsp_types::CallHierarchyServerCapability;
 use lsp_types::CodeAction;
@@ -34,6 +34,7 @@ use lsp_types::CodeActionOrCommand;
 use lsp_types::CodeActionParams;
 use lsp_types::CodeActionProviderCapability;
 use lsp_types::CodeActionResponse;
+use lsp_types::CodeActionTriggerKind;
 use lsp_types::CompletionList;
 use lsp_types::CompletionOptions;
 use lsp_types::CompletionParams;
@@ -59,6 +60,7 @@ use lsp_types::DocumentSymbolParams;
 use lsp_types::DocumentSymbolResponse;
 use lsp_types::FileSystemWatcher;
 use lsp_types::FoldingRange;
+use lsp_types::FoldingRangeKind;
 use lsp_types::FoldingRangeParams;
 use lsp_types::FoldingRangeProviderCapability;
 use lsp_types::FullDocumentDiagnosticReport;
@@ -71,6 +73,7 @@ use lsp_types::HoverParams;
 use lsp_types::HoverProviderCapability;
 use lsp_types::ImplementationProviderCapability;
 use lsp_types::InitializeParams;
+use lsp_types::InitializeResult;
 use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
 use lsp_types::InlayHintLabelPart;
@@ -103,6 +106,7 @@ use lsp_types::SemanticTokensRangeResult;
 use lsp_types::SemanticTokensResult;
 use lsp_types::SemanticTokensServerCapabilities;
 use lsp_types::ServerCapabilities;
+use lsp_types::ServerInfo;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
@@ -133,6 +137,7 @@ use lsp_types::notification::DidCloseTextDocument;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::notification::DidSaveTextDocument;
 use lsp_types::notification::Exit;
+use lsp_types::notification::Initialized;
 use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::CallHierarchyIncomingCalls;
@@ -153,6 +158,7 @@ use lsp_types::request::GotoTypeDefinition;
 use lsp_types::request::GotoTypeDefinitionParams;
 use lsp_types::request::GotoTypeDefinitionResponse;
 use lsp_types::request::HoverRequest;
+use lsp_types::request::Initialize;
 use lsp_types::request::InlayHintRequest;
 use lsp_types::request::PrepareRenameRequest;
 use lsp_types::request::References;
@@ -163,16 +169,19 @@ use lsp_types::request::ResolveCompletionItem;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SemanticTokensRefresh;
+use lsp_types::request::Shutdown;
 use lsp_types::request::SignatureHelpRequest;
 use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
 use lsp_types::request::WorkspaceSymbolRequest;
+use pyrefly_build::SourceDatabase;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::config::ConfigSource;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
@@ -184,6 +193,14 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
+use pyrefly_util::telemetry::SubTaskTelemetry;
+use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::telemetry::TelemetryEventKind;
+use pyrefly_util::telemetry::TelemetryFileStats;
+use pyrefly_util::telemetry::TelemetryFileWatcherStats;
+use pyrefly_util::telemetry::TelemetryServerState;
+use pyrefly_util::telemetry::TelemetryTaskId;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -195,6 +212,7 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
 use tracing::info;
+use uuid::Uuid;
 
 use crate::ModuleInfo;
 use crate::commands::lsp::IndexingMode;
@@ -202,6 +220,11 @@ use crate::config::config::ConfigFile;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
+use crate::lsp::non_wasm::call_hierarchy::find_function_at_position_in_ast;
+use crate::lsp::non_wasm::call_hierarchy::prepare_call_hierarchy_item;
+use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
+use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
+use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
 use crate::lsp::non_wasm::lsp::apply_change_events;
 use crate::lsp::non_wasm::lsp::as_notification;
 use crate::lsp::non_wasm::lsp::as_request;
@@ -211,7 +234,11 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
-use crate::lsp::non_wasm::queue::HeavyTask;
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
+use crate::lsp::non_wasm::protocol::read_lsp_message;
+use crate::lsp::non_wasm::protocol::write_lsp_message;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
@@ -238,6 +265,7 @@ use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::ImportBehavior;
+use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
@@ -246,6 +274,25 @@ use crate::state::state::CancellableTransaction;
 use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
+use crate::state::subscriber::PublishDiagnosticsSubscriber;
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiagnosticSource {
+    // The diagnostic comes from an in-progress transaction on the recheck thread
+    Streaming,
+    // The diagnostic comes from a committing transaction in the LSP thread
+    CommittingTransaction,
+    // The diagnostic comes from a non-committable transaction in the LSP thread
+    NonCommittableTransaction,
+    // When we close a document, we send 0 diagnostics to clear them in the editor
+    DidClose,
+}
+
+pub enum DidCloseKind {
+    NotebookDocument,
+    TextDocument,
+}
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -274,26 +321,103 @@ pub trait TspInterface: Send + Sync {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
 
-    /// Get access to the state for creating transactions
-    fn state(&self) -> &State;
-
     fn connection(&self) -> &Connection;
 
     fn lsp_queue(&self) -> &LspQueue;
 
+    fn uris_pending_close(&self) -> &Mutex<HashMap<String, usize>>;
+
     /// Get access to the recheck queue for async task processing
-    fn recheck_queue(&self) -> &HeavyTaskQueue<HeavyTask>;
+    fn run_recheck_queue(&self, telemetry: &impl Telemetry);
+
+    fn stop_recheck_queue(&self);
 
     /// Process an LSP event and return the next step
     fn process_event<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
+        telemetry: &impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent>;
 
-    fn run_task(&self, task: HeavyTask);
+    fn telemetry_state(&self) -> TelemetryServerState;
+}
+
+pub struct Connection {
+    pub sender: Sender<Message>,
+    pub receiver: Receiver<Message>,
+}
+
+pub struct IoThreads {
+    reader: JoinHandle<std::io::Result<()>>,
+    writer: JoinHandle<std::io::Result<()>>,
+}
+
+impl IoThreads {
+    pub fn join(self) -> std::io::Result<()> {
+        let reader_result = match self.reader.join() {
+            Ok(result) => result,
+            Err(e) => std::panic::panic_any(e),
+        };
+        let writer_result = match self.writer.join() {
+            Ok(result) => result,
+            Err(e) => std::panic::panic_any(e),
+        };
+        reader_result.and(writer_result)
+    }
+}
+
+impl Connection {
+    pub fn stdio() -> (Self, IoThreads) {
+        let (reader_sender, reader_receiver) = crossbeam_channel::unbounded();
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
+        let reader = std::thread::spawn(move || {
+            let mut stdin = std::io::stdin().lock();
+            while let Some(msg) = read_lsp_message(&mut stdin)? {
+                let is_exit = match &msg {
+                    Message::Notification(x) => x.method == Exit::METHOD,
+                    _ => false,
+                };
+                if reader_sender.send(msg).is_err() || is_exit {
+                    break;
+                }
+            }
+            Ok(())
+        });
+        let writer = std::thread::spawn(move || {
+            let mut stdout = std::io::stdout().lock();
+            while let Ok(msg) = writer_receiver.recv() {
+                write_lsp_message(&mut stdout, msg)?
+            }
+            Ok(())
+        });
+        (
+            Self {
+                sender: writer_sender,
+                receiver: reader_receiver,
+            },
+            IoThreads { reader, writer },
+        )
+    }
+
+    #[cfg(test)]
+    pub fn memory() -> (Self, Self) {
+        let (s1, r1) = crossbeam_channel::unbounded();
+        let (s2, r2) = crossbeam_channel::unbounded();
+        (
+            Self {
+                sender: s1,
+                receiver: r2,
+            },
+            Self {
+                sender: s2,
+                receiver: r1,
+            },
+        )
+    }
 }
 
 struct ServerConnection(Connection);
@@ -307,7 +431,18 @@ impl ServerConnection {
         };
     }
 
-    fn publish_diagnostics_for_uri(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i32>) {
+    fn publish_diagnostics_for_uri(
+        &self,
+        uri: Url,
+        diags: Vec<Diagnostic>,
+        version: Option<i32>,
+        source: DiagnosticSource,
+    ) {
+        if matches!(source, DiagnosticSource::Streaming) {
+            info!("Streamed {} diagnostics for {}", diags.len(), uri);
+        } else {
+            info!("Published {} diagnostics for {}", diags.len(), uri);
+        }
         self.send(Message::Notification(
             new_notification::<PublishDiagnostics>(PublishDiagnosticsParams::new(
                 uri, diags, version,
@@ -319,14 +454,17 @@ impl ServerConnection {
         &self,
         diags: SmallMap<PathBuf, Vec<Diagnostic>>,
         notebook_cell_urls: SmallMap<PathBuf, Url>,
+        version_info: HashMap<PathBuf, i32>,
+        source: DiagnosticSource,
     ) {
         for (path, diags) in diags {
             if let Some(url) = notebook_cell_urls.get(&path) {
-                self.publish_diagnostics_for_uri(url.clone(), diags, None)
+                self.publish_diagnostics_for_uri(url.clone(), diags, None, source)
             } else {
                 let path = path.absolutize();
+                let version = version_info.get(&path).copied();
                 match Url::from_file_path(&path) {
-                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, None),
+                    Ok(uri) => self.publish_diagnostics_for_uri(uri, diags, version, source),
                     Err(_) => eprint!("Unable to convert path to uri: {path:?}"),
                 }
             }
@@ -337,11 +475,13 @@ impl ServerConnection {
 pub struct Server {
     connection: ServerConnection,
     lsp_queue: LspQueue,
-    recheck_queue: HeavyTaskQueue<HeavyTask>,
-    find_reference_queue: HeavyTaskQueue<HeavyTask>,
-    sourcedb_queue: HeavyTaskQueue<HeavyTask>,
+    recheck_queue: HeavyTaskQueue,
+    find_reference_queue: HeavyTaskQueue,
+    sourcedb_queue: HeavyTaskQueue,
     /// Any configs whose find cache should be invalidated.
-    invalidated_configs: Mutex<SmallSet<ArcId<ConfigFile>>>,
+    invalidated_source_dbs: Mutex<SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>>,
+    /// Custom initialization options are provided via initialize_params.initializationOptions
+    /// The type should match `LspConfig`
     initialize_params: InitializeParams,
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
@@ -365,11 +505,181 @@ pub struct Server {
     /// we rely on file watchers to catch up.
     indexed_workspaces: Mutex<HashSet<PathBuf>>,
     cancellation_handles: Mutex<HashMap<RequestId, CancellationHandle>>,
+    /// URIs we have received a didClose notification for, mapped to the number of didClose
+    /// operations we have yet to process.
+    uris_pending_close: Mutex<HashMap<String, usize>>,
     workspaces: Arc<Workspaces>,
     outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
     filewatcher_registered: AtomicBool,
     version_info: Mutex<HashMap<PathBuf, i32>>,
+    id: Uuid,
+    /// Whether to include comment section folding ranges (FoldingRangeKind::Region).
+    /// Defaults to false.
+    comment_folding_ranges: bool,
+    /// During a recheck with a committable transaction, we stream diagnostics to the client
+    /// as files are validated. This field tracks the snapshot of open files that are
+    /// eligible for streaming.
+    ///
+    /// Non-committable transactions should not publish diagnostics
+    /// for files in this set, as they will conflict w/ streaming diagnostics from the recheck
+    /// queue.
+    ///
+    /// If a file is modified after the start of the recheck, it is removed from this set and local
+    /// diagnostics may still be displayed based on the stale state + local edits.
+    ///
+    /// Once the background recheck finishes, we remove the file from this set
+    /// and run another transaction to make sure the diagnostics converge.
+    ///
+    /// - None means there is no ongoing recheck
+    /// - Empty set means there is an ongoing recheck but all open files at the start of
+    ///   the recheck were subsequently modified
+    currently_streaming_diagnostics_for_handles: RwLock<Option<SmallSet<Handle>>>,
+    /// Whether to stream diagnostics as they become available during recheck.
+    /// Defaults to true. Set via `streamDiagnostics` initialization option.
+    stream_diagnostics: bool,
+    /// Testing-only flag to prevent the next recheck from committing.
+    /// When set, the recheck queue task will loop without committing the transaction.
+    do_not_commit_recheck: AtomicBool,
+}
+
+pub fn shutdown_finish(connection: &Connection, id: RequestId) {
+    let response = Response::new_ok(id, ());
+    if connection.sender.send(response.into()).is_err() {
+        return;
+    }
+    while let Ok(msg) = connection.receiver.recv() {
+        match msg {
+            Message::Request(x) => {
+                error!("Unexpected request after shutdown: {x:?}");
+
+                let response = Response::new_err(
+                    x.id,
+                    ErrorCode::InvalidRequest as i32,
+                    "Shutdown already requested".to_owned(),
+                );
+                if connection.sender.send(response.into()).is_err() {
+                    return;
+                }
+            }
+            Message::Response(x) => {
+                error!("Unexpected response after shutdown: {x:?}");
+            }
+            Message::Notification(x) => {
+                if x.method == Exit::METHOD {
+                    return;
+                }
+
+                error!("Unexpected notification after shutdown: {x:?}");
+            }
+        }
+    }
+}
+
+// Waits for the client initialize request, returning the initialize request ID and params.
+// If the connection is closed, or we receive an exit notification, returns None.
+// If we receive an unexpected shutdown notification, respond and wait for exit.
+pub fn initialize_start(
+    connection: &Connection,
+) -> anyhow::Result<Option<(RequestId, InitializeParams)>> {
+    loop {
+        let Ok(msg) = connection.receiver.recv() else {
+            break;
+        };
+        match msg {
+            Message::Request(x) => {
+                if x.method == Initialize::METHOD {
+                    let params = serde_json::from_value(x.params)?;
+                    return Ok(Some((x.id, params)));
+                }
+
+                error!("Unexpected request before initialize: {x:?}");
+
+                let response = if x.method == Shutdown::METHOD {
+                    shutdown_finish(connection, x.id);
+                    break;
+                } else {
+                    Response::new_err(
+                        x.id,
+                        ErrorCode::ServerNotInitialized as i32,
+                        "Expected an initialize request".to_owned(),
+                    )
+                };
+
+                if connection.sender.send(response.into()).is_err() {
+                    break;
+                }
+            }
+            Message::Response(x) => {
+                error!("Unexpected response before initialize: {x:?}");
+            }
+            Message::Notification(x) => {
+                error!("Unexpected notification before initialize: {x:?}");
+
+                if x.method == Exit::METHOD {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+// Sends the initialize response and waits for the initialized notification.
+// If the connection is closed, or we receive an exit notification, returns false.
+pub fn initialize_finish(
+    connection: &Connection,
+    id: RequestId,
+    capabilities: ServerCapabilities,
+    server_info: Option<ServerInfo>,
+) -> anyhow::Result<bool> {
+    let result = InitializeResult {
+        capabilities,
+        server_info,
+    };
+    let response = Response::new_ok(id, result);
+    if connection.sender.send(response.into()).is_err() {
+        return Ok(false);
+    }
+    loop {
+        let Ok(msg) = connection.receiver.recv() else {
+            break;
+        };
+        match msg {
+            Message::Request(x) => {
+                error!("Unexpected request before initialized: {x:?}");
+
+                let response = if x.method == Shutdown::METHOD {
+                    shutdown_finish(connection, x.id);
+                    break;
+                } else {
+                    Response::new_err(
+                        x.id,
+                        ErrorCode::ServerNotInitialized as i32,
+                        format!(
+                            "Unexpected request before initialized notification: {}",
+                            x.method
+                        ),
+                    )
+                };
+                if connection.sender.send(response.into()).is_err() {
+                    break;
+                }
+            }
+            Message::Response(x) => {
+                error!("Unexpected response before initialized: {x:?}");
+            }
+            Message::Notification(x) => {
+                if x.method == Initialized::METHOD {
+                    return Ok(true);
+                } else if x.method == Exit::METHOD {
+                    break;
+                }
+                error!("Unexpected notification before initialized: {x:?}");
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// At the time when we are ready to handle a new LSP event, it will help if we know the list of
@@ -381,22 +691,17 @@ pub struct Server {
 /// - priority_events includes those that should be handled as soon as possible (e.g. know that a
 ///   request is cancelled)
 /// - queued_events includes most of the other events.
-pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: &LspQueue) {
+pub fn dispatch_lsp_events(
+    connection: &Connection,
+    lsp_queue: &LspQueue,
+    close_pending_uris: &Mutex<HashMap<String, usize>>,
+) {
     for msg in &connection.receiver {
         match msg {
             Message::Request(x) => {
-                match connection.handle_shutdown(&x) {
-                    Ok(is_shutdown) => {
-                        if is_shutdown {
-                            // break to ensure we send exit event
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Error handling shutdown: {:?}", e);
-                        // still exit in the case of error
-                        break;
-                    }
+                if x.method == Shutdown::METHOD {
+                    shutdown_finish(connection, x.id);
+                    break;
                 }
                 if lsp_queue.send(LspEvent::LspRequest(x)).is_err() {
                     return;
@@ -415,6 +720,11 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: &LspQueue) {
                 } else if let Some(Ok(params)) = as_notification::<DidChangeTextDocument>(&x) {
                     lsp_queue.send(LspEvent::DidChangeTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidCloseTextDocument>(&x) {
+                    close_pending_uris
+                        .lock()
+                        .entry(params.text_document.uri.path().to_owned())
+                        .and_modify(|pending| *pending += 1)
+                        .or_insert(1);
                     lsp_queue.send(LspEvent::DidCloseTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidSaveTextDocument>(&x) {
                     lsp_queue.send(LspEvent::DidSaveTextDocument(params))
@@ -423,6 +733,11 @@ pub fn dispatch_lsp_events(connection: &Connection, lsp_queue: &LspQueue) {
                 } else if let Some(Ok(params)) = as_notification::<DidChangeNotebookDocument>(&x) {
                     lsp_queue.send(LspEvent::DidChangeNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidCloseNotebookDocument>(&x) {
+                    close_pending_uris
+                        .lock()
+                        .entry(params.notebook_document.uri.path().to_owned())
+                        .and_modify(|pending| *pending += 1)
+                        .or_insert(1);
                     lsp_queue.send(LspEvent::DidCloseNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidSaveNotebookDocument>(&x) {
                     lsp_queue.send(LspEvent::DidSaveNotebookDocument(params))
@@ -466,6 +781,16 @@ pub fn capabilities(
         .and_then(|c| c.semantic_tokens.as_ref())
         .and_then(|c| c.augments_syntax_tokens)
         .unwrap_or(false);
+
+    // Parse syncNotebooks from initialization options, defaults to true
+    let sync_notebooks = initialization_params
+        .initialization_options
+        .as_ref()
+        .and_then(|opts| opts.get("pyrefly"))
+        .and_then(|pyrefly| pyrefly.get("syncNotebooks"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
     ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -476,7 +801,12 @@ pub fn capabilities(
         type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
         code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+            code_action_kinds: Some(vec![
+                CodeActionKind::QUICKFIX,
+                CodeActionKind::REFACTOR_EXTRACT,
+                CodeActionKind::new("refactor.move"),
+                CodeActionKind::REFACTOR_INLINE,
+            ]),
             ..Default::default()
         })),
         completion_provider: Some(CompletionOptions {
@@ -554,15 +884,19 @@ pub fn capabilities(
                 ..Default::default()
             }),
         }),
-        notebook_document_sync: Some(OneOf::Left(NotebookDocumentSyncOptions {
-            notebook_selector: vec![NotebookSelector::ByCells {
-                notebook: None,
-                cells: vec![NotebookCellSelector {
-                    language: "python".into(),
+        notebook_document_sync: if sync_notebooks {
+            Some(OneOf::Left(NotebookDocumentSyncOptions {
+                notebook_selector: vec![NotebookSelector::ByCells {
+                    notebook: None,
+                    cells: vec![NotebookCellSelector {
+                        language: "python".into(),
+                    }],
                 }],
-            }],
-            save: None,
-        })),
+                save: None,
+            }))
+        } else {
+            None
+        },
         ..Default::default()
     }
 }
@@ -580,6 +914,7 @@ pub fn lsp_loop(
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     build_system_blocking: bool,
+    telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
     let lsp_queue = LspQueue::new();
@@ -593,41 +928,50 @@ pub fn lsp_loop(
     );
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            dispatch_lsp_events(&server.connection.0, &server.lsp_queue);
+            dispatch_lsp_events(
+                &server.connection.0,
+                &server.lsp_queue,
+                &server.uris_pending_close,
+            );
         });
         scope.spawn(|| {
-            server
-                .recheck_queue
-                .run_until_stopped(|task| task.run(&server));
+            server.recheck_queue.run_until_stopped(&server, telemetry);
         });
         scope.spawn(|| {
             server
                 .find_reference_queue
-                .run_until_stopped(|task| task.run(&server));
+                .run_until_stopped(&server, telemetry);
         });
         scope.spawn(|| {
-            server
-                .sourcedb_queue
-                .run_until_stopped(|task| task.run(&server));
+            server.sourcedb_queue.run_until_stopped(&server, telemetry);
         });
         let mut ide_transaction_manager = TransactionManager::default();
         let mut canceled_requests = HashSet::new();
         while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
-            let process_start = Instant::now();
+            let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(
+                TelemetryEventKind::LspEvent(event.describe()),
+                enqueue_time,
+                server.telemetry_state(),
+            );
+            event_telemetry.set_task_stats(TelemetryTaskId::new("lsp_queue", None));
             let event_description = event.describe();
-            match server.process_event(
+            let result = server.process_event(
                 &mut ide_transaction_manager,
                 &mut canceled_requests,
+                telemetry,
+                &mut event_telemetry,
                 subsequent_mutation,
                 event,
-            ) {
+            );
+            let process_duration =
+                event_telemetry.finish_and_record(telemetry, result.as_ref().err());
+            match result {
                 Ok(ProcessEvent::Continue) => {
-                    let process_end = Instant::now();
-                    let process_duration = (process_end - process_start).as_secs_f32();
-                    let queue_duration = (process_start - enqueue_time).as_secs_f32();
                     info!(
                         "Language server processed event `{}` in {:.2}s ({:.2}s waiting)",
-                        event_description, process_duration, queue_duration
+                        event_description,
+                        process_duration.as_secs_f32(),
+                        queue_duration.as_secs_f32()
                     );
                 }
                 Ok(ProcessEvent::Exit) => break,
@@ -682,11 +1026,25 @@ impl Server {
         }
     }
 
+    fn decrement_uri_pending_close(&self, uri: &Url) {
+        let mut uris_pending_close = self.uris_pending_close.lock();
+        let Some(count) = uris_pending_close.get_mut(uri.path()) else {
+            return;
+        };
+
+        *count -= 1;
+        if *count == 0 {
+            uris_pending_close.remove(uri.path());
+        }
+    }
+
     /// Process the event and return next step.
     fn process_event<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
+        telemetry: &impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
         // After this event there is another mutation
         subsequent_mutation: bool,
         event: LspEvent,
@@ -697,7 +1055,10 @@ impl Server {
             }
             LspEvent::RecheckFinished => {
                 // We did a commit and want to get back to a stable state.
-                self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
+                self.validate_in_memory_and_commit_if_possible(
+                    ide_transaction_manager,
+                    telemetry_event,
+                );
             }
             LspEvent::CancelRequest(id) => {
                 info!("We should cancel request {id:?}");
@@ -707,13 +1068,17 @@ impl Server {
                 canceled_requests.insert(id);
             }
             LspEvent::InvalidateConfigFind => {
-                let mut lock = self.invalidated_configs.lock();
-                let invalidated_configs = std::mem::take(&mut *lock);
+                let mut lock = self.invalidated_source_dbs.lock();
+                let invalidated_source_dbs = std::mem::take(&mut *lock);
                 drop(lock);
-                if !invalidated_configs.is_empty() {
+                if !invalidated_source_dbs.is_empty() {
                     // a sourcedb rebuild completed before this, so it's okay
                     // to re-setup the file watcher right now
-                    self.setup_file_watcher_if_necessary();
+                    self.setup_file_watcher_if_necessary(Some(telemetry_event));
+                    let invalidated_configs = invalidated_source_dbs
+                        .into_iter()
+                        .flat_map(|db| self.workspaces.get_configs_for_source_db(db))
+                        .collect();
                     self.invalidate_find_for_configs(invalidated_configs);
                 }
             }
@@ -722,76 +1087,108 @@ impl Server {
                 let lsp_types::TextDocumentItem {
                     uri, version, text, ..
                 } = text_document;
-                let contents = Arc::new(LspFile::from_source(text));
-                self.did_open(
-                    ide_transaction_manager,
-                    subsequent_mutation,
-                    uri,
-                    version,
-                    contents,
-                )?;
+                self.set_file_stats(uri.clone(), telemetry_event);
+                if self.uris_pending_close.lock().contains_key(uri.path()) {
+                    telemetry_event.canceled = true;
+                } else {
+                    let contents = Arc::new(LspFile::from_source(text));
+                    self.did_open(
+                        ide_transaction_manager,
+                        telemetry,
+                        telemetry_event,
+                        subsequent_mutation,
+                        uri,
+                        version,
+                        contents,
+                    )?;
+                }
             }
             LspEvent::DidChangeTextDocument(params) => {
+                self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                 self.text_document_did_change(
                     ide_transaction_manager,
                     subsequent_mutation,
                     params,
+                    telemetry_event,
                 )?;
             }
             LspEvent::DidCloseTextDocument(params) => {
-                self.did_close(params.text_document.uri);
+                let uri = params.text_document.uri;
+                self.set_file_stats(uri.clone(), telemetry_event);
+                self.decrement_uri_pending_close(&uri);
+                self.did_close(uri, DidCloseKind::TextDocument, telemetry, telemetry_event);
             }
             LspEvent::DidSaveTextDocument(params) => {
+                self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                 self.did_save(params.text_document.uri);
             }
             LspEvent::DidOpenNotebookDocument(params) => {
                 let url = params.notebook_document.uri.clone();
-                let version = params.notebook_document.version;
-                let notebook_document = params.notebook_document.clone();
-                let cell_contents: HashMap<Url, String> = params
-                    .cell_text_documents
-                    .iter()
-                    .map(|doc| (doc.uri.clone(), doc.text.clone()))
-                    .collect();
-                let ruff_notebook = params.notebook_document.to_ruff_notebook(&cell_contents)?;
-                let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
-                let notebook_path = url.to_file_path().map_err(|_| {
-                    anyhow::anyhow!(
-                        "Could not convert uri to filepath: {}, expected a notebook",
-                        url
-                    )
-                })?;
-                for cell_url in lsp_notebook.cell_urls() {
-                    self.open_notebook_cells
-                        .write()
-                        .insert(cell_url.clone(), notebook_path.clone());
+                self.set_file_stats(url.clone(), telemetry_event);
+                if self.uris_pending_close.lock().contains_key(url.path()) {
+                    telemetry_event.canceled = true;
+                } else {
+                    let version = params.notebook_document.version;
+                    let notebook_document = params.notebook_document.clone();
+                    let cell_contents: HashMap<Url, String> = params
+                        .cell_text_documents
+                        .iter()
+                        .map(|doc| (doc.uri.clone(), doc.text.clone()))
+                        .collect();
+                    let ruff_notebook =
+                        params.notebook_document.to_ruff_notebook(&cell_contents)?;
+                    let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
+                    let notebook_path = url.to_file_path().map_err(|_| {
+                        anyhow::anyhow!(
+                            "Could not convert uri to filepath: {}, expected a notebook",
+                            url
+                        )
+                    })?;
+                    for cell_url in lsp_notebook.cell_urls() {
+                        self.open_notebook_cells
+                            .write()
+                            .insert(cell_url.clone(), notebook_path.clone());
+                    }
+                    self.did_open(
+                        ide_transaction_manager,
+                        telemetry,
+                        telemetry_event,
+                        subsequent_mutation,
+                        url,
+                        version,
+                        Arc::new(LspFile::Notebook(Arc::new(lsp_notebook))),
+                    )?;
                 }
-                self.did_open(
-                    ide_transaction_manager,
-                    subsequent_mutation,
-                    url,
-                    version,
-                    Arc::new(LspFile::Notebook(Arc::new(lsp_notebook))),
-                )?;
             }
             LspEvent::DidChangeNotebookDocument(params) => {
+                self.set_file_stats(params.notebook_document.uri.clone(), telemetry_event);
                 self.notebook_document_did_change(
                     ide_transaction_manager,
                     subsequent_mutation,
                     params,
+                    telemetry_event,
                 )?;
             }
             LspEvent::DidCloseNotebookDocument(params) => {
-                self.did_close(params.notebook_document.uri);
+                let uri = params.notebook_document.uri;
+                self.set_file_stats(uri.clone(), telemetry_event);
+                self.decrement_uri_pending_close(&uri);
+                self.did_close(
+                    uri,
+                    DidCloseKind::NotebookDocument,
+                    telemetry,
+                    telemetry_event,
+                );
             }
             LspEvent::DidSaveNotebookDocument(params) => {
+                self.set_file_stats(params.notebook_document.uri.clone(), telemetry_event);
                 self.did_save(params.notebook_document.uri);
             }
             LspEvent::DidChangeWatchedFiles(params) => {
-                self.did_change_watched_files(params);
+                self.did_change_watched_files(params, telemetry, telemetry_event);
             }
             LspEvent::DidChangeWorkspaceFolders(params) => {
-                self.workspace_folders_changed(params);
+                self.workspace_folders_changed(params, telemetry_event);
             }
             LspEvent::DidChangeConfiguration(params) => {
                 self.did_change_configuration(params);
@@ -807,19 +1204,25 @@ impl Server {
                     info!("Response for unknown request: {x:?}");
                 }
             }
-            LspEvent::LspRequest(x) => {
+            LspEvent::LspRequest(mut x) => {
+                telemetry_event.set_activity_key(std::mem::take(&mut x.activity_key));
+
                 // These are messages where VS Code will use results from previous document versions,
                 // we really don't want to implicitly cancel those.
                 const ONLY_ONCE: &[&str] = &[
                     Completion::METHOD,
                     SignatureHelpRequest::METHOD,
                     ResolveCompletionItem::METHOD,
+                const ONLY_ONCE: &[&str] = &[Completion::METHOD, SignatureHelpRequest::METHOD];
+                    GotoDefinition::METHOD,
+                    ProvideType::METHOD,
                 ];
 
                 let in_cancelled_requests = canceled_requests.remove(&x.id);
                 if in_cancelled_requests
                     || (subsequent_mutation && !ONLY_ONCE.contains(&x.method.as_str()))
                 {
+                    telemetry_event.canceled = true;
                     let message = format!(
                         "Request {} ({}) is canceled due to {}",
                         x.method,
@@ -848,8 +1251,7 @@ impl Server {
                 //
                 // Validating in-memory files is relatively cheap, since we only actually recheck open files which have
                 // changed file contents, so it's simpler to just always do it.
-                self.validate_in_memory_for_transaction(&mut transaction);
-
+                self.validate_in_memory_for_transaction(&mut transaction, telemetry_event);
                 info!("Handling non-canceled request {} ({})", x.method, &x.id);
                 if let Some(params) = as_request::<GotoDefinition>(&x) {
                     if let Some(params) = self
@@ -857,6 +1259,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
                         let default_response = GotoDefinitionResponse::Array(Vec::new());
                         self.send_response(new_response(
                             x.id,
@@ -871,6 +1281,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
                         let default_response = GotoDefinitionResponse::Array(Vec::new());
                         self.send_response(new_response(
                             x.id,
@@ -885,6 +1303,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
                         let default_response = GotoTypeDefinitionResponse::Array(Vec::new());
                         self.send_response(new_response(
                             x.id,
@@ -899,6 +1325,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
                         self.async_go_to_implementations(x.id, &transaction, params);
                     }
                 } else if let Some(params) = as_request::<CodeActionRequest>(&x) {
@@ -907,6 +1341,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.code_action(&transaction, params).unwrap_or_default()),
@@ -916,6 +1351,10 @@ impl Server {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<Completion>(params, &x.id)
                     {
+                        self.set_file_stats(
+                            params.text_document_position.text_document.uri.clone(),
+                            telemetry_event,
+                        );
                         self.send_response(new_response(
                             x.id,
                             self.completion(&transaction, params),
@@ -938,6 +1377,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
                         self.send_response(new_response(
                             x.id,
                             Ok(self.document_highlight(&transaction, params)),
@@ -951,6 +1398,10 @@ impl Server {
                             .read()
                             .contains_key(&params.text_document_position.text_document.uri)
                     {
+                        self.set_file_stats(
+                            params.text_document_position.text_document.uri.clone(),
+                            telemetry_event,
+                        );
                         self.references(x.id, &transaction, params);
                     } else {
                         // TODO(yangdanny) handle notebooks
@@ -964,6 +1415,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.prepare_rename(&transaction, params)),
@@ -977,6 +1429,10 @@ impl Server {
                             .read()
                             .contains_key(&params.text_document_position.text_document.uri)
                     {
+                        self.set_file_stats(
+                            params.text_document_position.text_document.uri.clone(),
+                            telemetry_event,
+                        );
                         // TODO(yangdanny) handle notebooks
                         // First check if rename is allowed via prepare_rename. If a rename is not allowed we
                         // send back an error. Otherwise we continue with the rename operation.
@@ -1002,6 +1458,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
                         self.send_response(new_response(
                             x.id,
                             Ok(self.signature_help(&transaction, params)),
@@ -1011,6 +1475,14 @@ impl Server {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<HoverRequest>(params, &x.id)
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
                         let default_response = Hover {
                             contents: HoverContents::Array(Vec::new()),
                             range: None,
@@ -1026,6 +1498,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.inlay_hints(&transaction, params).unwrap_or_default()),
@@ -1037,6 +1510,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                         let default_response = SemanticTokensResult::Tokens(SemanticTokens {
                             result_id: None,
                             data: Vec::new(),
@@ -1054,6 +1528,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                         let default_response = SemanticTokensRangeResult::Tokens(SemanticTokens {
                             result_id: None,
                             data: Vec::new(),
@@ -1071,6 +1546,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                         self.send_response(new_response(
                             x.id,
                             Ok(DocumentSymbolResponse::Nested(
@@ -1098,6 +1574,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                         self.send_response(new_response(
                             x.id,
                             Ok(self.document_diagnostics(&transaction, params)),
@@ -1107,9 +1584,10 @@ impl Server {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<ProvideType>(params, &x.id)
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                         self.send_response(new_response(
                             x.id,
-                            Ok(self.provide_type(&transaction, params)),
+                            Ok(self.provide_type(&mut transaction, params)),
                         ));
                     }
                 } else if let Some(params) = as_request::<WillRenameFiles>(&x) {
@@ -1141,6 +1619,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.text_document.uri.clone(), telemetry_event);
                         let result = self
                             .folding_ranges(&transaction, params)
                             .unwrap_or_default();
@@ -1152,6 +1631,14 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
                         self.send_response(new_response(
                             x.id,
                             Ok(self.prepare_call_hierarchy(&transaction, params)),
@@ -1163,6 +1650,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.item.uri.clone(), telemetry_event);
                         self.async_call_hierarchy_incoming_calls(x.id, &transaction, params);
                     }
                 } else if let Some(params) = as_request::<CallHierarchyOutgoingCalls>(&x) {
@@ -1171,16 +1659,19 @@ impl Server {
                             params, &x.id,
                         )
                     {
+                        self.set_file_stats(params.item.uri.clone(), telemetry_event);
                         self.async_call_hierarchy_outgoing_calls(x.id, &transaction, params);
                     }
                 } else if &x.method == "pyrefly/textDocument/docstringRanges" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
+                    self.set_file_stats(text_document.uri.clone(), telemetry_event);
                     let ranges = self
                         .docstring_ranges(&transaction, &text_document)
                         .unwrap_or_default();
                     self.send_response(new_response(x.id, Ok(ranges)));
                 } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
+                    self.set_file_stats(text_document.uri.clone(), telemetry_event);
                     if !self
                         .open_notebook_cells
                         .read()
@@ -1198,6 +1689,14 @@ impl Server {
                             Ok(TypeErrorDisplayStatus::DisabledDueToMissingConfigFile),
                         ));
                     }
+                } else if &x.method == "testing/doNotCommitNextRecheck" {
+                    self.do_not_commit_recheck.store(true, Ordering::SeqCst);
+                    info!("Set do_not_commit_recheck flag to true");
+                    self.send_response(new_response(x.id, Ok(())));
+                } else if &x.method == "testing/continueRecheck" {
+                    self.do_not_commit_recheck.store(false, Ordering::SeqCst);
+                    info!("Set do_not_commit_recheck flag to false");
+                    self.send_response(new_response(x.id, Ok(())));
                 } else {
                     self.send_response(Response::new_err(
                         x.id.clone(),
@@ -1206,7 +1705,7 @@ impl Server {
                     ));
                     info!("Unhandled request: {x:?}");
                 }
-                ide_transaction_manager.save(transaction);
+                ide_transaction_manager.save(transaction, telemetry_event);
             }
         }
         Ok(ProcessEvent::Continue)
@@ -1234,14 +1733,32 @@ impl Server {
 
         let workspaces = Arc::new(Workspaces::new(Workspace::default(), &folders));
 
+        // Parse streamDiagnostics from initialization options, defaulting to true
+        let stream_diagnostics = initialize_params
+            .initialization_options
+            .as_ref()
+            .and_then(|opts| opts.get("pyrefly"))
+            .and_then(|pyrefly| pyrefly.get("streamDiagnostics"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
         let config_finder = Workspaces::config_finder(workspaces.dupe());
+
+        // Parse commentFoldingRanges from initialization options, defaults to false
+        let comment_folding_ranges = initialize_params
+            .initialization_options
+            .as_ref()
+            .and_then(|opts| opts.get("commentFoldingRanges"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let s = Self {
             connection: ServerConnection(connection),
             lsp_queue,
             recheck_queue: HeavyTaskQueue::new("recheck_queue"),
             find_reference_queue: HeavyTaskQueue::new("find_reference_queue"),
             sourcedb_queue: HeavyTaskQueue::new("sourcedb_queue"),
-            invalidated_configs: Mutex::new(SmallSet::new()),
+            invalidated_source_dbs: Mutex::new(SmallSet::new()),
             initialize_params,
             indexing_mode,
             workspace_indexing_limit,
@@ -1253,11 +1770,17 @@ impl Server {
             indexed_configs: Mutex::new(HashSet::new()),
             indexed_workspaces: Mutex::new(HashSet::new()),
             cancellation_handles: Mutex::new(HashMap::new()),
+            uris_pending_close: Mutex::new(HashMap::new()),
             workspaces,
             outgoing_request_id: AtomicI32::new(1),
             outgoing_requests: Mutex::new(HashMap::new()),
             filewatcher_registered: AtomicBool::new(false),
             version_info: Mutex::new(HashMap::new()),
+            id: Uuid::new_v4(),
+            comment_folding_ranges,
+            currently_streaming_diagnostics_for_handles: RwLock::new(None),
+            stream_diagnostics,
+            do_not_commit_recheck: AtomicBool::new(false),
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -1275,9 +1798,33 @@ impl Server {
             }
         }
 
-        s.setup_file_watcher_if_necessary();
+        s.setup_file_watcher_if_necessary(None);
         s.request_settings_for_all_workspaces();
         s
+    }
+
+    pub fn telemetry_state(&self) -> TelemetryServerState {
+        TelemetryServerState {
+            has_sourcedb: self.workspaces.sourcedb_available(),
+            id: self.id,
+        }
+    }
+
+    pub fn set_file_stats(&self, uri: Url, telemetry: &mut TelemetryEvent) {
+        let config_root = if let Ok(path) = uri.to_file_path() {
+            let config = self.state.config_finder().python_file(
+                ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+                &ModulePath::filesystem(path),
+            );
+            config
+                .source
+                .root()
+                .and_then(|p| Url::from_file_path(p).ok())
+        } else {
+            None
+        };
+
+        telemetry.set_file_stats(TelemetryFileStats { uri, config_root });
     }
 
     fn send_response(&self, x: Response) {
@@ -1293,19 +1840,20 @@ impl Server {
             id: id.clone(),
             method: T::METHOD.to_owned(),
             params: serde_json::to_value(params).unwrap(),
+            activity_key: None,
         };
         self.connection.send(Message::Request(request.clone()));
         self.outgoing_requests.lock().insert(id, request);
     }
 
     /// Run the transaction with the in-memory content of open files. Returns the handles of open files when the transaction is done.
-    fn validate_in_memory_for_transaction(&self, transaction: &mut Transaction<'_>) -> Vec<Handle> {
-        let handles = self
-            .open_files
-            .read()
-            .keys()
-            .map(|x| make_open_handle(&self.state, x))
-            .collect::<Vec<_>>();
+    fn validate_in_memory_for_transaction(
+        &self,
+        transaction: &mut Transaction<'_>,
+        telemetry: &mut TelemetryEvent,
+    ) -> Vec<Handle> {
+        let validate_start = Instant::now();
+        let handles = self.get_open_file_handles();
         transaction.set_memory(
             self.open_files
                 .read()
@@ -1314,7 +1862,17 @@ impl Server {
                 .collect::<Vec<_>>(),
         );
         transaction.run(&handles, Require::Everything);
+        telemetry.set_validate_duration(validate_start.elapsed());
         handles
+    }
+
+    /// Get handles for all currently open files.
+    fn get_open_file_handles(&self) -> Vec<Handle> {
+        self.open_files
+            .read()
+            .keys()
+            .map(|x| make_open_handle(&self.state, x))
+            .collect()
     }
 
     fn get_diag_if_shown(
@@ -1326,10 +1884,10 @@ impl Server {
         if let Some(path) = to_real_path(e.path()) {
             // When no file covers this, we'll get the default configured config which includes "everything"
             // and excludes `.<file>`s.
-            let config = self
-                .state
-                .config_finder()
-                .python_file(ModuleName::unknown(), e.path());
+            let config = self.state.config_finder().python_file(
+                ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+                e.path(),
+            );
 
             let type_error_status = self.type_error_display_status(e.path().as_path());
 
@@ -1375,7 +1933,7 @@ impl Server {
 
     fn provide_type(
         &self,
-        transaction: &Transaction<'_>,
+        transaction: &mut Transaction<'_>,
         params: crate::lsp::wasm::provide_type::ProvideTypeParams,
     ) -> Option<ProvideTypeResponse> {
         let uri = &params.text_document.uri;
@@ -1392,7 +1950,7 @@ impl Server {
         let config = self
             .state
             .config_finder()
-            .python_file(handle.module(), handle.path());
+            .python_file(handle.module_kind(), handle.path());
         match self
             .workspaces
             .get_with(path.to_path_buf(), |(_, w)| w.display_type_errors)
@@ -1424,24 +1982,28 @@ impl Server {
     fn validate_in_memory_and_commit_if_possible<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry: &mut TelemetryEvent,
     ) {
         let possibly_committable_transaction =
             ide_transaction_manager.get_possibly_committable_transaction(&self.state);
         self.validate_in_memory_for_possibly_committable_transaction(
             ide_transaction_manager,
             possibly_committable_transaction,
+            telemetry,
         );
     }
 
     fn validate_in_memory_without_committing<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry: &mut TelemetryEvent,
     ) {
         let noncommittable_transaction =
             ide_transaction_manager.non_committable_transaction(&self.state);
         self.validate_in_memory_for_possibly_committable_transaction(
             ide_transaction_manager,
             Err(noncommittable_transaction),
+            telemetry,
         );
     }
 
@@ -1468,91 +2030,143 @@ impl Server {
         Self::append_unused_variable_diagnostics(transaction, handle, diagnostics);
     }
 
+    /// Publish diagnostics & send a semantic token refresh for the given handles
+    fn publish_for_handles<'a>(
+        &self,
+        transaction: &Transaction<'a>,
+        handles: &[Handle],
+        source: DiagnosticSource,
+    ) {
+        let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
+        let open_files = self.open_files.read();
+        let open_notebook_cells = self.open_notebook_cells.read();
+        let mut notebook_cell_urls = SmallMap::new();
+        for x in open_notebook_cells.keys() {
+            notebook_cell_urls.insert(PathBuf::from(x.to_string()), x.clone());
+        }
+        for handle in handles {
+            let handle_path_buf = handle.path().as_path().to_path_buf();
+            if let Some(lsp_file) = open_files.get(&handle_path_buf) {
+                match &**lsp_file {
+                    LspFile::Notebook(notebook) => {
+                        for url in notebook.cell_urls() {
+                            diags.insert(PathBuf::from(url.to_string()), Vec::new());
+                        }
+                    }
+                    LspFile::Source(_) => {
+                        diags.insert(handle_path_buf, Vec::new());
+                    }
+                }
+            }
+        }
+        for e in transaction.get_errors(handles).collect_errors().shown {
+            if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
+                diags.entry(path.to_owned()).or_default().push(diag);
+            }
+        }
+        drop(open_files);
+        for (path, diagnostics) in diags.iter_mut() {
+            for diagnostic in diagnostics.iter_mut() {
+                diagnostic.data = serde_json::to_value(source).ok()
+            }
+            if notebook_cell_urls.contains_key(path) {
+                continue;
+            }
+            let handle = make_open_handle(&self.state, path);
+            Self::append_ide_specific_diagnostics(transaction, &handle, diagnostics);
+        }
+        self.connection.publish_diagnostics(
+            diags,
+            notebook_cell_urls,
+            self.version_info.lock().clone(),
+            source,
+        );
+        if self
+            .initialize_params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.semantic_tokens.as_ref())
+            .and_then(|st| st.refresh_support)
+            .unwrap_or(false)
+        {
+            self.send_request::<SemanticTokensRefresh>(());
+        }
+    }
+
     /// Validate open files and send errors to the LSP. In the case of an ongoing recheck
     /// (i.e., another transaction is already being committed or the state is locked for writing),
-    /// we still update diagnostics using a non-committable transaction, which may have slightly stale
-    /// data compared to the main state
+    /// we only update diagnostics for files that were not open at the start of the recheck
     fn validate_in_memory_for_possibly_committable_transaction<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         mut possibly_committable_transaction: Result<CommittingTransaction<'a>, Transaction<'a>>,
+        telemetry: &mut TelemetryEvent,
     ) {
         let transaction = match &mut possibly_committable_transaction {
             Ok(transaction) => transaction.as_mut(),
             Err(transaction) => transaction,
         };
-        let handles = self.validate_in_memory_for_transaction(transaction);
-
-        let publish = |transaction: &Transaction| {
-            let mut diags: SmallMap<PathBuf, Vec<Diagnostic>> = SmallMap::new();
-            let open_files = self.open_files.read();
-            let open_notebook_cells = self.open_notebook_cells.read();
-            let mut notebook_cell_urls = SmallMap::new();
-            for x in open_notebook_cells.keys() {
-                diags.insert(PathBuf::from(x.to_string()), Vec::new());
-                notebook_cell_urls.insert(PathBuf::from(x.to_string()), x.clone());
-            }
-            for (x, file) in open_files.iter() {
-                if !file.is_notebook() {
-                    diags.insert(x.as_path().to_owned(), Vec::new());
-                }
-            }
-            for e in transaction.get_errors(&handles).collect_errors().shown {
-                if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
-                    diags.entry(path.to_owned()).or_default().push(diag);
-                }
-            }
-            for (path, diagnostics) in diags.iter_mut() {
-                if notebook_cell_urls.contains_key(path) {
-                    continue;
-                }
-                let handle = make_open_handle(&self.state, path);
-                Self::append_ide_specific_diagnostics(transaction, &handle, diagnostics);
-            }
-            self.connection
-                .publish_diagnostics(diags, notebook_cell_urls);
-            if self
-                .initialize_params
-                .capabilities
-                .workspace
-                .as_ref()
-                .and_then(|w| w.semantic_tokens.as_ref())
-                .and_then(|st| st.refresh_support)
-                .unwrap_or(false)
-            {
-                self.send_request::<SemanticTokensRefresh>(());
-            }
-        };
-
+        let handles = self.validate_in_memory_for_transaction(transaction, telemetry);
         match possibly_committable_transaction {
             Ok(transaction) => {
-                self.state.commit_transaction(transaction);
+                self.state.commit_transaction(transaction, Some(telemetry));
+                *self.currently_streaming_diagnostics_for_handles.write() = None;
+                let state_lock_blocked_start = Instant::now();
                 // In the case where we can commit transactions, `State` already has latest updates.
                 // Therefore, we can compute errors from transactions freshly created from `State``.
                 let transaction = self.state.transaction();
-                publish(&transaction);
+                let state_lock_blocked = state_lock_blocked_start.elapsed();
+                self.publish_for_handles(
+                    &transaction,
+                    &handles,
+                    DiagnosticSource::CommittingTransaction,
+                );
                 info!("Validated open files and committed transaction.");
+                if let Some(transaction_telemetry) = &mut telemetry.transaction_stats {
+                    transaction_telemetry.state_lock_blocked += state_lock_blocked;
+                }
             }
             Err(transaction) => {
-                // In the case where transaction cannot be committed because there is an ongoing
-                // recheck, we still want to update the diagnostics. In this case, we compute them
-                // from the transactions that won't be committed. It will still contain all the
-                // up-to-date in-memory content, but can have stale main `State` content.
-                // Note: if this changes, update this function's docstring.
-                publish(&transaction);
-                ide_transaction_manager.save(transaction);
+                // Check if there's an ongoing committable transaction streaming diagnostics.
+                // If so, only publish for files that are NOT being streamed by the committable transaction.
+                let open_files_at_recheck = self.currently_streaming_diagnostics_for_handles.read();
+                let handles_to_publish: Vec<Handle> =
+                    if let Some(streaming_handles) = open_files_at_recheck.as_ref() {
+                        handles
+                            .into_iter()
+                            .filter(|h| !streaming_handles.contains(h))
+                            .collect()
+                    } else {
+                        handles
+                    };
+                drop(open_files_at_recheck);
+
+                if !handles_to_publish.is_empty() {
+                    self.publish_for_handles(
+                        &transaction,
+                        &handles_to_publish,
+                        DiagnosticSource::NonCommittableTransaction,
+                    );
+                } else {
+                    info!("Skip publishDiagnostics, all open files are currently being rechecked");
+                }
+                ide_transaction_manager.save(transaction, telemetry);
                 info!("Validated open files and saved non-committable transaction.");
             }
         }
     }
 
     fn invalidate_find_for_configs(&self, invalidated_configs: SmallSet<ArcId<ConfigFile>>) {
-        self.invalidate(|t| t.invalidate_find_for_configs(invalidated_configs));
+        self.invalidate(TelemetryEventKind::InvalidateFind, |t| {
+            t.invalidate_find_for_configs(invalidated_configs)
+        });
     }
 
     fn populate_project_files_if_necessary(
         &self,
         config_to_populate_files: Option<ArcId<ConfigFile>>,
+        telemetry: &mut TelemetryEvent,
     ) {
         if let Some(config) = config_to_populate_files {
             if config.skip_lsp_config_indexing {
@@ -1562,21 +2176,25 @@ impl Server {
                 IndexingMode::None => {}
                 IndexingMode::LazyNonBlockingBackground => {
                     if self.indexed_configs.lock().insert(config.dupe()) {
-                        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
-                            server.populate_all_project_files_in_config(config);
-                        }));
+                        self.recheck_queue.queue_task(
+                            TelemetryEventKind::PopulateProjectFiles,
+                            Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
+                                server
+                                    .populate_all_project_files_in_config(config, telemetry_event);
+                            }),
+                        );
                     }
                 }
                 IndexingMode::LazyBlocking => {
                     if self.indexed_configs.lock().insert(config.dupe()) {
-                        self.populate_all_project_files_in_config(config);
+                        self.populate_all_project_files_in_config(config, telemetry);
                     }
                 }
             }
         }
     }
 
-    fn populate_workspace_files_if_necessary(&self) {
+    fn populate_workspace_files_if_necessary(&self, telemetry: &mut TelemetryEvent) {
         let mut indexed_workspaces = self.indexed_workspaces.lock();
         let roots_to_populate_files = self
             .workspaces
@@ -1593,52 +2211,102 @@ impl Server {
             IndexingMode::LazyNonBlockingBackground => {
                 indexed_workspaces.extend(roots_to_populate_files.iter().cloned());
                 drop(indexed_workspaces);
-                self.recheck_queue.queue_task(HeavyTask::new(move |server| {
-                    server.populate_all_workspaces_files(roots_to_populate_files);
-                }));
+                self.recheck_queue.queue_task(
+                    TelemetryEventKind::PopulateWorkspaceFiles,
+                    Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
+                        server.populate_all_workspaces_files(
+                            roots_to_populate_files,
+                            telemetry_event,
+                        );
+                    }),
+                );
             }
             IndexingMode::LazyBlocking => {
                 indexed_workspaces.extend(roots_to_populate_files.iter().cloned());
                 drop(indexed_workspaces);
-                self.populate_all_workspaces_files(roots_to_populate_files);
+                self.populate_all_workspaces_files(roots_to_populate_files, telemetry);
             }
         }
     }
 
-    /// Perform an invalidation of elements on `State` and commit them.
-    /// Runs asynchronously. Returns immediately and may wait a while for a committable transaction.
-    fn invalidate(&self, f: impl FnOnce(&mut Transaction) + Send + Sync + 'static) {
-        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
-            let mut transaction = server
-                .state
-                .new_committable_transaction(Require::indexing(), None);
-            f(transaction.as_mut());
+    fn invalidate(
+        &self,
+        kind: TelemetryEventKind,
+        f: impl FnOnce(&mut Transaction) + Send + Sync + 'static,
+    ) {
+        let open_handles = self.get_open_file_handles();
+        let stream_diagnostics = self.stream_diagnostics;
+        self.recheck_queue.queue_task(
+            kind,
+            Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
+                // Take a snapshot of the open files at the beginning of the transaction
+                // we'll stream diagnostics for those files as they become available
+                let open_handles_set: SmallSet<Handle> = open_handles.iter().cloned().collect();
+                // Store the snapshot so non-committable transactions know not to publish
+                // diagnostics for these files (they'll be streamed by this transaction)
+                if stream_diagnostics {
+                    *server.currently_streaming_diagnostics_for_handles.write() =
+                        Some(open_handles_set.clone());
+                }
+                let publish_callback =
+                    move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
+                        if stream_diagnostics && changed && open_handles_set.contains(handle) {
+                            server.publish_for_handles(
+                                transaction,
+                                std::slice::from_ref(handle),
+                                DiagnosticSource::Streaming,
+                            )
+                        }
+                    };
+                let subscriber = PublishDiagnosticsSubscriber { publish_callback };
+                let mut transaction = server
+                    .state
+                    .new_committable_transaction(Require::indexing(), Some(Box::new(subscriber)));
+                let invalidate_start = Instant::now();
+                // Mark files as dirty
+                f(transaction.as_mut());
+                telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
 
-            server.validate_in_memory_for_transaction(transaction.as_mut());
+                // Run transaction prioritizing currently-open files, sending diagnostics as soon as they are available via the subscriber
+                server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry_event);
 
-            // Commit will be blocked until there are no ongoing reads.
-            // If we have some long running read jobs that can be cancelled, we should cancel them
-            // to unblock committing transactions.
-            for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
-                cancellation_handle.cancel();
-            }
-            // we have to run, not just commit to process updates
-            server
-                .state
-                .run_with_committing_transaction(transaction, &[], Require::Everything);
-            // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
-            // the main event loop of the server. As a result, the server can do a revalidation of
-            // all the in-memory files based on the fresh main State as soon as possible.
-            info!("Invalidated state, prepare to recheck open files.");
-            let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
-        }));
+                // Wait in a loop while do_not_commit_recheck flag is set (testing only)
+                while server.do_not_commit_recheck.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+
+                // Commit will be blocked until there are no ongoing reads.
+                // If we have some long running read jobs that can be cancelled, we should cancel them
+                // to unblock committing transactions.
+                for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
+                    cancellation_handle.cancel();
+                }
+                // we have to run, not just commit to process updates
+                server.state.run_with_committing_transaction(
+                    transaction,
+                    &[],
+                    Require::Everything,
+                    Some(telemetry_event),
+                );
+                *server.currently_streaming_diagnostics_for_handles.write() = None;
+                // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
+                // the main event loop of the server. As a result, the server can do a revalidation of
+                // all the in-memory files based on the fresh main State as soon as possible.
+                info!("Invalidated state, prepare to recheck open files.");
+                let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
+            }),
+        );
     }
 
     /// Certain IDE features (e.g. find-references) require us to know the dependency graph of the
     /// entire project to work. This blocking function should be called when we know that a project
     /// file is opened and if we intend to provide features like find-references, and should be
     /// called when config changes (currently this is a TODO).
-    fn populate_all_project_files_in_config(&self, config: ArcId<ConfigFile>) {
+    fn populate_all_project_files_in_config(
+        &self,
+        config: ArcId<ConfigFile>,
+        telemetry: &mut TelemetryEvent,
+    ) {
         let unknown = ModuleName::unknown();
 
         info!("Populating all files in the config ({:?}).", config.source);
@@ -1654,7 +2322,7 @@ impl Server {
             let path_config = self
                 .state
                 .config_finder()
-                .python_file(unknown, &module_path);
+                .python_file(ModuleNameWithKind::guaranteed(unknown), &module_path);
             if config != path_config {
                 continue;
             }
@@ -1663,7 +2331,7 @@ impl Server {
 
         info!("Prepare to check {} files.", handles.len());
         transaction.as_mut().run(&handles, Require::indexing());
-        self.state.commit_transaction(transaction);
+        self.state.commit_transaction(transaction, Some(telemetry));
         // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
         // the main event loop of the server. As a result, the server can do a revalidation of
         // all the in-memory files based on the fresh main State as soon as possible.
@@ -1671,7 +2339,11 @@ impl Server {
         let _ = self.lsp_queue.send(LspEvent::RecheckFinished);
     }
 
-    fn populate_all_workspaces_files(&self, workspace_roots: Vec<PathBuf>) {
+    fn populate_all_workspaces_files(
+        &self,
+        workspace_roots: Vec<PathBuf>,
+        telemetry: &mut TelemetryEvent,
+    ) {
         for workspace_root in workspace_roots {
             info!(
                 "Populating up to {} files in the workspace ({workspace_root:?}).",
@@ -1697,7 +2369,7 @@ impl Server {
 
             info!("Prepare to check {} files.", handles.len());
             transaction.as_mut().run(&handles, Require::indexing());
-            self.state.commit_transaction(transaction);
+            self.state.commit_transaction(transaction, Some(telemetry));
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
             // all the in-memory files based on the fresh main State as soon as possible.
@@ -1708,8 +2380,16 @@ impl Server {
 
     /// Attempts to requery any open sourced_dbs for open files, and if there are changes,
     /// invalidate find and perform a recheck.
-    fn queue_source_db_rebuild_and_recheck(&self, force: bool) {
-        let run = move |server: &Server| {
+    fn queue_source_db_rebuild_and_recheck(
+        &self,
+        telemetry: &impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
+        force: bool,
+    ) {
+        let run = move |server: &Server,
+                        telemetry: &dyn Telemetry,
+                        telemetry_event: &mut TelemetryEvent,
+                        task_stats: Option<&TelemetryTaskId>| {
             let mut configs_to_paths: SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>> =
                 SmallMap::new();
             let config_finder = server.state.config_finder();
@@ -1720,38 +2400,47 @@ impl Server {
                 .map(|x| make_open_handle(&server.state, x))
                 .collect::<Vec<_>>();
             for handle in handles {
-                let config = config_finder.python_file(handle.module(), handle.path());
+                let config = config_finder.python_file(handle.module_kind(), handle.path());
                 configs_to_paths
                     .entry(config)
                     .or_default()
                     .insert(handle.path().dupe());
             }
-            let new_invalidated_configs = ConfigFile::query_source_db(&configs_to_paths, force);
-            if !new_invalidated_configs.is_empty() {
-                let mut lock = server.invalidated_configs.lock();
-                for c in new_invalidated_configs {
-                    lock.insert(c);
+            let task_telemetry =
+                SubTaskTelemetry::new(telemetry, server.telemetry_state(), task_stats);
+            let (new_invalidated_source_dbs, rebuild_stats) =
+                ConfigFile::query_source_db(&configs_to_paths, force, Some(task_telemetry));
+            telemetry_event.set_sourcedb_rebuild_stats(rebuild_stats);
+            if !new_invalidated_source_dbs.is_empty() {
+                let mut lock = server.invalidated_source_dbs.lock();
+                for db in new_invalidated_source_dbs {
+                    lock.insert(db);
                 }
                 let _ = server.lsp_queue.send(LspEvent::InvalidateConfigFind);
             }
         };
 
         if self.build_system_blocking {
-            run(self);
+            run(self, telemetry, telemetry_event, None);
         } else {
-            self.sourcedb_queue.queue_task(HeavyTask::new(run));
+            self.sourcedb_queue
+                .queue_task(TelemetryEventKind::SourceDbRebuild, Box::new(run));
         }
     }
 
     fn did_save(&self, url: Url) {
         if let Some(path) = self.path_for_uri(&url) {
-            self.invalidate(move |t| t.invalidate_disk(&[path]))
+            self.invalidate(TelemetryEventKind::InvalidateDisk, move |t| {
+                t.invalidate_disk(&[path])
+            })
         }
     }
 
     fn did_open<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry: &impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         url: Url,
         version: i32,
@@ -1780,7 +2469,7 @@ impl Server {
         };
         self.version_info.lock().insert(path.clone(), version);
         self.open_files.write().insert(path.clone(), contents);
-        self.queue_source_db_rebuild_and_recheck(false);
+        self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         if !subsequent_mutation {
             // In order to improve perceived startup perf, when a file is opened, we run a
             // non-committing transaction that indexes the file with default require level Exports.
@@ -1796,12 +2485,12 @@ impl Server {
                 "File {} opened, prepare to validate open files.",
                 path.display()
             );
-            self.validate_in_memory_without_committing(ide_transaction_manager);
+            self.validate_in_memory_without_committing(ide_transaction_manager, telemetry_event);
         }
-        self.populate_project_files_if_necessary(config_to_populate_files);
-        self.populate_workspace_files_if_necessary();
+        self.populate_project_files_if_necessary(config_to_populate_files, telemetry_event);
+        self.populate_workspace_files_if_necessary(telemetry_event);
         // rewatch files in case we loaded or dropped any configs
-        self.setup_file_watcher_if_necessary();
+        self.setup_file_watcher_if_necessary(Some(telemetry_event));
         Ok(())
     }
 
@@ -1810,6 +2499,7 @@ impl Server {
         ide_transaction_manager: &mut TransactionManager<'a>,
         subsequent_mutation: bool,
         params: DidChangeTextDocumentParams,
+        telemetry: &mut TelemetryEvent,
     ) -> anyhow::Result<()> {
         let VersionedTextDocumentIdentifier { uri, version } = params.text_document;
         let Some(file_path) = self.path_for_uri(&uri) else {
@@ -1826,6 +2516,8 @@ impl Server {
             ));
         }
         version_info.insert(file_path.clone(), version);
+        // drop this to avoid deadlock
+        drop(version_info);
         let mut lock = self.open_files.write();
         let Some(original) = lock.get_mut(&file_path) else {
             return Err(anyhow::anyhow!(
@@ -1843,7 +2535,15 @@ impl Server {
                 "File {} changed, prepare to validate open files.",
                 file_path.display()
             );
-            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
+            if let Some(handle) =
+                self.make_handle_if_enabled(&uri, Some(DidChangeTextDocument::METHOD))
+            {
+                self.currently_streaming_diagnostics_for_handles
+                    .write()
+                    .as_mut()
+                    .map(|handles| handles.shift_remove(&handle));
+            }
+            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager, telemetry);
         }
         Ok(())
     }
@@ -1853,6 +2553,7 @@ impl Server {
         ide_transaction_manager: &mut TransactionManager<'a>,
         subsequent_mutation: bool,
         params: DidChangeNotebookDocumentParams,
+        telemetry: &mut TelemetryEvent,
     ) -> anyhow::Result<()> {
         let uri = params.notebook_document.uri.clone();
         let version = params.notebook_document.version;
@@ -1895,6 +2596,7 @@ impl Server {
             notebook_document.metadata = Some(metadata.clone());
         }
         version_info.insert(file_path.clone(), version);
+        drop(version_info);
         notebook_document.version = version;
         // Changes to cells
         if let Some(change) = &params.change.cells {
@@ -1977,7 +2679,7 @@ impl Server {
                 "Notebook {} changed, prepare to validate open files.",
                 file_path.display()
             );
-            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager);
+            self.validate_in_memory_and_commit_if_possible(ide_transaction_manager, telemetry);
         }
         Ok(())
     }
@@ -2000,7 +2702,12 @@ impl Server {
         config_changed || files_added_or_removed
     }
 
-    fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+    fn did_change_watched_files(
+        &self,
+        params: DidChangeWatchedFilesParams,
+        telemetry: &impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
+    ) {
         let events = CategorizedEvents::new_lsp(params.changes);
         if events.is_empty() {
             return;
@@ -2010,53 +2717,105 @@ impl Server {
         // Rewatch files if necessary (config changed, files added/removed, etc.)
         if Self::should_rewatch(&events) {
             info!("[Pyrefly] Re-registering file watchers");
-            self.setup_file_watcher_if_necessary();
+            self.setup_file_watcher_if_necessary(Some(telemetry_event));
         }
 
-        self.invalidate(move |t| t.invalidate_events(&events));
+        self.invalidate(TelemetryEventKind::InvalidateFind, move |t| {
+            t.invalidate_events(&events)
+        });
 
         // If a non-Python, non-config file was changed, then try rebuilding build systems.
         // If no build system file was changed, then we should just not do anything. If
         // a build system file was changed, then the change should take effect soon.
         if should_requery_build_system {
-            self.queue_source_db_rebuild_and_recheck(true);
+            self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, true);
         }
     }
 
-    fn did_close(&self, url: Url) {
+    fn did_close(
+        &self,
+        url: Url,
+        kind: DidCloseKind,
+        telemetry: &impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
+    ) {
         let Some(path) = self.path_for_uri(&url) else {
             return;
         };
-        self.version_info.lock().remove(&path);
-        if let Some(LspFile::Notebook(notebook)) = self.open_files.write().remove(&path).as_deref()
-        {
-            for cell in notebook.cell_urls() {
-                self.connection
-                    .publish_diagnostics_for_uri(cell.clone(), Vec::new(), None);
-                self.open_notebook_cells.write().remove(cell);
-            }
-        } else {
-            self.connection
-                .publish_diagnostics_for_uri(url.clone(), Vec::new(), None);
+        let version = self
+            .version_info
+            .lock()
+            .remove(&path)
+            .map(|version| version + 1);
+        let mut open_files = self.open_files.write();
+        let Entry::Occupied(entry) = open_files.entry(path.clone()) else {
+            return;
+        };
+        match entry.get().as_ref() {
+            LspFile::Notebook(notebook) => match kind {
+                DidCloseKind::NotebookDocument => {
+                    let cell_urls: Vec<_> = notebook.cell_urls().to_vec();
+                    for cell in cell_urls {
+                        self.connection.publish_diagnostics_for_uri(
+                            cell.clone(),
+                            Vec::new(),
+                            version,
+                            DiagnosticSource::DidClose,
+                        );
+                        self.open_notebook_cells.write().remove(&cell);
+                    }
+                    entry.remove();
+                }
+                DidCloseKind::TextDocument => {
+                    info!("textDocument/didClose received for file open as a notebook");
+                    return;
+                }
+            },
+            LspFile::Source(_) => match kind {
+                DidCloseKind::NotebookDocument => {
+                    info!("notebookDocument/didClose received for file open in a text editor");
+                    return;
+                }
+                DidCloseKind::TextDocument => {
+                    self.connection.publish_diagnostics_for_uri(
+                        url.clone(),
+                        Vec::new(),
+                        version,
+                        DiagnosticSource::DidClose,
+                    );
+                    entry.remove();
+                }
+            },
         }
+        drop(open_files);
         self.unsaved_file_tracker.forget_uri_path(&url);
-        self.queue_source_db_rebuild_and_recheck(false);
-        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
-            // Clear out the memory associated with this file.
-            // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
-            // Having the extra file hanging around doesn't harm anything, but does use extra memory.
-            let mut transaction = server
-                .state
-                .new_committable_transaction(Require::indexing(), None);
-            transaction.as_mut().set_memory(vec![(path, None)]);
-            let _ = server.validate_in_memory_for_transaction(transaction.as_mut());
-            server.state.commit_transaction(transaction);
-        }));
+        self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
+        self.recheck_queue.queue_task(
+            TelemetryEventKind::InvalidateOnClose,
+            Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
+                // Clear out the memory associated with this file.
+                // Not a race condition because we immediately call validate_in_memory to put back the open files as they are now.
+                // Having the extra file hanging around doesn't harm anything, but does use extra memory.
+                let mut transaction = server
+                    .state
+                    .new_committable_transaction(Require::indexing(), None);
+                transaction.as_mut().set_memory(vec![(path, None)]);
+                let _ = server
+                    .validate_in_memory_for_transaction(transaction.as_mut(), telemetry_event);
+                server
+                    .state
+                    .commit_transaction(transaction, Some(telemetry_event));
+            }),
+        );
     }
 
-    fn workspace_folders_changed(&self, params: DidChangeWorkspaceFoldersParams) {
+    fn workspace_folders_changed(
+        &self,
+        params: DidChangeWorkspaceFoldersParams,
+        telemetry_event: &mut TelemetryEvent,
+    ) {
         self.workspaces.changed(params.event);
-        self.setup_file_watcher_if_necessary();
+        self.setup_file_watcher_if_necessary(Some(telemetry_event));
         self.request_settings_for_all_workspaces();
     }
 
@@ -2357,10 +3116,6 @@ impl Server {
         params: CodeActionParams,
     ) -> Option<CodeActionResponse> {
         let uri = &params.text_document.uri;
-        if self.open_notebook_cells.read().contains_key(uri) {
-            // TODO(yangdanny) handle notebooks
-            return None;
-        }
         let (handle, lsp_config) = self.make_handle_with_lsp_analysis_config_if_enabled(
             uri,
             Some(CodeActionRequest::METHOD),
@@ -2368,26 +3123,113 @@ impl Server {
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let module_info = transaction.get_module_info(&handle)?;
         let range = self.from_lsp_range(uri, &module_info, params.range);
-        let code_actions = transaction
-            .local_quickfix_code_actions(&handle, range, import_format)?
-            .into_map(|(title, info, range, insert_text)| {
-                CodeActionOrCommand::CodeAction(CodeAction {
-                    title,
-                    kind: Some(CodeActionKind::QUICKFIX),
+        let mut actions = Vec::new();
+        if let Some(quickfixes) =
+            transaction.local_quickfix_code_actions_sorted(&handle, range, import_format)
+        {
+            actions.extend(quickfixes.into_iter().filter_map(
+                |(title, info, range, insert_text)| {
+                    let lsp_location = self.to_lsp_location(&TextRangeWithModule {
+                        module: info,
+                        range,
+                    })?;
+                    Some(CodeActionOrCommand::CodeAction(CodeAction {
+                        title,
+                        kind: Some(CodeActionKind::QUICKFIX),
+                        edit: Some(WorkspaceEdit {
+                            changes: Some(HashMap::from([(
+                                lsp_location.uri,
+                                vec![TextEdit {
+                                    range: lsp_location.range,
+                                    new_text: insert_text,
+                                }],
+                            )])),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }))
+                },
+            ));
+        }
+        // Optimization: do not calculate refactors for automated codeactions since they're expensive
+        // If we had lazy code actions, we could keep them.
+        if let Some(trigger_kind) = params.context.trigger_kind
+            && trigger_kind == CodeActionTriggerKind::AUTOMATIC
+        {
+            return (!actions.is_empty()).then_some(actions);
+        }
+        let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
+            for action in refactors {
+                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                for (module, edit_range, new_text) in action.edits {
+                    let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
+                        module,
+                        range: edit_range,
+                    }) else {
+                        continue;
+                    };
+                    changes.entry(lsp_location.uri).or_default().push(TextEdit {
+                        range: lsp_location.range,
+                        new_text,
+                    });
+                }
+                if changes.is_empty() {
+                    continue;
+                }
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: action.title,
+                    kind: Some(action.kind),
                     edit: Some(WorkspaceEdit {
-                        changes: Some(HashMap::from([(
-                            uri.clone(),
-                            vec![TextEdit {
-                                range: info.to_lsp_range(range),
-                                new_text: insert_text,
-                            }],
-                        )])),
+                        changes: Some(changes),
                         ..Default::default()
                     }),
                     ..Default::default()
-                })
-            });
-        Some(code_actions)
+                }));
+            }
+        };
+        if let Some(refactors) = transaction.extract_field_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.inline_variable_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.inline_method_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.inline_parameter_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.pull_members_up_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.push_members_down_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) =
+            transaction.move_module_member_code_actions(&handle, range, import_format)
+        {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) =
+            transaction.make_local_function_top_level_code_actions(&handle, range, import_format)
+        {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(action) =
+            convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
+        {
+            actions.push(action);
+        }
+        (!actions.is_empty()).then_some(actions)
     }
 
     fn document_highlight(
@@ -2453,14 +3295,15 @@ impl Server {
         else {
             return self.send_response(new_response::<Option<V>>(request_id, Ok(None)));
         };
-        self.find_reference_queue
-            .queue_task(HeavyTask::new(move |server| {
+        self.find_reference_queue.queue_task(
+            TelemetryEventKind::FindFromDefinition,
+            Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
                 let mut transaction = server.state.cancellable_transaction();
                 server
                     .cancellation_handles
                     .lock()
                     .insert(request_id.clone(), transaction.get_cancellation_handle());
-                server.validate_in_memory_for_transaction(transaction.as_mut());
+                server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry_event);
                 match find_fn(&mut transaction, &handle, definition) {
                     Ok(results) => {
                         server.cancellation_handles.lock().remove(&request_id);
@@ -2479,7 +3322,8 @@ impl Server {
                         )));
                     }
                 }
-            }));
+            }),
+        );
     }
 
     /// Compute references of a symbol at a given position using the standard find_global_references_from_definition
@@ -2943,6 +3787,10 @@ impl Server {
             ranges
                 .into_iter()
                 .filter_map(|(range, kind)| {
+                    // Filter out comment section folding ranges (Region) unless enabled
+                    if !self.comment_folding_ranges && kind == Some(FoldingRangeKind::Region) {
+                        return None;
+                    }
                     let lsp_range = module.to_lsp_range(range);
                     if lsp_range.start.line >= lsp_range.end.line {
                         return None;
@@ -3043,7 +3891,9 @@ impl Server {
         }
     }
 
-    fn setup_file_watcher_if_necessary(&self) {
+    fn setup_file_watcher_if_necessary(&self, telemetry_event: Option<&mut TelemetryEvent>) {
+        let start = Instant::now();
+        let mut pattern_count = 0;
         let roots = self.workspaces.roots();
         match self.initialize_params.capabilities.workspace {
             Some(WorkspaceClientCapabilities {
@@ -3096,6 +3946,7 @@ impl Server {
                         kind: Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete),
                     })
                     .collect::<Vec<_>>();
+                pattern_count = watchers.len();
                 self.send_request::<RegisterCapability>(RegistrationParams {
                     registrations: Vec::from([Registration {
                         id: Self::FILEWATCHER_ID.to_owned(),
@@ -3111,6 +3962,12 @@ impl Server {
                 self.filewatcher_registered.store(true, Ordering::Relaxed);
             }
             _ => (),
+        }
+        if let Some(telemetry_event) = telemetry_event {
+            telemetry_event.set_file_watcher_stats(TelemetryFileWatcherStats {
+                count: pattern_count,
+                duration: start.elapsed(),
+            });
         }
     }
 
@@ -3144,35 +4001,61 @@ impl Server {
     /// Asynchronously invalidate configuration and then validate in-memory files
     /// This ensures validate_in_memory() only runs after config invalidation completes
     fn invalidate_config_and_validate_in_memory(&self) {
-        self.recheck_queue.queue_task(HeavyTask::new(move |server| {
-            let mut transaction = server
-                .state
-                .new_committable_transaction(Require::indexing(), None);
-            transaction.as_mut().invalidate_config();
-
-            server.validate_in_memory_for_transaction(transaction.as_mut());
-
-            // Commit will be blocked until there are no ongoing reads.
-            // If we have some long running read jobs that can be cancelled, we should cancel them
-            // to unblock committing transactions.
-            for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
-                cancellation_handle.cancel();
-            }
-            // we have to run, not just commit to process updates
-            server
-                .state
-                .run_with_committing_transaction(transaction, &[], Require::Everything);
-            // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
-            // the main event loop of the server. As a result, the server can do a revalidation of
-            // all the in-memory files based on the fresh main State as soon as possible.
-            // Only send RecheckFinished if there are actually open files to revalidate.
-            if !server.open_files.read().is_empty() {
-                info!("Invalidated config, prepare to recheck open files.");
-                let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
-            } else {
-                info!("Invalidated config, but no open files to recheck.");
-            }
-        }));
+        let open_handles = self.get_open_file_handles();
+        let stream_diagnostics = self.stream_diagnostics;
+        self.recheck_queue.queue_task(
+            TelemetryEventKind::InvalidateConfig,
+            Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
+                let open_handles_set: SmallSet<Handle> = open_handles.iter().cloned().collect();
+                // Only set this if streaming is enabled
+                if stream_diagnostics {
+                    *server.currently_streaming_diagnostics_for_handles.write() =
+                        Some(open_handles_set.clone());
+                }
+                let publish_callback =
+                    move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
+                        if stream_diagnostics && changed && open_handles_set.contains(handle) {
+                            server.publish_for_handles(
+                                transaction,
+                                std::slice::from_ref(handle),
+                                DiagnosticSource::Streaming,
+                            )
+                        }
+                    };
+                let subscriber = PublishDiagnosticsSubscriber { publish_callback };
+                let mut transaction = server
+                    .state
+                    .new_committable_transaction(Require::indexing(), Some(Box::new(subscriber)));
+                let invalidate_start = Instant::now();
+                transaction.as_mut().invalidate_config();
+                telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
+                server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry_event);
+                // Commit will be blocked until there are no ongoing reads.
+                // If we have some long running read jobs that can be cancelled, we should cancel them
+                // to unblock committing transactions.
+                for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
+                    cancellation_handle.cancel();
+                }
+                // we have to run, not just commit to process updates
+                server.state.run_with_committing_transaction(
+                    transaction,
+                    &[],
+                    Require::Everything,
+                    Some(telemetry_event),
+                );
+                *server.currently_streaming_diagnostics_for_handles.write() = None;
+                // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
+                // the main event loop of the server. As a result, the server can do a revalidation of
+                // all the in-memory files based on the fresh main State as soon as possible.
+                // Only send RecheckFinished if there are actually open files to revalidate.
+                if !server.open_files.read().is_empty() {
+                    info!("Invalidated config, prepare to recheck open files.");
+                    let _ = server.lsp_queue.send(LspEvent::RecheckFinished);
+                } else {
+                    info!("Invalidated config, but no open files to recheck.");
+                }
+            }),
+        );
     }
 
     fn will_rename_files(
@@ -3279,37 +4162,7 @@ impl Server {
                     &target_def,
                 )
             },
-            |callers| {
-                let mut incoming_calls = Vec::new();
-                for (caller_module, call_sites) in callers {
-                    for (call_range, caller_name, caller_def_range) in call_sites {
-                        let Some(caller_uri) = module_info_to_uri(&caller_module) else {
-                            continue;
-                        };
-
-                        let from = lsp_types::CallHierarchyItem {
-                            name: caller_name
-                                .split('.')
-                                .next_back()
-                                .unwrap_or(&caller_name)
-                                .to_owned(),
-                            kind: lsp_types::SymbolKind::FUNCTION,
-                            tags: None,
-                            detail: Some(caller_name),
-                            uri: caller_uri,
-                            range: caller_module.to_lsp_range(caller_def_range),
-                            selection_range: caller_module.to_lsp_range(caller_def_range),
-                            data: None,
-                        };
-
-                        incoming_calls.push(lsp_types::CallHierarchyIncomingCall {
-                            from,
-                            from_ranges: vec![caller_module.to_lsp_range(call_range)],
-                        });
-                    }
-                }
-                incoming_calls
-            },
+            transform_incoming_calls,
         );
     }
 
@@ -3356,33 +4209,7 @@ impl Server {
                 Ok((callees, definition.module))
             },
             move |(callees, source_module)| {
-                let mut outgoing_calls = Vec::new();
-                for (target_module, calls) in callees {
-                    let target_uri = lsp_types::Url::from_file_path(target_module.path().as_path())
-                        .unwrap_or_else(|()| uri_for_transform.clone());
-
-                    for (call_range, target_def_range) in calls {
-                        let target_name_short = target_module.code_at(target_def_range);
-                        let target_name = format!("{}.{}", target_module.name(), target_name_short);
-
-                        let to = lsp_types::CallHierarchyItem {
-                            name: target_name_short.to_owned(),
-                            kind: lsp_types::SymbolKind::FUNCTION,
-                            tags: None,
-                            detail: Some(target_name),
-                            uri: target_uri.clone(),
-                            range: target_module.to_lsp_range(target_def_range),
-                            selection_range: target_module.to_lsp_range(target_def_range),
-                            data: None,
-                        };
-
-                        outgoing_calls.push(lsp_types::CallHierarchyOutgoingCall {
-                            to,
-                            from_ranges: vec![source_module.to_lsp_range(call_range)],
-                        });
-                    }
-                }
-                outgoing_calls
+                transform_outgoing_calls(callees, &source_module, &uri_for_transform)
             },
         );
     }
@@ -3398,10 +4225,6 @@ impl Server {
         transaction: &Transaction<'_>,
         params: lsp_types::CallHierarchyPrepareParams,
     ) -> Option<Vec<lsp_types::CallHierarchyItem>> {
-        use lsp_types::CallHierarchyItem;
-        use lsp_types::SymbolKind;
-        use ruff_text_size::Ranged;
-
         let uri = &params.text_document_position_params.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, None)?;
         let module_info = transaction.get_module_info(&handle)?;
@@ -3430,28 +4253,10 @@ impl Server {
 
             // Look for function at the definition position, not the original cursor position
             if let Some(func_def) =
-                crate::state::state::CancellableTransaction::find_function_at_position_in_ast(
-                    &ast,
-                    def.definition_range.start(),
-                )
+                find_function_at_position_in_ast(&ast, def.definition_range.start())
             {
-                let name = func_def.name.id.to_string();
-                let detail = Some(format!("{}.{}", def.module.name(), name));
-                let kind = SymbolKind::FUNCTION;
-
-                let range = def.module.to_lsp_range(func_def.range());
-                let selection_range = def.module.to_lsp_range(func_def.name.range());
-
-                return Some(vec![CallHierarchyItem {
-                    name,
-                    kind,
-                    tags: None,
-                    detail,
-                    uri: def_uri,
-                    range,
-                    selection_range,
-                    data: None,
-                }]);
+                let item = prepare_call_hierarchy_item(func_def, &def.module, def_uri);
+                return Some(vec![item]);
             }
         }
         None
@@ -3463,10 +4268,6 @@ impl TspInterface for Server {
         self.send_response(response)
     }
 
-    fn state(&self) -> &State {
-        &self.state
-    }
-
     fn connection(&self) -> &Connection {
         &self.connection.0
     }
@@ -3475,26 +4276,38 @@ impl TspInterface for Server {
         &self.lsp_queue
     }
 
-    fn recheck_queue(&self) -> &HeavyTaskQueue<HeavyTask> {
-        &self.recheck_queue
+    fn uris_pending_close(&self) -> &Mutex<HashMap<String, usize>> {
+        &self.uris_pending_close
+    }
+
+    fn run_recheck_queue(&self, telemetry: &impl Telemetry) {
+        self.recheck_queue.run_until_stopped(self, telemetry);
+    }
+
+    fn stop_recheck_queue(&self) {
+        self.recheck_queue.stop();
     }
 
     fn process_event<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
+        telemetry: &impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
     ) -> anyhow::Result<ProcessEvent> {
         self.process_event(
             ide_transaction_manager,
             canceled_requests,
+            telemetry,
+            telemetry_event,
             subsequent_mutation,
             event,
         )
     }
 
-    fn run_task(&self, task: HeavyTask) {
-        task.run(self)
+    fn telemetry_state(&self) -> TelemetryServerState {
+        self.telemetry_state()
     }
 }

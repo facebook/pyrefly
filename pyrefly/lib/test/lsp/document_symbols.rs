@@ -189,7 +189,7 @@ class MyClass:
     "children": [
       {
         "name": "__init__",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 4,
@@ -214,7 +214,7 @@ class MyClass:
       },
       {
         "name": "method1",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 7,
@@ -239,7 +239,7 @@ class MyClass:
       },
       {
         "name": "method2",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 10,
@@ -396,7 +396,7 @@ result = y.method()
       },
       {
         "name": "method",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 12,
@@ -689,7 +689,7 @@ result = y.method()
       },
       {
         "name": "method",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 12,
@@ -976,7 +976,7 @@ items: List[str] = ["a", "b", "c"]
       },
       {
         "name": "method",
-        "kind": 12,
+        "kind": 6,
         "range": {
           "start": {
             "line": 14,
@@ -1132,4 +1132,245 @@ items: List[str] = ["a", "b", "c"]
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn test_comment_sections_in_symbols() {
+    let code = r#"
+# Section 1 ----
+
+x = 1
+
+## Section 1.1 ----
+
+def foo():
+    pass
+
+# Section 2 ----
+
+class MyClass:
+    pass
+"#;
+    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+
+[
+  {
+    "name": "Section 1",
+    "kind": 15,
+    "range": {
+      "start": {
+        "line": 1,
+        "character": 0
+      },
+      "end": {
+        "line": 1,
+        "character": 16
+      }
+    },
+    "selectionRange": {
+      "start": {
+        "line": 1,
+        "character": 0
+      },
+      "end": {
+        "line": 1,
+        "character": 16
+      }
+    },
+    "children": [
+      {
+        "name": "x",
+        "kind": 13,
+        "range": {
+          "start": {
+            "line": 3,
+            "character": 0
+          },
+          "end": {
+            "line": 3,
+            "character": 5
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 3,
+            "character": 0
+          },
+          "end": {
+            "line": 3,
+            "character": 1
+          }
+        }
+      },
+      {
+        "name": "Section 1.1",
+        "kind": 15,
+        "range": {
+          "start": {
+            "line": 5,
+            "character": 0
+          },
+          "end": {
+            "line": 5,
+            "character": 19
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 5,
+            "character": 0
+          },
+          "end": {
+            "line": 5,
+            "character": 19
+          }
+        },
+        "children": [
+          {
+            "name": "foo",
+            "kind": 12,
+            "range": {
+              "start": {
+                "line": 7,
+                "character": 0
+              },
+              "end": {
+                "line": 8,
+                "character": 8
+              }
+            },
+            "selectionRange": {
+              "start": {
+                "line": 7,
+                "character": 4
+              },
+              "end": {
+                "line": 7,
+                "character": 7
+              }
+            },
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Section 2",
+    "kind": 15,
+    "range": {
+      "start": {
+        "line": 10,
+        "character": 0
+      },
+      "end": {
+        "line": 10,
+        "character": 16
+      }
+    },
+    "selectionRange": {
+      "start": {
+        "line": 10,
+        "character": 0
+      },
+      "end": {
+        "line": 10,
+        "character": 16
+      }
+    },
+    "children": [
+      {
+        "name": "MyClass",
+        "kind": 5,
+        "range": {
+          "start": {
+            "line": 12,
+            "character": 0
+          },
+          "end": {
+            "line": 13,
+            "character": 8
+          }
+        },
+        "selectionRange": {
+          "start": {
+            "line": 12,
+            "character": 6
+          },
+          "end": {
+            "line": 12,
+            "character": 13
+          }
+        },
+        "children": []
+      }
+    ]
+  }
+]
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn test_comment_sections_with_ast_children() {
+    let code = r#"
+# Imports ----
+import os
+
+## Standard Library ----
+from pathlib import Path
+a = 1
+
+def greeting():
+    print("hello, world")
+
+## Another second level ----
+
+# Configuration ====
+DEBUG = True
+
+b = 2
+"#;
+    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
+
+    // Verify the structure:
+    // - "Imports" should contain:
+    //   - "Standard Library" (subsection)
+    //     - a (variable)
+    //     - greeting (function)
+    //   - "Another second level" (subsection)
+    // - "Configuration" should contain:
+    //   - DEBUG (variable)
+    //   - b (variable)
+
+    let symbols: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_str(&report.split('\n').skip(2).collect::<Vec<_>>().join("\n")).unwrap();
+
+    // Check top-level sections
+    assert_eq!(symbols.len(), 2);
+    assert_eq!(symbols[0].name, "Imports");
+    assert_eq!(symbols[1].name, "Configuration");
+
+    // Check "Imports" children
+    let imports_children = symbols[0].children.as_ref().unwrap();
+    assert_eq!(imports_children.len(), 2);
+    assert_eq!(imports_children[0].name, "Standard Library");
+    assert_eq!(imports_children[1].name, "Another second level");
+
+    // Check "Standard Library" children
+    let std_lib_children = imports_children[0].children.as_ref().unwrap();
+    assert_eq!(std_lib_children.len(), 2);
+    assert_eq!(std_lib_children[0].name, "a");
+    assert_eq!(std_lib_children[1].name, "greeting");
+
+    // Check "Configuration" children
+    let config_children = symbols[1].children.as_ref().unwrap();
+    assert_eq!(config_children.len(), 2);
+    assert_eq!(config_children[0].name, "DEBUG");
+    assert_eq!(config_children[1].name, "b");
 }

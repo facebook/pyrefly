@@ -71,10 +71,6 @@ impl LspFile {
             }
         }
     }
-
-    pub fn is_notebook(&self) -> bool {
-        matches!(self, Self::Notebook(_))
-    }
 }
 
 /// The result of loading a module, including its `Module` and `ErrorCollector`.

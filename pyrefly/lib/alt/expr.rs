@@ -17,6 +17,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::literal::LitStyle;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -267,9 +268,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self_type_annotation;
         }
         let res = match x {
-            Expr::Name(x) => self
-                .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                .arc_clone(),
+            Expr::Name(x) => {
+                if Ast::is_synthesized_empty_name(x) {
+                    TypeInfo::of_ty(Type::any_error())
+                } else {
+                    self.get(&Key::BoundName(ShortIdentifier::expr_name(x)))
+                        .arc_clone()
+                }
+            }
             Expr::Attribute(x) => {
                 let base = self.expr_infer_type_info_with_hint(&x.value, None, errors);
                 self.record_external_attribute_definition_index(
@@ -295,10 +301,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.subscript_infer(&base, &x.slice, x.range(), errors)
             }
             Expr::Named(x) => match &*x.target {
-                Expr::Name(name) => self
+                Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => self
                     .get(&Key::Definition(ShortIdentifier::expr_name(name)))
                     .arc_clone(),
-                _ => TypeInfo::of_ty(Type::any_error()), // syntax error
+                _ => self.expr_infer_type_info_with_hint(&x.value, hint, errors),
             },
             // All other expressions operate at the `Type` level only, so we avoid the overhead of
             // wrapping and unwrapping `TypeInfo` by computing the result as a `Type` and only wrapping
@@ -415,6 +421,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }));
                 }
                 let params = Params::List(ParamList::new(params));
+                if let Some(hint) = hint {
+                    // Ensure no param vars are pinned to unfinished Variable::Quantified.
+                    // Since lambda parameters are unannotated, the specialization errors can be ignored.
+                    let _specialization_errors = self.solver().finish_all_quantified(hint.ty());
+                }
                 let ret = self.expr_infer_type_no_trace(
                     &lambda.body,
                     return_hint.as_ref().map(|hint| hint.as_ref()),
@@ -428,17 +439,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if x.is_empty() {
                     let elem_ty = elt_hint.map_or_else(
                         || {
-                            if !self.solver().infer_with_first_use {
-                                self.error(
-                                    errors,
-                                    x.range(),
-                                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
-                                    "This expression is implicitly inferred to be `list[Any]`. Please provide an explicit type annotation.".to_owned(),
-                                );
-                                Type::any_implicit()
-                            } else {
-                                self.solver().fresh_partial_contained(self.uniques).to_type()
-                            }
+                            self.solver()
+                                .fresh_partial_contained(self.uniques, x.range)
+                                .to_type()
                         },
                         |hint| hint.to_type(),
                     );
@@ -454,17 +457,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if x.is_empty() {
                     let elem_ty = elem_hint.map_or_else(
                         || {
-                            if !self.solver().infer_with_first_use {
-                                self.error(
-                                    errors,
-                                    x.range(),
-                                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
-                                    "This expression is implicitly inferred to be `set[Any]`. Please provide an explicit type annotation.".to_owned(),
-                                );
-                                Type::any_implicit()
-                            } else {
-                                self.solver().fresh_partial_contained(self.uniques).to_type()
-                            }
+                            self.solver()
+                                .fresh_partial_contained(self.uniques, x.range)
+                                .to_type()
                         },
                         |hint| hint.to_type(),
                     );
@@ -570,8 +565,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 });
                 match Lit::from_fstring(x) {
-                    Some(lit) => lit.to_type(),
-                    _ if all_literal_strings => Type::LiteralString,
+                    Some(lit) => lit.to_implicit_type(),
+                    _ if all_literal_strings => Type::LiteralString(LitStyle::Implicit),
                     _ => self.stdlib.str().clone().to_type(),
                 }
             }
@@ -581,14 +576,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ErrorInfo::Kind(ErrorKind::Unsupported),
                 "t-strings are not yet supported".to_owned(),
             ),
-            Expr::StringLiteral(x) => Lit::from_string_literal(x).to_type(),
-            Expr::BytesLiteral(x) => Lit::from_bytes_literal(x).to_type(),
+            Expr::StringLiteral(x) => Lit::from_string_literal(x).to_implicit_type(),
+            Expr::BytesLiteral(x) => Lit::from_bytes_literal(x).to_implicit_type(),
             Expr::NumberLiteral(x) => match &x.value {
-                Number::Int(x) => Lit::from_int(x).to_type(),
+                Number::Int(x) => Lit::from_int(x).to_implicit_type(),
                 Number::Float(_) => self.stdlib.float().clone().to_type(),
                 Number::Complex { .. } => self.stdlib.complex().clone().to_type(),
             },
-            Expr::BooleanLiteral(x) => Lit::from_boolean_literal(x).to_type(),
+            Expr::BooleanLiteral(x) => Lit::from_boolean_literal(x).to_implicit_type(),
             Expr::NoneLiteral(_) => Type::None,
             Expr::EllipsisLiteral(_) => Type::Ellipsis,
             Expr::Starred(ExprStarred { value, .. }) => {
@@ -630,7 +625,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             want.ty().clone()
         } else {
-            ty.promote_literals(self.stdlib)
+            ty.promote_implicit_literals(self.stdlib)
         }
     }
 
@@ -889,36 +884,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if items.is_empty() {
             let key_ty = key_hint.map_or_else(
                 || {
-                    if !self.solver().infer_with_first_use {
-                        Type::any_implicit()
-                    } else {
-                        self.solver()
-                            .fresh_partial_contained(self.uniques)
-                            .to_type()
-                    }
+                    self.solver()
+                        .fresh_partial_contained(self.uniques, range)
+                        .to_type()
                 },
                 |ty| ty.to_type(),
             );
             let value_ty = value_hint.map_or_else(
                 || {
-                    if !self.solver().infer_with_first_use {
-                        Type::any_implicit()
-                    } else {
-                        self.solver()
-                            .fresh_partial_contained(self.uniques)
-                            .to_type()
-                    }
+                    self.solver()
+                        .fresh_partial_contained(self.uniques, range)
+                        .to_type()
                 },
                 |ty| ty.to_type(),
             );
-            if hint.is_none() && !self.solver().infer_with_first_use {
-                self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
-                    "This expression is implicitly inferred to be `dict[Any, Any]`. Please provide an explicit type annotation.".to_owned(),
-                );
-            }
             self.stdlib.dict(key_ty, value_ty).to_type()
         } else {
             let mut typed_dict_fields = Vec::new();
@@ -956,7 +935,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         Type::union(vec![
                                             Type::None,
                                             self.solver()
-                                                .fresh_partial_contained(self.uniques)
+                                                .fresh_partial_contained(
+                                                    self.uniques,
+                                                    x.value.range(),
+                                                )
                                                 .to_type(),
                                         ])
                                     } else {
@@ -1150,7 +1132,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If this is not the last entry, we have to make a type-dependent decision and also narrow the
             // result; both operations require us to force `Var` first or they become unpredictable.
             if i < last_index {
-                t = self.force_for_narrowing(&t);
+                t = self.force_for_narrowing(&t, value.range(), errors);
             }
             if i < last_index && should_shortcircuit(&t, value.range()) {
                 t_acc = self.union(t_acc, t);
@@ -1160,13 +1142,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // If we reach the last value, we should always keep it.
                 if i == last_index || !should_discard(&t, value.range()) {
                     let t = if i != last_index && t == self.stdlib.bool().clone().to_type() {
-                        Lit::Bool(target).to_type()
+                        Lit::Bool(target).to_implicit_type()
                     } else if i != last_index && t == self.stdlib.int().clone().to_type() && !target
                     {
-                        Lit::Int(LitInt::new(0)).to_type()
+                        LitInt::new(0).to_implicit_type()
                     } else if i != last_index && t == self.stdlib.str().clone().to_type() && !target
                     {
-                        Lit::Str(Default::default()).to_type()
+                        Lit::Str(Default::default()).to_implicit_type()
                     } else {
                         t
                     };
@@ -1245,21 +1227,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        match slice {
-            Expr::NumberLiteral(ExprNumberLiteral {
-                value: Number::Int(idx),
-                ..
-            }) if let Some(idx) = idx.as_usize() => {
-                TypeInfo::at_facet(base, &FacetKind::Index(idx), || {
-                    self.subscript_infer_for_type(base.ty(), slice, range, errors)
-                })
+        if let Expr::NumberLiteral(ExprNumberLiteral {
+            value: Number::Int(idx),
+            ..
+        }) = slice
+            && let Some(idx) = idx.as_usize()
+        {
+            TypeInfo::at_facet(base, &FacetKind::Index(idx), || {
+                self.subscript_infer_for_type(base.ty(), slice, range, errors)
+            })
+        } else if let Expr::StringLiteral(ExprStringLiteral { value, .. }) = slice {
+            TypeInfo::at_facet(base, &FacetKind::Key(value.to_string()), || {
+                self.subscript_infer_for_type(base.ty(), slice, range, errors)
+            })
+        } else {
+            let swallower = self.error_swallower();
+            match self.expr_infer(slice, &swallower) {
+                Type::Literal(ref lit) if let Lit::Str(value) = &lit.value => {
+                    TypeInfo::at_facet(base, &FacetKind::Key(value.to_string()), || {
+                        self.subscript_infer_for_type(base.ty(), slice, range, errors)
+                    })
+                }
+                _ => {
+                    TypeInfo::of_ty(self.subscript_infer_for_type(base.ty(), slice, range, errors))
+                }
             }
-            Expr::StringLiteral(ExprStringLiteral { value: key, .. }) => {
-                TypeInfo::at_facet(base, &FacetKind::Key(key.to_string()), || {
-                    self.subscript_infer_for_type(base.ty(), slice, range, errors)
-                })
-            }
-            _ => TypeInfo::of_ty(self.subscript_infer_for_type(base.ty(), slice, range, errors)),
         }
     }
 
@@ -1278,22 +1270,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         ty.transform(&mut |ty| match ty {
             Type::SpecialForm(SpecialForm::Tuple) => {
+                Self::add_implicit_any_error(errors, range, "tuple", None);
                 *ty = Type::unbounded_tuple(Type::Any(AnyStyle::Implicit));
             }
             Type::SpecialForm(SpecialForm::Callable) => {
+                Self::add_implicit_any_error(errors, range, "Callable", None);
                 *ty = Type::callable_ellipsis(Type::Any(AnyStyle::Implicit))
             }
             Type::SpecialForm(SpecialForm::Type) => {
+                Self::add_implicit_any_error(errors, range, "type", None);
                 *ty = Type::type_form(Type::Any(AnyStyle::Implicit))
             }
             Type::ClassDef(cls) => {
                 if cls.is_builtin("tuple") {
+                    Self::add_implicit_any_error(errors, range, "tuple", None);
                     *ty = Type::type_form(Type::unbounded_tuple(Type::Any(AnyStyle::Implicit)));
+                } else if cls.is_builtin("type") {
+                    // `type`` is equivalent to `type[Any]`. As a result, the class def itself
+                    // has type `type[type[Any]]`.
+                    *ty = Type::type_form(Type::type_form(Type::Any(AnyStyle::Implicit)));
                 } else if cls.has_toplevel_qname("typing", "Any") {
                     *ty = Type::type_form(Type::any_explicit())
                 } else {
                     *ty = Type::type_form(self.promote(cls, range, errors));
                 }
+            }
+            Type::ClassType(cls) if cls.is_builtin("type") => {
+                *ty = Type::type_form(Type::Any(AnyStyle::Implicit));
             }
             _ => {}
         })
@@ -1302,7 +1305,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn literal_bool_infer(&self, x: &Expr, errors: &ErrorCollector) -> bool {
         let ty = self.expr_infer(x, errors);
         match ty {
-            Type::Literal(Lit::Bool(b)) => b,
+            Type::Literal(lit) if let Lit::Bool(b) = lit.value => b,
             _ => {
                 self.error(
                     errors,
@@ -1404,10 +1407,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             kw.value.range(),
                         ))
                     }
-                    "covariant" => try_set_variance(kw, PreInferenceVariance::PCovariant),
-                    "contravariant" => try_set_variance(kw, PreInferenceVariance::PContravariant),
-                    "invariant" => try_set_variance(kw, PreInferenceVariance::PInvariant),
-                    "infer_variance" => try_set_variance(kw, PreInferenceVariance::PUndefined),
+                    "covariant" => try_set_variance(kw, PreInferenceVariance::Covariant),
+                    "contravariant" => try_set_variance(kw, PreInferenceVariance::Contravariant),
+                    "invariant" => try_set_variance(kw, PreInferenceVariance::Invariant),
+                    "infer_variance" => try_set_variance(kw, PreInferenceVariance::Undefined),
                     "name" => {
                         if arg_name {
                             self.error(
@@ -1478,7 +1481,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ));
         }
 
-        let variance = variance.unwrap_or(PreInferenceVariance::PInvariant);
+        let variance = variance.unwrap_or(PreInferenceVariance::Invariant);
 
         TypeVar::new(
             name,
@@ -1974,7 +1977,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         && self.get_enum_from_class(cls).is_some() =>
                 {
                     if let Some(member) = self.get_enum_member(cls, &Name::new(key.to_str())) {
-                        Type::Literal(member)
+                        member.to_implicit_type()
                     } else {
                         self.error(
                             errors,
@@ -2105,19 +2108,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
                 Type::Any(style) => style.propagate(),
-                Type::Literal(Lit::Bytes(ref bytes)) => self.subscript_bytes_literal(
+                Type::Literal(ref lit) if let Lit::Bytes(ref bytes) = lit.value => self.subscript_bytes_literal(
                     bytes,
                     slice,
                     errors,
                     range,
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
-                Type::LiteralString if xs.len() <= 3 => {
+                Type::LiteralString(_) if xs.len() <= 3 => {
                     // We could have a more precise type here, but this matches Pyright.
                     self.stdlib.str().clone().to_type()
                 }
-                Type::Literal(Lit::Str(ref value)) if xs.len() <= 3 => {
-                    let base_ty = Type::Literal(Lit::Str(value.clone()));
+                Type::Literal(ref lit) if let Lit::Str(ref value) = lit.value && xs.len() <= 3 => {
+                    let base_ty = Lit::Str(value.clone()).to_implicit_type();
                     let context = || ErrorContext::Index(self.for_display(base_ty.clone()));
                     self.subscript_str_literal(
                         value.as_str(),
@@ -2189,10 +2192,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::TypedDict(typed_dict) => {
                     let key_ty = self.expr_infer(slice, errors);
+                    // Don't warn on anonymous typed dicts
+                    let warn_on_not_required_access = matches!(typed_dict, TypedDict::TypedDict(_));
                     self.distribute_over_union(&key_ty, |ty| match ty {
-                        Type::Literal(Lit::Str(field_name)) => {
+                        Type::Literal(lit) if let Lit::Str(field_name) = &lit.value => {
                             let fields = self.typed_dict_fields(&typed_dict);
-                            if let Some(field) = fields.get(&Name::new(field_name)) {
+                            let key_name = Name::new(field_name);
+                            if let Some(field) = fields.get(&key_name) {
+                                if warn_on_not_required_access && !field.required {
+                                    errors.add(
+                                        slice.range(),
+                                        ErrorInfo::Kind(ErrorKind::NotRequiredKeyAccess),
+                                        vec1![format!(
+                                            "TypedDict key `{}` may be absent",
+                                            key_name
+                                        ),
+                                        format!(
+                                            "Hint: guard this access with `'{}' in obj` or `obj.get('{}')`",
+                                            key_name, key_name
+                                        )],
+                                    );
+                                }
                                 field.ty.clone()
                             } else if let ExtraItems::Extra(extra) =
                                 self.typed_dict_extra_items(&typed_dict)
@@ -2205,7 +2225,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     field_name
                                 )];
                                 if let Some(suggestion) = best_suggestion(
-                                    &Name::new(field_name),
+                                    &key_name,
                                     fields.keys().map(|candidate| (candidate, 0usize)),
                                 ) {
                                     msg.push(format!("Did you mean `{suggestion}`?"));
@@ -2254,16 +2274,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Return the reason why we think `ty` is suspicious to use as a branching condition
     fn get_condition_redundant_reason(&self, ty: &Type) -> Option<ConditionRedundantReason> {
         match ty {
-            Type::Literal(Lit::Bool(_)) => None,
-            Type::Literal(Lit::Int(i)) => Some(ConditionRedundantReason::IntLiteral(i.as_bool())),
-            Type::Literal(Lit::Str(s)) => Some(ConditionRedundantReason::StrLiteral(!s.is_empty())),
-            Type::Literal(Lit::Bytes(s)) => {
+            Type::Literal(lit) if let Lit::Bool(_) = lit.value => None,
+            Type::Literal(lit) if let Lit::Int(i) = &lit.value => {
+                Some(ConditionRedundantReason::IntLiteral(i.as_bool()))
+            }
+            Type::Literal(lit) if let Lit::Str(s) = &lit.value => {
+                Some(ConditionRedundantReason::StrLiteral(!s.is_empty()))
+            }
+            Type::Literal(lit) if let Lit::Bytes(s) = &lit.value => {
                 Some(ConditionRedundantReason::BytesLiteral(!s.is_empty()))
             }
-            Type::Literal(Lit::Enum(e)) => Some(ConditionRedundantReason::EnumLiteral(
-                e.class.class_object().name().clone(),
-                e.member.clone(),
-            )),
+            Type::Literal(lit) if let Lit::Enum(e) = &lit.value => {
+                Some(ConditionRedundantReason::EnumLiteral(
+                    e.class.class_object().name().clone(),
+                    e.member.clone(),
+                ))
+            }
             Type::Function(f) => Some(ConditionRedundantReason::Function(
                 self.module().name(),
                 f.metadata.kind.clone(),

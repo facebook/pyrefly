@@ -6,9 +6,9 @@
  */
 
 use lsp_server::RequestId;
-use lsp_server::Response;
 use tempfile::TempDir;
 
+use crate::lsp::non_wasm::protocol::Response;
 use crate::test::tsp::tsp_interaction::object_model::TspInteraction;
 
 #[test]
@@ -39,7 +39,7 @@ print("Hello, World!")
     // Expect protocol version response
     tsp.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!("0.2.0")),
+        result: Some(serde_json::json!("0.4.0")),
         error: None,
     });
 
@@ -74,7 +74,7 @@ x = 42
     // Expect protocol version response
     tsp.client.expect_response(Response {
         id: RequestId::from(2),
-        result: Some(serde_json::json!("0.2.0")),
+        result: Some(serde_json::json!("0.4.0")),
         error: None,
     });
 

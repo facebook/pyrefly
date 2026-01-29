@@ -16,6 +16,7 @@ use serde_json::Value;
 use serde_repr::*;
 
 use crate::report::glean::schema::*;
+use crate::report::glean::facts::GleanPredicate;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct FileDigest {
@@ -24,10 +25,6 @@ pub struct FileDigest {
 }
 
 impl FileDigest {
-    pub fn GLEAN_name() -> String {
-        String::from("digest.FileDigest.1")
-    }
-
     pub fn new(file: src::File, digest: Digest) -> Self {
         FileDigest {
             id: 0,
@@ -37,6 +34,13 @@ impl FileDigest {
             }),
         }
     }
+}
+
+impl GleanPredicate for FileDigest {
+    fn GLEAN_name() -> String {
+        String::from("digest.FileDigest.1")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]

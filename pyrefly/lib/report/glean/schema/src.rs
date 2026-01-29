@@ -16,6 +16,7 @@ use serde_json::Value;
 use serde_repr::*;
 
 use crate::report::glean::schema::*;
+use crate::report::glean::facts::GleanPredicate;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct RangeContains {
@@ -24,10 +25,6 @@ pub struct RangeContains {
 }
 
 impl RangeContains {
-    pub fn GLEAN_name() -> String {
-        String::from("src.RangeContains.1")
-    }
-
     pub fn new(fileLines: Range, contains: Range) -> Self {
         RangeContains {
             id: 0,
@@ -39,6 +36,13 @@ impl RangeContains {
     }
 }
 
+impl GleanPredicate for RangeContains {
+    fn GLEAN_name() -> String {
+        String::from("src.RangeContains.1")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct IndexFailure {
     pub id: u64,
@@ -46,10 +50,6 @@ pub struct IndexFailure {
 }
 
 impl IndexFailure {
-    pub fn GLEAN_name() -> String {
-        String::from("src.IndexFailure.1")
-    }
-
     pub fn new(file: File, reason: IndexFailureReason, details: String) -> Self {
         IndexFailure {
             id: 0,
@@ -62,6 +62,13 @@ impl IndexFailure {
     }
 }
 
+impl GleanPredicate for IndexFailure {
+    fn GLEAN_name() -> String {
+        String::from("src.IndexFailure.1")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct FileLines {
     pub id: u64,
@@ -69,10 +76,6 @@ pub struct FileLines {
 }
 
 impl FileLines {
-    pub fn GLEAN_name() -> String {
-        String::from("src.FileLines.1")
-    }
-
     pub fn new(file: File, lengths: Vec<u64>, endsInNewline: bool, hasUnicodeOrTabs: bool) -> Self {
         FileLines {
             id: 0,
@@ -86,6 +89,13 @@ impl FileLines {
     }
 }
 
+impl GleanPredicate for FileLines {
+    fn GLEAN_name() -> String {
+        String::from("src.FileLines.1")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct FileLanguage {
     pub id: u64,
@@ -93,10 +103,6 @@ pub struct FileLanguage {
 }
 
 impl FileLanguage {
-    pub fn GLEAN_name() -> String {
-        String::from("src.FileLanguage.1")
-    }
-
     pub fn new(file: File, language: Language) -> Self {
         FileLanguage {
             id: 0,
@@ -108,6 +114,13 @@ impl FileLanguage {
     }
 }
 
+impl GleanPredicate for FileLanguage {
+    fn GLEAN_name() -> String {
+        String::from("src.FileLanguage.1")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct FileDigest {
     pub id: u64,
@@ -116,10 +129,6 @@ pub struct FileDigest {
 }
 
 impl FileDigest {
-    pub fn GLEAN_name() -> String {
-        String::from("src.FileDigest.1")
-    }
-
     pub fn new(key: File, value: FileDigest_value) -> Self {
         FileDigest {
             id: 0,
@@ -129,6 +138,37 @@ impl FileDigest {
     }
 }
 
+impl GleanPredicate for FileDigest {
+    fn GLEAN_name() -> String {
+        String::from("src.FileDigest.1")
+    }
+
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct FileContent {
+    pub id: u64,
+    pub key: Box<File>,
+    pub value: FileContent_value,
+}
+
+impl FileContent {
+    pub fn new(key: File, value: FileContent_value) -> Self {
+        FileContent {
+            id: 0,
+            key: Box::new(key),
+            value: value,
+        }
+    }
+}
+
+impl GleanPredicate for FileContent {
+    fn GLEAN_name() -> String {
+        String::from("src.FileContent.1")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct File {
     pub id: u64,
@@ -136,16 +176,19 @@ pub struct File {
 }
 
 impl File {
-    pub fn GLEAN_name() -> String {
-        String::from("src.File.1")
-    }
-
     pub fn new(key: String) -> Self {
         File {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for File {
+    fn GLEAN_name() -> String {
+        String::from("src.File.1")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -155,10 +198,6 @@ pub struct ByteSpanContains {
 }
 
 impl ByteSpanContains {
-    pub fn GLEAN_name() -> String {
-        String::from("src.ByteSpanContains.1")
-    }
-
     pub fn new(byteSpan: ByteSpan, contains: ByteSpan) -> Self {
         ByteSpanContains {
             id: 0,
@@ -168,6 +207,13 @@ impl ByteSpanContains {
             }),
         }
     }
+}
+
+impl GleanPredicate for ByteSpanContains {
+    fn GLEAN_name() -> String {
+        String::from("src.ByteSpanContains.1")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -253,6 +299,8 @@ pub struct FileLanguage_key {
 }
 
 pub type FileDigest_value = String;
+
+pub type FileContent_value = String;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ByteSpan {

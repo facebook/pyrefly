@@ -124,6 +124,33 @@ d: list[Any] = ["test"]
 );
 
 testcase!(
+    test_assign_list_concat_with_contextual_hint,
+    r#"
+from typing import assert_type, reveal_type
+
+class Base: ...
+class A(Base): ...
+class B(Base): ...
+
+# List literal with mixed subclasses works with contextual hint
+l1: list[Base] = [A(), B()]
+
+# List concatenation with contextual hint should also work
+l2: list[Base] = [A()] + [B()]
+
+# List concatenation with list comprehension operands
+l3: list[Base] = [A() for _ in range(1)] + [B()]
+
+# Without contextual hint, reveal_type should show the inferred union type
+reveal_type([A()] + [B()])  # E: revealed type: list[A | B]
+
+# Non-fresh operands (variables) should NOT be coerced
+xs: list[A] = [A()]
+l4: list[Base] = xs + [B()]  # E: `list[A | B]` is not assignable to `list[Base]`
+"#,
+);
+
+testcase!(
     test_assign_at_types,
     r#"
 a: int = 3
@@ -408,6 +435,44 @@ b.x += 1  # E: Cannot set field `x`
 );
 
 testcase!(
+    test_assign_final_attr_in_constructor,
+    r#"
+from typing import Final, Self
+
+class A:
+    x: Final[int]
+
+    def __init__(self) -> None:
+        self.x = 1
+
+    def mutate(self) -> None:
+        self.x = 2  # E: Cannot set field `x`
+
+    def __new__(cls) -> Self:
+        instance = super().__new__(cls)
+        instance.x = 1 # E: Cannot set field `x`
+        return instance
+
+a = A()
+a.x = 3  # E: Cannot set field `x`
+    "#,
+);
+
+testcase!(
+    test_assign_final_attr_in_nested_function_in_constructor,
+    r#"
+# We allow assigning to final attributes in nested functions in constructors
+# This is allowed by mypy but not by pyright
+from typing import Final
+class C:
+    x: Final[int]
+    def __init__(self):
+        def inner():
+            self.x = 1
+    "#,
+);
+
+testcase!(
     test_aug_assign_integer,
     r#"
 def f(x: int):
@@ -420,7 +485,7 @@ testcase!(
     r#"
 x: list[int] = []
 x += [1]
-x += ["foo"]  # E: Augmented assignment produces a value of type `list[int | str]`, which is not assignable to `list[int]`
+x += ["foo"]  # E: Augmented assignment result `list[int | str]` is not assignable to `list[int]`
 "#,
 );
 
@@ -439,7 +504,7 @@ testcase!(
     r#"
 from typing import Final
 x: Final = [""]
-x += [""]  # E: Cannot assign to var x because it is marked final
+x += [""]  # E: Cannot assign to variable `x` because it is marked final
 x[0] += ""
 "#,
 );
@@ -476,10 +541,10 @@ testcase!(
     r#"
 def foo(y: list[int]) -> None:
     y += [1]
-    y += ["foo"]  # E: Augmented assignment produces a value of type `list[int | str]`, which is not assignable to `list[int]`
+    y += ["foo"]  # E: Augmented assignment result `list[int | str]` is not assignable to `list[int]`
     z: list[int] = []
     z += [1]
-    z += ["foo"]  # E: Augmented assignment produces a value of type `list[int | str]`, which is not assignable to `list[int]`
+    z += ["foo"]  # E: Augmented assignment result `list[int | str]` is not assignable to `list[int]`
 "#,
 );
 
@@ -517,7 +582,7 @@ testcase!(
 x: list[list[int]] = []
 x += [[1]]
 x[0] += [1]
-x += [1]  # E: Augmented assignment produces a value of type `list[int | list[int]]`, which is not assignable to `list[list[int]]`
+x += [1]  # E: Augmented assignment result `list[int | list[int]]` is not assignable to `list[list[int]]`
 "#,
 );
 

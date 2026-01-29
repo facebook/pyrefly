@@ -11,8 +11,8 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use pyrefly_graph::calculation::Calculation;
 use pyrefly_python::docstring::Docstring;
-use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
@@ -26,8 +26,9 @@ use starlark_map::small_set::SmallSet;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::DunderAllEntry;
+use crate::export::definitions::DunderAllKind;
+use crate::export::definitions::SyntacticDeps;
 use crate::export::special::SpecialExport;
-use crate::graph::calculation::Calculation;
 use crate::module::module_info::ModuleInfo;
 use crate::state::loader::FindingOrError;
 
@@ -49,9 +50,9 @@ pub struct Export {
 /// Where is this export defined?
 #[derive(Debug, Clone)]
 pub enum ExportLocation {
-    // This export is defined in this module.
+    /// This export is defined in this module.
     ThisModule(Export),
-    // Export from another module ModuleName. If it's aliased, the old name (before the alias) is provided.
+    /// Export from another module ModuleName. If it's aliased, the old name (before the alias) is provided.
     OtherModule(ModuleName, Option<Name>),
 }
 
@@ -78,7 +79,7 @@ struct ExportsInner {
 
 impl Display for Exports {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for x in self.0.definitions.dunder_all.iter() {
+        for x in self.0.definitions.dunder_all.entries.iter() {
             match x {
                 DunderAllEntry::Name(_, x) => writeln!(f, "export {x}")?,
                 DunderAllEntry::Module(_, x) => writeln!(f, "from {x} import *")?,
@@ -124,7 +125,7 @@ impl Exports {
     pub fn wildcard(&self, lookup: &dyn LookupExport) -> Arc<SmallSet<Name>> {
         let f = || {
             let mut result = SmallSet::new();
-            for x in &self.0.definitions.dunder_all {
+            for x in &self.0.definitions.dunder_all.entries {
                 match x {
                     DunderAllEntry::Name(_, x) => {
                         result.insert(x.clone());
@@ -154,11 +155,35 @@ impl Exports {
         self.0.docstring_range
     }
 
+    /// Get the syntactic dependencies for this module.
+    /// Includes imports from all scopes (module-level and nested in functions/classes).
+    pub fn syntactic_deps(&self) -> &SyntacticDeps {
+        &self.0.definitions.syntactic_deps
+    }
+
     pub fn is_submodule_imported_implicitly(&self, name: &Name) -> bool {
         self.0
             .definitions
             .implicitly_imported_submodules
             .contains(name)
+    }
+
+    /// Return an iterator with entries in `__all__` that are user-defined or None if `__all__` was not present.
+    pub fn get_explicit_dunder_all_names_iter(&self) -> Option<impl Iterator<Item = &Name>> {
+        match self.0.definitions.dunder_all.kind {
+            DunderAllKind::Specified => Some(
+                self.0
+                    .definitions
+                    .dunder_all
+                    .entries
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        DunderAllEntry::Name(_, name) => Some(name),
+                        _ => None,
+                    }),
+            ),
+            _ => None,
+        }
     }
 
     /// Returns entries in `__all__` that don't exist in the module's definitions.
@@ -170,11 +195,11 @@ impl Exports {
         module_info: &ModuleInfo,
     ) -> Vec<(TextRange, Name)> {
         // Only validate if __all__ was explicitly defined by the user
-        if !self.0.definitions.definitions.contains_key(&dunder::ALL) {
+        if self.0.definitions.dunder_all.kind == DunderAllKind::Inferred {
             return Vec::new();
         }
         let mut invalid = Vec::new();
-        for entry in &self.0.definitions.dunder_all {
+        for entry in &self.0.definitions.dunder_all.entries {
             if let DunderAllEntry::Name(range, name) = entry {
                 // Check if name exists in definitions
                 if self.0.definitions.definitions.contains_key(name) {

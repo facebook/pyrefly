@@ -769,3 +769,24 @@ class Foo:
         ))
     },
 );
+
+exported_class_testcase!(
+    test_export_private_attribute,
+    r#"
+import typing
+class Foo:
+    def __init__(self, x: int) -> None:
+        self.__x: int = x
+"#,
+    &|context: &ModuleContext| {
+        create_simple_class("Foo", 0, ScopeParent::TopLevel).with_fields(HashMap::from([(
+            "__x".into(),
+            PysaClassField {
+                type_: PysaType::from_class_type(context.stdlib.int(), context),
+                explicit_annotation: Some("int".to_owned()),
+                location: Some(create_location(5, 14, 5, 17)),
+                declaration_kind: Some(PysaClassFieldDeclaration::DefinedInMethod),
+            },
+        )]))
+    },
+);

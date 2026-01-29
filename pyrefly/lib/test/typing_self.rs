@@ -96,7 +96,6 @@ class A:
 );
 
 testcase!(
-    bug = "The display and solve semantics for `Self` are incorrect",
     test_instance_attr,
     r#"
 from typing import Self, assert_type
@@ -115,7 +114,6 @@ assert_type(B().x, B)
 );
 
 testcase!(
-    bug = "The display and solve semantics for `Self` are incorrect",
     test_class_attr,
     r#"
 from typing import ClassVar, Self, assert_type
@@ -193,5 +191,21 @@ class C:
 
     def m(self):
         assert_type(self(), Self)
+"#,
+);
+
+testcase!(
+    bug = "conformance: Should error when returning concrete class instead of Self",
+    test_self_return_concrete_class,
+    r#"
+from typing import Self
+
+class Shape:
+    def method(self) -> Self:
+        return Shape()  # should error: returns Shape, not Self
+
+    @classmethod
+    def cls_method(cls) -> Self:
+        return Shape()  # should error: returns Shape, not Self
 "#,
 );

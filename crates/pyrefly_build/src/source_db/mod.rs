@@ -16,6 +16,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::lock::RwLock;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -125,7 +126,11 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// Returns `Err` if the shellout to the build system failed
     /// The resulting bool represents whether find caches
     /// related to this sourcedb should be invalidated.
-    fn query_source_db(&self, files: SmallSet<ModulePathBuf>, force: bool) -> anyhow::Result<bool>;
+    fn query_source_db(
+        &self,
+        files: SmallSet<ModulePathBuf>,
+        force: bool,
+    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats);
     /// The source database-related configuration files a watcher should wait for
     /// changes on. Changes to one of these returned watchfiles should force
     /// a sourcedb rebuild.

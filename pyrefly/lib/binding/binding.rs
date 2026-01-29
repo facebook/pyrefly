@@ -13,6 +13,7 @@ use std::hash::Hash;
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModuleStyle;
@@ -60,10 +61,11 @@ use crate::alt::types::yields::YieldResult;
 use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::Bindings;
+use crate::binding::django::DjangoFieldInfo;
 use crate::binding::narrow::NarrowOp;
+use crate::binding::narrow::NarrowingSubject;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::module::module_info::ModuleInfo;
 use crate::types::annotation::Annotation;
 use crate::types::class::Class;
@@ -80,7 +82,7 @@ use crate::types::types::Type;
 use crate::types::types::Var;
 
 assert_words!(Key, 6);
-assert_words!(KeyExpect, 1);
+assert_bytes!(KeyExpect, 12);
 assert_words!(KeyExport, 3);
 assert_words!(KeyClass, 1);
 assert_bytes!(KeyTParams, 4);
@@ -99,12 +101,12 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 11);
-assert_words!(BindingExpect, 11);
+assert_words!(BindingExpect, 16);
 assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 23);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
-assert_words!(BindingClassMetadata, 11);
+assert_words!(BindingClassMetadata, 9);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_words!(BindingClassField, 21);
@@ -167,16 +169,48 @@ impl DisplayWith<Bindings> for AnyIdx {
     }
 }
 
+/// A type-erased exported key, used for fine-grained dependency tracking.
+/// Unlike `AnyIdx`, this stores the key itself rather than an index into a bindings table.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AnyExportedKey {
+    KeyTParams(KeyTParams),
+    KeyClassBaseType(KeyClassBaseType),
+    KeyClassField(KeyClassField),
+    KeyClassSynthesizedFields(KeyClassSynthesizedFields),
+    KeyVariance(KeyVariance),
+    KeyExport(KeyExport),
+    KeyClassMetadata(KeyClassMetadata),
+    KeyClassMro(KeyClassMro),
+    KeyAbstractClassCheck(KeyAbstractClassCheck),
+}
+
+/// Any key that sets `EXPORTED` to `true` should not include positions
+/// Incremental updates depend on knowing when a file's exports changed, which uses equality between exported keys
+/// Moving code around should not cause all dependencies to be re-checked
 pub trait Keyed: Hash + Eq + Clone + DisplayWith<ModuleInfo> + Debug + Ranged + 'static {
     const EXPORTED: bool = false;
     type Value: Debug + DisplayWith<Bindings>;
     type Answer: Clone + Debug + Display + TypeEq + VisitMut<Type>;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx;
+
+    /// If this key represents an exported name (like KeyExport), return the name.
+    /// This is used for fine-grained incremental invalidation.
+    fn as_export_name(&self) -> Option<&Name> {
+        None
+    }
+
+    /// Convert this key to an AnyExportedKey if it is an exported key.
+    /// Returns None for non-exported keys.
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        None
+    }
 }
 
 /// Should be equivalent to Keyed<EXPORTED=true>.
 /// Once `associated_const_equality` is stabilised, can switch to that.
-pub trait Exported: Keyed {}
+pub trait Exported: Keyed {
+    fn to_anykey(&self) -> AnyExportedKey;
+}
 
 impl Keyed for Key {
     type Value = Binding;
@@ -213,8 +247,15 @@ impl Keyed for KeyTParams {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyTParams(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyTParams(self.clone()))
+    }
 }
-impl Exported for KeyTParams {}
+impl Exported for KeyTParams {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyTParams(self.clone())
+    }
+}
 impl Keyed for KeyClassBaseType {
     const EXPORTED: bool = true;
     type Value = BindingClassBaseType;
@@ -222,8 +263,15 @@ impl Keyed for KeyClassBaseType {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassBaseType(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassBaseType(self.clone()))
+    }
 }
-impl Exported for KeyClassBaseType {}
+impl Exported for KeyClassBaseType {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassBaseType(self.clone())
+    }
+}
 impl Keyed for KeyClassField {
     const EXPORTED: bool = true;
     type Value = BindingClassField;
@@ -231,8 +279,15 @@ impl Keyed for KeyClassField {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassField(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassField(self.clone()))
+    }
 }
-impl Exported for KeyClassField {}
+impl Exported for KeyClassField {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassField(self.clone())
+    }
+}
 impl Keyed for KeyClassSynthesizedFields {
     const EXPORTED: bool = true;
     type Value = BindingClassSynthesizedFields;
@@ -240,8 +295,15 @@ impl Keyed for KeyClassSynthesizedFields {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassSynthesizedFields(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassSynthesizedFields(self.clone()))
+    }
 }
-impl Exported for KeyVariance {}
+impl Exported for KeyClassSynthesizedFields {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassSynthesizedFields(self.clone())
+    }
+}
 impl Keyed for KeyVariance {
     const EXPORTED: bool = true;
     type Value = BindingVariance;
@@ -249,9 +311,15 @@ impl Keyed for KeyVariance {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyVariance(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyVariance(self.clone()))
+    }
 }
-
-impl Exported for KeyClassSynthesizedFields {}
+impl Exported for KeyVariance {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyVariance(self.clone())
+    }
+}
 impl Keyed for KeyExport {
     const EXPORTED: bool = true;
     type Value = BindingExport;
@@ -259,8 +327,18 @@ impl Keyed for KeyExport {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyExport(idx)
     }
+    fn as_export_name(&self) -> Option<&Name> {
+        Some(&self.0)
+    }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyExport(self.clone()))
+    }
 }
-impl Exported for KeyExport {}
+impl Exported for KeyExport {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyExport(self.clone())
+    }
+}
 impl Keyed for KeyDecorator {
     type Value = BindingDecorator;
     type Answer = Decorator;
@@ -296,8 +374,15 @@ impl Keyed for KeyClassMetadata {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassMetadata(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassMetadata(self.clone()))
+    }
 }
-impl Exported for KeyClassMetadata {}
+impl Exported for KeyClassMetadata {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassMetadata(self.clone())
+    }
+}
 impl Keyed for KeyClassMro {
     const EXPORTED: bool = true;
     type Value = BindingClassMro;
@@ -305,8 +390,15 @@ impl Keyed for KeyClassMro {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyClassMro(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassMro(self.clone()))
+    }
 }
-impl Exported for KeyClassMro {}
+impl Exported for KeyClassMro {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassMro(self.clone())
+    }
+}
 impl Keyed for KeyAbstractClassCheck {
     const EXPORTED: bool = true;
     type Value = BindingAbstractClassCheck;
@@ -314,8 +406,15 @@ impl Keyed for KeyAbstractClassCheck {
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyAbstractClassCheck(idx)
     }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyAbstractClassCheck(self.clone()))
+    }
 }
-impl Exported for KeyAbstractClassCheck {}
+impl Exported for KeyAbstractClassCheck {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyAbstractClassCheck(self.clone())
+    }
+}
 impl Keyed for KeyLegacyTypeParam {
     type Value = BindingLegacyTypeParam;
     type Answer = LegacyTypeParameterLookup;
@@ -445,6 +544,8 @@ pub enum Key {
     /// This `Key` is *only* ever used if the variable has only a `del` but is not otherwise defined (which is
     /// always a type error, since you cannot delete an uninitialized variable).
     Delete(TextRange),
+    /// Match statement that needs type-based exhaustiveness checking
+    MatchExhaustive(TextRange),
 }
 
 impl Ranged for Key {
@@ -475,6 +576,7 @@ impl Ranged for Key {
             Self::SelfTypeLiteral(r) => *r,
             Self::PossibleLegacyTParam(r) => *r,
             Self::PatternNarrow(r) => *r,
+            Self::MatchExhaustive(r) => *r,
         }
     }
 }
@@ -520,6 +622,7 @@ impl DisplayWith<ModuleInfo> for Key {
                 write!(f, "Key::PossibleLegacyTParam({})", ctx.display(r))
             }
             Self::PatternNarrow(r) => write!(f, "Key::PatternNarrow({})", ctx.display(r)),
+            Self::MatchExhaustive(r) => write!(f, "Key::MatchExhaustive({})", ctx.display(r)),
         }
     }
 }
@@ -531,18 +634,61 @@ impl DisplayWith<Bindings> for Key {
 }
 
 /// An expectation to be checked. For example, that a sequence is of an expected length.
+///
+/// This is an enum to ensure that different kinds of expectations at the same source
+/// location don't collide. Each variant represents a distinct category of expectation.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct KeyExpect(pub TextRange);
+pub enum KeyExpect {
+    /// Expression that needs type checking without using the result.
+    TypeCheckExpr(TextRange),
+    /// Expression in base class list that needs additional checks.
+    TypeCheckBaseClassExpr(TextRange),
+    /// Expected number of values in an unpacked iterable.
+    UnpackedLength(TextRange),
+    /// Exception and cause from a raise statement.
+    CheckRaisedException(TextRange),
+    /// Redefinition check for matching annotations.
+    Redefinition(TextRange),
+    /// Expression used in a boolean context.
+    Bool(TextRange),
+    /// Match statement exhaustiveness check.
+    MatchExhaustiveness(TextRange),
+    /// Private attribute access validation.
+    PrivateAttributeAccess(TextRange),
+    /// Deferred uninitialized variable check.
+    UninitializedCheck(TextRange),
+}
 
 impl Ranged for KeyExpect {
     fn range(&self) -> TextRange {
-        self.0
+        match self {
+            KeyExpect::TypeCheckExpr(range)
+            | KeyExpect::TypeCheckBaseClassExpr(range)
+            | KeyExpect::UnpackedLength(range)
+            | KeyExpect::CheckRaisedException(range)
+            | KeyExpect::Redefinition(range)
+            | KeyExpect::Bool(range)
+            | KeyExpect::MatchExhaustiveness(range)
+            | KeyExpect::PrivateAttributeAccess(range)
+            | KeyExpect::UninitializedCheck(range) => *range,
+        }
     }
 }
 
 impl DisplayWith<ModuleInfo> for KeyExpect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &ModuleInfo) -> fmt::Result {
-        write!(f, "KeyExpect({})", ctx.display(&self.0))
+        let (name, range) = match self {
+            KeyExpect::TypeCheckExpr(r) => ("TypeCheckExpr", r),
+            KeyExpect::TypeCheckBaseClassExpr(r) => ("TypeCheckBaseClassExpr", r),
+            KeyExpect::UnpackedLength(r) => ("UnpackedLength", r),
+            KeyExpect::CheckRaisedException(r) => ("CheckRaisedException", r),
+            KeyExpect::Redefinition(r) => ("Redefinition", r),
+            KeyExpect::Bool(r) => ("Bool", r),
+            KeyExpect::MatchExhaustiveness(r) => ("MatchExhaustiveness", r),
+            KeyExpect::PrivateAttributeAccess(r) => ("PrivateAttributeAccess", r),
+            KeyExpect::UninitializedCheck(r) => ("UninitializedCheck", r),
+        };
+        write!(f, "KeyExpect::{}({})", name, ctx.display(range))
     }
 }
 
@@ -550,6 +696,13 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
 pub enum ExprOrBinding {
     Expr(Expr),
     Binding(Binding),
+}
+
+#[derive(Clone, Debug)]
+pub struct PrivateAttributeAccessCheck {
+    pub value: Expr,
+    pub attr: Identifier,
+    pub class_idx: Option<Idx<KeyClass>>,
 }
 
 impl DisplayWith<Bindings> for ExprOrBinding {
@@ -580,6 +733,32 @@ pub enum BindingExpect {
     },
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
     Bool(Expr),
+    /// A match statement that may be non-exhaustive at runtime.
+    /// Due to gaps in our type algebra, we only check exhaustiveness for enums & unions
+    /// of enum literals.
+    /// Since this makes use of narrowing, not every match subject will be
+    /// checked for exhaustiveness, only variables and chained subscripts/attributes of variables
+    MatchExhaustiveness {
+        subject_idx: Idx<Key>,
+        narrowing_subject: NarrowingSubject,
+        narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
+        subject_range: TextRange,
+    },
+    /// Track private attribute accesses that need semantic validation.
+    PrivateAttributeAccess(PrivateAttributeAccessCheck),
+    /// Deferred check for uninitialized variables. This is a "dangling" binding
+    /// that doesn't affect any other types - it only exists to emit an error at
+    /// solve time if any of the termination keys don't have Never type.
+    UninitializedCheck {
+        /// The variable name (for error messages).
+        name: Name,
+        /// The range of the variable usage (for error location).
+        range: TextRange,
+        /// Termination keys from branches that don't define the variable.
+        /// At solve time, we check if ALL of these have Never type.
+        /// If any don't, the variable may be uninitialized.
+        termination_keys: Vec<Idx<Key>>,
+    },
 }
 
 impl DisplayWith<Bindings> for BindingExpect {
@@ -630,6 +809,42 @@ impl DisplayWith<Bindings> for BindingExpect {
                 ctx.display(*existing),
                 name
             ),
+            Self::PrivateAttributeAccess(expectation) => write!(
+                f,
+                "PrivateAttributeAccess({}, {}, {})",
+                m.display(&expectation.value),
+                expectation.attr.id,
+                if let Some(class_idx) = expectation.class_idx {
+                    format!("{}", ctx.display(class_idx))
+                } else {
+                    "None".to_owned()
+                }
+            ),
+            Self::MatchExhaustiveness {
+                subject_idx,
+                subject_range: range,
+                ..
+            } => {
+                write!(
+                    f,
+                    "MatchExhaustiveness({}, {})",
+                    ctx.display(*subject_idx),
+                    ctx.module().display(range)
+                )
+            }
+            Self::UninitializedCheck {
+                name,
+                range,
+                termination_keys,
+            } => {
+                write!(
+                    f,
+                    "UninitializedCheck({}, {}, {:?})",
+                    name,
+                    ctx.module().display(range),
+                    termination_keys
+                )
+            }
         }
     }
 }
@@ -1133,6 +1348,7 @@ pub struct ReturnExplicit {
     pub is_generator: bool,
     pub is_async: bool,
     pub range: TextRange,
+    pub is_unreachable: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1168,6 +1384,11 @@ pub enum ReturnTypeKind {
         /// whether these two fields are empty or not.
         yields: Box<[Idx<KeyYield>]>,
         yield_froms: Box<[Idx<KeyYieldFrom>]>,
+        /// Whether the function body is trivial (e.g., `pass`, `raise NotImplementedError()`).
+        /// Used to detect abstract methods in ABC subclasses.
+        body_is_trivial: bool,
+        /// The class metadata key, if this function is a method. Used to check if the class extends ABC.
+        class_metadata_key: Option<Idx<KeyClassMetadata>>,
     },
 }
 
@@ -1197,13 +1418,16 @@ pub struct ReturnType {
     pub is_async: bool,
 }
 
-#[derive(Clone, Dupe, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum LastStmt {
     /// The last statement is an expression
     Expr,
     /// The last statement is a `with`, with the following context,
     /// which might (if exit is true) catch an exception
     With(IsAsync),
+    /// The last statement is a match that may be type-exhaustive.
+    /// Contains the match statement range to look up exhaustiveness at solve time.
+    Match(TextRange),
 }
 
 #[derive(Clone, Debug)]
@@ -1264,6 +1488,16 @@ pub enum FirstUse {
     /// This binding is the first use, we should calculate it to get first-use based
     /// inference.
     UsedBy(Idx<Key>),
+}
+
+/// Information about a branch in a Phi node.
+#[derive(Clone, Debug)]
+pub struct BranchInfo {
+    /// The type key from this branch.
+    pub value_key: Idx<Key>,
+    /// The last `Binding::StmtExpr` in this branch, if any.
+    /// Used to check for type-based termination (NoReturn/Never) at solve time.
+    pub termination_key: Option<Idx<Key>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1334,12 +1568,16 @@ pub enum Binding {
     /// The option range tracks the original name's location for renamed import.
     /// e.g. in `from foo import bar as baz`, we should track the range of `bar`.
     Import(ModuleName, Name, Option<TextRange>),
+    /// An import via module-level __getattr__ for incomplete stubs.
+    /// See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
+    ImportViaGetattr(ModuleName, Name),
     /// A class definition, points to a BindingClass and any decorators.
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
     Forward(Idx<Key>),
     /// A phi node, representing the union of several alternative keys.
-    Phi(JoinStyle<Idx<Key>>, SmallSet<Idx<Key>>),
+    /// Each BranchInfo contains the value key and optional termination key from one branch.
+    Phi(JoinStyle<Idx<Key>>, Vec<BranchInfo>),
     /// A phi node for a name that was defined above a loop. This can involve recursion
     /// due to reassingment in the loop, so we provide a prior idx of the type from above
     /// the loop, which can be used if the resulting Var is forced.
@@ -1384,7 +1622,12 @@ pub enum Binding {
     SuperInstance(SuperStyle, TextRange),
     /// The result of assigning to an attribute. This operation cannot change the *type* of the
     /// name to which we are assigning, but it *can* change the live attribute narrows.
-    AssignToAttribute(ExprAttribute, Box<ExprOrBinding>),
+    AssignToAttribute {
+        attr: ExprAttribute,
+        value: Box<ExprOrBinding>,
+        /// `Final` fields may be assigned inside `__init__`
+        allow_assign_to_final: bool,
+    },
     /// The result of assigning to a subscript, used for narrowing.
     AssignToSubscript(ExprSubscript, Box<ExprOrBinding>),
     /// A placeholder binding, used to force the solving of some other `K::Value` (for
@@ -1447,6 +1690,18 @@ pub enum Binding {
     /// It could either be an unbound name or a reference to an inherited attribute
     /// We'll find out which when we solve the class
     ClassBodyUnknownName(Idx<KeyClass>, Identifier, Option<Name>),
+    /// A match statement that may be type-exhaustive.
+    /// Resolves to Never if exhaustive, None otherwise.
+    /// When `exhaustiveness_info` is None, we couldn't determine narrowing info,
+    /// so we conservatively assume the match is not exhaustive.
+    MatchExhaustive {
+        subject_idx: Idx<Key>,
+        subject_range: TextRange,
+        /// Narrowing information needed to check exhaustiveness. None if we couldn't
+        /// determine the narrowing subject (e.g., complex expressions) or couldn't
+        /// accumulate narrow ops for it.
+        exhaustiveness_info: Option<(NarrowingSubject, (Box<NarrowOp>, TextRange))>,
+    },
 }
 
 impl DisplayWith<Bindings> for Binding {
@@ -1523,6 +1778,7 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::Function(x, _pred, _class) => write!(f, "Function({})", ctx.display(*x)),
             Self::Import(m, n, original_name) => write!(f, "Import({m}, {n}, {original_name:?})"),
+            Self::ImportViaGetattr(m, n) => write!(f, "ImportViaGetattr({m}, {n})"),
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
             Self::AugAssign(a, s) => write!(f, "AugAssign({}, {})", ann(a), m.display(s)),
@@ -1553,11 +1809,13 @@ impl DisplayWith<Bindings> for Binding {
                     }
                 )
             }
-            Self::Phi(style, xs) => {
+            Self::Phi(style, branches) => {
                 write!(
                     f,
                     "Phi({style:?}, {})",
-                    intersperse_iter("; ", || xs.iter().map(|x| ctx.display(*x))),
+                    intersperse_iter("; ", || branches
+                        .iter()
+                        .map(|branch| ctx.display(branch.value_key))),
                 )
             }
             Self::LoopPhi(k, xs) => {
@@ -1657,13 +1915,18 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, "SuperInstance::Implicit({}, {v})", ctx.display(*k))
             }
             Self::SuperInstance(SuperStyle::Any, _range) => write!(f, "SuperInstance::Any"),
-            Self::AssignToAttribute(attr, x) => {
+            Self::AssignToAttribute {
+                attr,
+                value,
+                allow_assign_to_final,
+            } => {
                 write!(
                     f,
-                    "AssignToAttribute({}, {}, {})",
+                    "AssignToAttribute({}, {}, {}, allow_assign_to_final={})",
                     m.display(&attr.value),
                     attr.attr,
-                    x.display_with(ctx)
+                    value.display_with(ctx),
+                    allow_assign_to_final
                 )
             }
             Self::AssignToSubscript(subscript, x) => {
@@ -1722,6 +1985,18 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, ")")
             }
+            Self::MatchExhaustive {
+                subject_idx,
+                subject_range,
+                ..
+            } => {
+                write!(
+                    f,
+                    "MatchExhaustive({}, {})",
+                    ctx.display(*subject_idx),
+                    ctx.module().display(subject_range)
+                )
+            }
         }
     }
 }
@@ -1744,7 +2019,7 @@ impl Binding {
                     Some(SymbolKind::Function)
                 }
             }
-            Binding::Import(_, _, _) => {
+            Binding::Import(_, _, _) | Binding::ImportViaGetattr(_, _) => {
                 // TODO: maybe we can resolve it to see its symbol kind
                 Some(SymbolKind::Variable)
             }
@@ -1787,14 +2062,15 @@ impl Binding {
             | Binding::PatternMatchClassKeyword(_, _, _)
             | Binding::ExceptionHandler(_, _)
             | Binding::SuperInstance(_, _)
-            | Binding::AssignToAttribute(_, _)
+            | Binding::AssignToAttribute { .. }
             | Binding::UsageLink(_)
             | Binding::SelfTypeLiteral(..)
             | Binding::AssignToSubscript(_, _)
             | Binding::CompletedPartialType(..)
             | Binding::PartialTypeWithUpstreamsCompleted(..)
             | Binding::Delete(_)
-            | Binding::ClassBodyUnknownName(_, _, _) => None,
+            | Binding::ClassBodyUnknownName(_, _, _)
+            | Binding::MatchExhaustive { .. } => None,
         }
     }
 }
@@ -1881,12 +2157,12 @@ pub enum AnnotationTarget {
 impl Display for AnnotationTarget {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Param(name) => write!(f, "param {name}"),
-            Self::ArgsParam(name) => write!(f, "args {name}"),
-            Self::KwargsParam(name) => write!(f, "kwargs {name}"),
-            Self::Return(name) => write!(f, "{name} return"),
-            Self::Assign(name, _initialized) => write!(f, "var {name}"),
-            Self::ClassMember(name) => write!(f, "attr {name}"),
+            Self::Param(name) => write!(f, "parameter `{name}`"),
+            Self::ArgsParam(name) => write!(f, "args `{name}`"),
+            Self::KwargsParam(name) => write!(f, "kwargs `{name}`"),
+            Self::Return(name) => write!(f, "`{name}` return"),
+            Self::Assign(name, _initialized) => write!(f, "variable `{name}`"),
+            Self::ClassMember(name) => write!(f, "attribute `{name}`"),
         }
     }
 }
@@ -1994,10 +2270,13 @@ pub enum ClassFieldDefinition {
     /// Declared with no annotation or assignment (this is impossible
     /// in a normal class, but can happen with some synthesized classes).
     DeclaredWithoutAnnotation,
-    /// Defined via assignment, possibly with an annotation
+    /// Defined via assignment, possibly with an annotation.
+    /// `alias_of` is set when the value is a simple name referring to another
+    /// field in the same class (used for enum alias detection).
     AssignedInBody {
         value: ExprOrBinding,
         annotation: Option<Idx<KeyAnnotation>>,
+        alias_of: Option<Name>,
     },
     /// Defined by a `def` form. Because of decorators it may not
     /// actually *be* a method, hence the name `MethodLike`.
@@ -2167,9 +2446,8 @@ pub struct BindingClassMetadata {
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
     pub is_new_type: bool,
     pub pydantic_config_dict: PydanticConfigDict,
-    /// The name of the field that has primary_key=True, if any (for Django models).
-    /// Note that we calculate this field for all classes, but it is ignored unless the class is a django model.
-    pub django_primary_key_field: Option<Name>,
+    /// Django-specific field information.
+    pub django_field_info: Box<DjangoFieldInfo>,
 }
 
 impl DisplayWith<Bindings> for BindingClassMetadata {
@@ -2245,6 +2523,7 @@ impl BindingLegacyTypeParam {
 pub enum BindingYield {
     Yield(Option<Idx<KeyAnnotation>>, ExprYield),
     Invalid(ExprYield),
+    Unreachable(ExprYield),
 }
 
 impl BindingYield {
@@ -2252,6 +2531,7 @@ impl BindingYield {
         match self {
             Self::Yield(_, x) => x,
             Self::Invalid(x) => x,
+            Self::Unreachable(x) => x,
         }
     }
 }
@@ -2267,6 +2547,7 @@ impl DisplayWith<Bindings> for BindingYield {
 pub enum BindingYieldFrom {
     YieldFrom(Option<Idx<KeyAnnotation>>, IsAsync, ExprYieldFrom),
     Invalid(ExprYieldFrom),
+    Unreachable(ExprYieldFrom),
 }
 
 impl BindingYieldFrom {
@@ -2274,6 +2555,7 @@ impl BindingYieldFrom {
         match self {
             Self::YieldFrom(_, _, x) => x,
             Self::Invalid(x) => x,
+            Self::Unreachable(x) => x,
         }
     }
 }

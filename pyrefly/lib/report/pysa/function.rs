@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -41,11 +42,10 @@ use crate::binding::binding::BindingClassField;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecoratedFunction;
-use crate::graph::index::Idx;
 use crate::report::pysa::ModuleContext;
 use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::resolve_decorator_callees;
-use crate::report::pysa::captured_variable::CapturedVariable;
+use crate::report::pysa::captured_variable::CapturedVariableRef;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::get_all_classes;
@@ -238,7 +238,7 @@ pub struct FunctionDefinition {
     pub base: FunctionBaseDefinition,
     pub undecorated_signatures: Vec<FunctionSignature>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub captured_variables: Vec<CapturedVariable>,
+    pub captured_variables: Vec<CapturedVariableRef<FunctionRef>>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub decorator_callees: HashMap<PysaLocation, Vec<Target<FunctionRef>>>,
 }
@@ -409,9 +409,11 @@ pub fn should_export_decorated_function(
 // Requires `context` to be the module context of the decorated function.
 pub fn get_exported_decorated_function(
     key_decorated_function: Idx<KeyDecoratedFunction>,
+    skip_property_getter: bool,
     context: &ModuleContext,
 ) -> DecoratedFunction {
-    // Follow the successor chain to find either the last function or a function that is not an overload.
+    // Follow the successor chain to find either the last function, or a function that is not an overload,
+    // or a property setter when `skip_property_getter` is true.
     let mut last_decorated_function = key_decorated_function;
     loop {
         let binding_decorated_function = context.bindings.get(last_decorated_function);
@@ -420,7 +422,16 @@ pub fn get_exported_decorated_function(
             .answers
             .get_idx(binding_decorated_function.undecorated_idx)
             .unwrap();
-        if !undecorated_function.metadata.flags.is_overload {
+        let is_getter_but_should_skip = skip_property_getter
+            && undecorated_function
+                .metadata
+                .flags
+                .property_metadata
+                .as_ref()
+                .is_some_and(|property_metadata| {
+                    matches!(property_metadata.role, PropertyRole::Getter)
+                });
+        if !undecorated_function.metadata.flags.is_overload && !is_getter_but_should_skip {
             break;
         }
 
@@ -605,8 +616,11 @@ impl FunctionNode {
             }) => {
                 let binding = context.bindings.get(*definition);
                 if let Binding::Function(key_decorated_function, _, _) = binding {
-                    let exported_function =
-                        get_exported_decorated_function(*key_decorated_function, context);
+                    let exported_function = get_exported_decorated_function(
+                        *key_decorated_function,
+                        /* skip_property_getter */ false,
+                        context,
+                    );
                     Some(FunctionNode::DecoratedFunction(exported_function))
                 } else {
                     // TODO(T225700656): Handle special case
@@ -629,6 +643,7 @@ impl FunctionNode {
 
     pub fn exported_function_from_definition_item_with_docstring<'a>(
         item: &FindDefinitionItemWithDocstring,
+        skip_property_getter: bool,
         context: &ModuleContext<'a>,
     ) -> Option<(Self, ModuleContext<'a>)> {
         let handle = Handle::new(
@@ -636,14 +651,13 @@ impl FunctionNode {
             item.module.path().dupe(),
             context.handle.sys_info().dupe(),
         );
-        let context =
-            ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
+        let context = ModuleContext::create(handle, context.transaction, context.module_ids)?;
         let key_decorated_function =
             KeyDecoratedFunction(ShortIdentifier::from_text_range(item.definition_range));
         context
             .bindings
             .key_to_idx_hashed_opt(Hashed::new(&key_decorated_function))
-            .map(|idx| get_exported_decorated_function(idx, &context))
+            .map(|idx| get_exported_decorated_function(idx, skip_property_getter, &context))
             .map(|exported_function| (FunctionNode::DecoratedFunction(exported_function), context))
     }
 
@@ -878,7 +892,7 @@ pub fn export_all_functions(
 
 pub fn export_function_definitions(
     function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
-    captured_variables: &HashMap<FunctionRef, Vec<CapturedVariable>>,
+    captured_variables: &HashMap<FunctionRef, Vec<CapturedVariableRef<FunctionRef>>>,
     context: &ModuleContext,
 ) -> ModuleFunctionDefinitions<FunctionDefinition> {
     let mut function_definitions = ModuleFunctionDefinitions::new();

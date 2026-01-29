@@ -5,6 +5,13 @@ slug: /import-resolution
 description: How imports in a given file are found by Pyrefly and their bindings are resolved, including files that are being type checked
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Import Resolution
 
 This doc describes how imports in a given file are found within Pyrefly while performing
@@ -128,6 +135,34 @@ imports by first searching for a relevant `-stubs` package, then by looking at
 the non-stubs package's `.pyi` files, then falls back to a `.py` file. See
 [Absolute Imports](#absolute-imports) for details on when non-stubs packages
 are allowed to be used for types, and how you can override that behavior.
+
+## Bundled Third Party Stubs
+
+Pyrefly bundles stubs for several popular third party libraries along with its binary which are
+used for type checking and IDE features. These bundled stubs have special import resolution rules which differ
+from how installed stubs might be treated. The decision tree below describes the scenarios in which third party stubs
+are used.
+
+
+```
+- Pyrefly config file present?
+   - Yes
+      - Is the package installed?
+         - Yes
+            - Are stubs installed by user?
+               - Yes
+                  Installed stubs are used.
+               - No
+                  UntypedImport error.
+         - No
+            MissingImport error.
+   - No
+      - Is the package installed?
+         - Yes
+            Bundled stubs used.
+         - No
+            MissingSourceForStubs error.
+```
 
 ## Editable Installs
 

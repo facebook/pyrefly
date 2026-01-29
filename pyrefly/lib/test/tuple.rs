@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -367,7 +368,7 @@ def test() -> None:
     x: tuple[object, ...] = (1,)
     x += (2, "y")
     y: tuple[int, ...] = (1,)
-    y += (2, "y")  # E: Augmented assignment produces a value of type `tuple[*tuple[int, ...], Literal[2], Literal['y']]`, which is not assignable to `tuple[int, ...]`
+    y += (2, "y")  # E: Augmented assignment result `tuple[*tuple[int, ...], Literal[2], Literal['y']]` is not assignable to `tuple[int, ...]`
 "#,
 );
 
@@ -422,6 +423,18 @@ def g(x):
         assert_type(x, tuple)
 "#,
 );
+
+#[test]
+fn test_tuple_concat_large_union_no_crash() -> anyhow::Result<()> {
+    let code = r#"
+a: int | list[int] | tuple[int, ...] | bool
+a + (a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a)
+"#;
+    let (state, handle_fn) = TestEnv::one("main", code).to_state();
+    let handle = handle_fn("main");
+    state.transaction().get_errors(&[handle]);
+    Ok(())
+}
 
 testcase!(
     test_tuple_class_type,

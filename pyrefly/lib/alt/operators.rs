@@ -5,9 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
+use pyrefly_types::literal::LitStyle;
 use ruff_python_ast::CmpOp;
-use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprUnaryOp;
@@ -31,7 +33,6 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::graph::index::Idx;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
@@ -223,17 +224,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ];
             self.try_binop_calls(&calls_to_try, range, errors, &context)
         };
-        // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
-        // type hint when evaluating [X]
         let lhs;
         let rhs;
-        if matches!(&*x.left, Expr::List(_)) && x.op == Operator::Mult {
+        if Ast::is_list_literal_or_comprehension(&x.left) && x.op == Operator::Mult {
+            // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
+            // type hint when evaluating [X]
             rhs = self.expr_infer(&x.right, errors);
             if self.is_subset_eq(&rhs, &self.stdlib.int().clone().to_type()) {
                 lhs = self.expr_infer_with_hint(&x.left, hint, errors);
             } else {
                 lhs = self.expr_infer(&x.left, errors);
             }
+        } else if x.op == Operator::Add
+            && Ast::is_list_literal_or_comprehension(&x.left)
+            && Ast::is_list_literal_or_comprehension(&x.right)
+        {
+            // If both operands are list literals, pass the contextual hint down
+            lhs = self.expr_infer_with_hint(&x.left, hint, errors);
+            rhs = self.expr_infer_with_hint(&x.right, hint, errors);
         } else {
             lhs = self.expr_infer(&x.left, errors);
             rhs = self.expr_infer(&x.right, errors);
@@ -264,10 +272,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     Type::type_form(self.union(l, r))
                 } else if x.op == Operator::Add
-                    && ((*lhs == Type::LiteralString && rhs.is_literal_string())
-                        || (*rhs == Type::LiteralString && lhs.is_literal_string()))
+                    && ((matches!(lhs, Type::LiteralString(_)) && rhs.is_literal_string())
+                        || (matches!(rhs, Type::LiteralString(_)) && lhs.is_literal_string()))
                 {
-                    Type::LiteralString
+                    Type::LiteralString(LitStyle::Implicit)
                 } else if x.op == Operator::Add
                     && let Type::Tuple(l) = lhs
                     && let Type::Tuple(r) = rhs
@@ -313,7 +321,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && base.is_literal_string()
                     && rhs.is_literal_string()
                 {
-                    Type::LiteralString
+                    Type::LiteralString(LitStyle::Implicit)
                 } else if x.op == Operator::Add
                     && let Type::Tuple(ref l) = base
                     && let Type::Tuple(r) = rhs
@@ -387,7 +395,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                                 Some(&context),
                             ) {
-                                // Comparison method called.
                                 ret
                             } else {
                                 let iteration_errors = self.error_collector();
@@ -443,19 +450,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let context =
                 || ErrorContext::UnaryOp(x.op.as_str().to_owned(), self.for_display(t.clone()));
             match t {
-                Type::Literal(lit) if let Some(ret) = f(lit) => ret,
-                Type::ClassType(_) | Type::SelfType(_) => {
+                Type::Literal(lit) if let Some(ret) = f(&lit.value) => ret,
+                Type::ClassType(_) | Type::SelfType(_) | Type::Quantified(_) => {
                     self.call_method_or_error(t, method, x.range, &[], &[], errors, Some(&context))
                 }
-                Type::Literal(Lit::Enum(lit_enum)) => self.call_method_or_error(
-                    &lit_enum.class.clone().to_type(),
-                    method,
-                    x.range,
-                    &[],
-                    &[],
-                    errors,
-                    Some(&context),
-                ),
+                Type::Literal(lit) if let Lit::Enum(lit_enum) = &lit.value => self
+                    .call_method_or_error(
+                        &lit_enum.class.clone().to_type(),
+                        method,
+                        x.range,
+                        &[],
+                        &[],
+                        errors,
+                        Some(&context),
+                    ),
                 Type::Any(style) => style.propagate(),
                 _ => self.error(
                     errors,
@@ -478,7 +486,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.check_dunder_bool_is_callable(t, x.range, errors);
                 match t.as_bool() {
                     None => self.stdlib.bool().clone().to_type(),
-                    Some(b) => Type::Literal(Lit::Bool(!b)),
+                    Some(b) => Lit::Bool(!b).to_implicit_type(),
                 }
             }
             UnaryOp::Invert => {
@@ -547,23 +555,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (Type::Literal(l1), Type::Literal(l2)) => {
                 if l1 != l2 {
                     emit_literal_warning(
-                        &l1.to_string(),
-                        &l2.to_string(),
+                        &l1.value.to_string(),
+                        &l2.value.to_string(),
                         if is_op { "False" } else { "True" },
                     );
-                } else if is_bool_literal(l1) {
+                } else if is_bool_literal(&l1.value) {
                     emit_literal_warning(
-                        &l1.to_string(),
-                        &l2.to_string(),
+                        &l1.value.to_string(),
+                        &l2.value.to_string(),
                         if is_op { "True" } else { "False" },
                     );
                 }
             }
             (Type::Literal(l), Type::None) => {
-                emit_literal_warning(&l.to_string(), "None", if is_op { "False" } else { "True" });
+                emit_literal_warning(
+                    &l.value.to_string(),
+                    "None",
+                    if is_op { "False" } else { "True" },
+                );
             }
             (Type::None, Type::Literal(l)) => {
-                emit_literal_warning("None", &l.to_string(), if is_op { "False" } else { "True" });
+                emit_literal_warning(
+                    "None",
+                    &l.value.to_string(),
+                    if is_op { "False" } else { "True" },
+                );
             }
 
             // ClassDef vs ClassType - disjoint unless ClassType is `type`, `object`,

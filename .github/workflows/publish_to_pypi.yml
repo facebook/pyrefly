@@ -27,20 +27,20 @@ jobs:
       id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
     steps:
       - name: Download dist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # release/v1.13
   push-tag:
     name: Push version tag
     runs-on: ubuntu-latest
     needs: pypi-publish  # Don't push a tag unless the publish job succeeds
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Get all history for all branches and tags
       - name: Get version

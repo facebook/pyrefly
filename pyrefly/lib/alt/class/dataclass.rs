@@ -13,10 +13,12 @@ use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr::EllipsisLiteral;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -30,6 +32,7 @@ use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::pydantic::PydanticModelKind;
+use crate::alt::unwrap::HintRef;
 use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
 use crate::binding::pydantic::LE;
@@ -48,6 +51,7 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::class::Class;
+use crate::types::class::ClassType;
 use crate::types::display::ClassDisplayContext;
 use crate::types::keywords::ConverterMap;
 use crate::types::keywords::DataclassFieldKeywords;
@@ -86,12 +90,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let dataclass = metadata.dataclass_metadata()?;
         let mut fields = SmallMap::new();
 
+        // Compute kw_only fields once for all methods that need it
+        let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
+
+        self.check_dataclass_non_data_descriptors(cls, dataclass, errors);
+        self.check_dataclass_data_descriptor_defaults(cls, dataclass, errors);
         if dataclass.kws.init {
             let init_method = if let Some((root_model_type, has_strict)) =
                 self.get_pydantic_root_model_type_via_mro(cls, &metadata)
             {
                 self.get_pydantic_root_model_init(cls, root_model_type, has_strict)
-            } else if metadata.is_pydantic_base_model() {
+            } else if metadata.is_pydantic_model() {
                 // Pydantic models with RootModel fields need type expansion
                 let transform_type: &dyn Fn(Type) -> Type = &|ty: Type| {
                     if let Some(root_type) = self.extract_root_model_inner_type(&ty) {
@@ -109,7 +118,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
 
                 let field_types: Vec<Type> = self
-                    .iter_fields(cls, dataclass, false)
+                    .iter_fields(cls, dataclass, false, &kw_only_by_class)
                     .into_iter()
                     .map(|(_, field, _)| field.ty())
                     .collect();
@@ -122,6 +131,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     transform_type,
                     force_optional,
                     converter_table,
+                    &kw_only_by_class,
                     errors,
                 )
             } else {
@@ -133,6 +143,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &|ty| ty,
                     false,
                     ConverterMap::new(),
+                    &kw_only_by_class,
                     errors,
                 )
             };
@@ -153,7 +164,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if dataclass.kws.match_args {
             fields.insert(
                 dunder::MATCH_ARGS,
-                self.get_dataclass_match_args(cls, dataclass),
+                self.get_dataclass_match_args(cls, dataclass, &kw_only_by_class),
             );
         }
         if dataclass.kws.slots {
@@ -167,7 +178,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     "Cannot specify both `slots=True` and `__slots__`".to_owned(),
                 );
             } else {
-                fields.insert(dunder::SLOTS, self.get_dataclass_slots(cls, dataclass));
+                fields.insert(
+                    dunder::SLOTS,
+                    self.get_dataclass_slots(cls, dataclass, &kw_only_by_class),
+                );
             }
         }
         // See rules for `__hash__` creation under "unsafe_hash":
@@ -177,7 +191,239 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if dataclass.kws.eq {
             fields.insert(dunder::HASH, ClassSynthesizedField::new(Type::None));
         }
+        fields.insert(
+            dunder::REPLACE,
+            self.get_dataclass_replace(cls, dataclass, &kw_only_by_class, errors),
+        );
         Some(ClassSynthesizedFields::new(fields))
+    }
+
+    /// Check for non-data descriptors in dataclass fields and emit errors.
+    ///
+    /// Non-data descriptors (having __get__ but no __set__) are unsound in dataclasses
+    /// because the dataclass __init__ writes to the instance dict, shadowing the
+    /// class-level descriptor.
+    ///
+    /// Exception: If the descriptor's __get__ returns Self, then the shadowing is sound
+    /// (the runtime type of the shadow matches the static type of the descriptor call).
+    /// We check for exactly Self rather than using assignability to avoid issues with overloads.
+    fn check_dataclass_non_data_descriptors(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+        errors: &ErrorCollector,
+    ) {
+        for name in dataclass.fields.iter() {
+            if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
+                && let Some((range, descriptor_cls)) = field.value.non_data_descriptor_info()
+            {
+                // Get the __get__ method's return type from the descriptor class.
+                // If all overloads return Self, the type will be SelfType, and
+                // shadowing is sound because the instance dict value has the same type.
+                // We don't use assignability here because overloads could cause issues.
+                let get_return_ty = self
+                    .get_class_member(descriptor_cls.class_object(), &dunder::GET)
+                    .and_then(|get_field| get_field.ty().callable_return_type());
+
+                if let Some(Type::SelfType(_)) = get_return_ty {
+                    continue;
+                }
+
+                let cls = descriptor_cls.name();
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    vec1![
+                        format!("Cannot set field `{name}` to non-data descriptor `{cls}`"),
+                        format!("Hint: add a `__set__` method to make `{cls}` a data descriptor"),
+                    ],
+                );
+            }
+        }
+    }
+
+    /// Check that data descriptor defaults are type-safe in dataclass fields.
+    ///
+    /// For a data descriptor (having both __get__ and __set__), the "default" value
+    /// when the field is not provided to __init__ is the class-level descriptor.
+    /// Reading the field returns the `__get__` return type, but setting the field
+    /// expects the `__set__` value parameter type. For the default to be type-safe,
+    /// the `__get__` return type must be assignable to the `__set__` value type.
+    fn check_dataclass_data_descriptor_defaults(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+        errors: &ErrorCollector,
+    ) {
+        for name in dataclass.fields.iter() {
+            if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
+                && let Some((range, descriptor_cls)) = field.value.data_descriptor_info()
+            {
+                // Get the __get__ method's return type from the descriptor class.
+                let get_return_ty = self
+                    .get_class_member(descriptor_cls.class_object(), &dunder::GET)
+                    .and_then(|get_field| get_field.ty().callable_return_type());
+
+                // Get the __set__ method and extract the value parameter type (3rd param).
+                let set_value_ty = self
+                    .get_class_member(descriptor_cls.class_object(), &dunder::SET)
+                    .and_then(|set_field| {
+                        set_field
+                            .ty()
+                            .callable_signatures()
+                            .first()
+                            .and_then(|sig| {
+                                if let Params::List(params) = &sig.params {
+                                    match params.items().get(2) {
+                                        Some(Param::Pos(_, t, _) | Param::PosOnly(_, t, _)) => {
+                                            Some(t.clone())
+                                        }
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                    });
+
+                if let (Some(get_ty), Some(set_ty)) = (get_return_ty, set_value_ty) {
+                    // Check if the __get__ return type is assignable to the __set__ value type.
+                    if !self.is_subset_eq(&get_ty, &set_ty) {
+                        let cls = descriptor_cls.name();
+                        errors.add(
+                            range,
+                            ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                            vec1![
+                                format!("Cannot set field `{name}` to data descriptor `{cls}` with inconsistent types"),
+                                format!("Return type `{get_ty}` of `{cls}.__get__` is not assignable to value type `{set_ty}` of `{cls}.__set__`"),
+                            ],
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn call_dataclasses_replace(
+        &self,
+        replace_ty: &Type,
+        args: &[CallArg],
+        kws: &[CallKeyword],
+        callee_range: TextRange,
+        arg_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let Some(CallArg::Arg(obj_arg)) = args.first() else {
+            return self.freeform_call_infer(
+                replace_ty.clone(),
+                args,
+                kws,
+                callee_range,
+                arg_range,
+                hint,
+                errors,
+            );
+        };
+        let obj_ty = obj_arg.infer(self, errors);
+
+        let is_dataclass = |cls: &ClassType| {
+            let cls_metadata = self.get_metadata_for_class(cls.class_object());
+            cls_metadata.dataclass_metadata().is_some()
+        };
+
+        let mut dataclasses = Vec::new();
+        let mut non_dataclasses = Vec::new();
+        self.map_over_union(&obj_ty, |ty| match ty {
+            Type::ClassType(cls) if is_dataclass(cls) => dataclasses.push(ty.clone()),
+            _ => non_dataclasses.push(ty.clone()),
+        });
+
+        // For unions of dataclasses, typecheck each member individually. We treat the first argument
+        // as the member type to avoid rejecting `A | B` as not assignable to `A`.
+        let mut rets = dataclasses.map(|ty| {
+            let ret = self.call_magic_dunder_method(
+                ty,
+                &dunder::REPLACE,
+                arg_range,
+                &args.iter().skip(1).cloned().collect::<Vec<_>>(),
+                kws,
+                errors,
+                None,
+            );
+            ret.unwrap_or_else(|| ty.clone())
+        });
+        if !non_dataclasses.is_empty() {
+            let mut new_args = Vec::with_capacity(args.len());
+            let new_first_arg = self.unions(non_dataclasses);
+            new_args.push(CallArg::ty(&new_first_arg, obj_arg.range()));
+            new_args.extend(args.iter().skip(1).cloned());
+            rets.push(self.freeform_call_infer(
+                replace_ty.clone(),
+                &new_args,
+                kws,
+                callee_range,
+                arg_range,
+                hint,
+                errors,
+            ));
+        }
+        self.unions(rets)
+    }
+
+    fn get_dataclass_replace(
+        &self,
+        cls: &Class,
+        dataclass_metadata: &DataclassMetadata,
+        kw_only_by_class: &SmallMap<Class, SmallSet<Name>>,
+        errors: &ErrorCollector,
+    ) -> ClassSynthesizedField {
+        let mut params = vec![self.class_self_param(cls, true)];
+
+        let strict_default = dataclass_metadata.kws.strict;
+        for (name, field, field_flags) in
+            self.iter_fields(cls, dataclass_metadata, true, kw_only_by_class)
+        {
+            if !field_flags.init {
+                continue;
+            }
+
+            let strict = field_flags.strict.unwrap_or(strict_default);
+            let has_default = !field.is_init_var() || field_flags.default.is_some();
+            if field_flags.init_by_name {
+                params.push(self.as_param(
+                    &field,
+                    &name,
+                    has_default,
+                    true,
+                    strict,
+                    field_flags.converter_param.clone(),
+                    &|t| t,
+                    errors,
+                ));
+            }
+            if let Some(alias) = &field_flags.init_by_alias {
+                params.push(self.as_param(
+                    &field,
+                    alias,
+                    has_default,
+                    true,
+                    strict,
+                    field_flags.converter_param.clone(),
+                    &|t| t,
+                    errors,
+                ));
+            }
+        }
+        if dataclass_metadata.kws.extra {
+            params.push(Param::Kwargs(None, Type::Any(AnyStyle::Implicit)));
+        }
+
+        let ty = Type::Function(Box::new(Function {
+            signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
+            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::REPLACE),
+        }));
+        ClassSynthesizedField::new(ty)
     }
 
     pub fn validate_frozen_dataclass_inheritance(
@@ -232,8 +478,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         // `__post_init__` is called with a dataclass's `InitVar`s, so we use the `InitVar` types
         // to generate a callable signature to check `__post_init__` against.
+        let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
         let mut params = Vec::new();
-        for (name, field, _) in self.iter_fields(cls, dataclass_metadata, true) {
+        for (name, field, _) in self.iter_fields(cls, dataclass_metadata, true, &kw_only_by_class) {
             if field.is_init_var() {
                 params.push(self.as_param(
                     &field,
@@ -404,7 +651,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 if alias.is_none() && Some(name) == alias_keyword {
                     self.fill_in_literal(alias, ty, default_ty, |ty| match ty {
-                        Type::Literal(Lit::Str(s)) => Some(Name::new(s)),
+                        Type::Literal(lit) if let Lit::Str(s) = &lit.value => Some(Name::new(s)),
                         _ => None,
                     });
                 }
@@ -478,36 +725,77 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    fn iter_fields(
+    pub fn compute_kw_only_fields_by_class(&self, cls: &Class) -> SmallMap<Class, SmallSet<Name>> {
+        let is_kw_only_marker = |ty: &Type| matches!(ty, Type::ClassType(cls) if cls.has_qname("dataclasses", "KW_ONLY"));
+
+        let compute_for_class = |target_cls: &Class| -> SmallSet<Name> {
+            let mut kw_only_fields = SmallSet::new();
+            let mut seen_kw_only_marker = false;
+            for name in target_cls.fields() {
+                if !target_cls.is_field_annotated(name) {
+                    continue;
+                }
+                let Some(field) =
+                    self.get_non_synthesized_field_from_current_class_only(target_cls, name)
+                else {
+                    continue;
+                };
+                if is_kw_only_marker(&field.ty()) {
+                    seen_kw_only_marker = true;
+                } else if seen_kw_only_marker {
+                    kw_only_fields.insert(name.clone());
+                }
+            }
+            kw_only_fields
+        };
+
+        let mut result: SmallMap<Class, SmallSet<Name>> = SmallMap::new();
+        result.insert(cls.clone(), compute_for_class(cls));
+
+        for ancestor in self.get_mro_for_class(cls).ancestors_no_object() {
+            let ancestor_cls = ancestor.class_object();
+            if ancestor_cls == cls {
+                continue;
+            }
+            result.insert(ancestor_cls.clone(), compute_for_class(ancestor_cls));
+        }
+        result
+    }
+
+    pub fn iter_fields(
         &self,
         cls: &Class,
         dataclass: &DataclassMetadata,
         include_initvar: bool,
+        kw_only_fields_by_class: &SmallMap<Class, SmallSet<Name>>,
     ) -> Vec<(Name, ClassField, DataclassFieldKeywords)> {
-        let mut seen_kw_only_marker = false;
         let mut positional_fields = Vec::new();
         let mut kwonly_fields = Vec::new();
         let cls_is_kw_only = dataclass.kws.kw_only;
         for name in dataclass.fields.iter() {
             match (self.get_dataclass_member(cls, name), include_initvar) {
                 (DataclassMember::KwOnlyMarker, _) => {
-                    seen_kw_only_marker = true;
+                    // KW_ONLY markers are not fields, skip them
                 }
                 (DataclassMember::NotAField, _) => {}
                 (DataclassMember::Field(field, mut keywords), _)
                 | (DataclassMember::InitVar(field, mut keywords), true) => {
                     if keywords.kw_only.is_none() {
-                        // kw_only hasn't been explicitly set on the field
-                        keywords.kw_only = Some(
-                            seen_kw_only_marker
-                                || if field.defining_class == *cls {
-                                    cls_is_kw_only
-                                } else {
-                                    self.get_metadata_for_class(&field.defining_class)
-                                        .dataclass_metadata()
-                                        .is_some_and(|m| m.kws.kw_only)
-                                },
-                        );
+                        // kw_only hasn't been explicitly set on the field.
+                        // A field is kw_only if:
+                        // 1. It appears after a KW_ONLY marker in its defining class, OR
+                        // 2. Its defining class has kw_only=True in the decorator
+                        let after_kw_only_marker = kw_only_fields_by_class
+                            .get(&field.defining_class)
+                            .is_some_and(|fields| fields.contains(name));
+                        let defining_class_is_kw_only = if field.defining_class == *cls {
+                            cls_is_kw_only
+                        } else {
+                            self.get_metadata_for_class(&field.defining_class)
+                                .dataclass_metadata()
+                                .is_some_and(|m| m.kws.kw_only)
+                        };
+                        keywords.kw_only = Some(after_kw_only_marker || defining_class_is_kw_only);
                     };
                     if keywords.is_kw_only() {
                         kwonly_fields.push((name.clone(), (*field.value).clone(), keywords))
@@ -531,11 +819,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         param_type_transform: &dyn Fn(Type) -> Type,
         force_optional: bool,
         converter_table: ConverterMap,
+        kw_only_by_class: &SmallMap<Class, SmallSet<Name>>,
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
         let mut params = vec![self.class_self_param(cls, false)];
         let mut has_seen_default = false;
-        for (name, field, field_flags) in self.iter_fields(cls, dataclass, true) {
+        for (name, field, field_flags) in self.iter_fields(cls, dataclass, true, kw_only_by_class) {
             let strict = field_flags.strict.unwrap_or(strict_default);
             if field_flags.init {
                 let has_default = force_optional
@@ -611,20 +900,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         dataclass: &DataclassMetadata,
+        kw_only_by_class: &SmallMap<Class, SmallSet<Name>>,
     ) -> ClassSynthesizedField {
         // Keyword-only fields do not appear in __match_args__.
         let kw_only = dataclass.kws.kw_only;
         let ts = if kw_only {
             Vec::new()
         } else {
-            let filtered_fields = self.iter_fields(cls, dataclass, true);
+            let filtered_fields = self.iter_fields(cls, dataclass, true, kw_only_by_class);
             filtered_fields
                 .iter()
                 .filter_map(|(name, _, field_flags)| {
                     if field_flags.is_kw_only() || !field_flags.init {
                         None
                     } else {
-                        Some(Type::Literal(Lit::Str(name.as_str().into())))
+                        Some(Lit::Str(name.as_str().into()).to_implicit_type())
                     }
                 })
                 .collect()
@@ -637,11 +927,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         dataclass: &DataclassMetadata,
+        kw_only_by_class: &SmallMap<Class, SmallSet<Name>>,
     ) -> ClassSynthesizedField {
-        let filtered_fields = self.iter_fields(cls, dataclass, false);
+        let filtered_fields = self.iter_fields(cls, dataclass, false, kw_only_by_class);
         let ts = filtered_fields
             .iter()
-            .map(|(name, _, _)| Type::Literal(Lit::Str(name.as_str().into())))
+            .map(|(name, _, _)| Lit::Str(name.as_str().into()).to_implicit_type())
             .collect();
         let ty = Type::concrete_tuple(ts);
         ClassSynthesizedField::new(ty)

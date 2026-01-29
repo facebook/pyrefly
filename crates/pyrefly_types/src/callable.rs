@@ -490,6 +490,7 @@ pub enum FunctionKind {
     IsSubclass,
     Dataclass,
     DataclassField,
+    DataclassReplace,
     /// `typing.dataclass_transform`. Note that this is `dataclass_transform` itself, *not* the
     /// decorator created by a `dataclass_transform(...)` call. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
@@ -703,7 +704,7 @@ impl Callable {
 impl Param {
     fn fmt_default(&self, default: &Option<Type>) -> String {
         match default {
-            Some(Type::Literal(lit)) => format!("{lit}"),
+            Some(Type::Literal(lit)) => format!("{}", lit.value),
             Some(Type::None) => "None".to_owned(),
             _ => "...".to_owned(),
         }
@@ -798,6 +799,27 @@ impl Param {
             _ => false,
         }
     }
+
+    /// Format a parameter for display using the proper type display infrastructure.
+    /// This ensures consistent formatting with default values, position-only markers, etc.
+    ///
+    /// This is similar to the `Display` impl, but allows passing in a `TypeDisplayContext`
+    /// for context-aware formatting (e.g., disambiguating types with the same name).
+    pub fn format_for_signature(&self, type_ctx: &crate::display::TypeDisplayContext) -> String {
+        use pyrefly_util::display::Fmt;
+
+        use crate::type_output::DisplayOutput;
+
+        format!(
+            "{}",
+            Fmt(|f| {
+                let mut output = DisplayOutput::new(type_ctx, f);
+                self.fmt_with_type(&mut output, &|ty, o| {
+                    type_ctx.fmt_helper_generic(ty, false, o)
+                })
+            })
+        )
+    }
 }
 
 impl Display for Param {
@@ -822,12 +844,13 @@ impl FunctionKind {
             ("builtins", None, "classmethod") => Self::ClassMethod,
             ("dataclasses", None, "dataclass") => Self::Dataclass,
             ("dataclasses", None, "field") => Self::DataclassField,
-            ("typing", None, "overload") => Self::Overload,
-            ("typing", None, "override") => Self::Override,
-            ("typing", None, "cast") => Self::Cast,
-            ("typing", None, "assert_type") => Self::AssertType,
-            ("typing", None, "reveal_type") => Self::RevealType,
-            ("typing", None, "final") => Self::Final,
+            ("dataclasses", None, "replace") => Self::DataclassReplace,
+            ("typing" | "typing_extensions", None, "overload") => Self::Overload,
+            ("typing" | "typing_extensions", None, "override") => Self::Override,
+            ("typing" | "typing_extensions", None, "cast") => Self::Cast,
+            ("typing" | "typing_extensions", None, "assert_type") => Self::AssertType,
+            ("typing" | "typing_extensions", None, "reveal_type") => Self::RevealType,
+            ("typing" | "typing_extensions", None, "final") => Self::Final,
             ("typing" | "typing_extensions", None, "runtime_checkable") => Self::RuntimeCheckable,
             ("typing" | "typing_extensions", None, "dataclass_transform") => {
                 Self::DataclassTransform
@@ -835,8 +858,8 @@ impl FunctionKind {
             ("abc", None, "abstractmethod") => Self::AbstractMethod,
             ("functools", None, "total_ordering") => Self::TotalOrdering,
             ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
-            ("numba", None, "jit") => Self::NumbaJit,
-            ("numba", None, "njit") => Self::NumbaNjit,
+            ("numba.core.decorators", None, "jit") => Self::NumbaJit,
+            ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
             _ => Self::Def(Box::new(FuncId {
                 module,
                 cls,
@@ -852,6 +875,7 @@ impl FunctionKind {
             Self::ClassMethod => ModuleName::builtins(),
             Self::Dataclass => ModuleName::dataclasses(),
             Self::DataclassField => ModuleName::dataclasses(),
+            Self::DataclassReplace => ModuleName::dataclasses(),
             Self::DataclassTransform => ModuleName::typing(),
             Self::Final => ModuleName::typing(),
             Self::Overload => ModuleName::typing(),
@@ -877,6 +901,7 @@ impl FunctionKind {
             Self::ClassMethod => Cow::Owned(Name::new_static("classmethod")),
             Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
             Self::DataclassField => Cow::Owned(Name::new_static("field")),
+            Self::DataclassReplace => Cow::Owned(Name::new_static("replace")),
             Self::DataclassTransform => Cow::Owned(Name::new_static("dataclass_transform")),
             Self::Final => Cow::Owned(Name::new_static("final")),
             Self::Overload => Cow::Owned(Name::new_static("overload")),
@@ -902,6 +927,7 @@ impl FunctionKind {
             Self::ClassMethod => None,
             Self::Dataclass => None,
             Self::DataclassField => None,
+            Self::DataclassReplace => None,
             Self::DataclassTransform => None,
             Self::Final => None,
             Self::Overload => None,

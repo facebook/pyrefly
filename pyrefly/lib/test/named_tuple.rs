@@ -221,6 +221,14 @@ Tup2 = namedtuple("Tup2", ["a", "b"], defaults=[None, x])
 );
 
 testcase!(
+    test_too_many_defaults,
+    r#"
+from collections import namedtuple
+Tup = namedtuple("Tup", ["a", "b"], defaults=(1, 2, 3))  # E: Too many defaults: expected at most 2, got 3
+    "#,
+);
+
+testcase!(
     test_named_tuple_dunder_unpack,
     r#"
 from typing import NamedTuple
@@ -365,9 +373,9 @@ testcase!(
     test_collections_namedtuple_unexpected_keyword,
     r#"
 from collections import namedtuple
-X = namedtuple('X', [], nonsense=True)  # E: Unrecognized argument `nonsense` for named tuple definition
+X = namedtuple('X', [], nonsense=True)  # E: Unrecognized keyword argument `nonsense` in named tuple definition
 def f(kwargs):
-    Y = namedtuple('Y', [], **kwargs)  # E: Unrecognized argument for named tuple definition
+    Y = namedtuple('Y', [], **kwargs)  # E: Unpacking is not supported in named tuple definition
     "#,
 );
 
@@ -376,5 +384,13 @@ testcase!(
     r#"
 from typing import NamedTuple
 N = NamedTuple('N', ())
+    "#,
+);
+
+testcase!(
+    test_bad_field_def,
+    r#"
+from typing import NamedTuple
+N = NamedTuple('N', [('x', int, 'oops')])  # E: Expected (name, type) pair, got 3-tuple
     "#,
 );

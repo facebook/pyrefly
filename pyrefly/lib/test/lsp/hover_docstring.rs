@@ -379,30 +379,3 @@ Docstring Result: `Test docstring`
         report.trim(),
     );
 }
-
-#[test]
-fn test_removes_block_quote_symbols_at_start_of_line() {
-    let code = r#"
-def fun() -> None:
-    """
-    >>> d = {"col1": [1, 2], "col2": [3, 4]}
-    """
-    pass
-
-f = fun()
-#   ^
-"#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
-    assert_eq!(
-        r#"
-# main.py
-8 | f = fun()
-        ^
-Docstring Result: `  
-d = {"col1": [1, 2], "col2": [3, 4]}  
-`
-"#
-        .trim(),
-        report.trim(),
-    );
-}

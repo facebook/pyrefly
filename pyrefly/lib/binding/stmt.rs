@@ -5,7 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -13,7 +15,11 @@ use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprNumberLiteral;
+use ruff_python_ast::ExprSet;
+use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
@@ -50,12 +56,58 @@ use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::special::SpecialExport;
-use crate::graph::index::Idx;
 use crate::state::loader::FindError;
 use crate::state::loader::FindingOrError;
 use crate::types::alias::resolve_typeshed_alias;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::Type;
+
+/// Checks if an iterable expression is guaranteed to be non-empty and thus
+/// the for-loop body will definitely execute at least once.
+///
+/// Returns true for:
+/// - `range(N)` where N is a positive integer literal
+/// - Non-empty list literals like `[1, 2, 3]`
+/// - Non-empty tuple literals like `(1, 2, 3)`
+/// - Non-empty set literals like `{1, 2, 3}`
+fn is_definitely_nonempty_iterable(iter: &Expr) -> bool {
+    match iter {
+        // Check for range(N) where N is a positive integer literal
+        Expr::Call(ExprCall {
+            func, arguments, ..
+        }) => {
+            // Check if the function is `range` with a single argument and no keywords
+            if let Expr::Name(ExprName { id, .. }) = &**func
+                && id.as_str() == "range"
+                && arguments.keywords.is_empty()
+                && let [arg] = &*arguments.args
+            {
+                // range(stop) - positive stop means at least one iteration
+                // range(start, stop) - we only handle range(stop) for simplicity
+                if let Expr::NumberLiteral(ExprNumberLiteral { value, .. }) = arg
+                    && let Some(n) = value.as_int().and_then(|i| i.as_i64())
+                {
+                    return n > 0;
+                }
+                // Also handle negative literals like range(-5) which iterate 0 times
+                if let Expr::UnaryOp(unary) = arg
+                    && matches!(unary.op, ruff_python_ast::UnaryOp::USub)
+                {
+                    // range(-N) always iterates 0 times
+                    return false;
+                }
+            }
+            false
+        }
+        // Check for non-empty list literals
+        Expr::List(ExprList { elts, .. }) => !elts.is_empty(),
+        // Check for non-empty tuple literals
+        Expr::Tuple(ExprTuple { elts, .. }) => !elts.is_empty(),
+        // Check for non-empty set literals
+        Expr::Set(ExprSet { elts, .. }) => !elts.is_empty(),
+        _ => false,
+    }
+}
 
 impl<'a> BindingsBuilder<'a> {
     fn assert(&mut self, assert_range: TextRange, mut test: Expr, msg: Option<Expr>) {
@@ -77,7 +129,7 @@ impl<'a> BindingsBuilder<'a> {
             let mut msg = self.declare_current_idx(Key::UsageLink(msg_expr.range()));
             self.ensure_expr(&mut msg_expr, msg.usage());
             let idx = self.insert_binding(
-                KeyExpect(msg_expr.range()),
+                KeyExpect::TypeCheckExpr(msg_expr.range()),
                 BindingExpect::TypeCheckExpr(msg_expr),
             );
             self.insert_binding_current(msg, Binding::UsageLink(LinkedKey::Expect(idx)));
@@ -89,7 +141,7 @@ impl<'a> BindingsBuilder<'a> {
             &Usage::Narrowing(None),
         );
         if let Some(false) = static_test {
-            self.scopes.mark_flow_termination();
+            self.scopes.mark_flow_termination(true);
         }
     }
 
@@ -282,7 +334,10 @@ impl<'a> BindingsBuilder<'a> {
         }
         let mut ret = self.declare_current_idx(Key::ReturnExplicit(x.range()));
         self.ensure_expr_opt(x.value.as_deref_mut(), ret.usage());
-        if let Err((ret, oops_top_level)) = self.scopes.record_or_reject_return(ret, x) {
+        if let Err((ret, oops_top_level)) =
+            self.scopes
+                .record_or_reject_return(ret, x, self.scopes.is_definitely_unreachable())
+        {
             match oops_top_level.value {
                 Some(v) => self.insert_binding_current(ret, Binding::Expr(None, *v)),
                 None => self.insert_binding_current(ret, Binding::Type(Type::None)),
@@ -293,7 +348,7 @@ impl<'a> BindingsBuilder<'a> {
                 "Invalid `return` outside of a function".to_owned(),
             );
         }
-        self.scopes.mark_flow_termination();
+        self.scopes.mark_flow_termination(false);
     }
 
     fn find_error(&self, error: &FindError, range: TextRange) {
@@ -308,6 +363,9 @@ impl<'a> BindingsBuilder<'a> {
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
         self.with_semantic_checker(|semantic, context| semantic.visit_stmt(&x, context));
+
+        // Clear last_stmt_expr at the start - will be set again if this is a StmtExpr
+        self.scopes.set_last_stmt_expr(None);
 
         match x {
             Stmt::FunctionDef(x) => {
@@ -504,7 +562,7 @@ impl<'a> BindingsBuilder<'a> {
                     // check that in that case the annotations match.
                     if let Some(ann) = canonical_ann_idx {
                         self.insert_binding(
-                            KeyExpect(name.range),
+                            KeyExpect::Redefinition(name.range),
                             BindingExpect::Redefinition {
                                 new: ann_idx,
                                 existing: ann,
@@ -537,15 +595,14 @@ impl<'a> BindingsBuilder<'a> {
                         .record_self_attr_assign(&attr, value.clone(), Some(ann_key))
                     {
                         self.error(
-                             x.range,
-                             ErrorInfo::Kind(ErrorKind::BadAssignment),
-                             format!(
-                                "Type cannot be declared in assignment to non-self attribute `{}.{}`",
+                            x.range,
+                            ErrorInfo::Kind(ErrorKind::BadAssignment),
+                            format!(
+                                "Cannot annotate non-self attribute `{}.{}`",
                                 self.module_info.display(&attr.value),
                                 attr_name,
                             ),
-
-                         );
+                        );
                     }
                 }
                 mut target => {
@@ -615,6 +672,9 @@ impl<'a> BindingsBuilder<'a> {
                         // We don't track first-usage in this context, since we won't analyze the usage anyway.
                         let mut e = illegal_target.clone();
                         self.ensure_expr(&mut e, &mut Usage::StaticTypeInformation);
+                        // Even though the assignment target is invalid, we still need to analyze the RHS so errors
+                        // (like invalid walrus targets) are reported.
+                        self.ensure_expr(&mut x.value, &mut Usage::StaticTypeInformation);
                     }
                 }
             }
@@ -665,6 +725,9 @@ impl<'a> BindingsBuilder<'a> {
                 Ast::expr_lvalue(&x.target, &mut |name| {
                     loop_header_targets.insert(name.id.clone());
                 });
+                // Check if the iterable is definitely non-empty before binding
+                // (must be done before x.iter is moved)
+                let loop_definitely_runs = is_definitely_nonempty_iterable(&x.iter);
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
                     Binding::IterableValue(ann, expr.clone(), IsAsync::new(x.is_async))
                 });
@@ -673,7 +736,14 @@ impl<'a> BindingsBuilder<'a> {
                 // targets - which get re-bound each iteration - are excluded from the loop Phi logic.
                 self.setup_loop(x.range, &loop_header_targets);
                 self.stmts(x.body, parent);
-                self.teardown_loop(x.range, &NarrowOps::new(), x.orelse, parent, false);
+                self.teardown_loop(
+                    x.range,
+                    &NarrowOps::new(),
+                    x.orelse,
+                    parent,
+                    false,
+                    loop_definitely_runs,
+                );
             }
             Stmt::While(mut x) => {
                 self.setup_loop(x.range, &SmallSet::new());
@@ -689,11 +759,23 @@ impl<'a> BindingsBuilder<'a> {
                     NarrowUseLocation::Span(x.range),
                     &Usage::Narrowing(None),
                 );
-                self.insert_binding(KeyExpect(x.test.range()), BindingExpect::Bool(*x.test));
+                self.insert_binding(
+                    KeyExpect::Bool(x.test.range()),
+                    BindingExpect::Bool(*x.test),
+                );
                 self.stmts(x.body, parent);
-                self.teardown_loop(x.range, &narrow_ops, x.orelse, parent, is_while_true);
+                // For while True: loops, the loop body definitely runs at least once
+                self.teardown_loop(
+                    x.range,
+                    &narrow_ops,
+                    x.orelse,
+                    parent,
+                    is_while_true,
+                    is_while_true,
+                );
             }
             Stmt::If(x) => {
+                let is_definitely_unreachable = self.scopes.is_definitely_unreachable();
                 let mut exhaustive = false;
                 self.start_fork(x.range);
                 // Type narrowing operations that are carried over from one branch to the next. For example, in:
@@ -704,6 +786,7 @@ impl<'a> BindingsBuilder<'a> {
                 // x is bound to Narrow(x, Is(None)) in the if branch, and the negation, Narrow(x, IsNot(None)),
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
+                let mut contains_static_test_with_no_else = false;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
                     self.bind_narrow_ops(
@@ -713,8 +796,17 @@ impl<'a> BindingsBuilder<'a> {
                     );
                     // If there is no test, it's an `else` clause and `this_branch_chosen` will be true.
                     let this_branch_chosen = match &test {
-                        None => Some(true),
-                        Some(x) => self.sys_info.evaluate_bool(x),
+                        None => {
+                            contains_static_test_with_no_else = false;
+                            Some(true)
+                        }
+                        Some(x) => {
+                            let result = self.sys_info.evaluate_bool(x);
+                            if result.is_some() {
+                                contains_static_test_with_no_else = true;
+                            }
+                            result
+                        }
                     };
                     self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
@@ -728,7 +820,7 @@ impl<'a> BindingsBuilder<'a> {
                     if let Some(test_expr) = test {
                         // Typecheck the test condition during solving.
                         self.insert_binding(
-                            KeyExpect(test_expr.range()),
+                            KeyExpect::Bool(test_expr.range()),
                             BindingExpect::Bool(test_expr),
                         );
                     }
@@ -749,6 +841,11 @@ impl<'a> BindingsBuilder<'a> {
                     self.finish_exhaustive_fork();
                 } else {
                     self.finish_non_exhaustive_fork(&negated_prev_ops);
+                }
+                // If we have a statically evaluated test like `sys.version_info`, we should set `is_definitely_unreachable` to false
+                // to reduce false positive unreachable errors, since some code paths can still be hit at runtime
+                if contains_static_test_with_no_else && !is_definitely_unreachable {
+                    self.scopes.set_definitely_unreachable(false);
                 }
             }
             Stmt::With(x) => {
@@ -778,7 +875,9 @@ impl<'a> BindingsBuilder<'a> {
                         );
                     }
                 }
+                self.scopes.enter_with();
                 self.stmts(x.body, parent);
+                self.scopes.exit_with();
             }
             Stmt::Match(x) => {
                 self.stmt_match(x, parent);
@@ -794,7 +893,7 @@ impl<'a> BindingsBuilder<'a> {
                         RaisedException::WithoutCause(*exc)
                     };
                     let idx = self.insert_binding(
-                        KeyExpect(x.range),
+                        KeyExpect::CheckRaisedException(x.range),
                         BindingExpect::CheckRaisedException(raised),
                     );
                     self.insert_binding_current(
@@ -804,7 +903,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     // If there's no exception raised, don't bother checking the cause.
                 }
-                self.scopes.mark_flow_termination();
+                self.scopes.mark_flow_termination(false);
             }
             Stmt::Try(x) => {
                 self.start_fork_and_branch(x.range);
@@ -887,7 +986,13 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     match x.asname {
                         Some(asname) => {
-                            self.scopes.register_import(&asname);
+                            // `import X as X` is an explicit re-export per Python typing spec.
+                            // Don't flag it as unused.
+                            if asname.id == x.name.id {
+                                self.scopes.register_reexport_import(&asname);
+                            } else {
+                                self.scopes.register_import(&asname);
+                            }
                             self.bind_definition(
                                 &asname,
                                 Binding::Module(m, m.components(), None),
@@ -988,10 +1093,10 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     None
                 };
-                self.insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
-                if special_export == Some(SpecialExport::PytestNoReturn) {
-                    self.scopes.mark_flow_termination();
-                }
+                let key = self
+                    .insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
+                // Track this StmtExpr as the trailing statement for type-based termination
+                self.scopes.set_last_stmt_expr(Some(key));
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {
@@ -1054,14 +1159,11 @@ impl<'a> BindingsBuilder<'a> {
                     };
                     let key = self.insert_binding(key, val);
                     // Register the imported name from wildcard imports
-                    self.scopes.register_import_with_star(
-                        &Identifier {
-                            node_index: AtomicNodeIndex::default(),
-                            id: name.into_key().clone(),
-                            range: x.range,
-                        },
-                        true,
-                    );
+                    self.scopes.register_import_with_star(&Identifier {
+                        node_index: AtomicNodeIndex::default(),
+                        id: name.into_key().clone(),
+                        range: x.range,
+                    });
                     self.bind_name(
                         name.key(),
                         key,
@@ -1069,6 +1171,9 @@ impl<'a> BindingsBuilder<'a> {
                     );
                 }
             } else {
+                // `from X import Y as Y` is an explicit re-export per Python typing spec.
+                // Check this before consuming x.asname.
+                let is_reexport = x.asname.as_ref().is_some_and(|a| a.id == x.name.id);
                 let original_name_range = if x.asname.is_some() {
                     Some(x.name.range)
                 } else {
@@ -1095,28 +1200,40 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     Binding::Import(m, x.name.id.clone(), original_name_range)
                 } else {
+                    // Try submodule lookup first, then fall back to __getattr__
                     let x_as_module_name = m.append(&x.name.id);
                     let (finding, error) = match self.lookup.get(x_as_module_name) {
                         FindingOrError::Finding(finding) => (true, finding.error),
                         FindingOrError::Error(error) => (false, Some(error)),
                     };
-                    let error = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
-                    if error {
+                    let is_not_found = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
+                    if finding {
+                        Binding::Module(x_as_module_name, x_as_module_name.components(), None)
+                    } else if exported.contains_key(&dunder::GETATTR) {
+                        // Module has __getattr__, which means any attribute can be accessed.
+                        // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
+                        Binding::ImportViaGetattr(m, x.name.id.clone())
+                    } else if is_not_found {
                         self.error(
                             x.range,
                             ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
                             format!("Could not import `{}` from `{m}`", x.name.id),
                         );
-                    }
-                    if finding {
-                        Binding::Module(x_as_module_name, x_as_module_name.components(), None)
-                    } else if error {
                         Binding::Type(Type::any_error())
                     } else {
                         Binding::Type(Type::any_explicit())
                     }
                 };
-                self.scopes.register_import(&asname);
+                // __future__ imports have side effects even if not explicitly used,
+                // so we skip the unused import check for them.
+                // See: https://typing.python.org/en/latest/spec/distributing.html#import-conventions
+                if m == ModuleName::future() {
+                    self.scopes.register_future_import(&asname);
+                } else if is_reexport {
+                    self.scopes.register_reexport_import(&asname);
+                } else {
+                    self.scopes.register_import(&asname);
+                }
                 self.bind_definition(&asname, val, FlowStyle::Import(m, x.name.id));
             }
         }

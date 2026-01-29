@@ -117,6 +117,7 @@ impl PyrightConfig {
 #[serde(rename_all = "lowercase")]
 pub enum DiagnosticLevel {
     None,
+    Hint,
     Information,
     Warning,
     Error,
@@ -127,6 +128,7 @@ impl DiagnosticLevel {
         match self {
             Self::None => Severity::Ignore,
             Self::Information => Severity::Info,
+            Self::Hint => Severity::Info,
             Self::Warning => Severity::Warn,
             Self::Error => Severity::Error,
         }

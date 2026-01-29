@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
@@ -39,6 +40,8 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
+use crate::solver::solver::QuantifiedHandle;
+use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -282,6 +285,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                 }
             }
+            Type::Intersect(intersect) => {
+                // TODO(rechen): implement calling `A & B`
+                let (_, fallback) = *intersect;
+                self.as_call_target_impl(fallback, quantified, dunder_call)
+            }
             Type::Any(style) => CallTargetLookup::Ok(Box::new(CallTarget::Any(style))),
             Type::TypeAlias(ta) => {
                 self.as_call_target_impl(ta.as_value(self.stdlib), quantified, dunder_call)
@@ -323,6 +331,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     cls,
                     ConstructorKind::TypeOfClass,
                 )))
+            }
+            Type::Type(box Type::Intersect(box (_, fallback))) => {
+                // TODO(rechen): implement calling `type[A & B]`
+                self.as_call_target_impl(Type::type_form(fallback), quantified, dunder_call)
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
@@ -366,9 +378,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             },
             Type::KwCall(call) => self.as_call_target_impl(call.return_ty, quantified, dunder_call),
-            Type::Literal(Lit::Enum(enum_)) => {
-                self.as_call_target_impl(enum_.class.to_type(), quantified, dunder_call)
-            }
+            Type::Literal(box Literal {
+                value: Lit::Enum(enum_),
+                ..
+            }) => self.as_call_target_impl(enum_.class.to_type(), quantified, dunder_call),
             _ => CallTargetLookup::Error(vec![]),
         }
     }
@@ -473,6 +486,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             "Expr::call_method",
             true,
         )?;
+        // Record the method type for hover support
+        self.record_resolved_trace(range, callee_ty.clone());
         Some(self.make_call_target_and_call(
             callee_ty,
             method_name,
@@ -498,6 +513,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let callee_ty =
             self.type_of_attr_get(ty, method_name, range, errors, context, "Expr::call_method");
+        self.record_resolved_trace(range, callee_ty.clone());
         self.make_call_target_and_call(
             callee_ty,
             method_name,
@@ -514,7 +530,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn call_metaclass(
         &self,
         cls: &ClassType,
-        range: TextRange,
+        arguments_range: TextRange,
         args: &[CallArg],
         keywords: &[CallKeyword],
         errors: &ErrorCollector,
@@ -528,13 +544,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.as_call_target_or_error(
                 dunder_call,
                 CallStyle::Method(&dunder::CALL),
-                range,
+                arguments_range,
                 errors,
                 context,
             ),
             args,
             keywords,
-            range,
+            arguments_range,
             errors,
             context,
             hint,
@@ -544,6 +560,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .finish_class_targs(&mut ctor_targs, self.uniques);
         ret.subst_mut(&ctor_targs.substitution_map());
         Some(ret)
+    }
+
+    pub fn add_specialization_errors(
+        &self,
+        specialization_errors: Vec1<TypeVarSpecializationError>,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) {
+        for e in specialization_errors {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::new(ErrorKind::BadSpecialization, context),
+                e.to_error_msg(self),
+            );
+        }
     }
 
     fn construct_class(
@@ -558,23 +591,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
     ) -> Type {
         // Based on https://typing.readthedocs.io/en/latest/spec/constructors.html.
-        if let Some(hint) = hint {
-            self.solver()
+        let vs = if let Some(hint) = hint {
+            let vs = self
+                .solver()
                 .freshen_class_targs(cls.targs_mut(), self.uniques);
 
             self.is_subset_eq(&cls.clone().to_type(), hint.ty());
             self.solver().generalize_class_targs(cls.targs_mut());
-        }
+            vs
+        } else {
+            QuantifiedHandle::empty()
+        };
         let hint = None; // discard hint
+        let class_metadata = self.get_metadata_for_class(cls.class_object());
         if let Some(ret) =
             self.call_metaclass(&cls, arguments_range, args, keywords, errors, context, hint)
             && !self.is_compatible_constructor_return(&ret, cls.class_object())
         {
             if let Some(metaclass_dunder_call) = self.get_metaclass_dunder_call(&cls) {
                 if let Some(callee_range) = callee_range
-                    && let Some(metaclass) = self
-                        .get_metadata_for_class(cls.class_object())
-                        .custom_metaclass()
+                    && let Some(metaclass) = class_metadata.custom_metaclass()
                 {
                     self.record_external_attribute_definition_index(
                         &metaclass.clone().to_type(),
@@ -585,6 +621,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.record_resolved_trace(arguments_range, metaclass_dunder_call);
             }
             // Got something other than an instance of the class under construction.
+            if let Err(e) = self
+                .solver()
+                .finish_quantified(vs, self.solver().infer_with_first_use)
+            {
+                self.add_specialization_errors(e, arguments_range, errors, context);
+            }
             return ret;
         }
         let mut dunder_new_ret = None;
@@ -630,6 +672,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Any, using the class under construction is still more useful.
                     self.solver()
                         .finish_class_targs(cls.targs_mut(), self.uniques);
+                    if let Err(e) = self
+                        .solver()
+                        .finish_quantified(vs, self.solver().infer_with_first_use)
+                    {
+                        self.add_specialization_errors(e, arguments_range, errors, context);
+                    }
                     return ret.subst(&cls.targs().substitution_map());
                 }
                 (true, has_errors)
@@ -671,8 +719,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             self.record_resolved_trace(arguments_range, init_method);
         }
+        if class_metadata.is_pydantic_model()
+            && let Some(dataclass) = class_metadata.dataclass_metadata()
+        {
+            self.check_pydantic_argument_range_constraints(
+                cls.class_object(),
+                dataclass,
+                args,
+                keywords,
+                errors,
+            );
+        }
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
+        if let Err(e) = self
+            .solver()
+            .finish_quantified(vs, self.solver().infer_with_first_use)
+        {
+            self.add_specialization_errors(e, arguments_range, errors, context);
+        }
         if let Some(mut ret) = dunder_new_ret {
             ret.subst_mut(&cls.targs().substitution_map());
             ret
@@ -686,30 +751,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut typed_dict: TypedDictInner,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
-        if let Some(hint) = hint {
-            self.solver()
+        let vs = if let Some(hint) = hint {
+            let vs = self
+                .solver()
                 .freshen_class_targs(typed_dict.targs_mut(), self.uniques);
             self.is_subset_eq(&typed_dict.clone().to_type(), hint.ty());
             self.solver().generalize_class_targs(typed_dict.targs_mut());
-        }
+            vs
+        } else {
+            QuantifiedHandle::empty()
+        };
         let hint = None; // discard hint
         let init_method = self.get_typed_dict_dunder_init(&typed_dict);
         self.call_infer(
             self.as_call_target_or_error(
                 init_method,
                 CallStyle::Method(&dunder::INIT),
-                range,
+                arguments_range,
                 errors,
                 context,
             ),
             args,
             keywords,
-            range,
+            arguments_range,
             errors,
             context,
             hint,
@@ -717,6 +786,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         self.solver()
             .finish_class_targs(typed_dict.targs_mut(), self.uniques);
+        if let Err(e) = self
+            .solver()
+            .finish_quantified(vs, self.solver().infer_with_first_use)
+        {
+            self.add_specialization_errors(e, arguments_range, errors, context);
+        }
         Type::TypedDict(TypedDict::TypedDict(typed_dict))
     }
 
@@ -731,12 +806,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn call_infer_with_range(
+    fn call_infer_with_callee_range(
         &self,
         call_target: CallTarget,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         callee_range: Option<TextRange>,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
@@ -751,7 +826,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let method_name = meta.kind.format(self.module().name());
             self.error(
                 errors,
-                range,
+                arguments_range,
                 ErrorInfo::new(ErrorKind::AbstractMethodCall, context),
                 format!("Cannot call abstract method `{method_name}`"),
             );
@@ -775,16 +850,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if cls.has_qname("typing", "Any") {
                     return self.error(
                         errors,
-                        range,
+                        arguments_range,
                         ErrorInfo::new(ErrorKind::BadInstantiation, context),
-                        format!("`{}` can not be instantiated", cls.name()),
+                        format!("`{}` cannot be instantiated", cls.name()),
                     );
                 }
                 let metadata = self.get_metadata_for_class(cls.class_object());
                 if metadata.is_protocol() && constructor_kind == ConstructorKind::BareClassName {
                     self.error(
                         errors,
-                        range,
+                        arguments_range,
                         ErrorInfo::new(ErrorKind::BadInstantiation, context),
                         format!(
                             "Cannot instantiate `{}` because it is a protocol",
@@ -800,7 +875,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         self.error(
                             errors,
-                            range,
+                            arguments_range,
                             ErrorInfo::new(ErrorKind::BadInstantiation, context),
                             format!(
                                 "Cannot instantiate `{}` because the following members are abstract: {}",
@@ -817,23 +892,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if cls.has_qname("builtins", "bool") {
                     match self.first_arg_type(args, errors) {
                         None => (),
-                        Some(ty) => self.check_dunder_bool_is_callable(&ty, range, errors),
+                        Some(ty) => {
+                            self.check_dunder_bool_is_callable(&ty, arguments_range, errors)
+                        }
                     }
                 };
                 self.construct_class(
                     cls,
                     args,
                     keywords,
-                    range,
+                    arguments_range,
                     callee_range,
                     errors,
                     context,
                     hint,
                 )
             }
-            CallTarget::TypedDict(td) => {
-                self.construct_typed_dict(td, args, keywords, range, errors, context, hint)
-            }
+            CallTarget::TypedDict(td) => self.construct_typed_dict(
+                td,
+                args,
+                keywords,
+                arguments_range,
+                errors,
+                context,
+                hint,
+            ),
             CallTarget::BoundMethod(
                 obj,
                 TargetWithTParams(
@@ -850,7 +933,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(obj),
                 args,
                 keywords,
-                range,
+                arguments_range,
                 errors,
                 errors,
                 context,
@@ -864,7 +947,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
                 args,
                 keywords,
-                range,
+                arguments_range,
                 errors,
                 errors,
                 context,
@@ -884,7 +967,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None,
                 args,
                 keywords,
-                range,
+                arguments_range,
                 errors,
                 errors,
                 context,
@@ -893,7 +976,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
             CallTarget::FunctionOverload(overloads, metadata) => {
                 self.call_overloads(
-                    overloads, metadata, None, args, keywords, range, errors, context, hint,
+                    overloads,
+                    metadata,
+                    None,
+                    args,
+                    keywords,
+                    arguments_range,
+                    errors,
+                    context,
+                    hint,
                     ctor_targs,
                 )
                 .0
@@ -905,7 +996,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(obj),
                     args,
                     keywords,
-                    range,
+                    arguments_range,
                     errors,
                     context,
                     hint,
@@ -919,11 +1010,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let keywords = call.vec_call_keyword(keywords, self, errors);
                 self.unions(targets.into_map(|t| {
                     let ctor_targs = None; // hack
-                    self.call_infer_with_range(
+                    self.call_infer_with_callee_range(
                         t,
                         &args,
                         &keywords,
-                        range,
+                        arguments_range,
                         callee_range,
                         errors,
                         context,
@@ -969,17 +1060,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         call_target: CallTarget,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
-        self.call_infer_with_range(
+        self.call_infer_with_callee_range(
             call_target,
             args,
             keywords,
-            range,
+            arguments_range,
             None,
             errors,
             context,
@@ -1090,7 +1181,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let call_target =
             self.as_call_target_or_error(getattr_ty, CallStyle::FreeForm, range, errors, context);
-        let attr_name_ty = Type::Literal(Lit::Str(attr_name.as_str().into()));
+        let attr_name_ty = Lit::Str(attr_name.as_str().into()).to_implicit_type();
         self.call_infer(
             call_target,
             &[CallArg::ty(&attr_name_ty, range)],
@@ -1114,7 +1205,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let call_target =
             self.as_call_target_or_error(setattr_ty, CallStyle::FreeForm, range, errors, context);
-        let attr_name_ty = Type::Literal(Lit::Str(attr_name.as_str().into()));
+        let attr_name_ty = Lit::Str(attr_name.as_str().into()).to_implicit_type();
         self.call_infer(
             call_target,
             &[CallArg::ty(&attr_name_ty, range), arg],
@@ -1164,7 +1255,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Check the __init__ method and whether it comes from object or has been overridden
         let (init_attr_ty, overrides_init) = if let Some(mut t) = self.get_dunder_init(cls, false) {
             // Replace the return type with Self (the current class)
-            t.set_callable_return_type(class_type.clone());
+            t.set_callable_return_type_for_constructor(class_type.clone());
             (t, true)
         } else {
             (default_constructor(), false)
@@ -1216,7 +1307,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 kws = x.arguments.keywords.map(CallKeyword::new);
             }
 
-            self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
+            let result = self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                     .call_assert_type(
                         &x.arguments.args,
@@ -1240,6 +1331,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &x.arguments.args,
                         &x.arguments.keywords,
                         x.arguments.range,
+                        errors,
+                    )
+                }
+                Some(CalleeKind::Function(FunctionKind::DataclassReplace)) => {
+                    self.call_dataclasses_replace(
+                        ty,
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range,
+                        hint,
                         errors,
                     )
                 }
@@ -1288,28 +1390,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 //     f = staticmethod(f)
                 // Check if this call applies a decorator with known typing effects to a function.
                 _ if let Some(ret) = self.maybe_apply_function_decorator(ty, &args, &kws, errors) => ret,
-                _ => {
-                    let callable = self.as_call_target_or_error(
-                        ty.clone(),
-                        CallStyle::FreeForm,
-                        x.func.range(),
-                        errors,
-                        None,
-                    );
-                    self.call_infer_with_range(
-                        callable,
-                        &args,
-                        &kws,
-                        x.arguments.range,
-                        Some(x.func.range()),
-                        errors,
-                        None,
-                        hint,
-                        None,
-                    )
-                }
-            })
+                _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors),
+            });
+            // TypeIs and TypeGuard functions return bool at runtime
+            match result {
+                Type::TypeIs(_) | Type::TypeGuard(_) => self.stdlib.bool().clone().to_type(),
+                other => other,
+            }
         }
+    }
+
+    pub fn freeform_call_infer(
+        &self,
+        ty: Type,
+        args: &[CallArg],
+        kws: &[CallKeyword],
+        callee_range: TextRange,
+        arg_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let callable =
+            self.as_call_target_or_error(ty, CallStyle::FreeForm, callee_range, errors, None);
+        self.call_infer_with_callee_range(
+            callable,
+            args,
+            kws,
+            arg_range,
+            Some(callee_range),
+            errors,
+            None,
+            hint,
+            None,
+        )
     }
 
     fn has_exactly_two_posargs(&self, arguments: &Arguments) -> bool {

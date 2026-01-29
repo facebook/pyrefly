@@ -5,9 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fmt::Write;
+
 use pyrefly_python::sys_info::PythonVersion;
 
 use crate::test::util::TestEnv;
+use crate::test::util::testcase_for_macro;
 use crate::testcase;
 
 testcase!(
@@ -398,7 +401,7 @@ def test(x: int):
         case 1:
             assert_type(x, Literal[1])
         case 2 as q:
-            assert_type(x, int)
+            assert_type(x, Literal[2])
             assert_type(q, Literal[2])
         case q:
             assert_type(x, int)
@@ -515,7 +518,7 @@ def fun(x: A | B | C) -> None:
             assert_type(x, B)
     match x:
         case B(3, "B") as y:
-            assert_type(x, A | B | C)
+            assert_type(x, B)
             assert_type(y, B)
     match x:
         case A(1, "a") | B(2, "b"):
@@ -632,7 +635,7 @@ def test(x: Foo | Bar) -> None:
             assert_type(x, Bar)
             assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
         case Bar(a) as b:
-            assert_type(x, Foo | Bar)
+            assert_type(x, Bar)
             assert_type(b, Bar)
             assert_type(a, str)
             assert_type(b, Bar)
@@ -1223,6 +1226,19 @@ def test_oops() -> None:
 "#,
 );
 
+#[test]
+fn test_many_subscript_assignments_do_not_stack_overflow() -> anyhow::Result<()> {
+    let mut contents =
+        String::from("new_val: dict[str, int] = {}\nvalues: dict[str, dict[str, int]] = {}\n");
+    for i in 0..600 {
+        writeln!(&mut contents, "values[\"K{i}\"] = {{}}").unwrap();
+    }
+    for i in 0..600 {
+        writeln!(&mut contents, "values[\"K{i}\"][\"K{i}\"] = {i}").unwrap();
+    }
+    testcase_for_macro(TestEnv::new(), &contents, file!(), line!())
+}
+
 // Regression test for a stack overflow we had at one point.
 testcase!(
     test_flow_merging_with_recursion,
@@ -1401,4 +1417,148 @@ for _ in []:
     finally:
         continue
     "#,
+);
+
+testcase!(
+    test_noreturn_branch_termination,
+    r#"
+from typing import NoReturn, assert_type
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: str | bytes | bool) -> str | bytes:
+    if isinstance(x, str):
+        pass
+    elif isinstance(x, bytes):
+        pass
+    else:
+        raises()
+    return x  # Should be ok - x is str | bytes here
+
+def g(x: str | None) -> str:
+    if x is None:
+        raises()
+    return x  # Should be ok - x is str here
+
+def h(x: int | str) -> None:
+    if isinstance(x, int):
+        y = x + 1
+    else:
+        raises()
+    assert_type(y, int)  # y should be int, not str | int
+"#,
+);
+
+testcase!(
+    test_noreturn_nested_branches,
+    r#"
+from typing import NoReturn, assert_type
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: str | int | None) -> str:
+    if x is None:
+        raises()
+    else:
+        if isinstance(x, str):
+            return x
+        else:
+            raises()
+    # Should not be reachable, but if it were, x would be str
+"#,
+);
+
+testcase!(
+    test_noreturn_with_assignment_after,
+    r#"
+from typing import assert_type, NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: str | None):
+    if x is None:
+        raises()
+        y = "unreachable"  # This makes the branch NOT terminate
+    assert_type(x, str | None)
+"#,
+);
+
+testcase!(
+    test_noreturn_all_branches_terminate,
+    r#"
+from typing import assert_type, NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: int | str):
+    if isinstance(x, str):
+        raises()
+    else:
+        raises()
+    # All branches terminate with a NoReturn call; when Pyrefly
+    # encounters this it just ignores the NoReturn and goes ahead
+    # producing the union.
+    assert_type(x, int | str)
+"#,
+);
+
+testcase!(
+    test_non_noreturn_with_termination_key,
+    r#"
+from typing import assert_type
+
+def maybe_raises() -> None:
+    """Not NoReturn - might return normally."""
+    if True:
+        raise Exception()
+
+def f(cond: bool) -> str:
+    if cond:
+        x = "defined"
+    else:
+        maybe_raises()  # Has termination key, but is NOT NoReturn
+    return x  # E: `x` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_non_noreturn_elif,
+    r#"
+def maybe_raises() -> None:
+    if True:
+        raise Exception()
+
+def f(x: int) -> str:
+    if x == 1:
+        y = "one"
+    elif x == 2:
+        maybe_raises()
+    else:
+        maybe_raises()
+    return y  # E: `y` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_declared_variable_with_noreturn_else_false_positive,
+    r#"
+from typing import NoReturn
+
+def raises() -> NoReturn:
+    raise Exception()
+
+def f(x: int) -> str:
+    y: str
+    if x == 1:
+        y = "one"
+    elif x == 2:
+        y = "two"
+    else:
+        raises()
+    return y
+"#,
 );

@@ -422,7 +422,7 @@ from typing import Self
 class A:
     def __new__(cls: type[Self]): ...
 A.__new__(A)  # OK
-A.__new__(int) # E: Argument `type[int]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+A.__new__(int) # E: `int` is not assignable to upper bound `A` of type variable `Self@A`
     "#,
 );
 
@@ -432,7 +432,7 @@ testcase!(
 class A:
     def __new__(cls): ...
 A.__new__(A)  # OK
-A.__new__(int)  # E: Argument `type[int]` is not assignable to parameter `cls` with type `type[A]` in function `A.__new__`
+A.__new__(int)  # E: `int` is not assignable to upper bound `A` of type variable `Self@A`
     "#,
 );
 
@@ -626,5 +626,63 @@ class Column[T]:
     def __init__(self, ty: TypeEngine[T]) -> None: ...
 
 assert_type(Column(UUID(as_uuid=False)), Column[B])
+    "#,
+);
+
+testcase!(
+    test_typevar_with_explicit_any_default,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+
+T = TypeVar("T", bound=int, default=Any)
+
+class A(Generic[T]):
+    def __new__(cls, x: T) -> A[T]: ...
+
+assert_type(A(0), A[int])
+A("oops")  # E: `str` is not assignable to upper bound `int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_typevar_with_explicit_any_default_in_nested_constructor_call,
+    r#"
+from typing import Any, assert_type
+
+class A[T = Any]:
+    def __new__(cls, x: T) -> A[T]: ...
+
+class B[T: int | A[Any] = Any]:
+    def __new__(cls, x: list[A[T]]) -> B[A[T]]: ...
+
+assert_type(B([A(0)]), B[A[int]])
+B([A("oops")])  # E: `str` is not assignable to upper bound `A[Any] | int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_init_overload_with_self,
+    r#"
+from typing import Generic, TypeVar, overload, Callable
+T = TypeVar("T")
+class C(Generic[T]):
+    @overload
+    def __init__(self: "C[int]", x: int) -> None:
+        ...
+    @overload
+    def __init__(self: "C[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        ...
+
+def takes_Cint(x: Callable[[int], C[int]]) -> None:
+    pass
+def takes_Cstr(x: Callable[[str], C[str]]) -> None:
+    pass
+def takes_Cstr_wrong(x: Callable[[str], C[int]]) -> None:
+    pass
+takes_Cint(C)
+takes_Cstr(C)
+takes_Cstr_wrong(C) # E: Argument `type[C]` is not assignable to parameter `x` with type `(str) -> C[int]` in function `takes_Cstr_wrong`
     "#,
 );

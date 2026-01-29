@@ -62,6 +62,7 @@ pub struct ClassMetadata {
     dataclass_transform_metadata: Option<DataclassTransformMetadata>,
     pydantic_model_kind: Option<PydanticModelKind>,
     django_model_metadata: Option<DjangoModelMetadata>,
+    is_marshmallow_schema: bool,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -98,6 +99,7 @@ impl ClassMetadata {
         dataclass_transform_metadata: Option<DataclassTransformMetadata>,
         pydantic_model_kind: Option<PydanticModelKind>,
         django_model_metadata: Option<DjangoModelMetadata>,
+        is_marshmallow_schema: bool,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -119,6 +121,7 @@ impl ClassMetadata {
             dataclass_transform_metadata,
             pydantic_model_kind,
             django_model_metadata,
+            is_marshmallow_schema,
         }
     }
 
@@ -143,6 +146,7 @@ impl ClassMetadata {
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
             django_model_metadata: None,
+            is_marshmallow_schema: false,
         }
     }
 
@@ -170,12 +174,17 @@ impl ClassMetadata {
         self.typed_dict_metadata.is_some()
     }
 
-    pub fn is_pydantic_base_model(&self) -> bool {
+    /// Returns true if this class is a pydantic model (BaseModel, RootModel, or BaseSettings).
+    pub fn is_pydantic_model(&self) -> bool {
         self.pydantic_model_kind.is_some()
     }
 
     pub fn is_django_model(&self) -> bool {
         self.django_model_metadata.is_some()
+    }
+
+    pub fn is_marshmallow_schema(&self) -> bool {
+        self.is_marshmallow_schema
     }
 
     pub fn pydantic_model_kind(&self) -> Option<PydanticModelKind> {
@@ -460,6 +469,10 @@ pub struct DjangoModelMetadata {
     /// The name of the field that has primary_key=True, if any.
     /// If None, the model uses the default auto-generated `id` field.
     pub custom_primary_key_field: Option<Name>,
+    /// Names of ForeignKey fields
+    pub foreign_key_fields: Vec<Name>,
+    /// Names of fields with choices=...
+    pub fields_with_choices: Vec<Name>,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

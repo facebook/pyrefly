@@ -10,9 +10,12 @@ use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::lit_int::LitInt;
-use pyrefly_types::literal::Lit;
+use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::unions;
+use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::Type;
+use pyrefly_util::uniques::UniqueFactory;
+use ruff_python_ast::name::Name;
 
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::context::ModuleContext;
@@ -298,7 +301,7 @@ class C:
             ClassNamesFromType::from_class(context.stdlib.int().class_object(), &context),
         )
         .with_is_int(true),
-        PysaType::from_type(&Type::Literal(Lit::Int(LitInt::new(0))), &context),
+        PysaType::from_type(&LitInt::new(0).to_implicit_type(), &context),
     );
 
     // Strip self type
@@ -349,6 +352,60 @@ class C:
                     .stdlib
                     .awaitable(Type::ClassType(context.stdlib.int().clone()))
             )),
+            &context
+        ),
+    );
+
+    // Strip type variable with bound
+    assert_eq!(
+        PysaType::new(
+            "T".to_owned(),
+            ClassNamesFromType::from_class(&get_class("test", "MyClass", &context), &context)
+                .prepend_typevar_bound(),
+        ),
+        PysaType::from_type(
+            &Type::Quantified(Box::new(Quantified::type_var(
+                Name::new_static("T"),
+                &UniqueFactory::new(),
+                /* default */ None,
+                Restriction::Bound(Type::ClassType(ClassType::new(
+                    get_class("test", "MyClass", &context),
+                    Default::default(),
+                ))),
+            ))),
+            &context
+        ),
+    );
+
+    // Strip type variable with constraints
+    assert_eq!(
+        PysaType::new(
+            "T".to_owned(),
+            ClassNamesFromType::from_classes(
+                vec![
+                    get_class_ref("test", "MyClass", &context),
+                    get_class_ref("test", "A", &context),
+                ],
+                /* is_exhaustive */ true
+            )
+            .prepend_typevar_constraint(),
+        ),
+        PysaType::from_type(
+            &Type::Quantified(Box::new(Quantified::type_var(
+                Name::new_static("T"),
+                &UniqueFactory::new(),
+                /* default */ None,
+                Restriction::Constraints(vec![
+                    Type::ClassType(ClassType::new(
+                        get_class("test", "MyClass", &context),
+                        Default::default(),
+                    )),
+                    Type::ClassType(ClassType::new(
+                        get_class("test", "A", &context),
+                        Default::default(),
+                    ))
+                ]),
+            ))),
             &context
         ),
     );

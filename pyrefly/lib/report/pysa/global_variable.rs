@@ -112,7 +112,7 @@ fn visit_assign_target(
             .key_to_idx_hashed_opt(Hashed::new(&Key::Definition(short_identifier)))
             .and_then(|idx| context.answers.get_idx(idx));
         if let Some(type_) = type_.as_ref()
-            && (type_.ty().is_type_variable() || is_bound_method_like(type_.ty()))
+            && (type_.ty().is_raw_legacy_type_variable() || is_bound_method_like(type_.ty()))
         {
             // Don't export:
             // - Type variable, such as `T = TypeVar("T")`

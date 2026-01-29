@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
+
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
@@ -14,6 +16,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::Deprecation;
+use pyrefly_util::small_set1::SmallSet1;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
@@ -37,6 +40,128 @@ use starlark_map::small_set::SmallSet;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::types::globals::ImplicitGlobal;
+
+/// What names from a module this module depends on.
+#[derive(Debug, Clone)]
+pub enum DependsOn {
+    /// Depends on all exports (star import or `import x`).
+    All,
+    /// Depends on specific names (`from x import a, b`).
+    Names(SmallSet1<Name>),
+}
+
+/// Syntactic dependency information for fine-grained incremental invalidation.
+/// Tracks which names are imported from which modules.
+#[derive(Debug, Clone, Default)]
+pub struct SyntacticDeps {
+    /// Map from module to what names are imported from it.
+    deps: HashMap<ModuleName, DependsOn>,
+}
+
+impl SyntacticDeps {
+    /// Add a dependency on a specific name from a module.
+    pub fn add_named(&mut self, module: ModuleName, name: Name) {
+        match self.deps.entry(module) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let names = SmallSet1::new(name);
+                e.insert(DependsOn::Names(names));
+            }
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                // Only add if not already All
+                if let DependsOn::Names(names) = e.get_mut() {
+                    names.insert(name);
+                }
+            }
+        }
+    }
+
+    /// Add a wildcard dependency on a module (depends on all exports).
+    pub fn add_wildcard(&mut self, module: ModuleName) {
+        self.deps.insert(module, DependsOn::All);
+    }
+
+    /// Add a module-level dependency (for `import x` or `import x as y`).
+    /// Module imports depend on all exports since accessing `x.foo` requires `foo` to exist.
+    pub fn add_module(&mut self, module: ModuleName) {
+        self.deps.insert(module, DependsOn::All);
+    }
+
+    /// Check if this module imports any of the changed names from the given module.
+    /// Returns true if we should invalidate (i.e., we might be affected by the change).
+    pub fn imports_any(&self, module: ModuleName, changed_names: &SmallSet<Name>) -> bool {
+        match self.deps.get(&module) {
+            None => false,
+            Some(DependsOn::All) => true,
+            Some(DependsOn::Names(names)) => names.into_iter().any(|n| changed_names.contains(n)),
+        }
+    }
+
+    /// Get the underlying deps map.
+    pub fn deps(&self) -> &HashMap<ModuleName, DependsOn> {
+        &self.deps
+    }
+
+    /// Get all modules that are depended upon.
+    pub fn modules(&self) -> impl Iterator<Item = &ModuleName> {
+        self.deps.keys()
+    }
+}
+
+/// Collects syntactic dependencies from all import statements in the AST,
+/// including those nested inside functions and classes.
+struct SyntacticDepsCollector {
+    module_name: ModuleName,
+    is_init: bool,
+    deps: SyntacticDeps,
+}
+
+impl SyntacticDepsCollector {
+    fn new(module_name: ModuleName, is_init: bool) -> Self {
+        Self {
+            module_name,
+            is_init,
+            deps: SyntacticDeps::default(),
+        }
+    }
+
+    fn collect(mut self, stmts: &[Stmt]) -> SyntacticDeps {
+        for stmt in stmts {
+            self.stmt(stmt);
+        }
+        self.deps
+    }
+
+    fn stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Import(x) => {
+                for a in &x.names {
+                    let imported_module = ModuleName::from_name(&a.name.id);
+                    self.deps.add_module(imported_module);
+                }
+            }
+            Stmt::ImportFrom(x) => {
+                let name = self.module_name.new_maybe_relative(
+                    self.is_init,
+                    x.level,
+                    x.module.as_ref().map(|x| &x.id),
+                );
+                if let Some(module) = name {
+                    for a in &x.names {
+                        if &a.name == "*" {
+                            self.deps.add_wildcard(module);
+                        } else {
+                            self.deps.add_named(module, a.name.id.clone());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        // Recurse into all nested statements, including functions and classes.
+        // Unlike DefinitionsBuilder, we want to find imports in all scopes.
+        stmt.recurse(&mut |x| self.stmt(x));
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MutableCaptureKind {
@@ -132,7 +257,7 @@ pub struct Definitions {
     /// All the modules that are imported with `from x import *`.
     pub import_all: SmallMap<ModuleName, TextRange>,
     /// The `__all__` variable contents.
-    pub dunder_all: Vec<DunderAllEntry>,
+    pub dunder_all: DunderAll,
     /// If the containing module `foo` is a __init__ file, then this is the set of submodules
     /// that are guaranteed to be imported under `foo` when `foo` is itself imported in downstream
     /// files.
@@ -141,6 +266,19 @@ pub struct Definitions {
     pub deprecated: SmallMap<Name, Deprecation>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
+    /// Syntactic dependencies for fine-grained incremental invalidation.
+    /// Includes imports from all scopes (module-level and nested in functions/classes).
+    pub syntactic_deps: SyntacticDeps,
+}
+
+/// Whether `__all__` was explicitly defined by the user or synthesized from module definitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DunderAllKind {
+    /// `__all__` was synthesized from module definitions
+    #[default]
+    Inferred,
+    /// `__all__` was explicitly defined by the user
+    Specified,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -149,6 +287,13 @@ pub enum DunderAllEntry {
     Module(TextRange, ModuleName),
     // We have to have this explicitly, as you might remove something in a Module
     Remove(TextRange, Name),
+}
+
+/// The `__all__` variable contents with tracking of whether it was user-specified.
+#[derive(Debug, Clone, Default)]
+pub struct DunderAll {
+    pub kind: DunderAllKind,
+    pub entries: Vec<DunderAllEntry>,
 }
 
 impl DunderAllEntry {
@@ -191,7 +336,9 @@ struct DefinitionsBuilder<'a> {
 }
 
 fn is_private_name(name: &Name) -> bool {
-    name.starts_with('_')
+    // Names starting with underscore are private, except for a single underscore `_`
+    // which is commonly used as an alias for gettext.
+    name.starts_with('_') && name.as_str() != "_"
 }
 
 fn implicitly_imported_submodule(
@@ -221,6 +368,11 @@ impl Definitions {
             inner: Definitions::default(),
         };
         builder.stmts(x);
+
+        // Collect syntactic deps from all imports (including nested in functions/classes)
+        let syntactic_deps = SyntacticDepsCollector::new(module_name, is_init).collect(x);
+        builder.inner.syntactic_deps = syntactic_deps;
+
         builder.inner
     }
 
@@ -255,7 +407,9 @@ impl Definitions {
         }
         if style == ModuleStyle::Executable {
             for (x, range) in self.import_all.iter() {
-                self.dunder_all.push(DunderAllEntry::Module(*range, *x));
+                self.dunder_all
+                    .entries
+                    .push(DunderAllEntry::Module(*range, *x));
             }
         }
         for (name, def) in self.definitions.iter() {
@@ -269,6 +423,7 @@ impl Definitions {
                     ))
             {
                 self.dunder_all
+                    .entries
                     .push(DunderAllEntry::Name(def.range, name.clone()));
             }
         }
@@ -279,6 +434,7 @@ impl Definitions {
         for name in extra {
             if let Some(def) = self.definitions.get(name) {
                 self.dunder_all
+                    .entries
                     .push(DunderAllEntry::Name(def.range, name.clone()))
             }
         }
@@ -420,7 +576,10 @@ impl<'a> DefinitionsBuilder<'a> {
                             && a.name.id == dunder::ALL
                             && let Some(module) = name
                         {
-                            self.inner.dunder_all = vec![DunderAllEntry::Module(x.range, module)]
+                            self.inner.dunder_all = DunderAll {
+                                kind: DunderAllKind::Specified,
+                                entries: vec![DunderAllEntry::Module(x.range, module)],
+                            }
                         }
                         self.add_identifier(a.asname.as_ref().unwrap_or(&a.name), style);
                     }
@@ -468,7 +627,10 @@ impl<'a> DefinitionsBuilder<'a> {
                 for t in &x.targets {
                     self.expr_lvalue(t);
                     if DunderAllEntry::is_all(t) {
-                        self.inner.dunder_all = DunderAllEntry::as_list(&x.value);
+                        self.inner.dunder_all = DunderAll {
+                            kind: DunderAllKind::Specified,
+                            entries: DunderAllEntry::as_list(&x.value),
+                        };
                     }
                 }
             }
@@ -479,7 +641,10 @@ impl<'a> DefinitionsBuilder<'a> {
                 if let Some(v) = &x.value
                     && DunderAllEntry::is_all(&x.target)
                 {
-                    self.inner.dunder_all = DunderAllEntry::as_list(v.as_ref());
+                    self.inner.dunder_all = DunderAll {
+                        kind: DunderAllKind::Specified,
+                        entries: DunderAllEntry::as_list(v.as_ref()),
+                    };
                 }
                 match &*x.target {
                     Expr::Name(x) => {
@@ -498,8 +663,10 @@ impl<'a> DefinitionsBuilder<'a> {
             Stmt::AugAssign(x) => {
                 self.named_in_expr(&x.value);
                 if DunderAllEntry::is_all(&x.target) && x.op == Operator::Add {
+                    self.inner.dunder_all.kind = DunderAllKind::Specified;
                     self.inner
                         .dunder_all
+                        .entries
                         .extend(DunderAllEntry::as_list(&x.value));
                 }
                 if let Expr::Name(name) = &*x.target {
@@ -531,14 +698,17 @@ impl<'a> DefinitionsBuilder<'a> {
                     && arguments.len() == 1
                     && arguments.keywords.is_empty()
                 {
+                    self.inner.dunder_all.kind = DunderAllKind::Specified;
                     match attr.as_str() {
                         "extend" => self
                             .inner
                             .dunder_all
+                            .entries
                             .extend(DunderAllEntry::as_list(&arguments.args[0])),
                         "append" => self
                             .inner
                             .dunder_all
+                            .entries
                             .extend(DunderAllEntry::as_item(&arguments.args[0])),
                         "remove" => {
                             if let Some(DunderAllEntry::Name(range, remove)) =
@@ -546,6 +716,7 @@ impl<'a> DefinitionsBuilder<'a> {
                             {
                                 self.inner
                                     .dunder_all
+                                    .entries
                                     .push(DunderAllEntry::Remove(range, remove));
                             }
                         }
@@ -554,7 +725,9 @@ impl<'a> DefinitionsBuilder<'a> {
                 }
             }
             Stmt::TypeAlias(x) => {
-                self.named_in_expr(&x.value);
+                // Note: We don't call named_in_expr here because named expressions
+                // are not allowed inside type aliases (PEP 695). Type aliases create
+                // their own scope, so any walrus operators would be scoped there anyway.
                 if matches!(&*x.name, Expr::Name(_)) {
                     self.expr_lvalue(&x.name)
                 }
@@ -733,7 +906,7 @@ mod tests {
             is_init,
             &SysInfo::default(),
         );
-        res.dunder_all.iter_mut().for_each(unrange);
+        res.dunder_all.entries.iter_mut().for_each(unrange);
         res
     }
 
@@ -808,6 +981,8 @@ match x():
                 "qux", "moo", "mod", "x", "z", "w", "n", "X", "Y", "case0", "case1",
             ],
         );
+        // No explicit __all__, so it should be inferred
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Inferred);
     }
 
     #[test]
@@ -826,8 +1001,9 @@ match (x7 := 42):
     case int(): pass
 (x8 := 42)[y] = 42
 assert (x9 := 42), (x10 := "oops")
-type y = (x11 := int)
 # Named expressions inside expression-level scopes should not appear in definitions.
+# This includes type aliases which create their own scope (PEP 695).
+type y = (x11 := int)
 lambda x: (z := 42)
 {z := "str" for _ in [1]}
 {(z := "str"):1 for _ in [1]}
@@ -838,7 +1014,7 @@ lambda x: (z := 42)
         assert_definition_names(
             &defs,
             &[
-                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
+                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
             ],
         );
     }
@@ -862,6 +1038,8 @@ def bar(x: str) -> str: ...
         );
         assert_import_all(&defs, &[]);
         assert_definition_names(&defs, &["overload", "foo", "bar"]);
+        // No explicit __all__, so it should be inferred
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Inferred);
 
         let foo = defs.definitions.get(&Name::new_static("foo")).unwrap();
         assert_eq!(
@@ -898,6 +1076,7 @@ __all__.remove('r')
         );
         assert_import_all(&defs, &["foo"]);
         assert_definition_names(&defs, &["a", "b", "__all__"]);
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
 
         let loc = TextRange::default();
         let a = &DunderAllEntry::Name(loc, Name::new_static("a"));
@@ -905,7 +1084,7 @@ __all__.remove('r')
         let foo = &DunderAllEntry::Module(loc, ModuleName::from_str("foo"));
         let r = &DunderAllEntry::Remove(loc, Name::new_static("r"));
         assert_eq!(
-            defs.dunder_all.map(|x| x),
+            defs.dunder_all.entries.map(|x| x),
             vec![a, b, a, b, foo, a, b, foo, a, r]
         );
     }
@@ -921,10 +1100,11 @@ __all__: list[str] = ["a", "b"]
         "#,
         );
         assert_definition_names(&defs, &["a", "b", "__all__"]);
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
         let loc = TextRange::default();
         let a = &DunderAllEntry::Name(loc, Name::new_static("a"));
         let b = &DunderAllEntry::Name(loc, Name::new_static("b"));
-        assert_eq!(defs.dunder_all.map(|x| x), vec![a, b]);
+        assert_eq!(defs.dunder_all.entries.map(|x| x), vec![a, b]);
     }
 
     #[test]
@@ -938,9 +1118,10 @@ from _collections_abc import __all__ as __all__
         );
         assert_import_all(&defs, &["_collections_abc"]);
         assert_definition_names(&defs, &["__all__"]);
+        assert_eq!(defs.dunder_all.kind, DunderAllKind::Specified);
 
         assert_eq!(
-            defs.dunder_all,
+            defs.dunder_all.entries,
             vec![DunderAllEntry::Module(
                 TextRange::default(),
                 ModuleName::from_str("_collections_abc")

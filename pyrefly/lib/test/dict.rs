@@ -33,3 +33,21 @@ class C(TypedDict):
 x: C | dict[str, int] = {"y": 0}
     "#,
 );
+
+testcase!(
+    test_kwargs_unpack_dict_union,
+    r#"
+from typing import Any
+
+def foo(**kwargs: Any) -> None:
+    pass
+
+def bar(yes: bool) -> None:
+    if yes:
+        kwargs = {"hello": "world"}
+    else:
+        kwargs = {"goodbye": 1}
+
+    foo(**kwargs)  
+"#,
+);

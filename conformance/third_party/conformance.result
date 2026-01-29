@@ -20,8 +20,7 @@
     "Line 63: Expected 1 errors",
     "Line 69: Expected 1 errors",
     "Line 72: Expected 1 errors",
-    "Line 75: Expected 1 errors",
-    "Line 42: Unexpected errors [\"Expected a type form, got instance of `Literal['RecursiveMapping']`\"]"
+    "Line 75: Expected 1 errors"
   ],
   "aliases_type_statement.py": [
     "Line 82: Expected 1 errors",
@@ -48,9 +47,7 @@
     "Line 87: Unexpected errors ['Expected a type form, got instance of `(self: Self@ClassD) -> None`']",
     "Line 96: Unexpected errors ['assert_type(Any, int) failed']"
   ],
-  "annotations_generators.py": [
-    "Line 190: Unexpected errors ['Expected to yield a value of type `int`, but a bare `yield` gives `None` instead']"
-  ],
+  "annotations_generators.py": [],
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
   "callables_annotation.py": [
@@ -80,12 +77,18 @@
     "Line 184: Expected 1 errors",
     "Line 195: Expected 1 errors",
     "Line 62: Unexpected errors ['Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`']",
-    "Line 164: Unexpected errors ['assert_type(Class7[Any], Class7[int]) failed']",
-    "Line 165: Unexpected errors ['assert_type(Class7[Any], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
+    "Line 165: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
     "Line 183: Unexpected errors ['assert_type(Class8[Any], Class8[str]) failed']"
   ],
   "constructors_consistency.py": [],
-  "dataclasses_descriptors.py": [],
+  "dataclasses_descriptors.py": [
+    "Line 32: Unexpected errors ['Cannot set field `y` to data descriptor `Desc1` with inconsistent types\\n  Return type `Desc1 | int` of `Desc1.__get__` is not assignable to value type `int` of `Desc1.__set__`']",
+    "Line 58: Unexpected errors ['Cannot set field `z` to non-data descriptor `Desc2`\\n  Hint: add a `__set__` method to make `Desc2` a data descriptor']",
+    "Line 61: Unexpected errors ['assert_type(Desc2[int], list[int]) failed']",
+    "Line 62: Unexpected errors ['assert_type(Desc2[str], list[str]) failed']",
+    "Line 66: Unexpected errors ['assert_type(Desc2[int], int) failed']",
+    "Line 67: Unexpected errors ['assert_type(Desc2[str], str) failed']"
+  ],
   "dataclasses_final.py": [],
   "dataclasses_frozen.py": [],
   "dataclasses_hash.py": [],
@@ -119,9 +122,7 @@
   "enums_expansion.py": [],
   "enums_member_names.py": [],
   "enums_member_values.py": [],
-  "enums_members.py": [
-    "Line 100: Unexpected errors ['assert_type(Literal[TrafficLight.AMBER], Literal[TrafficLight.YELLOW]) failed']"
-  ],
+  "enums_members.py": [],
   "exceptions_context_managers.py": [
     "Line 50: Unexpected errors ['assert_type(str, int | str) failed']",
     "Line 57: Unexpected errors ['assert_type(str, int | str) failed']"
@@ -130,18 +131,14 @@
     "Line 98: Expected 1 errors"
   ],
   "generics_basic.py": [
-    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__` called with arguments: (AnyStr)\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]', 'Returned type `bytes | Unknown` is not assignable to declared return type `AnyStr`']",
+    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__` called with arguments: (AnyStr)\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]']",
     "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
   "generics_defaults.py": [
-    "Line 170: Unexpected errors ['assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
+    "Line 170: Unexpected errors ['assert_type([DefaultIntT = int](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
   ],
-  "generics_defaults_referential.py": [
-    "Line 66: Unexpected errors ['Expected default `TypeVar[X1]` of `Ok1` to be assignable to the upper bound of `float`']",
-    "Line 67: Unexpected errors ['Expected default `TypeVar[X1]` of `AlsoOk1` to be assignable to the upper bound of `int`']",
-    "Line 77: Unexpected errors ['Expected default `TypeVar[Y2]` of `AlsoOk2` to be one of the following constraints: `int`, `str`, `bool`']"
-  ],
+  "generics_defaults_referential.py": [],
   "generics_defaults_specialization.py": [],
   "generics_paramspec_basic.py": [],
   "generics_paramspec_components.py": [
@@ -214,10 +211,7 @@
   ],
   "generics_variance_inference.py": [],
   "historical_positional.py": [],
-  "literals_interactions.py": [
-    "Line 71: Unexpected errors ['`@` is not supported between `Matrix[Literal[2], Literal[3]]` and `Matrix[Literal[3], Literal[7]]`\\n  Argument `Matrix[Literal[3], Literal[7]]` is not assignable to parameter `other` with type `Matrix[Literal[3], int]` in function `Matrix.__matmul__`']",
-    "Line 72: Unexpected errors ['assert_type(Matrix[Literal[2], int], Matrix[Literal[2], Literal[7]]) failed']"
-  ],
+  "literals_interactions.py": [],
   "literals_literalstring.py": [],
   "literals_parameterizations.py": [],
   "literals_semantics.py": [],
@@ -242,9 +236,7 @@
     "Line 117: Expected 1 errors",
     "Line 79: Unexpected errors ['`Concrete` is not assignable to `Template`\\n  Protocol `Template` requires attribute `temp`']"
   ],
-  "protocols_explicit.py": [
-    "Line 89: Expected 1 errors"
-  ],
+  "protocols_explicit.py": [],
   "protocols_generic.py": [],
   "protocols_merging.py": [],
   "protocols_modules.py": [
@@ -274,12 +266,7 @@
   "qualifiers_final_annotation.py": [
     "Line 34: Expected 1 errors",
     "Line 38: Expected 1 errors",
-    "Line 62: Expected 1 errors",
-    "Line 63: Expected 1 errors",
     "Line 107: Expected 1 errors",
-    "Line 149: Expected 1 errors",
-    "Line 152: Expected 1 errors",
-    "Line 155: Expected 1 errors",
     "Line 166: Expected 1 errors",
     "Line 170: Expected 1 errors",
     "Line 131: Unexpected errors ['Expected first item to be a string literal', 'Expected first item to be a string literal']",
@@ -292,16 +279,7 @@
   ],
   "specialtypes_none.py": [],
   "specialtypes_promotions.py": [],
-  "specialtypes_type.py": [
-    "Line 70: Expected 1 errors",
-    "Line 84: Unexpected errors ['assert_type(type, type[Any]) failed']",
-    "Line 99: Unexpected errors ['Object of class `type` has no attribute `unknown`']",
-    "Line 100: Unexpected errors ['Object of class `type` has no attribute `unknown`']",
-    "Line 102: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
-    "Line 106: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
-    "Line 110: Unexpected errors ['assert_type(Any, tuple[type, ...]) failed']",
-    "Line 139: Unexpected errors ['assert_type(type, type[Any]) failed']"
-  ],
+  "specialtypes_type.py": [],
   "tuples_type_compat.py": [],
   "tuples_type_form.py": [],
   "tuples_unpacked.py": [],
