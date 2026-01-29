@@ -23,6 +23,7 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::binding::binding::AnyExportedKey;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::DunderAllEntry;
@@ -36,6 +37,16 @@ use crate::state::loader::FindingOrError;
 pub trait LookupExport {
     /// Get the exports of a given module, or an error if the module is not available.
     fn get(&self, module: ModuleName) -> FindingOrError<Exports>;
+
+    /// Record a failed export lookup for incremental invalidation.
+    ///
+    /// When `from module import name` fails because `name` is not in `module`'s exports,
+    /// call this so that the importer is invalidated when `module` later exports `name`.
+    ///
+    /// The default implementation is a no-op, suitable for test environments.
+    fn record_failed_export(&self, _module: ModuleName, _key: AnyExportedKey) {
+        // Default no-op
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -19,6 +19,7 @@ use starlark_map::small_set::SmallSet;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::variance_inference::VarianceMap;
+use crate::binding::binding::AnyExportedKey;
 use crate::binding::binding::KeyVariance;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::SubsetError;
@@ -148,9 +149,13 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
     }
 
     pub fn get_variance_from_class(self, cls: &Class) -> Arc<VarianceMap> {
-        self.0
-            .get_from_class(cls, &KeyVariance(cls.index()))
-            .unwrap_or_default()
+        let key = KeyVariance(cls.index());
+        self.0.get_from_class(cls, &key).unwrap_or_else(|| {
+            self.0
+                .exports
+                .record_failed_export(cls.module_name(), AnyExportedKey::KeyVariance(key));
+            Arc::default()
+        })
     }
 
     pub fn constructor_to_callable(self, cls: &ClassType) -> Type {
