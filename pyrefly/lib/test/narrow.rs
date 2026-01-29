@@ -147,6 +147,40 @@ def f2(x: E | int):
 );
 
 testcase!(
+    test_is_final_literal_sentinel,
+    r#"
+from typing import Final, Literal, assert_type
+
+S: Final[bool] = True
+def f(x: bool):
+    if x is S:
+        assert_type(x, Literal[True])
+    else:
+        assert_type(x, Literal[False])
+    if x is not S:
+        assert_type(x, Literal[False])
+    "#,
+);
+
+testcase!(
+    test_is_final_object_sentinel,
+    r#"
+from typing import Final
+
+class Sentinel:
+    pass
+
+S: Final[object] = Sentinel()
+
+def takes_s(x: Sentinel) -> None: ...
+
+def f(x: Sentinel | int):
+    if x is S:
+        takes_s(x)
+    "#,
+);
+
+testcase!(
     test_tri_enum,
     r#"
 from typing import assert_type, Literal

@@ -255,6 +255,13 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_qname(e.class.qname(), f)?;
                 write!(f, ".{}", e.member)
             }
+            Lit::Sentinel(sentinel) => {
+                if self.always_display_module_name {
+                    write!(f, "{}.{}", sentinel.module, sentinel.name)
+                } else {
+                    write!(f, "{}", sentinel.name)
+                }
+            }
             _ => write!(f, "{lit}"),
         }
     }

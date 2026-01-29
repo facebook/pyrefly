@@ -131,6 +131,7 @@ impl TypeOutput for OutputWithLocations<'_> {
                     qname.range(),
                 ))
             }
+            Lit::Sentinel(_) => None,
             _ => None,
         };
         self.parts.push((formatted, location));

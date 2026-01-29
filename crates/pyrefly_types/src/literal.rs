@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
 
@@ -12,6 +13,7 @@ use compact_str::CompactString;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::assert_words;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprBytesLiteral;
@@ -21,6 +23,7 @@ use ruff_python_ast::FStringPart;
 use ruff_python_ast::Int;
 use ruff_python_ast::InterpolatedStringElement;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 
 use crate::class::ClassType;
 use crate::lit_int::LitInt;
@@ -54,6 +57,7 @@ pub enum Lit {
     Bool(bool),
     Bytes(Box<[u8]>),
     Enum(Box<LitEnum>),
+    Sentinel(Box<LitSentinel>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -64,6 +68,27 @@ pub struct LitEnum {
     /// Raw type assigned to name in class def.
     /// We store the raw type so we can return it when the value or _value_ attribute is accessed.
     pub ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub struct LitSentinel {
+    pub module: ModuleName,
+    pub name: Name,
+    pub range: Option<TextRange>,
+    pub class: ClassType,
+}
+
+impl Ord for LitSentinel {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (&self.module, &self.name, &self.class).cmp(&(&other.module, &other.name, &other.class))
+    }
+}
+
+impl PartialOrd for LitSentinel {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Display for Lit {
@@ -92,6 +117,9 @@ impl Display for Lit {
             }
             Lit::Enum(lit_enum) => {
                 write!(f, "{}.{}", lit_enum.class.name(), lit_enum.member)
+            }
+            Lit::Sentinel(sentinel) => {
+                write!(f, "{}", sentinel.name)
             }
         }
     }
@@ -191,6 +219,7 @@ impl Lit {
             Lit::Bool(_) => stdlib.bool(),
             Lit::Bytes(_) => stdlib.bytes(),
             Lit::Enum(lit_enum) => &lit_enum.class,
+            Lit::Sentinel(sentinel) => &sentinel.class,
         }
     }
 
