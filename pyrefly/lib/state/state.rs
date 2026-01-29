@@ -106,7 +106,6 @@ use crate::state::loader::LoaderFindCache;
 use crate::state::memory::MemoryFiles;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::memory::MemoryFilesOverlay;
-use crate::state::pytest::PytestModuleInfo;
 use crate::state::require::Require;
 use crate::state::steps::Context;
 use crate::state::steps::Step;
@@ -343,7 +342,6 @@ pub(crate) struct TransactionData<'a> {
     updated_loaders: LockedMap<ArcId<ConfigFile>, Arc<LoaderFindCache>>,
     memory_overlay: MemoryFilesOverlay,
     default_require: Require,
-    pytest_module_info_cache: Mutex<SmallMap<Handle, Option<Arc<PytestModuleInfo>>>>,
     /// The epoch when this transaction was created
     base: Epoch,
     /// The current epoch, gets incremented every time we recompute
@@ -425,20 +423,6 @@ impl<'a> Transaction<'a> {
 
     pub fn get_ast(&self, handle: &Handle) -> Option<Arc<ruff_python_ast::ModModule>> {
         self.with_module_inner(handle, |x| x.steps.ast.dupe())
-    }
-
-    pub(crate) fn get_pytest_module_info_cached(
-        &self,
-        handle: &Handle,
-        compute: impl FnOnce() -> Option<PytestModuleInfo>,
-    ) -> Option<Arc<PytestModuleInfo>> {
-        let mut cache = self.data.pytest_module_info_cache.lock();
-        if let Some(cached) = cache.get(handle) {
-            return cached.clone();
-        }
-        let computed = compute().map(Arc::new);
-        cache.insert(handle.dupe(), computed.clone());
-        computed
     }
 
     pub fn get_config(&self, handle: &Handle) -> Option<ArcId<ConfigFile>> {
@@ -2343,7 +2327,6 @@ impl State {
                 base: now,
                 now,
                 default_require,
-                pytest_module_info_cache: Default::default(),
                 todo: Default::default(),
                 changed: Default::default(),
                 dirty: Default::default(),
@@ -2416,7 +2399,6 @@ impl State {
                             todo: _,
                             changed: _,
                             dirty,
-                            pytest_module_info_cache: _,
                             subscriber: _,
                         },
                 },

@@ -459,6 +459,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &mut self_type,
             &mut decorator_param_hints,
             &mut parent_param_hints,
+            class_key,
             errors,
         );
         let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
@@ -808,6 +809,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self_type: &mut Option<Type>,
         decorator_param_hints: &mut Option<DecoratorParamHints>,
         parent_param_hints: &mut Option<ParentParamHints>,
+        class_key: Option<&Idx<KeyClass>>,
         errors: &ErrorCollector,
     ) -> (Vec<Param>, Option<Quantified>) {
         let mut paramspec_args = None;
@@ -824,12 +826,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .as_mut()
                     .and_then(|hint| hint.take_posonly())
             };
+            let fixture_hint = self
+                .bindings()
+                .pytest_fixture_param_hint(def, class_key, &x.parameter.name)
+                .map(|key| self.get(&Key::ReturnType(key)).arc_clone_ty());
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                decorator_hint.or(parent_hint),
+                decorator_hint.or(parent_hint).or(fixture_hint),
                 errors,
             );
             Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
@@ -851,12 +857,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .as_mut()
                     .and_then(|hint| hint.take_positional())
             };
+            let fixture_hint = self
+                .bindings()
+                .pytest_fixture_param_hint(def, class_key, &x.parameter.name)
+                .map(|key| self.get(&Key::ReturnType(key)).arc_clone_ty());
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                decorator_hint.or(parent_hint),
+                decorator_hint.or(parent_hint).or(fixture_hint),
                 errors,
             );
 
@@ -916,12 +926,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let parent_hint = parent_param_hints
                 .as_mut()
                 .and_then(|hint| hint.take_kwonly(&x.parameter.name));
+            let fixture_hint = self
+                .bindings()
+                .pytest_fixture_param_hint(def, class_key, &x.parameter.name)
+                .map(|key| self.get(&Key::ReturnType(key)).arc_clone_ty());
             let (ty, required) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                parent_hint,
+                parent_hint.or(fixture_hint),
                 errors,
             );
             Param::KwOnly(x.parameter.name.id.clone(), ty, required)

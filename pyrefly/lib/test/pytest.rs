@@ -25,7 +25,6 @@ def fixture(func: Callable[..., T]) -> Callable[..., T]: ...
 }
 
 testcase!(
-    bug = "Fixture injection should propagate fixture return types to parameters.",
     test_pytest_fixture_injected_parameter_type,
     env_pytest_fixture(),
     r#"
@@ -37,6 +36,6 @@ def my_fixture() -> int:
     return 42
 
 def test_foo(my_fixture):
-    reveal_type(my_fixture)  # E: revealed type: Unknown
+    reveal_type(my_fixture)  # E: revealed type: int
 "#,
 );
