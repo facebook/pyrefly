@@ -7,7 +7,6 @@
 
 use std::cmp::Ordering;
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -3031,21 +3030,6 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
-    }
-
-    fn get_documentation_from_export(
-        &self,
-        export_info: Option<(Handle, Export)>,
-    ) -> Option<lsp_types::Documentation> {
-        let (definition_handle, export) = export_info?;
-        let docstring_range = export.docstring_range?;
-        let def_module = self.get_module_info(&definition_handle)?;
-        let docstring = Docstring(docstring_range, def_module.clone()).resolve();
-        let documentation = lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
-            kind: lsp_types::MarkupKind::Markdown,
-            value: docstring,
-        });
-        Some(documentation)
     }
 
     fn documentation_for_completion_export(
