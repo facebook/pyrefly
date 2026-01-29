@@ -2003,6 +2003,17 @@ impl Server {
             .unwrap_or(false)
     }
 
+    fn supports_snippet_completions(&self) -> bool {
+        self.initialize_params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|t| t.completion.as_ref())
+            .and_then(|c| c.completion_item.as_ref())
+            .and_then(|ci| ci.snippet_support)
+            .unwrap_or(false)
+    }
+
     /// Helper to append all additional diagnostics (unreachable, unused parameters/imports/variables)
     fn append_ide_specific_diagnostics(
         transaction: &Transaction<'_>,
@@ -3067,7 +3078,7 @@ impl Server {
         params: CompletionParams,
     ) -> anyhow::Result<CompletionResponse> {
         let uri = &params.text_document_position.text_document.uri;
-        let (handle, import_format) = match self
+        let (handle, lsp_config) = match self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(Completion::METHOD))
         {
             None => {
@@ -3076,16 +3087,22 @@ impl Server {
                     items: Vec::new(),
                 }));
             }
-            Some((x, config)) => (x, config.and_then(|c| c.import_format).unwrap_or_default()),
+            Some((x, config)) => (x, config),
         };
+        let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
+        let complete_function_parens = lsp_config
+            .and_then(|c| c.complete_function_parens)
+            .unwrap_or(false);
         let (items, is_incomplete) = transaction
             .get_module_info(&handle)
             .map(|info| {
-                transaction.completion_with_incomplete(
+                transaction.completion_with_incomplete_with_function_parens(
                     &handle,
                     self.from_lsp_position(uri, &info, params.text_document_position.position),
                     import_format,
                     self.supports_completion_item_details(),
+                    complete_function_parens,
+                    self.supports_snippet_completions(),
                 )
             })
             .unwrap_or_default();
