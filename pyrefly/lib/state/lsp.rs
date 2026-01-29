@@ -2006,6 +2006,14 @@ impl<'a> Transaction<'a> {
         quick_fixes::extract_variable::extract_variable_code_actions(self, handle, selection)
     }
 
+    pub fn invert_boolean_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::invert_boolean::invert_boolean_code_actions(self, handle, selection)
+    }
+
     pub fn pull_members_up_code_actions(
         &self,
         handle: &Handle,
