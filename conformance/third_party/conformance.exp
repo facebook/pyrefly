@@ -1261,8 +1261,8 @@
     {
       "code": -2,
       "column": 7,
-      "concise_description": "Cannot construct union type on forward reference string literals",
-      "description": "Cannot construct union type on forward reference string literals",
+      "concise_description": "Cannot use `|` operator with forward reference string literal and type",
+      "description": "Cannot use `|` operator with forward reference string literal and type",
       "line": 24,
       "name": "invalid-annotation",
       "severity": "error",
@@ -1272,8 +1272,8 @@
     {
       "code": -2,
       "column": 7,
-      "concise_description": "Cannot construct union type on forward reference string literals",
-      "description": "Cannot construct union type on forward reference string literals",
+      "concise_description": "Cannot use `|` operator with forward reference string literal and type",
+      "description": "Cannot use `|` operator with forward reference string literal and type",
       "line": 25,
       "name": "invalid-annotation",
       "severity": "error",

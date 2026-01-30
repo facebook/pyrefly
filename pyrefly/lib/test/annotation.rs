@@ -21,12 +21,11 @@ assert_type(D.x, int)  # E: assert_type(Any, int) failed
 );
 
 testcase!(
-    bug = "conformance: Union syntax cannot be used with string operand; use quotes around entire expression: PR #2048 contains a draft implementation",
     test_quoted_type_union_operator_runtime_error,
     r#"
 class ClassA:
     pass
-bad1: "ClassA" | int  # should be an error 
-bad2: int | "ClassA"  # should be an error 
+bad1: "ClassA" | int  # E: Cannot use `|` operator with forward reference string literal and type
+bad2: int | "ClassA"  # E: Cannot use `|` operator with forward reference string literal and type
 "#,
 );

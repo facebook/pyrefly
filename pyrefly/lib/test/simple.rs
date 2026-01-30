@@ -2077,22 +2077,20 @@ takes_Type_any(Callable[..., int]) # E: is not assignable to parameter `x` with 
 );
 
 testcase!(
-    bug = "should allow forward reference string literals with parameterized generic types",
     test_union_type_with_bare_string_literal,
     r#"
 from typing import assert_type, TypeVar, Generic
 T = TypeVar("T")
 class C(Generic[T]): ...
-bad1: int | "str" = "foo"  # E: Cannot construct union type on forward reference string literals
-bad2: int | "str" | T = "foo"  # E: Cannot construct union type on forward reference string literals
-bad3: "str" | int = "foo"  # E: Cannot construct union type on forward reference string literals
-bad4: "str" | int | T = "foo"  # E: Cannot construct union type on forward reference string literals
+bad1: int | "str" = "foo"  # E: Cannot use `|` operator with forward reference string literal and type
+bad2: int | "str" | T = "foo"  # E: Cannot use `|` operator with forward reference string literal and type
+bad3: "str" | int = "foo"  # E: Cannot use `|` operator with forward reference string literal and type
+bad4: "str" | int | T = "foo"  # E: Cannot use `|` operator with forward reference string literal and type
 ok1: T | "str" = "foo"
 ok2: "str" | T = "foo"
 ok3 = list["str" | T]
 ok4 = (int) | (str)
-# These should be allowed but currently error
-ok5: "str" | C[int] = "foo"  # E: Cannot construct union type on forward reference string literals
-ok6: C[int] | "str" = "foo"  # E: Cannot construct union type on forward reference string literals
+ok5: "str" | C[int] = "foo"
+ok6: C[int] | "str" = "foo"
 "#,
 );

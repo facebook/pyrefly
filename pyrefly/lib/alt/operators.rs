@@ -261,32 +261,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // parse the string literals to expressions and performs an in-place
             // replacement in the AST. During the process, we marked the
             // `node_index` of the `Name` expressions to be non-NONE values.
-            // We need this information to check for illegal unions here (such
-            // as "int" | str) that are runtime errors.
             let is_lhs_forward_ref =
                 x.left.node_index().load() != NodeIndex::NONE && x.left.is_name_expr();
             let is_rhs_forward_ref =
                 x.right.node_index().load() != NodeIndex::NONE && x.right.is_name_expr();
 
-            // Unless one side is a type variable, we cannot construct union types
-            // on forward reference string literals.
-            let is_type_var = |t: &Type| {
-                matches!(
-                    t,
-                    Type::TypeVar(_)
-                        | Type::Type(box Type::TypeVar(_))
-                        | Type::Quantified(_)
-                        | Type::Type(box Type::Quantified(_))
-                )
-            };
-            if (is_lhs_forward_ref && !is_type_var(&r))
-                || (is_rhs_forward_ref && !is_type_var(&l))
+            // If one side is a forward reference string literal and the other side
+            // is a plain type (like `int` or `str`), this would be a runtime error
+            // since `type.__or__` doesn't handle string literals properly.
+            // Parameterized generics (like `C[int]`), TypeVars, and other special
+            // forms handle `|` with strings correctly, so we only error for
+            // non-parameterized ClassType.
+            let is_plain_type =
+                |t: &Type| matches!(t, Type::ClassType(cls) if cls.targs().is_empty());
+            if (is_lhs_forward_ref && is_plain_type(&r))
+                || (is_rhs_forward_ref && is_plain_type(&l))
             {
                 self.error(
                     errors,
                     x.range(),
                     ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
-                    "Cannot construct union type on forward reference string literals".to_owned(),
+                    "Cannot use `|` operator with forward reference string literal and type"
+                        .to_owned(),
                 );
             }
             return Type::type_form(self.union(l, r));
