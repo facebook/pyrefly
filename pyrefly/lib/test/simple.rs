@@ -2094,3 +2094,36 @@ ok5: "str" | C[int] = "foo"
 ok6: C[int] | "str" = "foo"
 "#,
 );
+
+// Test that the error is raised for Python 3.13 (explicit version)
+testcase!(
+    test_union_type_with_bare_string_literal_py313,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+bad1: int | "str" = "foo"  # E: Cannot use `|` operator with forward reference string literal and type
+bad2: "str" | int = "foo"  # E: Cannot use `|` operator with forward reference string literal and type
+"#,
+);
+
+// Test that the error is NOT raised for Python 3.14+
+// In Python 3.14+, annotations are not evaluated at runtime by default (PEP 649)
+testcase!(
+    test_union_type_with_bare_string_literal_py314,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+ok1: int | "str" = "foo"
+ok2: "str" | int = "foo"
+"#,
+);
+
+// Test that the error is NOT raised when `from __future__ import annotations` is used
+// With future annotations, annotations are not evaluated at runtime
+testcase!(
+    test_union_type_with_bare_string_literal_future_annotations,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from __future__ import annotations
+ok1: int | "str" = "foo"
+ok2: "str" | int = "foo"
+"#,
+);

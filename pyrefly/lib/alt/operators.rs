@@ -272,10 +272,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Parameterized generics (like `C[int]`), TypeVars, and other special
             // forms handle `|` with strings correctly, so we only error for
             // non-parameterized ClassType.
+            //
+            // This error only applies when:
+            // - Python version < 3.14 (PEP 649 makes annotations lazy in 3.14+)
+            // - No `from __future__ import annotations` (which also makes annotations lazy)
             let is_plain_type =
                 |t: &Type| matches!(t, Type::ClassType(cls) if cls.targs().is_empty());
-            if (is_lhs_forward_ref && is_plain_type(&r))
-                || (is_rhs_forward_ref && is_plain_type(&l))
+            if ((is_lhs_forward_ref && is_plain_type(&r))
+                || (is_rhs_forward_ref && is_plain_type(&l)))
+                && !self.bindings().python_version().at_least(3, 14)
+                && !self.bindings().has_future_annotations()
             {
                 self.error(
                     errors,

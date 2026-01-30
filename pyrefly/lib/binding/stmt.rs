@@ -1374,6 +1374,9 @@ impl<'a> BindingsBuilder<'a> {
                 // See: https://typing.python.org/en/latest/spec/distributing.html#import-conventions
                 if m == ModuleName::future() {
                     self.scopes.register_future_import(&asname);
+                    if x.name.id.as_str() == "annotations" {
+                        self.has_future_annotations = true;
+                    }
                 } else if is_reexport {
                     self.scopes.register_reexport_import(&asname);
                 } else {

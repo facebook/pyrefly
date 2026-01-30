@@ -20,6 +20,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_info::JoinStyle;
@@ -171,6 +172,8 @@ table! {
 #[derive(Clone, Debug)]
 struct BindingsInner {
     module_info: ModuleInfo,
+    python_version: PythonVersion,
+    has_future_annotations: bool,
     table: BindingTable,
     scope_trace: Option<ScopeTrace>,
     unused_parameters: Vec<UnusedParameter>,
@@ -236,6 +239,8 @@ pub struct BindingsBuilder<'a> {
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
     /// BoundName lookups deferred until after AST traversal
     deferred_bound_names: Vec<DeferredBoundName>,
+    /// Whether `from __future__ import annotations` is present
+    pub has_future_annotations: bool,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -295,6 +300,14 @@ impl Bindings {
 
     pub fn module(&self) -> &ModuleInfo {
         &self.0.module_info
+    }
+
+    pub fn python_version(&self) -> PythonVersion {
+        self.0.python_version
+    }
+
+    pub fn has_future_annotations(&self) -> bool {
+        self.0.has_future_annotations
     }
 
     pub fn unused_parameters(&self) -> &[UnusedParameter] {
@@ -470,6 +483,7 @@ impl Bindings {
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_syntax_errors: RefCell::new(Vec::new()),
             deferred_bound_names: Vec::new(),
+            has_future_annotations: false,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -531,6 +545,8 @@ impl Bindings {
         }
         Self(Arc::new(BindingsInner {
             module_info,
+            python_version: builder.sys_info.version(),
+            has_future_annotations: builder.has_future_annotations,
             table: builder.table,
             scope_trace: if enable_trace {
                 Some(scope_trace)
@@ -1801,7 +1817,8 @@ impl<'a> SemanticSyntaxContext for BindingsBuilder<'a> {
     }
 
     fn future_annotations_or_stub(&self) -> bool {
-        self.module_info.source_type() == ruff_python_ast::PySourceType::Stub
+        self.has_future_annotations
+            || self.module_info.source_type() == ruff_python_ast::PySourceType::Stub
     }
 
     fn report_semantic_error(&self, error: SemanticSyntaxError) {
