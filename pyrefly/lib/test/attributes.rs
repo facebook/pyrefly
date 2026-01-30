@@ -1054,6 +1054,16 @@ class Test(B):
 );
 
 testcase!(
+    test_any_as_base_class_suppresses_missing_attribute_in_method,
+    r#"
+from typing import Any
+class MyTest(Any):
+    def foo(self):
+        self.bar()  # should not error: Any is in base-class hierarchy
+"#,
+);
+
+testcase!(
     test_field_using_method_scope_type_variable,
     r#"
 from typing import assert_type, Any

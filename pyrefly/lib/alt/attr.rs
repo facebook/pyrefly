@@ -1512,7 +1512,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AttributeBase1::SelfType(cls) => match self.get_self_attribute(cls, attr_name) {
                 Some(attr) => acc.found_class_attribute(attr, base),
-                None => acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base)),
+                None => {
+                    let metadata = self.get_metadata_for_class(cls.class_object());
+                    if metadata.has_base_any() {
+                        acc.found_type(Type::Any(AnyStyle::Implicit), base)
+                    } else {
+                        acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base))
+                    }
+                }
             },
             AttributeBase1::Intersect(bases, fallback) => {
                 // For now, only handle the simplest case: if exactly one base has a successful lookup, use it.
