@@ -744,17 +744,14 @@ for a in A:  # E: Type `type[A]` is not iterable
     "#,
 );
 
-// It's debatable whether it is possible to construct a value of `type[A[int]]`.
-// If we consider `A[int]` to be of type `type[A[int]]`, then this test captures the bahavior correctly.
-// If not (based on the philosophy that `type[...]` must be an instance of `type`), then we cannot construct such a value,
-// which makes this test vacuously correct.
 testcase!(
-    test_getitem_can_iterate_generic_class,
+    bug = "Although A[int] is a generic alias and can be iterated over, type[A[int]] is a type and cannot be iterated over.",
+    test_getitem_cannot_iterate_generic_class,
     r#"
 class A[T]:
     def __getitem__(self, i: int) -> int: ...
 def f(x: type[A[int]]):
-    for a in x:
+    for a in x:  # Expect an error here
         pass
     "#,
 );
