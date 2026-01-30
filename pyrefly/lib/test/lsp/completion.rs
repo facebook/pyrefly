@@ -1557,6 +1557,9 @@ Completion Results:
     );
 }
 
+/// When an argument is provided that could narrow down the overload,
+/// we still show params from all overloads. Ideally we would filter
+/// to only compatible overloads, but that requires type checking.
 #[test]
 fn kwargs_completion_overload_correct() {
     let code = r#"
@@ -1579,17 +1582,18 @@ foo(1,
            ^
 Completion Results:
 - (Variable) x=: int
+- (Variable) y=: bool
 - (Variable) y=: str
+- (Variable) z=: bool
 "#
         .trim(),
         report.trim(),
     );
 }
 
-/// Bug: when overloads share the same first arg and differ on later args,
-/// we only show params from the closest overload. Ideally we should show
-/// params from all overloads that match the provided arguments so far
-/// (here both overloads accept `x: int`, so `y=` and `z=` should both appear).
+/// When overloads share the same first arg and differ on later args,
+/// show params from all overloads (here both overloads accept `x: int`,
+/// so `y=` and `z=` should both appear).
 #[test]
 fn kwargs_completion_overload_shared_first_arg() {
     let code = r#"
@@ -1612,6 +1616,7 @@ foo(1,
 Completion Results:
 - (Variable) x=: int
 - (Variable) y=: str
+- (Variable) z=: bool
 "#
         .trim(),
         report.trim(),

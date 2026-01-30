@@ -38,7 +38,6 @@ use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
-use crate::lsp::wasm::signature_help::ActiveArgument;
 use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -333,20 +332,12 @@ impl Transaction<'_> {
         position: TextSize,
         completions: &mut Vec<RankedCompletion>,
     ) {
-        if let Some((callables, chosen_overload_index, active_argument, _)) =
-            self.get_callables_from_call(handle, position)
-        {
-            // When args have been provided that narrow down the overload, use only
-            // the closest matching overload. Otherwise show params from all overloads.
-            let has_existing_args = !matches!(active_argument, ActiveArgument::Next(0));
-            let selected: Vec<Type> = if has_existing_args && let Some(idx) = chosen_overload_index
-            {
-                callables.into_iter().nth(idx).into_iter().collect()
-            } else {
-                callables
-            };
+        if let Some((callables, _, _, _)) = self.get_callables_from_call(handle, position) {
+            // Show params from all overloads. Ideally we would filter to only
+            // compatible overloads based on arguments provided so far, but that
+            // would require re-evaluating type compatibility here.
             let mut seen = SmallSet::new();
-            for callable in selected {
+            for callable in callables {
                 if let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
                 {
                     for param in params {
