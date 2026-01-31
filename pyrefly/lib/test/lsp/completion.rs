@@ -2530,6 +2530,42 @@ x = sys.version
 }
 
 #[test]
+fn endpoint_completion_from_client() {
+    let code = r#"
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+app = FastAPI()
+
+@app.get("/users")
+def list_users():
+    return {"ok": True}
+
+@app.post("/users")
+def create_user():
+    return {"ok": True}
+
+client = TestClient(app)
+client.get("")
+#          ^
+client.post("")
+#           ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let trimmed = report.trim();
+    for expected in [
+        "- (Value) /users: GET endpoint inserting `/users`",
+        "- (Value) /users: POST endpoint inserting `/users`",
+    ] {
+        assert!(
+            trimmed.contains(expected),
+            "missing {expected} in completions:\n{trimmed}"
+        );
+    }
+}
+
+#[test]
 fn bound_method_completions_include_descriptor_attributes() {
     // Make sure completions work for bound methods from custom descriptors.
     // See: https://github.com/facebook/pyrefly/issues/821
