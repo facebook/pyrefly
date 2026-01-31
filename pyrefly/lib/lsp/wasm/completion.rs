@@ -24,6 +24,7 @@ use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::ExprContext;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -482,9 +483,12 @@ impl Transaction<'_> {
         position: TextSize,
         import_format: ImportFormat,
         supports_completion_item_details: bool,
+        complete_function_parens: bool,
+        supports_snippets: bool,
     ) -> (Vec<CompletionItem>, bool) {
         let mut result = Vec::new();
         let mut is_incomplete = false;
+        let mut allow_function_call_parens = false;
         // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
         // If the user might be typing the `import` keyword, add that as an autocomplete option.
         match self.identifier_at(handle, position) {
@@ -543,6 +547,7 @@ impl Transaction<'_> {
                 identifier: _,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
+                allow_function_call_parens = true;
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
                 {
@@ -589,6 +594,12 @@ impl Transaction<'_> {
                 identifier,
                 context,
             }) => {
+                if matches!(
+                    context,
+                    IdentifierContext::Expr(ExprContext::Load | ExprContext::Invalid)
+                ) {
+                    allow_function_call_parens = true;
+                }
                 if matches!(context, IdentifierContext::MethodDef { .. }) {
                     Self::add_magic_method_completions(&identifier, &mut result);
                 }
@@ -652,6 +663,9 @@ impl Transaction<'_> {
                     }
                 }
             }
+        }
+        if complete_function_parens && allow_function_call_parens {
+            Self::add_function_call_parens(&mut result, supports_snippets);
         }
         for item in &mut result {
             let sort_text = if item
