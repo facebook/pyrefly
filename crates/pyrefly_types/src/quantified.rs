@@ -22,6 +22,7 @@ use ruff_python_ast::name::Name;
 use crate::class::ClassType;
 use crate::stdlib::Stdlib;
 use crate::type_var::Restriction;
+use crate::type_var::TypeVar;
 use crate::types::Type;
 
 #[derive(Debug, Clone, Eq)]
@@ -145,6 +146,16 @@ impl Quantified {
             QuantifiedKind::TypeVar,
             default,
             restriction,
+        )
+    }
+
+    /// Creates a Quantified from a TypeVar, extracting all relevant fields.
+    pub fn from_type_var(tv: &TypeVar, uniques: &UniqueFactory) -> Self {
+        Self::type_var(
+            tv.qname().id().clone(),
+            uniques,
+            tv.default().cloned(),
+            tv.restriction().clone(),
         )
     }
 

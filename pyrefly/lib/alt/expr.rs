@@ -1118,17 +1118,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let should_discard = |t: &Type, r: TextRange| self.as_bool(t, r, errors) == Some(!target);
 
         let mut t_acc = Type::never();
+        // Separate accumulator for soft hints - uses un-narrowed types.
+        // The narrowing of bool/int/str to literals is for the result type of the boolop,
+        // not for contextual typing of subsequent expressions.
+        let mut hint_acc: Option<Type> = None;
         let last_index = values.len() - 1;
         for (i, value) in values.iter().enumerate() {
             // If there isn't a hint for the overall expression, use the preceding branches as a "soft" hint
             // for the next one. Most useful for expressions like `optional_list or []`.
-            let hint = hint.or_else(|| {
-                if t_acc.is_never() {
-                    None
-                } else {
-                    Some(HintRef::soft(&t_acc))
-                }
-            });
+            let hint = hint.or_else(|| hint_acc.as_ref().map(HintRef::soft));
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
             // If this is not the last entry, we have to make a type-dependent decision and also narrow the
@@ -1143,6 +1141,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for t in t.into_unions() {
                 // If we reach the last value, we should always keep it.
                 if i == last_index || !should_discard(&t, value.range()) {
+                    // Accumulate un-narrowed type for hints
+                    hint_acc = Some(match hint_acc {
+                        None => t.clone(),
+                        Some(acc) => self.union(acc, t.clone()),
+                    });
+                    // Narrow the type for the result of the boolop
                     let t = if i != last_index && t == self.stdlib.bool().clone().to_type() {
                         Lit::Bool(target).to_implicit_type()
                     } else if i != last_index && t == self.stdlib.int().clone().to_type() && !target

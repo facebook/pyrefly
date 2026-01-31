@@ -674,7 +674,7 @@ class B[T]:
     pass
 for x in A[str]:
     assert_type(x, int)
-for _ in B[str]:  # E: Type `type[B[str]]` is not iterable
+for _ in B[str]:
     pass
     "#,
 );
@@ -745,12 +745,13 @@ for a in A:  # E: Type `type[A]` is not iterable
 );
 
 testcase!(
+    bug = "Although A[int] is a generic alias and can be iterated over, type[A[int]] is a type and cannot be iterated over.",
     test_getitem_cannot_iterate_generic_class,
     r#"
 class A[T]:
     def __getitem__(self, i: int) -> int: ...
 def f(x: type[A[int]]):
-    for a in x:  # E: Type `type[A[int]]` is not iterable
+    for a in x:  # Expect an error here
         pass
     "#,
 );

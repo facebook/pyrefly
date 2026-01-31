@@ -35,6 +35,7 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Parameters;
 use ruff_python_ast::StmtAugAssign;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFunctionDef;
@@ -103,7 +104,7 @@ assert_words!(KeyUndecoratedFunction, 1);
 assert_words!(Binding, 11);
 assert_words!(BindingExpect, 16);
 assert_words!(BindingAnnotation, 15);
-assert_words!(BindingClass, 23);
+assert_words!(BindingClass, 15);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 9);
@@ -116,7 +117,7 @@ assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 21);
+assert_words!(BindingUndecoratedFunction, 14);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1287,6 +1288,46 @@ impl DisplayWith<Bindings> for BindingDecorator {
     }
 }
 
+/// Stores fields from `StmtFunctionDef` that are needed during solving.
+#[derive(Clone, Debug)]
+pub struct FunctionDefData {
+    pub name: Identifier,
+    pub parameters: Box<Parameters>,
+    pub type_params: Option<Box<TypeParams>>,
+    pub is_async: bool,
+    pub range: TextRange,
+}
+
+impl FunctionDefData {
+    pub fn new(def: StmtFunctionDef) -> Self {
+        Self {
+            name: def.name,
+            parameters: def.parameters,
+            type_params: def.type_params,
+            is_async: def.is_async,
+            range: def.range,
+        }
+    }
+}
+
+/// Stores fields from `StmtClassDef` that are needed during solving.
+#[derive(Clone, Debug)]
+pub struct ClassDefData {
+    pub name: Identifier,
+    pub type_params: Option<Box<TypeParams>>,
+    pub range: TextRange,
+}
+
+impl ClassDefData {
+    pub fn new(def: StmtClassDef) -> Self {
+        Self {
+            name: def.name,
+            type_params: def.type_params,
+            range: def.range,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BindingDecoratedFunction {
     pub undecorated_idx: Idx<KeyUndecoratedFunction>,
@@ -1303,8 +1344,7 @@ impl DisplayWith<Bindings> for BindingDecoratedFunction {
 
 #[derive(Clone, Debug)]
 pub struct BindingUndecoratedFunction {
-    /// A function definition, but with the return/body stripped out.
-    pub def: StmtFunctionDef,
+    pub def: FunctionDefData,
     pub stub_or_impl: FunctionStubOrImpl,
     pub class_key: Option<Idx<KeyClass>>,
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
@@ -1320,8 +1360,7 @@ impl DisplayWith<Bindings> for BindingUndecoratedFunction {
 
 #[derive(Clone, Debug)]
 pub struct ClassBinding {
-    /// A class definition, but with the body stripped out.
-    pub def: StmtClassDef,
+    pub def: ClassDefData,
     pub def_index: ClassDefIndex,
     pub parent: NestingContext,
     /// The fields are all the names declared on the class that we were able to detect
@@ -1370,6 +1409,7 @@ pub enum ReturnTypeKind {
     /// We have an explicit return annotation, and we should blindly trust it without any validation
     ShouldTrustAnnotation {
         annotation: Idx<KeyAnnotation>,
+        range: TextRange,
         is_generator: bool,
     },
     /// We don't have an explicit return annotation, and we should just act as if the return is annotated as `Any`

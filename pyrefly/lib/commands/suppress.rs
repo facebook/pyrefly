@@ -14,7 +14,7 @@ use pyrefly_config::error_kind::Severity;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::error::suppress;
-use crate::error::suppress::SuppressableError;
+use crate::error::suppress::SerializedError;
 
 /// Suppress type errors by adding ignore comments to source files.
 #[derive(Clone, Debug, Parser)]
@@ -28,37 +28,85 @@ pub struct SuppressArgs {
     config_override: ConfigOverrideArgs,
 
     /// Path to a JSON file containing errors to suppress.
-    /// The JSON should be an array of objects with "path", "line", and "name" fields.
+    /// The JSON should be an array of objects with "path", "line", "name", and "message" fields.
     #[arg(long)]
     json: Option<PathBuf>,
+
+    /// Remove unused ignore comments instead of adding suppressions.
+    #[arg(long)]
+    remove_unused: bool,
 }
 
 impl SuppressArgs {
     pub fn run(&self) -> anyhow::Result<CommandExitStatus> {
-        let suppressable_errors = if let Some(json_path) = &self.json {
-            // Parse errors from JSON file
-            let json_content = std::fs::read_to_string(json_path)?;
-            serde_json::from_str(&json_content)?
+        if self.remove_unused {
+            // Remove unused ignores mode
+            let unused_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {
+                // Parse errors from JSON file, filtering for UnusedIgnore errors only
+                let json_content = std::fs::read_to_string(json_path)?;
+                let errors: Vec<SerializedError> = serde_json::from_str(&json_content)?;
+                errors
+                    .into_iter()
+                    .filter(|e| e.is_unused_ignore())
+                    .collect()
+            } else {
+                // Run type checking to collect unused ignore errors
+                self.config_override.validate()?;
+                let (files_to_check, config_finder) =
+                    self.files.clone().resolve(self.config_override.clone())?;
+
+                let check_args = super::check::CheckArgs::parse_from([
+                    "check",
+                    "--output-format",
+                    "omit-errors",
+                ]);
+                let (_, errors) = check_args.run_once(files_to_check, config_finder)?;
+
+                // Convert to SerializedErrors, filtering for UnusedIgnore only
+                errors
+                    .into_iter()
+                    .filter_map(|e| SerializedError::from_error(&e))
+                    .filter(|e| e.is_unused_ignore())
+                    .collect()
+            };
+
+            // Remove unused ignores
+            suppress::remove_unused_ignores_from_serialized(unused_errors);
         } else {
-            // Run type checking to collect errors
-            self.config_override.validate()?;
-            let (files_to_check, config_finder) =
-                self.files.clone().resolve(self.config_override.clone())?;
+            // Add suppressions mode (existing behavior)
+            let serialized_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {
+                // Parse errors from JSON file, filtering out UnusedIgnore errors
+                let json_content = std::fs::read_to_string(json_path)?;
+                let errors: Vec<SerializedError> = serde_json::from_str(&json_content)?;
+                errors
+                    .into_iter()
+                    .filter(|e| !e.is_unused_ignore())
+                    .collect()
+            } else {
+                // Run type checking to collect errors
+                self.config_override.validate()?;
+                let (files_to_check, config_finder) =
+                    self.files.clone().resolve(self.config_override.clone())?;
 
-            let check_args =
-                super::check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
-            let (_, errors) = check_args.run_once(files_to_check, config_finder)?;
+                let check_args = super::check::CheckArgs::parse_from([
+                    "check",
+                    "--output-format",
+                    "omit-errors",
+                ]);
+                let (_, errors) = check_args.run_once(files_to_check, config_finder)?;
 
-            // Convert to SuppressableErrors, filtering by severity
-            errors
-                .into_iter()
-                .filter(|e| e.severity() >= Severity::Warn)
-                .filter_map(|e| SuppressableError::from_error(&e))
-                .collect()
-        };
+                // Convert to SerializedErrors, filtering by severity and excluding UnusedIgnore
+                errors
+                    .into_iter()
+                    .filter(|e| e.severity() >= Severity::Warn)
+                    .filter_map(|e| SerializedError::from_error(&e))
+                    .filter(|e| !e.is_unused_ignore())
+                    .collect()
+            };
 
-        // Apply suppressions
-        suppress::suppress_errors(suppressable_errors);
+            // Apply suppressions
+            suppress::suppress_errors(serialized_errors);
+        }
 
         Ok(CommandExitStatus::Success)
     }

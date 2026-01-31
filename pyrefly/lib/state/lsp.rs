@@ -15,10 +15,6 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use lsp_types::CompletionItem;
-use lsp_types::CompletionItemKind;
-use lsp_types::CompletionItemLabelDetails;
-use lsp_types::CompletionItemTag;
-use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
@@ -32,7 +28,6 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -1845,7 +1840,7 @@ impl<'a> Transaction<'a> {
         .map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
 
-    fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
+    pub(crate) fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
         let matcher = SkimMatcherV2::default().smart_case();
         let mut results = Vec::new();
 
@@ -2587,135 +2582,6 @@ impl<'a> Transaction<'a> {
             }
         }
         Some(references)
-    }
-
-    fn add_autoimport_completions(
-        &self,
-        handle: &Handle,
-        identifier: &Identifier,
-        completions: &mut Vec<CompletionItem>,
-        import_format: ImportFormat,
-        supports_completion_item_details: bool,
-    ) {
-        // Auto-import can be slow. Let's only return results if there are no local
-        // results for now. TODO: re-enable it once we no longer have perf issues.
-        // We should not try to generate autoimport when the user has typed very few
-        // characters. It's unhelpful to narrow down suggestions.
-        if identifier.as_str().len() >= MIN_CHARACTERS_TYPED_AUTOIMPORT
-            && let Some(ast) = self.get_ast(handle)
-            && let Some(module_info) = self.get_module_info(handle)
-        {
-            for (handle_to_import_from, name, export) in
-                self.search_exports_fuzzy(identifier.as_str())
-            {
-                // Using handle itself doesn't always work because handles can be made separately and have different hashes
-                if handle_to_import_from.module() == handle.module()
-                    || handle_to_import_from.module() == ModuleName::builtins()
-                {
-                    continue;
-                }
-                let depth = handle_to_import_from.module().components().len();
-                let module_description = handle_to_import_from.module().as_str().to_owned();
-                let (insert_text, additional_text_edits, imported_module) = {
-                    let (position, insert_text, module_name) = insert_import_edit(
-                        &ast,
-                        self.config_finder(),
-                        handle.dupe(),
-                        handle_to_import_from,
-                        &name,
-                        import_format,
-                    );
-                    let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                        new_text: insert_text.clone(),
-                    };
-                    (insert_text, Some(vec![import_text_edit]), module_name)
-                };
-                let auto_import_label_detail = format!(" (import {imported_module})");
-
-                completions.push(CompletionItem {
-                    label: name,
-                    detail: Some(insert_text),
-                    kind: export
-                        .symbol_kind
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
-                    additional_text_edits,
-                    label_details: supports_completion_item_details.then_some(
-                        CompletionItemLabelDetails {
-                            detail: Some(auto_import_label_detail),
-                            description: Some(module_description),
-                        },
-                    ),
-                    tags: if export.deprecation.is_some() {
-                        Some(vec![CompletionItemTag::DEPRECATED])
-                    } else {
-                        None
-                    },
-                    sort_text: Some(format!("4{}", depth)),
-                    ..Default::default()
-                });
-            }
-
-            for module_name in self.search_modules_fuzzy(identifier.as_str()) {
-                if module_name == handle.module() {
-                    continue;
-                }
-                let module_name_str = module_name.as_str().to_owned();
-                if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
-                {
-                    let (insert_text, additional_text_edits) = {
-                        let (position, insert_text) =
-                            import_regular_import_edit(&ast, module_handle);
-                        let import_text_edit = TextEdit {
-                            range: module_info
-                                .to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                            new_text: insert_text.clone(),
-                        };
-                        (insert_text, Some(vec![import_text_edit]))
-                    };
-                    let auto_import_label_detail = format!(" (import {module_name_str})");
-
-                    completions.push(CompletionItem {
-                        label: module_name_str.clone(),
-                        detail: Some(insert_text),
-                        kind: Some(CompletionItemKind::MODULE),
-                        additional_text_edits,
-                        label_details: supports_completion_item_details.then_some(
-                            CompletionItemLabelDetails {
-                                detail: Some(auto_import_label_detail),
-                                description: Some(module_name_str),
-                            },
-                        ),
-                        ..Default::default()
-                    });
-                }
-            }
-        }
-    }
-
-    fn add_literal_completions(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-        completions: &mut Vec<CompletionItem>,
-        in_string_literal: bool,
-    ) {
-        if let Some((callables, chosen_overload_index, active_argument, _)) =
-            self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(chosen_overload_index)
-            && let Some(params) =
-                Self::normalize_singleton_function_type_into_params(callable.clone())
-            && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
-            && let Some(param) = params.get(arg_index)
-        {
-            Self::add_literal_completions_from_type(
-                param.as_type(),
-                completions,
-                in_string_literal,
-            );
-        }
     }
 
     // Kept for backwards compatibility - used by external callers (lsp/server.rs, playground.rs)
@@ -3480,7 +3346,6 @@ mod tests {
             .map(|match_| (match_.name.as_str(), match_.is_vararg_repeat))
     }
 
-    #[cfg(not(windows))] // TODO: fix and re-enable
     #[test]
     fn test_get_editable_source_paths_finds_editable_package() {
         let temp_dir = tempfile::tempdir().unwrap();

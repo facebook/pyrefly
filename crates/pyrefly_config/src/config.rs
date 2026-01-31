@@ -57,6 +57,7 @@ use tracing::debug;
 use tracing::error;
 
 use crate::base::ConfigBase;
+use crate::base::RecursionLimitConfig;
 use crate::base::UntypedDefBehavior;
 use crate::environment::environment::PythonEnvironment;
 use crate::environment::interpreters::Interpreters;
@@ -817,6 +818,12 @@ impl ConfigFile {
                  self.root.enabled_ignores.as_ref().unwrap())
     }
 
+    /// Get the recursion limit configuration.
+    /// Returns None if not set (disabled).
+    pub fn recursion_limit_config(&self) -> Option<RecursionLimitConfig> {
+        ConfigBase::get_recursion_limit_config(&self.root)
+    }
+
     pub fn get_error_config(&self, path: &Path) -> ErrorConfig<'_> {
         ErrorConfig::new(
             self.errors(path),
@@ -1429,6 +1436,8 @@ mod tests {
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     permissive_ignores: None,
                     enabled_ignores: None,
+                    recursion_depth_limit: None,
+                    recursion_overflow_handler: None,
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
@@ -1447,6 +1456,8 @@ mod tests {
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         permissive_ignores: None,
                         enabled_ignores: None,
+                        recursion_depth_limit: None,
+                        recursion_overflow_handler: None,
                     }
                 }],
                 typeshed_path: None,
@@ -1829,6 +1840,8 @@ baseline = "baseline.json"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                recursion_depth_limit: None,
+                recursion_overflow_handler: None,
             },
             sub_configs: vec![
                 SubConfig {
@@ -2136,6 +2149,8 @@ baseline = "baseline.json"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                recursion_depth_limit: None,
+                recursion_overflow_handler: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -2168,6 +2183,8 @@ baseline = "baseline.json"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                recursion_depth_limit: None,
+                recursion_overflow_handler: None,
             },
             sub_configs: vec![],
             ..Default::default()

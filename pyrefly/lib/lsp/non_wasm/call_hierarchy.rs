@@ -58,6 +58,8 @@ pub fn find_function_at_position_in_ast(
 ///
 /// Given a call site position, finds the enclosing function and returns
 /// information needed to represent it in the call hierarchy.
+/// For module-level code (e.g., `if __name__ == "__main__":`), returns
+/// the module name with `<module>` suffix.
 pub fn find_containing_function_for_call(
     handle: &Handle,
     ast: &ModModule,
@@ -84,7 +86,11 @@ pub fn find_containing_function_for_call(
             }
         }
     }
-    None
+
+    // No containing function found - this is module-level code.
+    // Use "<module>" as the caller name with the module's range.
+    let name = format!("{}.<module>", handle.module());
+    Some((name, ast.range()))
 }
 
 /// Converts raw incoming call data to LSP CallHierarchyIncomingCall items.
@@ -232,20 +238,30 @@ impl CancellableTransaction<'_> {
 
                 let mut callers_in_file = Vec::new();
 
-                ast.visit(&mut |expr| {
+                /// Recursively collects Call expressions that match references to the target function.
+                fn collect_calls_from_expr(
+                    expr: &Expr,
+                    ref_set: &std::collections::HashSet<TextRange>,
+                    handle: &Handle,
+                    ast: &ModModule,
+                    callers: &mut Vec<(TextRange, String, TextRange)>,
+                ) {
                     if let Expr::Call(call) = expr
                         && ref_set
                             .iter()
                             .any(|ref_range| call.func.range().contains(ref_range.start()))
                         && let Some((containing_func_name, containing_func_range)) =
-                            find_containing_function_for_call(handle, &ast, call.range().start())
+                            find_containing_function_for_call(handle, ast, call.range().start())
                     {
-                        callers_in_file.push((
-                            call.range(),
-                            containing_func_name,
-                            containing_func_range,
-                        ));
+                        callers.push((call.range(), containing_func_name, containing_func_range));
                     }
+                    expr.recurse(&mut |child| {
+                        collect_calls_from_expr(child, ref_set, handle, ast, callers)
+                    });
+                }
+
+                ast.visit(&mut |expr| {
+                    collect_calls_from_expr(expr, &ref_set, handle, &ast, &mut callers_in_file)
                 });
 
                 if callers_in_file.is_empty() {

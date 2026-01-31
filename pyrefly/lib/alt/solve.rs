@@ -257,12 +257,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         match maybe_parameter.ty() {
             Type::TypeVar(x) => {
-                let q = Quantified::type_var(
-                    x.qname().id().clone(),
-                    self.uniques,
-                    x.default().cloned(),
-                    x.restriction().clone(),
-                );
+                let q = Quantified::from_type_var(x, self.uniques);
                 Arc::new(LegacyTypeParameterLookup::Parameter(TParam {
                     quantified: q,
                     variance: x.variance(),
@@ -902,12 +897,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         Entry::Vacant(e) => {
-                            let q = Quantified::type_var(
-                                ty_var.qname().id().clone(),
-                                self.uniques,
-                                ty_var.default().cloned(),
-                                ty_var.restriction().clone(),
-                            );
+                            let q = Quantified::from_type_var(&ty_var, self.uniques);
                             e.insert(q.clone());
                             tparams.push(TParam {
                                 quantified: q.clone(),
@@ -1057,12 +1047,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let q = match seen_type_vars.entry(ty_var.dupe()) {
                     Entry::Occupied(e) => e.get().clone(),
                     Entry::Vacant(e) => {
-                        let q = Quantified::type_var(
-                            ty_var.qname().id().clone(),
-                            self.uniques,
-                            ty_var.default().cloned(),
-                            ty_var.restriction().clone(),
-                        );
+                        let q = Quantified::from_type_var(ty_var, self.uniques);
                         e.insert(q.clone());
                         tparams.push((
                             ty_var.qname().range(),
@@ -2596,6 +2581,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ReturnTypeKind::ShouldTrustAnnotation {
                 annotation,
                 is_generator,
+                ..
             } => {
                 // TODO: A return type annotation like `Final` is invalid in this context.
                 // It will result in an implicit Any type, which is reasonable, but we should
@@ -3914,12 +3900,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let q = seen_type_vars
                         .entry(tv.dupe())
                         .or_insert_with(|| {
-                            let q = Quantified::type_var(
-                                tv.qname().id().clone(),
-                                self.uniques,
-                                tv.default().cloned(),
-                                tv.restriction().clone(),
-                            );
+                            let q = Quantified::from_type_var(tv, self.uniques);
                             tparams.push(TParam {
                                 quantified: q.clone(),
                                 variance: tv.variance(),
@@ -4243,8 +4224,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::ClassDef(cls.dupe())
                 }
             },
-            Binding::AnnotatedType(ann, val) => match &self.get_idx(*ann).ty(self.stdlib) {
-                Some(ty) => (*ty).clone(),
+            Binding::AnnotatedType(ann, val) => match self.get_idx(*ann).ty(self.stdlib) {
+                Some(ty) => self.wrap_callable_legacy_typevars(ty),
                 None => self.binding_to_type(val, errors),
             },
             Binding::Type(x) => x.clone(),

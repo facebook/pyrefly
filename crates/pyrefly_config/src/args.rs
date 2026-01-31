@@ -17,6 +17,7 @@ use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display;
 
+use crate::base::RecursionOverflowHandler;
 use crate::base::UntypedDefBehavior;
 use crate::config::ConfigFile;
 use crate::config::validate_path;
@@ -168,6 +169,13 @@ pub struct ConfigOverrideArgs {
     /// Force this rule to emit an info-level diagnostic. Can be passed multiple times or as a comma-separated list.
     #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     info: Vec<ErrorKind>,
+    /// Maximum recursion depth before triggering overflow protection.
+    /// Set to 0 to disable (default). This helps detect potential stack overflow situations.
+    #[arg(long)]
+    recursion_depth_limit: Option<u32>,
+    /// How to handle when recursion depth limit is exceeded.
+    #[arg(long)]
+    recursion_overflow_handler: Option<RecursionOverflowHandler>,
 }
 
 impl ConfigOverrideArgs {
@@ -340,6 +348,12 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.infer_with_first_use {
             config.root.infer_with_first_use = Some(*x);
+        }
+        if let Some(x) = &self.recursion_depth_limit {
+            config.root.recursion_depth_limit = Some(*x);
+        }
+        if let Some(x) = &self.recursion_overflow_handler {
+            config.root.recursion_overflow_handler = Some(*x);
         }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             for error_kind in &self.error {

@@ -589,3 +589,22 @@ class Parent(Grandparent[T1, T2]): ...
 class BadChild(Parent[T1, T2], Grandparent[T2, T1]): ...  # should be an error
 "#,
 );
+
+testcase!(
+    test_generic_alias_fields,
+    r#"
+from typing import assert_type
+
+list.__add__ # This is a method on `list`
+
+# No error for accessing properties on `GenericAlias`
+assert(list[int].__args__, tuple)
+assert(list[int].__parameters__, tuple)
+
+# No error for accessing methods on `list`
+list[int].__add__
+
+# No error for comparing two `GenericAlias`
+list[int] == list[str]
+"#,
+);

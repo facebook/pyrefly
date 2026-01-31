@@ -40,6 +40,7 @@ use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
+use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
@@ -444,10 +445,11 @@ impl<'a> BindingsBuilder<'a> {
                         has_explicit_return: !return_keys.is_empty(),
                     }
                 }
-                (Some((_, annotation)), None) => {
+                (Some((range, annotation)), None) => {
                     // We have an explicit return annotation and we just want to trust it.
                     ReturnTypeKind::ShouldTrustAnnotation {
                         annotation,
+                        range,
                         is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
                     }
                 }
@@ -757,7 +759,7 @@ impl<'a> BindingsBuilder<'a> {
         let undecorated_idx = self.insert_binding_idx(
             undecorated_idx,
             BindingUndecoratedFunction {
-                def: x,
+                def: FunctionDefData::new(x),
                 stub_or_impl,
                 class_key,
                 decorators: decorators.decorators,

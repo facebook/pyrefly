@@ -31,6 +31,7 @@ use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::TParam;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::Union;
+use pyrefly_util::display::pluralize;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::ResultExt;
 use pyrefly_util::visit::Visit;
@@ -1567,6 +1568,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let binding = Binding::Forward(*definition);
                 let value_ty =
                     Arc::unwrap_or_clone(self.solve_binding(&binding, range, errors)).into_ty();
+
+                // Validate __init__ self type for non-stub files.
+                // Skip this check for stub files
+                if name == &dunder::INIT && !class.module_path().is_interface() {
+                    // Ensure that self annotation does not contain class-scoped type variables.
+                    // Per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method
+                    // "Class-scoped type variables should not be used in the self annotation"
+                    value_ty.visit_toplevel_callable(|callable| {
+                        if let Params::List(param_list) = &callable.params
+                            && let Some(Param::Pos(_, self_ty, _)) = param_list.items().first()
+                            && let Type::ClassType(cls_ty) = self_ty
+                            && cls_ty.name() == class.name()
+                        {
+                            let tparams_names = cls_ty
+                                .tparams()
+                                .as_vec()
+                                .iter()
+                                .map(|tp| &tp.quantified)
+                                .collect::<SmallSet<_>>();
+                            let mut class_scoped_tvars = SmallSet::new();
+                            for (_, ty) in cls_ty.targs().iter_paired() {
+                                ty.collect_quantifieds(&mut class_scoped_tvars);
+                            }
+                            class_scoped_tvars.retain(|q| tparams_names.contains(q));
+                            if !class_scoped_tvars.is_empty() {
+                                let targs = class_scoped_tvars
+                                    .iter()
+                                    .map(|q| format!("`{}`", q.name()))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                errors.add(
+                                    range,
+                                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                                    vec1![format!(
+                                        "`__init__` method self type cannot reference class {} {targs}",
+                                        pluralize(class_scoped_tvars.len(), "type parameter")
+                                    )]
+                                );
+                            }
+                        }
+                    });
+                }
                 (
                     initialization,
                     !has_return_annotation,
@@ -3720,9 +3763,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn resolve_named_tuple_element(&self, cls: ClassType, name: &Name) -> Option<Type> {
+    pub fn resolve_named_tuple_element(&self, cls: &ClassType, name: &Name) -> Option<Type> {
         let field = self.get_class_member(cls.class_object(), name)?;
-        match field.instantiate_for(&Instance::of_class(&cls)).0 {
+        match field.instantiate_for(&Instance::of_class(cls)).0 {
             ClassFieldInner::ClassAttribute {
                 ty,
                 read_only_reason: Some(_),

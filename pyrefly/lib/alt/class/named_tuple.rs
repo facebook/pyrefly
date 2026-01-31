@@ -70,7 +70,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .elements
                 .iter()
                 .map(|name| {
-                    self.resolve_named_tuple_element(cls.clone(), name)
+                    self.resolve_named_tuple_element(cls, name)
                         .unwrap_or_else(Type::any_implicit)
                 })
                 .collect(),

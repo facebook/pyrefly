@@ -903,6 +903,7 @@ impl<'a> BindingsBuilder<'a> {
             FlowStyle::Other
             | FlowStyle::ClassField { .. }
             | FlowStyle::PossiblyUninitialized
+            | FlowStyle::MaybeInitialized(_)
             | FlowStyle::Uninitialized => {
                 self.special_export_from_binding_idx(idx, visited_names, visited_keys)
             }

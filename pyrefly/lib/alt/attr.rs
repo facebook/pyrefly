@@ -1512,7 +1512,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AttributeBase1::SelfType(cls) => match self.get_self_attribute(cls, attr_name) {
                 Some(attr) => acc.found_class_attribute(attr, base),
-                None => acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base)),
+                None => {
+                    let metadata = self.get_metadata_for_class(cls.class_object());
+                    if metadata.has_base_any() {
+                        acc.found_type(Type::Any(AnyStyle::Implicit), base)
+                    } else {
+                        acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base))
+                    }
+                }
             },
             AttributeBase1::Intersect(bases, fallback) => {
                 // For now, only handle the simplest case: if exactly one base has a successful lookup, use it.
@@ -1798,9 +1805,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypeAlias(ta) => self.as_attribute_base1(ta.as_value(self.stdlib), acc),
             Type::Type(box Type::Tuple(tuple)) => self
                 .as_attribute_base1(Type::type_form(self.erase_tuple_type(tuple).to_type()), acc),
-            Type::Type(box Type::ClassType(class)) => acc.push(AttributeBase1::ClassObject(
-                ClassBase::ClassType(class.clone()),
-            )),
+            Type::Type(box Type::ClassType(class)) => {
+                let class_base = AttributeBase1::ClassObject(ClassBase::ClassType(class.clone()));
+                if !class.targs().is_empty() {
+                    // If the class type has type arguments, at runtime it's also a GenericAlias
+
+                    // FIXME:
+                    // If `C` is a generic class, then the type of the expression `C` is `type[C]`.
+                    // We're relying on this behaviour to give `C[int]` the
+                    // runtime generic alias type, but this is technically
+                    // incorrect as `type[C[int]]` should be instances of `type`
+                    // and not `GenericAlias`.
+                    // Therefore, if we ever have a value of `type[C[int]]`
+                    // (e.g. via inheritance), we should not treat it as a
+                    // `GenericAlias`. However, such cases are rare in practice.
+                    let generic_alias_base =
+                        AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
+                    // Since GenericAlias also exposes all class attributes, we need to intersect the two bases
+                    acc.push(AttributeBase1::Intersect(
+                        vec![generic_alias_base.clone(), class_base],
+                        vec![generic_alias_base],
+                    ));
+                } else {
+                    acc.push(class_base)
+                }
+            }
             Type::QuantifiedValue(q) => acc.push(AttributeBase1::QuantifiedValue(*q)),
             Type::Type(box Type::Quantified(quantified)) => match quantified.restriction() {
                 Restriction::Bound(ty) => {

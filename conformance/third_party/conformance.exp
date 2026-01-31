@@ -2897,6 +2897,17 @@
     {
       "code": -2,
       "column": 9,
+      "concise_description": "`__init__` method self type cannot reference class type parameters `T2`, `T1`",
+      "description": "`__init__` method self type cannot reference class type parameters `T2`, `T1`",
+      "line": 107,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 107
+    },
+    {
+      "code": -2,
+      "column": 9,
       "concise_description": "Expected 0 positional arguments, got 1 in function `object.__init__`",
       "description": "Expected 0 positional arguments, got 1 in function `object.__init__`",
       "line": 130,

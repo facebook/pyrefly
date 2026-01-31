@@ -13,7 +13,6 @@ use pyrefly_types::callable::Callable;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::types::Union;
 use ruff_python_ast::Identifier;
-use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
@@ -25,6 +24,7 @@ use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::EnumMetadata;
+use crate::binding::binding::ClassDefData;
 use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyClassBaseType;
 use crate::binding::binding::KeyClassField;
@@ -62,7 +62,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn class_definition(
         &self,
         def_index: ClassDefIndex,
-        x: &StmtClassDef,
+        x: &ClassDefData,
         parent: &NestingContext,
         fields: SmallMap<Name, ClassFieldProperties>,
         tparams_require_binding: bool,

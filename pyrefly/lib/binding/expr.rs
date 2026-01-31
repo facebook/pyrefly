@@ -538,6 +538,10 @@ impl<'a> BindingsBuilder<'a> {
     pub fn ensure_expr(&mut self, x: &mut Expr, usage: &mut Usage) {
         self.with_semantic_checker(|semantic, context| semantic.visit_expr(x, context));
 
+        // Track uses of `typing.Self` in class bodies so they can be properly bound
+        // to the current class during the solving phase.
+        self.track_potential_typing_self(x);
+
         match x {
             Expr::Attribute(attr) => {
                 self.check_private_attribute_usage(attr);

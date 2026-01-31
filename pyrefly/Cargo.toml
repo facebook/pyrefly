@@ -76,4 +76,4 @@ tikv-jemallocator = "0.6.0"
 mimalloc = "0.1.46"
 
 [lints]
-rust = { unexpected_cfgs = { check-cfg = ["cfg(fbcode_build)"], level = "warn" } }
+rust = { unexpected_cfgs = { check-cfg = ["cfg(fbcode_build)", 'cfg(feature, values("debug-stack-overflow"))'], level = "warn" } }

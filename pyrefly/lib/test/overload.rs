@@ -477,7 +477,7 @@ testcase!(
 from typing import Callable, overload
 class defaulty[K, V]:
     @overload
-    def __init__(self: defaulty[str, V], **kwargs: V) -> None: ...
+    def __init__(self: defaulty[str, V], **kwargs: V) -> None: ... # E: `__init__` method self type cannot reference class type parameter `V`
     @overload
     def __init__(self, default_factory: Callable[[], V] | None, /) -> None: ...
     def __init__(self, *args, **kwargs) -> None:

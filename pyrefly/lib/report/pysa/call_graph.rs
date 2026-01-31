@@ -882,6 +882,12 @@ impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
     fn strip_unresolved_if_called(&mut self) {
         self.if_called.strip_unresolved_if_called();
     }
+
+    fn has_globals_or_properties(&self) -> bool {
+        !self.property_getters.is_empty()
+            || !self.property_setters.is_empty()
+            || !self.global_targets.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -933,6 +939,10 @@ impl<Function: FunctionTrait> IdentifierCallees<Function> {
 
     fn strip_unresolved_if_called(&mut self) {
         self.if_called.strip_unresolved_if_called();
+    }
+
+    fn has_globals_or_captures(&self) -> bool {
+        !self.global_targets.is_empty() || !self.captured_variables.is_empty()
     }
 }
 
@@ -1495,7 +1505,11 @@ impl DirectCall {
         Self::is_super_call(callee).or({
             match callee_type {
                 Some(Type::BoundMethod(box BoundMethod {
-                    obj: Type::ClassType(_) | Type::SelfType(_) | Type::Type(box Type::SelfType(_)),
+                    obj:
+                        Type::ClassType(_)
+                        | Type::SelfType(_)
+                        | Type::Type(box Type::SelfType(_))
+                        | Type::Type(box Type::ClassType(_)),
                     ..
                 })) => {
                     // Dynamic dispatch if calling a method via an attribute lookup
@@ -1550,6 +1564,32 @@ struct ReceiverClassResult {
     is_class_def: bool,
 }
 
+enum ResolveCallCallees {
+    Identifier(IdentifierCallees<FunctionRef>),
+    AttributeAccess(AttributeAccessCallees<FunctionRef>),
+    Unexpected,
+}
+
+struct ResolveCallResult {
+    callees: ResolveCallCallees,
+    // None if resolve_call() was called with resolve_higher_order_parameters = false.
+    higher_order_parameters: Option<HashMap<u32, HigherOrderParameter<FunctionRef>>>,
+}
+
+impl ResolveCallResult {
+    fn into_call_callees(self) -> CallCallees<FunctionRef> {
+        let mut callees = match self.callees {
+            ResolveCallCallees::Identifier(callees) => callees.if_called,
+            ResolveCallCallees::AttributeAccess(callees) => callees.if_called,
+            ResolveCallCallees::Unexpected => {
+                CallCallees::new_unresolved(UnresolvedReason::UnexpectedCalleeExpression)
+            }
+        };
+        callees.with_higher_order_parameters(self.higher_order_parameters.unwrap_or_default());
+        callees
+    }
+}
+
 impl<'a> CallGraphVisitor<'a> {
     fn pysa_location(&self, location: TextRange) -> PysaLocation {
         PysaLocation::new(self.module_context.module_info.display_range(location))
@@ -1597,13 +1637,18 @@ impl<'a> CallGraphVisitor<'a> {
                     is_class_def: true,
                 }
             }
-            Type::Type(box Type::SelfType(class_type)) if is_class_method => ReceiverClassResult {
-                class: Some(ClassRef::from_class(
-                    class_type.class_object(),
-                    self.module_context.module_ids,
-                )),
-                is_class_def: false,
-            },
+            Type::Type(box Type::SelfType(class_type))
+            | Type::Type(box Type::ClassType(class_type))
+                if is_class_method =>
+            {
+                ReceiverClassResult {
+                    class: Some(ClassRef::from_class(
+                        class_type.class_object(),
+                        self.module_context.module_ids,
+                    )),
+                    is_class_def: false,
+                }
+            }
             Type::TypedDict(TypedDict::Anonymous(_)) => ReceiverClassResult {
                 class: Some(ClassRef::from_class(
                     self.module_context.stdlib.dict_object(),
@@ -2844,18 +2889,21 @@ impl<'a> CallGraphVisitor<'a> {
                             "Resolving callees for higher order parameter `{}`",
                             argument.display_with(self.module_context)
                         );
-                        let callees = self.resolve_call(
-                            /* callee */ argument,
-                            /* return_type */
-                            self.get_return_type_for_callee(
-                                self.module_context
-                                    .answers
-                                    .get_type_trace(argument.range())
-                                    .as_ref(),
-                            ),
-                            /* arguments */ None,
-                            /* assignment_targets */ None,
-                        );
+                        let callees = self
+                            .resolve_call(
+                                /* callee */ argument,
+                                /* return_type */
+                                self.get_return_type_for_callee(
+                                    self.module_context
+                                        .answers
+                                        .get_type_trace(argument.range())
+                                        .as_ref(),
+                                ),
+                                /* arguments */ None,
+                                /* assignment_targets */ None,
+                                /* resolve_higher_order_parameters */ false,
+                            )
+                            .into_call_callees();
                         let call_targets = callees.call_targets;
                         if call_targets.is_empty() {
                             None
@@ -2882,10 +2930,15 @@ impl<'a> CallGraphVisitor<'a> {
         return_type: ScalarTypeProperties,
         arguments: Option<&ruff_python_ast::Arguments>,
         assignment_targets: Option<&[Expr]>,
-    ) -> CallCallees<FunctionRef> {
-        let higher_order_parameters = self.resolve_higher_order_parameters(arguments);
+        resolve_higher_order_parameters: bool,
+    ) -> ResolveCallResult {
+        let higher_order_parameters = if resolve_higher_order_parameters {
+            Some(self.resolve_higher_order_parameters(arguments))
+        } else {
+            None
+        };
 
-        let mut callees = match callee {
+        let callees = match callee {
             Expr::Name(name) => {
                 let callees = self.resolve_name(name, arguments, return_type);
                 debug_println!(
@@ -2895,7 +2948,7 @@ impl<'a> CallGraphVisitor<'a> {
                     arguments.display_with(self.module_context),
                     callees
                 );
-                callees.if_called
+                ResolveCallCallees::Identifier(callees)
             }
             Expr::Attribute(attribute) => {
                 let callee_expr = Some(AnyNodeRef::from(attribute));
@@ -2918,12 +2971,14 @@ impl<'a> CallGraphVisitor<'a> {
                     callee.display_with(self.module_context),
                     callees
                 );
-                callees.if_called
+                ResolveCallCallees::AttributeAccess(callees)
             }
-            _ => CallCallees::new_unresolved(UnresolvedReason::UnexpectedCalleeExpression),
+            _ => ResolveCallCallees::Unexpected,
         };
-        callees.with_higher_order_parameters(higher_order_parameters);
-        callees
+        ResolveCallResult {
+            callees,
+            higher_order_parameters,
+        }
     }
 
     // Use this only when we are not analyzing a call expression (e.g., `foo` in `x = foo`), because
@@ -3011,17 +3066,45 @@ impl<'a> CallGraphVisitor<'a> {
         &mut self,
         call: &ExprCall,
         return_type: ScalarTypeProperties,
-        expression_identifier: ExpressionIdentifier,
         assignment_targets: Option<&[Expr]>,
     ) {
         let callee = &call.func;
-        let callees = ExpressionCallees::Call(self.resolve_call(
+        let resolved = self.resolve_call(
             callee,
             return_type,
             Some(&call.arguments),
             assignment_targets,
-        ));
-        self.add_callees(expression_identifier, callees);
+            /* resolve_higher_order_parameters */ true,
+        );
+
+        // If necessary, register callees for the nested attribute or name access.
+        match (&resolved.callees, &*call.func) {
+            (ResolveCallCallees::Identifier(callees), Expr::Name(name))
+                if callees.has_globals_or_captures() =>
+            {
+                self.add_callees(
+                    ExpressionIdentifier::expr_name(name, &self.module_context.module_info),
+                    ExpressionCallees::Identifier(callees.clone()),
+                )
+            }
+            (ResolveCallCallees::AttributeAccess(callees), Expr::Attribute(attribute))
+                if callees.has_globals_or_properties() =>
+            {
+                self.add_callees(
+                    ExpressionIdentifier::regular(
+                        attribute.range(),
+                        &self.module_context.module_info,
+                    ),
+                    ExpressionCallees::AttributeAccess(callees.clone()),
+                )
+            }
+            _ => (),
+        }
+
+        self.add_callees(
+            ExpressionIdentifier::regular(call.range(), &self.module_context.module_info),
+            ExpressionCallees::Call(resolved.into_call_callees()),
+        );
 
         // Add extra callees for specific functions.
         // The pattern matching here must match exactly with different pattern
@@ -3680,7 +3763,6 @@ impl<'a> CallGraphVisitor<'a> {
                 self.resolve_and_register_call(
                     call,
                     return_type_from_expr,
-                    ExpressionIdentifier::regular(expr.range(), &self.module_context.module_info),
                     assignment_targets(current_statement),
                 );
             }
@@ -3947,12 +4029,15 @@ impl<'a> CallGraphVisitor<'a> {
                 .answers
                 .get_type_trace(decorator.expression.range());
             let return_type = self.get_return_type_for_callee(callee_type.as_ref());
-            let callees = self.resolve_call(
-                /* callee */ &decorator.expression,
-                return_type,
-                /* arguments */ None,
-                /* assignment_targets */ None,
-            );
+            let callees = self
+                .resolve_call(
+                    /* callee */ &decorator.expression,
+                    return_type,
+                    /* arguments */ None,
+                    /* assignment_targets */ None,
+                    /* resolve_higher_order_parameters */ true,
+                )
+                .into_call_callees();
             self.call_graphs.add_callees(
                 decorated_target.clone(),
                 ExpressionIdentifier::ArtificialCall(Origin {
@@ -4149,18 +4234,21 @@ fn resolve_call(
         error_collector: ErrorCollector::new(module_context.module_info.dupe(), ErrorStyle::Never),
         matching_graphql_decorators: Vec::new(),
     };
-    let callees = visitor.resolve_call(
-        /* callee */ &call.func,
-        /* return_type */
-        module_context
-            .answers
-            .get_type_trace(call.range())
-            .map_or(ScalarTypeProperties::none(), |type_| {
-                ScalarTypeProperties::from_type(&type_, module_context)
-            }),
-        /* arguments */ Some(&call.arguments),
-        /* assignment_targets */ None,
-    );
+    let callees = visitor
+        .resolve_call(
+            /* callee */ &call.func,
+            /* return_type */
+            module_context
+                .answers
+                .get_type_trace(call.range())
+                .map_or(ScalarTypeProperties::none(), |type_| {
+                    ScalarTypeProperties::from_type(&type_, module_context)
+                }),
+            /* arguments */ Some(&call.arguments),
+            /* assignment_targets */ None,
+            /* resolve_higher_order_parameters */ false,
+        )
+        .into_call_callees();
     callees.all_targets().cloned().collect()
 }
 

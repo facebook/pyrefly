@@ -49,6 +49,7 @@ use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingVariance;
 use crate::binding::binding::ClassBinding;
+use crate::binding::binding::ClassDefData;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
@@ -355,7 +356,7 @@ impl<'a> BindingsBuilder<'a> {
             class_indices.class_idx,
             BindingClass::ClassDef(ClassBinding {
                 def_index: class_indices.def_index,
-                def: x,
+                def: ClassDefData::new(x),
                 parent: parent.dupe(),
                 fields,
                 tparams_require_binding,
