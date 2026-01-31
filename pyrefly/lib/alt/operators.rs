@@ -84,7 +84,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 Some(&context),
                 "Expr::binop_infer",
-                true,
+                // Magic method lookup for operators should ignore __getattr__/__getattribute__.
+                false,
             );
             let Some(method_type_dunder) = method_type_dunder else {
                 continue;
