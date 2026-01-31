@@ -86,7 +86,17 @@ fn initialize_connection(
         return Ok(None);
     };
     let capabilities = capabilities(indexing_mode, &initialize_params);
-    if !initialize_finish(connection, id, capabilities, server_info)? {
+    let type_hierarchy_provider = match indexing_mode {
+        IndexingMode::None => None,
+        IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => Some(true),
+    };
+    if !initialize_finish(
+        connection,
+        id,
+        capabilities,
+        server_info,
+        type_hierarchy_provider,
+    )? {
         return Ok(None);
     }
     Ok(Some(initialize_params))

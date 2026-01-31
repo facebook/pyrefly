@@ -73,7 +73,6 @@ use lsp_types::HoverParams;
 use lsp_types::HoverProviderCapability;
 use lsp_types::ImplementationProviderCapability;
 use lsp_types::InitializeParams;
-use lsp_types::InitializeResult;
 use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
 use lsp_types::InlayHintLabelPart;
@@ -111,6 +110,7 @@ use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
 use lsp_types::SymbolInformation;
+use lsp_types::SymbolKind;
 use lsp_types::TextDocumentContentChangeEvent;
 use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextDocumentPositionParams;
@@ -118,6 +118,7 @@ use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::TextEdit;
 use lsp_types::TypeDefinitionProviderCapability;
+use lsp_types::TypeHierarchyItem;
 use lsp_types::Unregistration;
 use lsp_types::UnregistrationParams;
 use lsp_types::Url;
@@ -170,6 +171,9 @@ use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SemanticTokensRefresh;
 use lsp_types::request::Shutdown;
 use lsp_types::request::SignatureHelpRequest;
+use lsp_types::request::TypeHierarchyPrepare;
+use lsp_types::request::TypeHierarchySubtypes;
+use lsp_types::request::TypeHierarchySupertypes;
 use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
@@ -182,6 +186,7 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
@@ -207,6 +212,7 @@ use ruff_text_size::TextSize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
@@ -214,6 +220,10 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::ModuleInfo;
+use crate::alt::types::class_metadata::ClassMro;
+use crate::binding::binding::BindingClass;
+use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassMro;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::error::error::Error;
@@ -245,6 +255,9 @@ use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
 use crate::lsp::non_wasm::stdlib::should_show_error_for_display_mode;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::type_hierarchy::collect_class_defs;
+use crate::lsp::non_wasm::type_hierarchy::find_class_at_position_in_ast;
+use crate::lsp::non_wasm::type_hierarchy::prepare_type_hierarchy_item;
 use crate::lsp::non_wasm::unsaved_file_tracker::UnsavedFileTracker;
 use crate::lsp::non_wasm::will_rename_files::will_rename_files;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
@@ -626,14 +639,34 @@ pub fn initialize_start(
 
 // Sends the initialize response and waits for the initialized notification.
 // If the connection is closed, or we receive an exit notification, returns false.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerCapabilitiesWithTypeHierarchy<'a> {
+    #[serde(flatten)]
+    base: &'a ServerCapabilities,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    type_hierarchy_provider: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct InitializeResultWithTypeHierarchy<'a> {
+    capabilities: ServerCapabilitiesWithTypeHierarchy<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server_info: Option<ServerInfo>,
+}
+
 pub fn initialize_finish(
     connection: &Connection,
     id: RequestId,
     capabilities: ServerCapabilities,
     server_info: Option<ServerInfo>,
+    type_hierarchy_provider: Option<bool>,
 ) -> anyhow::Result<bool> {
-    let result = InitializeResult {
-        capabilities,
+    let result = InitializeResultWithTypeHierarchy {
+        capabilities: ServerCapabilitiesWithTypeHierarchy {
+            base: &capabilities,
+            type_hierarchy_provider,
+        },
         server_info,
     };
     let response = Response::new_ok(id, result);
@@ -1646,6 +1679,43 @@ impl Server {
                     {
                         self.set_file_stats(params.item.uri.clone(), telemetry_event);
                         self.async_call_hierarchy_outgoing_calls(x.id, &transaction, params);
+                    }
+                } else if let Some(params) = as_request::<TypeHierarchyPrepare>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<TypeHierarchyPrepare>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.prepare_type_hierarchy(&transaction, params)),
+                        ));
+                    }
+                } else if let Some(params) = as_request::<TypeHierarchySupertypes>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<TypeHierarchySupertypes>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(params.item.uri.clone(), telemetry_event);
+                        self.async_type_hierarchy_supertypes(x.id, &transaction, params);
+                    }
+                } else if let Some(params) = as_request::<TypeHierarchySubtypes>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<TypeHierarchySubtypes>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(params.item.uri.clone(), telemetry_event);
+                        self.async_type_hierarchy_subtypes(x.id, &transaction, params);
                     }
                 } else if &x.method == "pyrefly/textDocument/docstringRanges" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
@@ -4245,6 +4315,269 @@ impl Server {
             }
         }
         None
+    }
+
+    /// Prepares type hierarchy by validating that the symbol at the cursor is a class.
+    fn prepare_type_hierarchy(
+        &self,
+        transaction: &Transaction<'_>,
+        params: lsp_types::TypeHierarchyPrepareParams,
+    ) -> Option<Vec<TypeHierarchyItem>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, None)?;
+        let module_info = transaction.get_module_info(&handle)?;
+        let position = self.from_lsp_position(
+            uri,
+            &module_info,
+            params.text_document_position_params.position,
+        );
+
+        let definitions = transaction.find_definition(&handle, position, FindPreference::default());
+
+        for def in definitions {
+            let Some(def_uri) = module_info_to_uri(&def.module) else {
+                continue;
+            };
+            let Some(def_handle) = self.make_handle_if_enabled(&def_uri, None) else {
+                continue;
+            };
+            let Some(ast) = transaction.get_ast(&def_handle) else {
+                continue;
+            };
+            if let Some(class_def) =
+                find_class_at_position_in_ast(&ast, def.definition_range.start())
+            {
+                let item = prepare_type_hierarchy_item(class_def, &def.module, def_uri);
+                return Some(vec![item]);
+            }
+        }
+        None
+    }
+
+    fn async_type_hierarchy_supertypes<'a>(
+        &'a self,
+        request_id: RequestId,
+        transaction: &Transaction<'a>,
+        params: lsp_types::TypeHierarchySupertypesParams,
+    ) {
+        let uri = params.item.uri.clone();
+        let Some(handle) = self.make_handle_if_enabled(&uri, Some(TypeHierarchySupertypes::METHOD))
+        else {
+            return self.send_response(new_response::<Option<Vec<TypeHierarchyItem>>>(
+                request_id,
+                Ok(None),
+            ));
+        };
+
+        let type_hierarchy_item_from_class_type =
+            |class_type: &crate::types::class::ClassType| -> Option<TypeHierarchyItem> {
+                let class = class_type.class_object();
+                let module = class.module();
+                let uri = module_info_to_uri(module)?;
+                let range = module.to_lsp_range(class.range());
+                Some(TypeHierarchyItem {
+                    name: class.name().to_string(),
+                    kind: SymbolKind::CLASS,
+                    tags: None,
+                    detail: Some(format!("{}.{}", module.name(), class.name())),
+                    uri,
+                    range,
+                    selection_range: range,
+                    data: None,
+                })
+            };
+
+        self.async_find_from_definition_helper(
+            request_id,
+            transaction,
+            handle,
+            &uri,
+            params.item.selection_range.start,
+            FindPreference::default(),
+            move |transaction, handle, definition| {
+                transaction.run(&[handle.dupe()], Require::Everything)?;
+                let Some(ast) = transaction.as_ref().get_ast(handle) else {
+                    return Ok(Vec::new());
+                };
+                let Some(class_def) =
+                    find_class_at_position_in_ast(&ast, definition.definition_range.start())
+                else {
+                    return Ok(Vec::new());
+                };
+                let Some(bindings) = transaction.as_ref().get_bindings(handle) else {
+                    return Ok(Vec::new());
+                };
+                let Some(solutions) = transaction.as_ref().get_solutions(handle) else {
+                    return Ok(Vec::new());
+                };
+                let key = KeyClass(ShortIdentifier::new(&class_def.name));
+                let Some(class_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+                    return Ok(Vec::new());
+                };
+                let class_def_index = match bindings.get(class_idx) {
+                    BindingClass::ClassDef(class_binding) => class_binding.def_index,
+                    BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
+                };
+
+                let mro = solutions.get(&KeyClassMro(class_def_index));
+                let stdlib = transaction.as_ref().get_stdlib(handle);
+                let target_is_object = class_def.name.id == "object"
+                    && definition.module.name().as_str() == "builtins";
+                let mut items = Vec::new();
+                if let ClassMro::Resolved(ancestors) = mro.as_ref() {
+                    for ancestor in ancestors {
+                        if let Some(item) = type_hierarchy_item_from_class_type(ancestor) {
+                            items.push(item);
+                        }
+                    }
+                    if !target_is_object {
+                        if let Some(item) = type_hierarchy_item_from_class_type(stdlib.object()) {
+                            items.push(item);
+                        }
+                    }
+                }
+                Ok(items)
+            },
+            |items| items,
+        );
+    }
+
+    fn async_type_hierarchy_subtypes<'a>(
+        &'a self,
+        request_id: RequestId,
+        transaction: &Transaction<'a>,
+        params: lsp_types::TypeHierarchySubtypesParams,
+    ) {
+        let uri = params.item.uri.clone();
+        let Some(handle) = self.make_handle_if_enabled(&uri, Some(TypeHierarchySubtypes::METHOD))
+        else {
+            return self.send_response(new_response::<Option<Vec<TypeHierarchyItem>>>(
+                request_id,
+                Ok(None),
+            ));
+        };
+
+        self.async_find_from_definition_helper(
+            request_id,
+            transaction,
+            handle,
+            &uri,
+            params.item.selection_range.start,
+            FindPreference::default(),
+            move |transaction, handle, definition| {
+                transaction.run(&[handle.dupe()], Require::Everything)?;
+                let Some(ast) = transaction.as_ref().get_ast(handle) else {
+                    return Ok(Vec::new());
+                };
+                let Some(class_def) =
+                    find_class_at_position_in_ast(&ast, definition.definition_range.start())
+                else {
+                    return Ok(Vec::new());
+                };
+                let Some(bindings) = transaction.as_ref().get_bindings(handle) else {
+                    return Ok(Vec::new());
+                };
+                let Some(solutions) = transaction.as_ref().get_solutions(handle) else {
+                    return Ok(Vec::new());
+                };
+                let key = KeyClass(ShortIdentifier::new(&class_def.name));
+                let Some(target_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+                    return Ok(Vec::new());
+                };
+                let target_def_index = match bindings.get(target_idx) {
+                    BindingClass::ClassDef(class_binding) => class_binding.def_index,
+                    BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
+                };
+                let target_module_path = definition.module.path().dupe();
+                let target_is_object = class_def.name.id == "object"
+                    && definition.module.name().as_str() == "builtins";
+
+                let definition_location =
+                    TextRangeWithModule::new(definition.module.dupe(), class_def.name.range);
+                let candidate_handles = transaction.process_rdeps_with_definition(
+                    handle.sys_info(),
+                    &definition_location,
+                    |_, handle, _| Some(handle.dupe()),
+                )?;
+                let mut handles = Vec::new();
+                let mut handle_paths = HashSet::new();
+                for candidate in candidate_handles {
+                    if handle_paths.insert(candidate.path().dupe()) {
+                        handles.push(candidate);
+                    }
+                }
+                transaction.run(&handles, Require::Everything)?;
+
+                let mut items = Vec::new();
+                let mut seen: HashSet<(ModulePath, TextRange)> = HashSet::new();
+                for candidate in handles {
+                    let Some(ast) = transaction.as_ref().get_ast(&candidate) else {
+                        continue;
+                    };
+                    let Some(solutions) = transaction.as_ref().get_solutions(&candidate) else {
+                        continue;
+                    };
+                    let Some(bindings) = transaction.as_ref().get_bindings(&candidate) else {
+                        continue;
+                    };
+                    let Some(module_info) = transaction.as_ref().get_module_info(&candidate) else {
+                        continue;
+                    };
+                    let Some(candidate_uri) = module_info_to_uri(&module_info) else {
+                        continue;
+                    };
+
+                    let mut class_defs = Vec::new();
+                    collect_class_defs(ast.body.as_slice(), &mut class_defs);
+                    for class_def in class_defs {
+                        let key = KeyClass(ShortIdentifier::new(&class_def.name));
+                        let Some(class_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key))
+                        else {
+                            continue;
+                        };
+                        let class_def_index = match bindings.get(class_idx) {
+                            BindingClass::ClassDef(class_binding) => class_binding.def_index,
+                            BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
+                        };
+                        if class_def_index == target_def_index
+                            && module_info.path() == &target_module_path
+                        {
+                            continue;
+                        }
+                        let is_subtype = if target_is_object {
+                            true
+                        } else {
+                            let mro = solutions.get(&KeyClassMro(class_def_index));
+                            matches!(
+                                mro.as_ref(),
+                                ClassMro::Resolved(ancestors)
+                                    if ancestors
+                                        .iter()
+                                        .any(|ancestor| {
+                                            let ancestor_class = ancestor.class_object();
+                                            ancestor_class.index() == target_def_index
+                                                && ancestor_class.module_path()
+                                                    == &target_module_path
+                                        })
+                            )
+                        };
+                        if !is_subtype {
+                            continue;
+                        }
+                        if !seen.insert((module_info.path().dupe(), class_def.range())) {
+                            continue;
+                        }
+                        items.push(prepare_type_hierarchy_item(
+                            class_def,
+                            &module_info,
+                            candidate_uri.clone(),
+                        ));
+                    }
+                }
+                Ok(items)
+            },
+            |items| items,
+        );
     }
 }
 

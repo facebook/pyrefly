@@ -37,6 +37,7 @@ mod references;
 mod rename;
 mod semantic_tokens;
 mod type_definition;
+mod type_hierarchy;
 mod unsaved_file;
 mod util;
 mod will_rename_files;
