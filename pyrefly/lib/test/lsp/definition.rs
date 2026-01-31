@@ -65,6 +65,42 @@ fn get_test_report_do_not_jump_through_renamed_import(
 }
 
 #[test]
+fn endpoint_definition_from_client_literal() {
+    let code = r#"
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+app = FastAPI()
+
+@app.get("/users")
+def list_users():
+    return {"ok": True}
+
+client = TestClient(app)
+client.get("/users")
+#           ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    let def_start = code.find("list_users").expect("expected list_users definition");
+    let def_end = def_start + "list_users".len();
+    let expected = format!(
+        "Definition Result:\n{}",
+        code_frame_of_source_at_range(
+            code,
+            TextRange::new(
+                TextSize::from(def_start as u32),
+                TextSize::from(def_end as u32)
+            )
+        )
+    );
+    assert!(
+        report.contains(&expected),
+        "missing endpoint definition in report:\n{report}"
+    );
+}
+
+#[test]
 fn ignored_test() {
     let code = r#"
 x = 1 # go-to-definition is unsupported for literals
