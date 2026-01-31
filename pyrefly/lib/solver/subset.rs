@@ -1173,15 +1173,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (Type::ClassType(got), Type::ClassType(want))
                 if want.is_builtin("float")
-                    && (got.is_builtin("int") || got.is_builtin("bool")) =>
+                    && self.type_order.has_superclass(
+                        got.class_object(),
+                        self.type_order.stdlib().int().class_object(),
+                    ) =>
             {
                 Ok(())
             }
             (Type::ClassType(got), Type::ClassType(want))
                 if want.is_builtin("complex")
-                    && (got.is_builtin("int")
-                        || got.is_builtin("float")
-                        || got.is_builtin("bool")) =>
+                    && (self.type_order.has_superclass(
+                        got.class_object(),
+                        self.type_order.stdlib().int().class_object(),
+                    ) || self.type_order.has_superclass(
+                        got.class_object(),
+                        self.type_order.stdlib().float().class_object(),
+                    )) =>
             {
                 Ok(())
             }

@@ -479,6 +479,24 @@ assert_type(A.B, Literal[A.B])
     "#,
 );
 
+testcase!(
+    test_intenum_numeric_tower,
+    r#"
+import enum
+from typing import assert_type
+
+class Period(enum.IntEnum):
+    DAY = 24
+
+def takes_float(x: float) -> float:
+    return x
+
+assert_type(takes_float(Period.DAY), float)
+assert_type(takes_float(24), float)
+assert_type(takes_float(24.0), float)
+    "#,
+);
+
 // This used to trigger a false positive where we thought the metaclass inheriting
 // Any meant it was an enum metaclass, see https://github.com/facebook/pyrefly/issues/622
 testcase!(
