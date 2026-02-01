@@ -365,6 +365,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 comparator.range(),
                 errors,
             );
+            self.check_incompatible_comparison(
+                &current_left,
+                &right,
+                *op,
+                comparator.range(),
+                errors,
+            );
 
             let result = self.distribute_over_union(&current_left, |left| {
                 self.distribute_over_union(&right, |right| {
@@ -598,6 +605,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             // All other combinations: no warning
             _ => {}
+        }
+    }
+
+    /// Checks for incompatible equality comparisons between types that cannot overlap.
+    fn check_incompatible_comparison(
+        &self,
+        left: &Type,
+        right: &Type,
+        op: CmpOp,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if !matches!(op, CmpOp::Eq | CmpOp::NotEq) {
+            return;
+        }
+        if left.is_any() || right.is_any() || left.is_never() || right.is_never() {
+            return;
+        }
+        if self.intersects(&[left.clone(), right.clone()]).is_never() {
+            let left_display = self.for_display(left.clone());
+            let right_display = self.for_display(right.clone());
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::IncompatibleComparison),
+                format!(
+                    "Comparison `{}` between incompatible types `{}` and `{}`",
+                    op.as_str(),
+                    left_display,
+                    right_display
+                ),
+            );
         }
     }
 }

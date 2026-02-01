@@ -485,6 +485,17 @@ class C:
         self.y = 0  # error, `y` may be undefined if `f` does not execute
 ```
 
+## incompatible-comparison
+
+This error is raised when an equality (`==`) or inequality (`!=`) comparison is
+made between types that cannot overlap. This is almost always a bug.
+
+```python
+x: int = 1
+y: str = ""
+if x == y: ...  # Comparison `==` between incompatible types `int` and `str` [incompatible-comparison]
+```
+
 ## inconsistent-inheritance
 
 When a class inherits from multiple base classes, the inherited fields must be consistent.
