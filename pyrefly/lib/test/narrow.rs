@@ -906,6 +906,19 @@ def g(x: object, y: type[Any]) -> None:
 );
 
 testcase!(
+    test_isinstance_type_negative_no_narrow,
+    r#"
+from typing import reveal_type
+
+def f(cls: type[int], x: int | str) -> None:
+    if isinstance(x, cls):
+        reveal_type(x)  # E: revealed type: int
+    else:
+        reveal_type(x)  # E: revealed type: int | str
+"#,
+);
+
+testcase!(
     test_issubclass_union,
     r#"
 from typing import assert_type

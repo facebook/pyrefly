@@ -56,6 +56,7 @@ use crate::types::literal::Literal;
 use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::CalleeKind;
+use crate::types::types::TParams;
 use crate::types::types::Type;
 
 /// Beyond this size, don't try and narrow an enum.
@@ -276,7 +277,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
             res.push(self.distribute_over_union(left, |l| {
-                if let Some((tparams, right)) = self.unwrap_class_object_silently(&right) {
+                if let Some((tparams, right)) =
+                    self.unwrap_concrete_classinfo_for_negative_isinstance(&right)
+                {
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
@@ -292,6 +295,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }));
         }
         self.intersects(&res)
+    }
+
+    fn unwrap_concrete_classinfo_for_negative_isinstance(
+        &self,
+        right: &Type,
+    ) -> Option<(TParams, Type)> {
+        if !self.is_concrete_classinfo(right) {
+            return None;
+        }
+        self.unwrap_class_object_silently(right)
+    }
+
+    fn is_concrete_classinfo(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassDef(_) => true,
+            Type::TypeAlias(ta) => self.is_concrete_classinfo(&ta.as_value(self.stdlib)),
+            _ => false,
+        }
     }
 
     fn issubclass_result(&self, instance_result: Type, original: &Type) -> Type {
