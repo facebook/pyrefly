@@ -1201,7 +1201,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     (Some(_), None) => return type_info.clone(),
                     (None, _) => self.force_for_narrowing(type_info.ty(), range, errors),
                 };
-                if matches!(base_ty, Type::TypedDict(_)) {
+                if self.is_dict_like(&base_ty) {
                     let key_facet = FacetKind::Key(key.to_string());
                     let facets = match resolved_chain {
                         Some(chain) => {
@@ -1229,7 +1229,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     (Some(_), None) => return type_info.clone(),
                     (None, _) => self.force_for_narrowing(type_info.ty(), range, errors),
                 };
-                if matches!(base_ty, Type::TypedDict(_)) {
+                if self.is_dict_like(&base_ty) {
                     let key_facet = FacetKind::Key(key.to_string());
                     let facets = match resolved_chain {
                         Some(chain) => {
