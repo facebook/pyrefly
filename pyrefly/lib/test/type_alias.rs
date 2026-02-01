@@ -1116,10 +1116,13 @@ type RecursiveTypeAlias7 = RecursiveTypeAlias6
 );
 
 testcase!(
-    bug = "conformance: Should error on redeclared type aliases",
     test_type_statement_redeclaration_conformance,
     r#"
-type BadTypeAlias14 = int  # should error: redeclared
 type BadTypeAlias14 = int
+type BadTypeAlias14 = int # E: Cannot redefine existing name `BadTypeAlias14` as a type alias
+
+class C:
+    type T = int
+    type T = int # E: Cannot redefine existing name `T` as a type alias
 "#,
 );

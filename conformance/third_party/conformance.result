@@ -25,7 +25,6 @@
   "aliases_type_statement.py": [
     "Line 82: Expected 1 errors",
     "Line 84: Expected 1 errors",
-    "Lines 51, 52: Expected error (tag 'TA14')",
     "Lines 88, 89: Expected error (tag 'RTA6+')"
   ],
   "aliases_typealiastype.py": [
