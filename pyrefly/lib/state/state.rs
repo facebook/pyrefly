@@ -39,6 +39,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_python::sys_info::module_platform_guard;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::demand_tree::DemandCollector;
@@ -481,6 +482,14 @@ struct ModuleDataMut {
     /// are not a dependency of every module; only its resolvability affects the
     /// `tensor_shapes` bit. `None` means "not yet computed".
     tensor_shapes: RwLock<Option<bool>>,
+}
+
+fn module_sys_info_override(
+    sys_info: &SysInfo,
+    ast: Option<&ruff_python_ast::ModModule>,
+) -> Option<SysInfo> {
+    let ast = ast?;
+    module_platform_guard(&ast.body).map(|platform| sys_info.with_platform(platform))
 }
 
 impl ModuleData {
@@ -1407,11 +1416,18 @@ impl<'a> Transaction<'a> {
                     module_ids: &reporter.module_ids,
                     stdlib: stdlib.dupe(),
                 });
+            let sys_info_override = module_sys_info_override(
+                module_data.handle.sys_info(),
+                module_data.state.get_ast().as_deref(),
+            );
+            let sys_info = sys_info_override
+                .as_ref()
+                .unwrap_or(module_data.handle.sys_info());
             let ctx = Context {
                 require,
                 module: module_data.handle.module(),
                 path: module_data.handle.path(),
-                sys_info: module_data.handle.sys_info(),
+                sys_info,
                 memory: &self.memory_lookup(),
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
@@ -1869,13 +1885,17 @@ impl<'a> Transaction<'a> {
             .is_some()
     }
 
-    pub fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
+    pub fn get_stdlib_for_sys_info(&self, sys_info: &SysInfo) -> Arc<Stdlib> {
         if self.data.stdlib.len() == 1 {
             // Since we know our one must exist, we can shortcut
             return self.data.stdlib.first().unwrap().1.dupe();
         }
 
-        self.data.stdlib.get(handle.sys_info()).unwrap().dupe()
+        self.data.stdlib.get(sys_info).unwrap().dupe()
+    }
+
+    pub fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
+        self.get_stdlib_for_sys_info(handle.sys_info())
     }
 
     /// Compute the `Stdlib` for each requested `SysInfo`.
@@ -2608,14 +2628,17 @@ impl<'a> TransactionHandle<'a> {
         path: Option<&ModulePath>,
         dep: ModuleDep,
     ) -> FindingOrError<&'a ArcId<ModuleDataMut>> {
+        let sys_info_override = module_sys_info_override(
+            self.module_data.handle.sys_info(),
+            self.module_data.state.get_ast().as_deref(),
+        );
+        let sys_info = sys_info_override
+            .as_ref()
+            .unwrap_or(self.module_data.handle.sys_info());
         let handle = match path {
             Some(path) => {
                 // Explicit path — already resolved. Bypass imports entirely.
-                FindingOrError::new_finding(Handle::new(
-                    module,
-                    path.dupe(),
-                    self.module_data.handle.sys_info().dupe(),
-                ))
+                FindingOrError::new_finding(Handle::new(module, path.dupe(), sys_info.dupe()))
             }
             None => {
                 // No path — needs find_import. Check imports cache first.
@@ -2649,13 +2672,7 @@ impl<'a> TransactionHandle<'a> {
                         finding
                     }
                 };
-                path.map(|path| {
-                    Handle::new(
-                        module,
-                        path.dupe(),
-                        self.module_data.handle.sys_info().dupe(),
-                    )
-                })
+                path.map(|path| Handle::new(module, path.dupe(), sys_info.dupe()))
             }
         };
 
