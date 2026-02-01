@@ -202,6 +202,23 @@ C().d = 42  # E:  Attribute `d` of class `C` is a read-only descriptor with no `
     "#,
 );
 
+testcase!(
+    test_descriptor_dunder_call,
+    r#"
+from typing import assert_type
+class SomeCallable:
+    def __call__(self, x: int) -> str:
+        return "a"
+class Descriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> SomeCallable:
+        return SomeCallable()
+class B:
+    __call__: Descriptor = Descriptor()
+b_instance = B()
+assert_type(b_instance(1), str)
+    "#,
+);
+
 // Test that instance-only attributes with descriptor types are not treated as descriptors.
 // Descriptor protocol only applies to class-body initialized attributes; both annotation-only
 // and method-initialized attributes should allow assignment.
