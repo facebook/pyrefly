@@ -26,6 +26,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::Int;
 use ruff_python_ast::Number;
+use ruff_python_ast::Operator;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -56,7 +57,6 @@ use crate::types::literal::Literal;
 use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::CalleeKind;
-use crate::types::types::TParams;
 use crate::types::types::Type;
 
 /// Beyond this size, don't try and narrow an enum.
@@ -273,12 +273,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.unions(res)
     }
 
-    fn narrow_is_not_instance(&self, left: &Type, right: &Type) -> Type {
+    fn narrow_is_not_instance(&self, left: &Type, right: &Type, classinfo_expr: &Expr) -> Type {
+        let swallower = self.error_swallower();
+        fn is_precise_classinfo_expr<'a, Ans: LookupAnswer>(
+            me: &AnswersSolver<'a, Ans>,
+            expr: &Expr,
+            errors: &ErrorCollector,
+        ) -> bool {
+            match expr {
+                Expr::Name(_) | Expr::Attribute(_) => {
+                    matches!(me.expr_infer(expr, errors), Type::ClassDef(_))
+                }
+                Expr::BinOp(bin) if bin.op == Operator::BitOr => {
+                    is_precise_classinfo_expr(me, &bin.left, errors)
+                        && is_precise_classinfo_expr(me, &bin.right, errors)
+                }
+                Expr::Tuple(tuple) => tuple.elts.iter().all(|elt| match elt {
+                    Expr::Starred(_) => false,
+                    _ => is_precise_classinfo_expr(me, elt, errors),
+                }),
+                _ => false,
+            }
+        }
+        let allow_type_form_classinfo = is_precise_classinfo_expr(self, classinfo_expr, &swallower);
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
             res.push(self.distribute_over_union(left, |l| {
-                if let Some((tparams, right)) =
-                    self.unwrap_concrete_classinfo_for_negative_isinstance(&right)
+                let allow_unwrap = matches!(right, Type::ClassDef(_))
+                    || (allow_type_form_classinfo
+                        && matches!(&right, Type::Type(box Type::ClassType(_))));
+                if allow_unwrap
+                    && let Some((tparams, right)) = self.unwrap_class_object_silently(&right)
                 {
                     let (vs, right) = self
                         .solver()
@@ -295,24 +320,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }));
         }
         self.intersects(&res)
-    }
-
-    fn unwrap_concrete_classinfo_for_negative_isinstance(
-        &self,
-        right: &Type,
-    ) -> Option<(TParams, Type)> {
-        if !self.is_concrete_classinfo(right) {
-            return None;
-        }
-        self.unwrap_class_object_silently(right)
-    }
-
-    fn is_concrete_classinfo(&self, ty: &Type) -> bool {
-        match ty {
-            Type::ClassDef(_) => true,
-            Type::TypeAlias(ta) => self.is_concrete_classinfo(&ta.as_value(self.stdlib)),
-            _ => false,
-        }
     }
 
     fn issubclass_result(&self, instance_result: Type, original: &Type) -> Type {
@@ -945,7 +952,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::IsNotInstance(v, _source) => {
                 let right = self.expr_infer(v, errors);
-                self.narrow_is_not_instance(ty, &right)
+                self.narrow_is_not_instance(ty, &right, v)
             }
             AtomicNarrowOp::TypeEq(v) => {
                 // If type(X) == Y then X can't be a subclass of Y
