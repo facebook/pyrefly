@@ -1307,9 +1307,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (default_constructor(), false)
         };
         // Check the __init__ method and whether it comes from object or has been overridden
-        let (init_attr_ty, overrides_init) = if let Some(mut t) = self.get_dunder_init(cls, false) {
-            // Replace the return type with Self (the current class)
-            t.set_callable_return_type_for_constructor(class_type.clone());
+        let (init_attr_ty, overrides_init) = if let Some(t) = self.get_dunder_init(cls, false) {
+            // Replace the return type with Self (the current class) and remove the self param
+            let t = t.set_callable_return_type_for_constructor(class_type.clone());
             (t, true)
         } else {
             (default_constructor(), false)

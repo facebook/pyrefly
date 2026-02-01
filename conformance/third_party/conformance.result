@@ -38,12 +38,8 @@
   "constructors_call_new.py": [],
   "constructors_call_type.py": [],
   "constructors_callable.py": [
-    "Line 65: Expected 1 errors",
-    "Line 66: Expected 1 errors",
-    "Line 67: Expected 1 errors",
     "Line 184: Expected 1 errors",
     "Line 195: Expected 1 errors",
-    "Line 62: Unexpected errors ['Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`']",
     "Line 165: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
     "Line 183: Unexpected errors ['assert_type(Class8[Any], Class8[str]) failed']"
   ],
