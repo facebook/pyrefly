@@ -653,6 +653,15 @@ def project[S](func: Callable[[S], S], y: S) -> Callable[[], S]:
     return lambda: y
 
 project(f, 1)  # Overload type was not compatible with solved type variables: S = int
+## incompatible-comparison
+
+This error is raised when an equality (`==`) or inequality (`!=`) comparison is
+made between types that cannot overlap. This is almost always a bug.
+
+```python
+x: int = 1
+y: str = ""
+if x == y: ...  # Comparison `==` between incompatible types `int` and `str` [incompatible-comparison]
 ```
 
 ## inconsistent-inheritance

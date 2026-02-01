@@ -188,6 +188,8 @@ pub enum ErrorKind {
     ImplicitlyDefinedAttribute,
     /// Overload residual branch pruning left no valid branch for a solved type variable.
     IncompatibleOverloadResidual,
+    /// Equality or inequality comparison between incompatible types.
+    IncompatibleComparison,
     /// An inconsistency between inherited fields or methods from multiple base classes.
     InconsistentInheritance,
     /// An inconsistency between the signature of a function overload and the implementation.
