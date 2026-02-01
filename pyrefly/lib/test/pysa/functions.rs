@@ -1337,15 +1337,13 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
                             ),
                             required: true,
                         },
-                        FunctionParameter::Pos {
-                            name: "x".into(),
+                        FunctionParameter::VarArg {
+                            name: None,
                             annotation: PysaType::any_implicit(),
-                            required: true,
                         },
-                        FunctionParameter::Pos {
-                            name: "y".into(),
+                        FunctionParameter::Kwargs {
+                            name: None,
                             annotation: PysaType::any_implicit(),
-                            required: true,
                         },
                     ],
                     PysaType::none(),
