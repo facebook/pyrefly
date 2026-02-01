@@ -762,10 +762,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut literal_types = Vec::new();
                     for expr in exprs {
                         let expr_ty = self.expr_infer(&expr, errors);
-                        if matches!(expr_ty, Type::Literal(_) | Type::None) {
-                            literal_types.push(expr_ty);
-                        } else {
-                            return ty.clone();
+                        match expr_ty {
+                            Type::Literal(_) | Type::None => {
+                                literal_types.push(expr_ty);
+                            }
+                            Type::ClassDef(cls) => {
+                                literal_types.push(Type::type_form(self.promote_silently(&cls)));
+                            }
+                            Type::Type(box Type::ClassType(_)) => {
+                                literal_types.push(expr_ty);
+                            }
+                            _ => {
+                                return ty.clone();
+                            }
                         }
                     }
                     return self.intersect(ty, &self.unions(literal_types));
@@ -807,10 +816,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut literal_types = Vec::new();
                     for expr in exprs {
                         let expr_ty = self.expr_infer(&expr, errors);
-                        if matches!(expr_ty, Type::Literal(_) | Type::None) {
-                            literal_types.push(expr_ty);
-                        } else {
-                            return ty.clone();
+                        match expr_ty {
+                            Type::Literal(_) | Type::None => {
+                                literal_types.push(expr_ty);
+                            }
+                            Type::ClassDef(cls) => {
+                                literal_types.push(Type::type_form(self.promote_silently(&cls)));
+                            }
+                            Type::Type(box Type::ClassType(_)) => {
+                                literal_types.push(expr_ty);
+                            }
+                            _ => {
+                                return ty.clone();
+                            }
                         }
                     }
                     return self.distribute_over_union(ty, |t| {
@@ -818,6 +836,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         for right in &literal_types {
                             match (t, right) {
                                 (_, _) if self.literal_equal(t, right) => {
+                                    result = Type::never();
+                                }
+                                (
+                                    Type::Type(box Type::ClassType(left_cls)),
+                                    Type::Type(box Type::ClassType(right_cls)),
+                                ) if left_cls == right_cls => {
                                     result = Type::never();
                                 }
                                 (Type::ClassType(cls), Type::Literal(lit))
