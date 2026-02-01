@@ -52,9 +52,6 @@ use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::definitions::MutableCaptureKind;
-use crate::export::exports::Export;
-use crate::export::exports::ExportLocation;
-use crate::export::exports::Exports;
 use crate::export::special::SpecialExport;
 use crate::state::loader::FindError;
 use crate::state::loader::FindingOrError;
@@ -981,7 +978,7 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Import(x) => {
                 for x in x.names {
                     let m = ModuleName::from_name(&x.name.id);
-                    if let Some(error) = self.lookup.get(m).error() {
+                    if let Some(error) = self.lookup.module_exists(m).error() {
                         self.find_error(&error, x.range);
                     }
                     match x.asname {
@@ -1024,12 +1021,12 @@ impl<'a> BindingsBuilder<'a> {
                     x.level,
                     x.module.as_ref().map(|x| &x.id),
                 ) {
-                    match self.lookup.get(m) {
-                        FindingOrError::Finding(module_exports) => {
-                            if let Some(error) = module_exports.error {
+                    match self.lookup.module_exists(m) {
+                        FindingOrError::Finding(f) => {
+                            if let Some(error) = f.error {
                                 self.find_error(&error, x.range);
                             }
-                            self.bind_module_exports(x, m, module_exports.finding);
+                            self.bind_module_exports(x, m);
                         }
                         FindingOrError::Error(error) => {
                             self.find_error(&error, x.range);
@@ -1141,13 +1138,14 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn bind_module_exports(&mut self, x: StmtImportFrom, m: ModuleName, module_exports: Exports) {
-        let exported = module_exports.exports(self.lookup);
+    fn bind_module_exports(&mut self, x: StmtImportFrom, m: ModuleName) {
         for x in x.names {
-            if &x.name == "*" {
-                for name in module_exports.wildcard(self.lookup).iter_hashed() {
+            if &x.name == "*"
+                && let Some(wildcards) = self.lookup.get_wildcard(m)
+            {
+                for name in wildcards.iter_hashed() {
                     let key = Key::Import(name.into_key().clone(), x.range);
-                    let val = if exported.contains_key_hashed(name) {
+                    let val = if self.lookup.export_exists(m, &name) {
                         Binding::Import(m, name.into_key().clone(), None)
                     } else {
                         self.error(
@@ -1188,28 +1186,26 @@ impl<'a> BindingsBuilder<'a> {
                 // If both are present, generally we prefer the name defined in `x`,
                 // but there is an exception: if we are already looking at the
                 // `__init__` module of `x`, we always prefer the submodule.
-                let val = if (self.module_info.name() != m) && exported.contains_key(&x.name.id) {
-                    if let Some(ExportLocation::ThisModule(Export {
-                        deprecation: Some(deprecation),
-                        ..
-                    })) = exported.get(&x.name.id)
-                    {
+                let val = if (self.module_info.name() != m)
+                    && self.lookup.export_exists(m, &x.name.id)
+                {
+                    if let Some(deprecated) = self.lookup.get_deprecated(m, &x.name.id) {
                         let msg =
-                            deprecation.as_error_message(format!("`{}` is deprecated", x.name));
+                            deprecated.as_error_message(format!("`{}` is deprecated", x.name));
                         self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
                     }
                     Binding::Import(m, x.name.id.clone(), original_name_range)
                 } else {
                     // Try submodule lookup first, then fall back to __getattr__
                     let x_as_module_name = m.append(&x.name.id);
-                    let (finding, error) = match self.lookup.get(x_as_module_name) {
+                    let (finding, error) = match self.lookup.module_exists(x_as_module_name) {
                         FindingOrError::Finding(finding) => (true, finding.error),
                         FindingOrError::Error(error) => (false, Some(error)),
                     };
                     let is_not_found = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
                     if finding {
                         Binding::Module(x_as_module_name, x_as_module_name.components(), None)
-                    } else if exported.contains_key(&dunder::GETATTR) {
+                    } else if self.lookup.export_exists(m, &dunder::GETATTR) {
                         // Module has __getattr__, which means any attribute can be accessed.
                         // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
                         Binding::ImportViaGetattr(m, x.name.id.clone())

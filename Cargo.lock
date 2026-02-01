@@ -231,8 +231,7 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "backtrace"
 version = "0.3.76"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb531853791a215d7c62a30daf0dde835f381ab5de4589cfe7c649d2cbe92bd6"
+source = "git+https://github.com/rust-lang/backtrace-rs?rev=df979dcf80027eb047d7bb9e0874710c15009f31#df979dcf80027eb047d7bb9e0874710c15009f31"
 dependencies = [
  "addr2line",
  "cfg-if",
