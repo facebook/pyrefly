@@ -32,10 +32,36 @@ use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
 use crate::state::loader::FindingOrError;
 
-/// Find the exports of a given module.
+/// Find the exports of a given module. Beware: these APIs record dependencies between modules during lookups. Using the
+/// wrong API can lead to invalidation bugs.
 pub trait LookupExport {
-    /// Get the exports of a given module, or an error if the module is not available.
-    fn get(&self, module: ModuleName) -> FindingOrError<Exports>;
+    /// Check if a specific export exists in a module. Records a dependency on `name` from `module` regardless of if it exists.
+    fn export_exists(&self, module: ModuleName, name: &Name) -> bool;
+
+    /// Check if a module exists and do nothing with it. Note: if we rely on the exports of `module`, we need to call
+    /// `module_exists_and_record_export_dependency` instead.
+    fn module_exists(&self, module: ModuleName) -> FindingOrError<()>;
+
+    /// Get the wildcard exports for a module. Records a dependency on `module` regardless of if it exists.
+    fn get_wildcard(&self, module: ModuleName) -> Option<Arc<SmallSet<Name>>>;
+
+    /// Get all export names for a module. Records a dependency on all changes to `module`.
+    fn get_every_export(&self, module: ModuleName) -> Option<SmallSet<Name>>;
+
+    /// Check if a submodule is imported implicitly. Records a dependency on `name` from `module` regardless of if it exists.
+    fn is_submodule_imported_implicitly(&self, module: ModuleName, name: &Name) -> bool;
+
+    /// Get deprecation info for an export. Records a dependency on `name` from `module` regardless of if it exists.
+    fn get_deprecated(&self, module: ModuleName, name: &Name) -> Option<Deprecation>;
+
+    /// Check if an export is a re-export from another module. Records a dependency on `name` from `module` regardless of if it exists.
+    fn is_reexport(&self, module: ModuleName, name: &Name) -> bool;
+
+    /// Check if an export is a special export. Records a dependency on `name` from `module` regardless of if it exists.
+    fn is_special_export(&self, module: ModuleName, name: &Name) -> Option<SpecialExport>;
+
+    /// Get the docstring range for an export. Records a dependency on `name` from `module` regardless of if it exists.
+    fn docstring_range(&self, module: ModuleName, name: &Name) -> Option<TextRange>;
 }
 
 #[derive(Debug, Clone)]
@@ -132,8 +158,7 @@ impl Exports {
                     }
                     DunderAllEntry::Module(_, x) => {
                         // They did `__all__.extend(foo.__all__)`, but didn't import `foo`.
-                        if let Some(import) = lookup.get(*x).finding() {
-                            let wildcard = import.wildcard(lookup);
+                        if let Some(wildcard) = lookup.get_wildcard(*x) {
                             for y in wildcard.iter_hashed() {
                                 result.insert_hashed(y.cloned());
                             }
@@ -208,8 +233,8 @@ impl Exports {
                 // Check if name is available through a wildcard import
                 let mut found_in_import = false;
                 for (module, _) in self.0.definitions.import_all.iter() {
-                    if let Some(exports) = lookup.get(*module).finding()
-                        && exports.wildcard(lookup).contains(name)
+                    if let Some(wildcard) = lookup.get_wildcard(*module)
+                        && wildcard.contains(name)
                     {
                         found_in_import = true;
                         break;
@@ -221,7 +246,7 @@ impl Exports {
                 // In __init__.py, __all__ can list submodule names
                 if module_info.path().is_init() {
                     let submodule = module_info.name().append(name);
-                    if lookup.get(submodule).finding().is_some() {
+                    if lookup.module_exists(submodule).finding().is_some() {
                         continue;
                     }
                 }
@@ -280,8 +305,8 @@ impl Exports {
                 result.insert_hashed(name.cloned(), export);
             }
             for m in self.0.definitions.import_all.keys() {
-                if let Some(exports) = lookup.get(*m).finding() {
-                    for name in exports.wildcard(lookup).iter_hashed() {
+                if let Some(wildcard) = lookup.get_wildcard(*m) {
+                    for name in wildcard.iter_hashed() {
                         result.insert_hashed(name.cloned(), ExportLocation::OtherModule(*m, None));
                     }
                 }
@@ -308,11 +333,46 @@ mod tests {
     use crate::state::loader::FindError;
 
     impl LookupExport for SmallMap<ModuleName, Exports> {
-        fn get(&self, module: ModuleName) -> FindingOrError<Exports> {
+        fn export_exists(&self, module: ModuleName, k: &Name) -> bool {
+            self.get(&module)
+                .map(|x| x.exports(self).contains_key(k))
+                .unwrap_or(false)
+        }
+
+        fn get_wildcard(&self, module: ModuleName) -> Option<Arc<SmallSet<Name>>> {
+            self.get(&module).map(|x| x.wildcard(self))
+        }
+
+        fn get_every_export(&self, module: ModuleName) -> Option<SmallSet<Name>> {
+            self.get(&module)
+                .map(|x| x.exports(self).keys().cloned().collect::<SmallSet<Name>>())
+        }
+
+        fn module_exists(&self, module: ModuleName) -> FindingOrError<()> {
             match self.get(&module) {
-                Some(x) => FindingOrError::new_finding(x.dupe()),
+                Some(_) => FindingOrError::new_finding(()),
                 None => FindingOrError::Error(FindError::not_found(anyhow!("Error"), module)),
             }
+        }
+
+        fn get_deprecated(&self, _module: ModuleName, _name: &Name) -> Option<Deprecation> {
+            None
+        }
+
+        fn is_reexport(&self, _module: ModuleName, _name: &Name) -> bool {
+            false
+        }
+
+        fn docstring_range(&self, _module: ModuleName, _name: &Name) -> Option<TextRange> {
+            None
+        }
+
+        fn is_special_export(&self, _module: ModuleName, _name: &Name) -> Option<SpecialExport> {
+            None
+        }
+
+        fn is_submodule_imported_implicitly(&self, _module: ModuleName, _name: &Name) -> bool {
+            false
         }
     }
 

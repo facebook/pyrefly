@@ -86,9 +86,11 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::export::definitions::DependsOn;
 use crate::export::definitions::SyntacticDeps;
+use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
+use crate::export::special::SpecialExport;
 use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshedStdlib;
@@ -111,6 +113,7 @@ use crate::state::steps::Context;
 use crate::state::steps::Step;
 use crate::state::steps::Steps;
 use crate::state::subscriber::Subscriber;
+use crate::types::callable::Deprecation;
 use crate::types::class::Class;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::TParams;
@@ -2153,33 +2156,125 @@ impl<'a> TransactionHandle<'a> {
             }
         }
     }
+
+    /// Helper to get exports for a module with the correct lookup context.
+    fn with_exports<T>(
+        &self,
+        module: ModuleName,
+        f: impl FnOnce(&Exports, &Self) -> T,
+    ) -> Option<T> {
+        let module_data = self.get_module(module, None).finding()?;
+        let exports = self.transaction.lookup_export(&module_data);
+        let lookup = TransactionHandle {
+            transaction: self.transaction,
+            module_data,
+        };
+        Some(f(&exports, &lookup))
+    }
 }
 
 impl<'a> LookupExport for TransactionHandle<'a> {
-    fn get(&self, module: ModuleName) -> FindingOrError<Exports> {
-        let module_data = self.get_module(module, None);
-        module_data.map(|module_data| {
-            let exports = self.transaction.lookup_export(&module_data);
-
-            // TODO: Design this better.
-            //
-            // Currently to resolve Exports we have to recursively look at `import *` to get the full set of exported symbols.
-            // We write `lookup.get("imported").wildcards(lookup)` to do that.
-            // But that's no longer correct, because the module resolver for "imported" might be different to our resolver, so should be:
-            //
-            // `lookup.get("imported").wildcards(lookup_for_imported)`
-            //
-            // Since Bindings gets this right, we might have a mismatch from the exports, leading to a crash.
-            // Temporary band-aid is to just force it with the right lookup, but we probably want a type distinction
-            // between templated and resolved exports, or a different API that gives the pair of exports and lookup.
-            let transaction2 = TransactionHandle {
-                transaction: self.transaction,
-                module_data,
-            };
-            exports.wildcard(&transaction2);
-            exports.exports(&transaction2);
-            exports
+    fn export_exists(&self, module: ModuleName, k: &Name) -> bool {
+        self.with_exports(module, |exports, lookup| {
+            exports.exports(lookup).contains_key(k)
         })
+        .unwrap_or(false)
+    }
+
+    fn get_wildcard(&self, module: ModuleName) -> Option<Arc<SmallSet<Name>>> {
+        self.with_exports(module, |exports, lookup| exports.wildcard(lookup))
+    }
+
+    fn module_exists(&self, module: ModuleName) -> FindingOrError<()> {
+        self.get_module(module, None).map(|module_data| {
+            self.transaction.lookup_export(&module_data);
+        })
+    }
+
+    fn is_submodule_imported_implicitly(&self, module: ModuleName, name: &Name) -> bool {
+        self.with_exports(module, |exports, _lookup| {
+            exports.is_submodule_imported_implicitly(name)
+        })
+        .unwrap_or(false)
+    }
+
+    fn get_every_export(&self, module: ModuleName) -> Option<SmallSet<Name>> {
+        self.with_exports(module, |exports, lookup| {
+            exports
+                .exports(lookup)
+                .keys()
+                .cloned()
+                .collect::<SmallSet<Name>>()
+        })
+    }
+
+    fn get_deprecated(&self, module: ModuleName, name: &Name) -> Option<Deprecation> {
+        self.with_exports(module, |exports, lookup| {
+            match exports.exports(lookup).get(name)? {
+                ExportLocation::ThisModule(Export {
+                    deprecation: Some(d),
+                    ..
+                }) => Some(d.clone()),
+                _ => None,
+            }
+        })?
+    }
+
+    fn is_reexport(&self, module: ModuleName, name: &Name) -> bool {
+        self.with_exports(module, |exports, lookup| {
+            matches!(
+                exports.exports(lookup).get(name),
+                Some(ExportLocation::OtherModule(..))
+            )
+        })
+        .unwrap_or(false)
+    }
+
+    fn is_special_export(&self, mut module: ModuleName, name: &Name) -> Option<SpecialExport> {
+        let mut seen = HashSet::new();
+        let mut name = name.clone();
+
+        loop {
+            if let Some(special) = SpecialExport::new(&name)
+                && special.defined_in(module)
+            {
+                return Some(special);
+            }
+
+            if !seen.insert(module) {
+                return None; // Cycle detected
+            }
+
+            let next = self.with_exports(module, |exports, lookup| {
+                match exports.exports(lookup).get(&name)? {
+                    ExportLocation::ThisModule(export) => Some(Err(export.special_export)),
+                    ExportLocation::OtherModule(other_module, original_name) => {
+                        Some(Ok((*other_module, original_name.clone())))
+                    }
+                }
+            })??;
+
+            match next {
+                Err(special) => return special,
+                Ok((other_module, original_name)) => {
+                    if let Some(original_name) = original_name {
+                        name = original_name.clone();
+                    }
+                    module = other_module;
+                }
+            }
+        }
+    }
+
+    fn docstring_range(&self, module: ModuleName, name: &Name) -> Option<TextRange> {
+        self.with_exports(module, |exports, lookup| {
+            match exports.exports(lookup).get(name)? {
+                ExportLocation::ThisModule(Export {
+                    docstring_range, ..
+                }) => *docstring_range,
+                _ => None,
+            }
+        })?
     }
 }
 
