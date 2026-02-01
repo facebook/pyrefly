@@ -2014,11 +2014,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::ClassDef(cls) => {
                     let metadata = self.get_metadata_for_class(&cls);
-                    let class_getitem_result = if self.get_class_tparams(&cls).is_empty()
+                    let class_ty = Type::ClassDef(cls.dupe());
+                    let allow_dunder_lookup = self.get_class_tparams(&cls).is_empty()
                         && !metadata.has_base_any()
-                        && !metadata.is_new_type()
-                    {
-                        let class_ty = Type::ClassDef(cls.dupe());
+                        && !metadata.is_new_type();
+                    let class_getitem_result = if allow_dunder_lookup {
                         // TODO(stroxler): Add a new API, similar to `type_of_attr_get` but returning a
                         // LookupResult or an Optional type, that we could use here to avoid the double lookup.
                         if self.has_attr(&class_ty, &dunder::CLASS_GETITEM) {
@@ -2039,7 +2039,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         None
                     };
-                    if let Some(result) = class_getitem_result {
+                    let metaclass_getitem_result =
+                        if class_getitem_result.is_none() && allow_dunder_lookup {
+                            self.call_magic_dunder_method(
+                                &class_ty,
+                                &dunder::GETITEM,
+                                range,
+                                &[CallArg::expr(slice)],
+                                &[],
+                                errors,
+                                Some(&|| ErrorContext::Index(self.for_display(class_ty.clone()))),
+                            )
+                        } else {
+                            None
+                        };
+                    if let Some(result) = class_getitem_result.or(metaclass_getitem_result) {
                         result
                     } else {
                         Type::type_form(self.specialize(
