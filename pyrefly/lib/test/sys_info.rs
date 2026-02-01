@@ -205,6 +205,22 @@ assert_type(Z(), str)
 );
 
 testcase!(
+    test_module_platform_guard_imports,
+    TestEnv::one(
+        "winonly",
+        r#"
+import sys
+assert sys.platform == "win32"
+import winreg
+x = winreg.OpenKey
+"#,
+    ),
+    r#"
+import winonly
+"#,
+);
+
+testcase!(
     test_os_name,
     r#"
 from typing import assert_type
