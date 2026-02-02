@@ -2591,7 +2591,7 @@ impl<'a> Transaction<'a> {
     /// infer literals from. Instead, we look for a match value/singleton
     /// pattern at the cursor and pull the `match` subject's type to surface
     /// its Literal members.
-    fn add_match_literal_completions(
+    pub(crate) fn add_match_literal_completions(
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],

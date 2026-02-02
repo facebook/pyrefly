@@ -599,6 +599,12 @@ impl Transaction<'_> {
                     let in_string_literal = nodes
                         .iter()
                         .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)));
+                    self.add_match_literal_completions(
+                        handle,
+                        &nodes,
+                        &mut result,
+                        in_string_literal,
+                    );
                     self.add_literal_completions(handle, position, &mut result, in_string_literal);
                     self.add_dict_key_completions(
                         handle,
