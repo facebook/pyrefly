@@ -2582,10 +2582,7 @@ impl<'a> Transaction<'a> {
             }
         }
         Some(references)
-    }  
-
-
-
+    }
 
     /// Suggest Literal values when completing inside a `match` value pattern.
     ///
@@ -2695,7 +2692,6 @@ impl<'a> Transaction<'a> {
 
         ranges
     }
-
 
     fn export_from_location(
         &self,
