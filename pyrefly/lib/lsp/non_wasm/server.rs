@@ -287,6 +287,7 @@ use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
+use crate::types::class::ClassDefIndex;
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -641,32 +642,29 @@ pub fn initialize_start(
 // If the connection is closed, or we receive an exit notification, returns false.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ServerCapabilitiesWithTypeHierarchy<'a> {
+pub struct ServerCapabilitiesWithTypeHierarchy {
     #[serde(flatten)]
-    base: &'a ServerCapabilities,
+    base: ServerCapabilities,
     #[serde(skip_serializing_if = "Option::is_none")]
     type_hierarchy_provider: Option<bool>,
 }
 
 #[derive(Serialize)]
-struct InitializeResultWithTypeHierarchy<'a> {
-    capabilities: ServerCapabilitiesWithTypeHierarchy<'a>,
+#[serde(rename_all = "camelCase")]
+struct InitializeResult<C> {
+    capabilities: C,
     #[serde(skip_serializing_if = "Option::is_none")]
     server_info: Option<ServerInfo>,
 }
 
-pub fn initialize_finish(
+pub fn initialize_finish<C: Serialize>(
     connection: &Connection,
     id: RequestId,
-    capabilities: ServerCapabilities,
+    capabilities: C,
     server_info: Option<ServerInfo>,
-    type_hierarchy_provider: Option<bool>,
 ) -> anyhow::Result<bool> {
-    let result = InitializeResultWithTypeHierarchy {
-        capabilities: ServerCapabilitiesWithTypeHierarchy {
-            base: &capabilities,
-            type_hierarchy_provider,
-        },
+    let result = InitializeResult {
+        capabilities,
         server_info,
     };
     let response = Response::new_ok(id, result);
@@ -805,7 +803,7 @@ pub fn dispatch_lsp_events(
 pub fn capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
-) -> ServerCapabilities {
+) -> ServerCapabilitiesWithTypeHierarchy {
     let augments_syntax_tokens = initialization_params
         .capabilities
         .text_document
@@ -823,7 +821,12 @@ pub fn capabilities(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    ServerCapabilities {
+    let type_hierarchy_provider = match indexing_mode {
+        IndexingMode::None => None,
+        IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => Some(true),
+    };
+
+    let base = ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
@@ -929,6 +932,11 @@ pub fn capabilities(
             None
         },
         ..Default::default()
+    };
+
+    ServerCapabilitiesWithTypeHierarchy {
+        base,
+        type_hierarchy_provider,
     }
 }
 
@@ -938,6 +946,13 @@ pub enum ProcessEvent {
 }
 
 const PYTHON_SECTION: &str = "python";
+
+struct TypeHierarchyTarget {
+    def_index: ClassDefIndex,
+    module_path: ModulePath,
+    name_range: TextRange,
+    is_object: bool,
+}
 
 pub fn lsp_loop(
     connection: Connection,
@@ -4317,6 +4332,131 @@ impl Server {
         None
     }
 
+    fn type_hierarchy_target_from_definition(
+        transaction: &mut CancellableTransaction,
+        handle: &Handle,
+        definition: &FindDefinitionItemWithDocstring,
+    ) -> Option<TypeHierarchyTarget> {
+        let Some(ast) = transaction.as_ref().get_ast(handle) else {
+            return None;
+        };
+        let Some(class_def) =
+            find_class_at_position_in_ast(&ast, definition.definition_range.start())
+        else {
+            return None;
+        };
+        let Some(bindings) = transaction.as_ref().get_bindings(handle) else {
+            return None;
+        };
+        let key = KeyClass(ShortIdentifier::new(&class_def.name));
+        let class_idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let def_index = match bindings.get(class_idx) {
+            BindingClass::ClassDef(class_binding) => class_binding.def_index,
+            BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
+        };
+        Some(TypeHierarchyTarget {
+            def_index,
+            module_path: definition.module.path().dupe(),
+            name_range: class_def.name.range,
+            is_object: class_def.name.id == "object"
+                && definition.module.name().as_str() == "builtins",
+        })
+    }
+
+    fn type_hierarchy_candidate_handles(
+        transaction: &mut CancellableTransaction,
+        handle: &Handle,
+        definition: &FindDefinitionItemWithDocstring,
+        target: &TypeHierarchyTarget,
+    ) -> Result<Vec<Handle>, Cancelled> {
+        let definition_location =
+            TextRangeWithModule::new(definition.module.dupe(), target.name_range);
+        let candidate_handles = transaction.process_rdeps_with_definition(
+            handle.sys_info(),
+            &definition_location,
+            |_, handle, _| Some(handle.dupe()),
+        )?;
+        let mut handles = Vec::new();
+        let mut handle_paths = HashSet::new();
+        for candidate in candidate_handles {
+            if handle_paths.insert(candidate.path().dupe()) {
+                handles.push(candidate);
+            }
+        }
+        Ok(handles)
+    }
+
+    fn type_hierarchy_subtype_items(
+        transaction: &CancellableTransaction,
+        target: &TypeHierarchyTarget,
+        handles: Vec<Handle>,
+    ) -> Vec<TypeHierarchyItem> {
+        let mut items = Vec::new();
+        let mut seen: HashSet<(ModulePath, TextRange)> = HashSet::new();
+        for candidate in handles {
+            let Some(ast) = transaction.as_ref().get_ast(&candidate) else {
+                continue;
+            };
+            let Some(solutions) = transaction.as_ref().get_solutions(&candidate) else {
+                continue;
+            };
+            let Some(bindings) = transaction.as_ref().get_bindings(&candidate) else {
+                continue;
+            };
+            let Some(module_info) = transaction.as_ref().get_module_info(&candidate) else {
+                continue;
+            };
+            let Some(candidate_uri) = module_info_to_uri(&module_info) else {
+                continue;
+            };
+
+            let mut class_defs = Vec::new();
+            collect_class_defs(ast.body.as_slice(), &mut class_defs);
+            for class_def in class_defs {
+                let key = KeyClass(ShortIdentifier::new(&class_def.name));
+                let Some(class_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+                    continue;
+                };
+                let class_def_index = match bindings.get(class_idx) {
+                    BindingClass::ClassDef(class_binding) => class_binding.def_index,
+                    BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
+                };
+                if class_def_index == target.def_index && module_info.path() == &target.module_path
+                {
+                    continue;
+                }
+                let is_subtype = if target.is_object {
+                    true
+                } else {
+                    let mro = solutions.get(&KeyClassMro(class_def_index));
+                    matches!(
+                        mro.as_ref(),
+                        ClassMro::Resolved(ancestors)
+                            if ancestors
+                                .iter()
+                                .any(|ancestor| {
+                                    let ancestor_class = ancestor.class_object();
+                                    ancestor_class.index() == target.def_index
+                                        && ancestor_class.module_path() == &target.module_path
+                                })
+                    )
+                };
+                if !is_subtype {
+                    continue;
+                }
+                if !seen.insert((module_info.path().dupe(), class_def.range())) {
+                    continue;
+                }
+                items.push(prepare_type_hierarchy_item(
+                    class_def,
+                    &module_info,
+                    candidate_uri.clone(),
+                ));
+            }
+        }
+        items
+    }
+
     /// Prepares type hierarchy by validating that the symbol at the cursor is a class.
     fn prepare_type_hierarchy(
         &self,
@@ -4396,33 +4536,17 @@ impl Server {
             FindPreference::default(),
             move |transaction, handle, definition| {
                 transaction.run(&[handle.dupe()], Require::Everything)?;
-                let Some(ast) = transaction.as_ref().get_ast(handle) else {
-                    return Ok(Vec::new());
-                };
-                let Some(class_def) =
-                    find_class_at_position_in_ast(&ast, definition.definition_range.start())
+                let Some(target) =
+                    Self::type_hierarchy_target_from_definition(transaction, handle, &definition)
                 else {
-                    return Ok(Vec::new());
-                };
-                let Some(bindings) = transaction.as_ref().get_bindings(handle) else {
                     return Ok(Vec::new());
                 };
                 let Some(solutions) = transaction.as_ref().get_solutions(handle) else {
                     return Ok(Vec::new());
                 };
-                let key = KeyClass(ShortIdentifier::new(&class_def.name));
-                let Some(class_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
-                    return Ok(Vec::new());
-                };
-                let class_def_index = match bindings.get(class_idx) {
-                    BindingClass::ClassDef(class_binding) => class_binding.def_index,
-                    BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
-                };
 
-                let mro = solutions.get(&KeyClassMro(class_def_index));
+                let mro = solutions.get(&KeyClassMro(target.def_index));
                 let stdlib = transaction.as_ref().get_stdlib(handle);
-                let target_is_object = class_def.name.id == "object"
-                    && definition.module.name().as_str() == "builtins";
                 let mut items = Vec::new();
                 if let ClassMro::Resolved(ancestors) = mro.as_ref() {
                     for ancestor in ancestors {
@@ -4430,7 +4554,7 @@ impl Server {
                             items.push(item);
                         }
                     }
-                    if !target_is_object {
+                    if !target.is_object {
                         if let Some(item) = type_hierarchy_item_from_class_type(stdlib.object()) {
                             items.push(item);
                         }
@@ -4466,115 +4590,23 @@ impl Server {
             FindPreference::default(),
             move |transaction, handle, definition| {
                 transaction.run(&[handle.dupe()], Require::Everything)?;
-                let Some(ast) = transaction.as_ref().get_ast(handle) else {
-                    return Ok(Vec::new());
-                };
-                let Some(class_def) =
-                    find_class_at_position_in_ast(&ast, definition.definition_range.start())
+                let Some(target) =
+                    Self::type_hierarchy_target_from_definition(transaction, handle, &definition)
                 else {
                     return Ok(Vec::new());
                 };
-                let Some(bindings) = transaction.as_ref().get_bindings(handle) else {
-                    return Ok(Vec::new());
-                };
-                let Some(solutions) = transaction.as_ref().get_solutions(handle) else {
-                    return Ok(Vec::new());
-                };
-                let key = KeyClass(ShortIdentifier::new(&class_def.name));
-                let Some(target_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
-                    return Ok(Vec::new());
-                };
-                let target_def_index = match bindings.get(target_idx) {
-                    BindingClass::ClassDef(class_binding) => class_binding.def_index,
-                    BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
-                };
-                let target_module_path = definition.module.path().dupe();
-                let target_is_object = class_def.name.id == "object"
-                    && definition.module.name().as_str() == "builtins";
-
-                let definition_location =
-                    TextRangeWithModule::new(definition.module.dupe(), class_def.name.range);
-                let candidate_handles = transaction.process_rdeps_with_definition(
-                    handle.sys_info(),
-                    &definition_location,
-                    |_, handle, _| Some(handle.dupe()),
+                let handles = Self::type_hierarchy_candidate_handles(
+                    transaction,
+                    handle,
+                    &definition,
+                    &target,
                 )?;
-                let mut handles = Vec::new();
-                let mut handle_paths = HashSet::new();
-                for candidate in candidate_handles {
-                    if handle_paths.insert(candidate.path().dupe()) {
-                        handles.push(candidate);
-                    }
-                }
                 transaction.run(&handles, Require::Everything)?;
-
-                let mut items = Vec::new();
-                let mut seen: HashSet<(ModulePath, TextRange)> = HashSet::new();
-                for candidate in handles {
-                    let Some(ast) = transaction.as_ref().get_ast(&candidate) else {
-                        continue;
-                    };
-                    let Some(solutions) = transaction.as_ref().get_solutions(&candidate) else {
-                        continue;
-                    };
-                    let Some(bindings) = transaction.as_ref().get_bindings(&candidate) else {
-                        continue;
-                    };
-                    let Some(module_info) = transaction.as_ref().get_module_info(&candidate) else {
-                        continue;
-                    };
-                    let Some(candidate_uri) = module_info_to_uri(&module_info) else {
-                        continue;
-                    };
-
-                    let mut class_defs = Vec::new();
-                    collect_class_defs(ast.body.as_slice(), &mut class_defs);
-                    for class_def in class_defs {
-                        let key = KeyClass(ShortIdentifier::new(&class_def.name));
-                        let Some(class_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key))
-                        else {
-                            continue;
-                        };
-                        let class_def_index = match bindings.get(class_idx) {
-                            BindingClass::ClassDef(class_binding) => class_binding.def_index,
-                            BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
-                        };
-                        if class_def_index == target_def_index
-                            && module_info.path() == &target_module_path
-                        {
-                            continue;
-                        }
-                        let is_subtype = if target_is_object {
-                            true
-                        } else {
-                            let mro = solutions.get(&KeyClassMro(class_def_index));
-                            matches!(
-                                mro.as_ref(),
-                                ClassMro::Resolved(ancestors)
-                                    if ancestors
-                                        .iter()
-                                        .any(|ancestor| {
-                                            let ancestor_class = ancestor.class_object();
-                                            ancestor_class.index() == target_def_index
-                                                && ancestor_class.module_path()
-                                                    == &target_module_path
-                                        })
-                            )
-                        };
-                        if !is_subtype {
-                            continue;
-                        }
-                        if !seen.insert((module_info.path().dupe(), class_def.range())) {
-                            continue;
-                        }
-                        items.push(prepare_type_hierarchy_item(
-                            class_def,
-                            &module_info,
-                            candidate_uri.clone(),
-                        ));
-                    }
-                }
-                Ok(items)
+                Ok(Self::type_hierarchy_subtype_items(
+                    transaction,
+                    &target,
+                    handles,
+                ))
             },
             |items| items,
         );

@@ -64,12 +64,8 @@ fn initialize_tsp_connection(
         return Ok(None);
     };
     let capabilities = tsp_capabilities(indexing_mode, &initialize_params);
-    let type_hierarchy_provider = match indexing_mode {
-        IndexingMode::None => None,
-        IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => Some(true),
-    };
     // Note: TSP doesn't include serverInfo, unlike LSP
-    if !initialize_finish(connection, id, capabilities, None, type_hierarchy_provider)? {
+    if !initialize_finish(connection, id, capabilities, None)? {
         return Ok(None);
     }
     Ok(Some(initialize_params))
