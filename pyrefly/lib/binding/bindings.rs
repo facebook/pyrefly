@@ -837,9 +837,14 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn inject_builtins(&mut self, builtins_module: ModuleName, ignore_if_missing: bool) {
-        match self.lookup.get(builtins_module) {
-            FindingOrError::Finding(builtins_export) => {
-                for name in builtins_export.finding.wildcard(self.lookup).iter() {
+        match self.lookup.module_exists(builtins_module) {
+            FindingOrError::Error(err @ FindError::NotFound(..)) if !ignore_if_missing => {
+                let (_, msg) = err.display();
+                self.errors.internal_error(TextRange::default(), msg);
+            }
+            FindingOrError::Error(_) => (),
+            FindingOrError::Finding(_) => {
+                for name in self.lookup.get_wildcard(builtins_module).unwrap().iter() {
                     let key = Key::Import(name.clone(), TextRange::default());
                     let idx = self
                         .table
@@ -847,11 +852,6 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_name(name, idx, FlowStyle::Import(builtins_module, name.clone()));
                 }
             }
-            FindingOrError::Error(err @ FindError::NotFound(..)) if !ignore_if_missing => {
-                let (_, msg) = err.display();
-                self.errors.internal_error(TextRange::default(), msg);
-            }
-            FindingOrError::Error(_) => (),
         }
     }
 

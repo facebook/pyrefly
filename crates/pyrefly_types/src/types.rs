@@ -637,7 +637,7 @@ pub enum SuperObj {
 #[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
 pub struct Union {
     pub members: Vec<Type>,
-    pub display_name: Option<String>,
+    pub display_name: Option<Box<str>>,
 }
 
 impl PartialEq for Union {

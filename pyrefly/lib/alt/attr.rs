@@ -40,10 +40,8 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::export::exports::Export;
-use crate::export::exports::ExportLocation;
-use crate::export::exports::Exports;
 use crate::solver::solver::SubsetError;
+use crate::state::loader::FindingOrError;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
@@ -1680,10 +1678,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn get_module_exports(&self, module_name: ModuleName) -> Option<Exports> {
-        self.exports.get(module_name).finding()
-    }
-
     fn get_module_attr(&self, module: &ModuleType, attr_name: &Name) -> Option<Attribute> {
         // `module_name` could refer to a package, in which case we need to check if
         // `module_name.attr_name`:
@@ -1703,24 +1697,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         let module_name = ModuleName::from_parts(module.parts());
-        let module_exports = match self.get_module_exports(module_name) {
-            Some(x) => x,
-            None => return Some(Attribute::simple(Type::any_error())), // This module doesn't exist, we must have already errored
+
+        match self.exports.module_exists(module_name) {
+            FindingOrError::Finding(_) => (),
+            FindingOrError::Error(_) => return Some(Attribute::simple(Type::any_error())), // This module doesn't exist, we must have already errored
         };
 
-        if module_exports.exports(self.exports).contains_key(attr_name) {
+        if self.exports.export_exists(module_name, attr_name) {
             Some(Attribute::simple(
                 self.get_from_export(module_name, None, &KeyExport(attr_name.clone()))
                     .arc_clone(),
             ))
-        } else if module_exports.is_submodule_imported_implicitly(attr_name)
+        } else if self
+            .exports
+            .is_submodule_imported_implicitly(module_name, attr_name)
             && self
-                .get_module_exports(module_name.append(attr_name))
+                .exports
+                .module_exists(module_name.append(attr_name))
+                .finding()
                 .is_some()
         {
             Some(Attribute::simple(submodule.to_type()))
         } else if self
-            .get_module_exports(module_name.append(attr_name))
+            .exports
+            .module_exists(module_name.append(attr_name))
+            .finding()
             .is_some()
         {
             // The module isn't imported, but does exist on disk, so user must
@@ -2316,69 +2317,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         let module_name = ModuleName::from_parts(module.parts());
-        if let Some(exports) = self.get_module_exports(module_name) {
-            match expected_attribute_name {
-                None => {
-                    res.extend(
-                        exports
-                            .exports(self.exports)
-                            .iter()
-                            .map(|(x, export_location)| AttrInfo {
-                                name: x.clone(),
-                                ty: None,
-                                is_deprecated: matches!(
-                                    export_location,
-                                    ExportLocation::ThisModule(Export {
-                                        deprecation: Some(_),
-                                        ..
-                                    })
-                                ),
-                                definition: Some(
-                                    AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                        module_name,
-                                    },
-                                ),
-                                docstring_range: match export_location {
-                                    ExportLocation::ThisModule(Export {
-                                        docstring_range, ..
-                                    }) => *docstring_range,
-                                    _ => None,
-                                },
-                                is_reexport: matches!(
-                                    export_location,
-                                    ExportLocation::OtherModule(..)
-                                ),
-                            }),
-                    );
-                }
-                Some(expected_attribute_name) => {
-                    if let Some(export_location) =
-                        exports.exports(self.exports).get(expected_attribute_name)
-                    {
-                        res.push(AttrInfo {
-                            name: expected_attribute_name.clone(),
-                            ty: None,
-                            is_deprecated: matches!(
-                                export_location,
-                                ExportLocation::ThisModule(Export {
-                                    deprecation: Some(_),
-                                    ..
-                                })
-                            ),
-                            definition: Some(
-                                AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                    module_name,
-                                },
-                            ),
-                            docstring_range: match export_location {
-                                ExportLocation::ThisModule(Export {
-                                    docstring_range, ..
-                                }) => *docstring_range,
-                                _ => None,
+        match expected_attribute_name {
+            Some(name) => {
+                if self.exports.export_exists(module_name, name) {
+                    res.push(AttrInfo {
+                        name: name.clone(),
+                        ty: None,
+                        is_deprecated: self.exports.get_deprecated(module_name, name).is_some(),
+                        definition: Some(
+                            AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                                module_name,
                             },
-                            is_reexport: matches!(export_location, ExportLocation::OtherModule(..)),
-                        });
-                    }
+                        ),
+                        docstring_range: self.exports.docstring_range(module_name, name),
+                        is_reexport: self.exports.is_reexport(module_name, name),
+                    });
+                }
+            }
+            None => {
+                if let Some(exports) = self.exports.get_every_export(module_name) {
+                    res.extend(exports.iter().map(|name| AttrInfo {
+                        name: name.clone(),
+                        ty: None,
+                        is_deprecated: self.exports.get_deprecated(module_name, name).is_some(),
+                        definition: Some(
+                            AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                                module_name,
+                            },
+                        ),
+                        docstring_range: self.exports.docstring_range(module_name, name),
+                        is_reexport: self.exports.is_reexport(module_name, name),
+                    }));
                 }
             }
         }
