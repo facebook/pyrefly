@@ -189,15 +189,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Get ManyRelatedManager class from django stubs
     fn get_manager_type(&self, target_model_type: Type) -> Option<Type> {
         let django_related_module = ModuleName::django_models_fields_related_descriptors();
-        let django_related_module_exports = self.exports.get(django_related_module).finding()?;
-        let manager_class_type = if django_related_module_exports
-            .exports(self.exports)
-            .contains_key(&MANYRELATEDMANAGER)
+        if !self
+            .exports
+            .export_exists(django_related_module, &MANYRELATEDMANAGER)
         {
-            self.get_from_export(django_related_module, None, &KeyExport(MANYRELATEDMANAGER))
-        } else {
             return None;
-        };
+        }
+        let manager_class_type =
+            self.get_from_export(django_related_module, None, &KeyExport(MANYRELATEDMANAGER));
 
         // Extract the Class from ClassDef
         let manager_class = match manager_class_type.as_ref() {
@@ -241,13 +240,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let class_name = Name::new(value.to_str());
                     let module_name = class.module_name();
 
-                    if self
-                        .exports
-                        .get(module_name)
-                        .finding()?
-                        .exports(self.exports)
-                        .contains_key(&class_name)
-                    {
+                    if self.exports.export_exists(module_name, &class_name) {
                         let model_type =
                             self.get_from_export(module_name, None, &KeyExport(class_name));
                         Some(self.class_def_to_instance_type(&model_type))

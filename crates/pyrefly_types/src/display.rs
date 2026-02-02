@@ -1398,7 +1398,7 @@ pub mod tests {
         assert_eq!(
             Type::type_form(Type::Union(Box::new(Union {
                 members: vec![nonlit1, nonlit2],
-                display_name: Some("MyUnion".to_owned())
+                display_name: Some("MyUnion".into())
             })))
             .to_string(),
             "type[MyUnion]"

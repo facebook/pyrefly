@@ -6,7 +6,6 @@
  */
 
 use std::cmp::max;
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::mem;
 
@@ -71,7 +70,6 @@ use crate::export::definitions::Definition;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::MutableCaptureKind;
-use crate::export::exports::ExportLocation;
 use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
@@ -388,16 +386,16 @@ impl Static {
             d.inject_implicit_globals();
         }
 
-        let mut wildcards = Vec::with_capacity(d.import_all.len());
+        let mut all_wildcards = Vec::with_capacity(d.import_all.len());
         for (m, range) in d.import_all {
-            if let Some(exports) = lookup.get(m).finding() {
-                wildcards.push((range, exports.wildcard(lookup)));
+            if let Some(wildcards) = lookup.get_wildcard(m) {
+                all_wildcards.push((range, wildcards))
             }
         }
 
         // Try and avoid rehashing while we insert, with a little bit of spare space
         let capacity_guess =
-            d.definitions.len() + wildcards.iter().map(|x| x.1.len()).sum::<usize>();
+            d.definitions.len() + all_wildcards.iter().map(|x| x.1.len()).sum::<usize>();
         self.0.reserve(((capacity_guess * 5) / 4) + 25);
 
         for (name, definition) in d.definitions.into_iter_hashed() {
@@ -408,7 +406,7 @@ impl Static {
                 StaticStyle::of_definition(name.as_ref(), definition, scopes, get_annotation_idx);
             self.upsert(name, range, style);
         }
-        for (range, wildcard) in wildcards {
+        for (range, wildcard) in all_wildcards {
             for name in wildcard.iter_hashed() {
                 // TODO: semantics of import * and global var with same name
                 self.upsert(name.cloned(), range, StaticStyle::MergeableImport)
@@ -1753,46 +1751,6 @@ impl Scopes {
         Some((value.idx, value.style.clone()))
     }
 
-    // This helper handles re-exported symbols during special export lookups
-    fn lookup_special_export(
-        &self,
-        mut name: Name,
-        mut module: ModuleName,
-        lookup: &dyn LookupExport,
-    ) -> Option<SpecialExport> {
-        // Fast check to avoid calculating exports, reducing contention
-        if let Some(special) = SpecialExport::new(&name)
-            && special.defined_in(module)
-        {
-            return Some(special);
-        }
-        let mut seen = HashSet::new();
-        let mut exports = lookup.get(module).finding()?.exports(lookup);
-        loop {
-            if let Some(special) = SpecialExport::new(&name)
-                && special.defined_in(module)
-            {
-                return Some(special);
-            }
-            if !seen.insert(module) {
-                break;
-            }
-            match exports.as_ref().get(&name)? {
-                ExportLocation::ThisModule(export) => {
-                    return export.special_export;
-                }
-                ExportLocation::OtherModule(other_module, original_name) => {
-                    if let Some(original_name) = original_name {
-                        name = original_name.clone();
-                    }
-                    module = *other_module;
-                    exports = lookup.get(module).finding()?.exports(lookup);
-                }
-            }
-        }
-        None
-    }
-
     /// Look up either `name` or `base_name.name` in the current scope, assuming we are
     /// in the module with name `module_name`. If it is a `SpecialExport`, return it (otherwise None)
     pub fn as_special_export(
@@ -1808,11 +1766,9 @@ impl Scopes {
             let value = self.get_flow_info(base_name)?.value()?;
             match &value.style {
                 FlowStyle::MergeableImport(m) | FlowStyle::ImportAs(m) => {
-                    self.lookup_special_export(name.clone(), *m, lookup)
+                    lookup.is_special_export(*m, name)
                 }
-                FlowStyle::Import(m, upstream_name) => {
-                    self.lookup_special_export(upstream_name.clone(), *m, lookup)
-                }
+                FlowStyle::Import(m, upstream_name) => lookup.is_special_export(*m, upstream_name),
                 _ => None,
             }
         } else {
@@ -1821,11 +1777,9 @@ impl Scopes {
             let value = self.get_flow_info(name)?.value()?;
             match &value.style {
                 FlowStyle::MergeableImport(m) | FlowStyle::ImportAs(m) => {
-                    self.lookup_special_export(name.clone(), *m, lookup)
+                    lookup.is_special_export(*m, name)
                 }
-                FlowStyle::Import(m, upstream_name) => {
-                    self.lookup_special_export(upstream_name.clone(), *m, lookup)
-                }
+                FlowStyle::Import(m, upstream_name) => lookup.is_special_export(*m, upstream_name),
                 _ => {
                     let special = SpecialExport::new(name)?;
                     if special.defined_in(current_module) {
