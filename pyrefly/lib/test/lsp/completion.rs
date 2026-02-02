@@ -1794,13 +1794,13 @@ T = Literal
 2 | T = Literal
             ^
 Completion Results:
-- (Variable) AnyOrLiteralStr: from _typeshed import AnyOrLiteralStr
-
 - (Variable) Literal: from typing import Literal
 
 - (Variable) Literal: from typing_extensions import Literal
 
 - (Variable) LiteralString: from typing import LiteralString
+
+- (Variable) AnyOrLiteralStr: from _typeshed import AnyOrLiteralStr
 
 - (Variable) StrOrLiteralStr: from _typeshed import StrOrLiteralStr
 "#
