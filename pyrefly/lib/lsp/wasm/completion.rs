@@ -46,6 +46,14 @@ use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::types::Type;
 
+/// Options that influence completion item formatting and behavior.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CompletionOptions {
+    pub supports_completion_item_details: bool,
+    pub complete_function_parens: bool,
+    pub supports_snippet_completions: bool,
+}
+
 /// Returns true if the client supports snippet completions in completion items.
 pub(crate) fn supports_snippet_completions(capabilities: &lsp_types::ClientCapabilities) -> bool {
     capabilities
@@ -482,10 +490,13 @@ impl Transaction<'_> {
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
-        supports_completion_item_details: bool,
-        complete_function_parens: bool,
-        supports_snippets: bool,
+        options: CompletionOptions,
     ) -> (Vec<CompletionItem>, bool) {
+        let CompletionOptions {
+            supports_completion_item_details,
+            complete_function_parens,
+            supports_snippet_completions,
+        } = options;
         let mut result = Vec::new();
         let mut is_incomplete = false;
         let mut allow_function_call_parens = false;
@@ -665,7 +676,7 @@ impl Transaction<'_> {
             }
         }
         if complete_function_parens && allow_function_call_parens {
-            Self::add_function_call_parens(&mut result, supports_snippets);
+            Self::add_function_call_parens(&mut result, supports_snippet_completions);
         }
         for item in &mut result {
             let sort_text = if item

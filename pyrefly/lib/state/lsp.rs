@@ -65,6 +65,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::wasm::completion::CompletionOptions;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -2584,8 +2585,8 @@ impl<'a> Transaction<'a> {
         Some(references)
     }
 
-    // Kept for backwards compatibility - used by external callers (lsp/server.rs, playground.rs)
-    // who don't need the is_incomplete flag
+    // Kept for backwards compatibility - used by external callers who don't need the
+    // is_incomplete flag.
     pub fn completion(
         &self,
         handle: &Handle,
@@ -2597,7 +2598,10 @@ impl<'a> Transaction<'a> {
             handle,
             position,
             import_format,
-            supports_completion_item_details,
+            CompletionOptions {
+                supports_completion_item_details,
+                ..Default::default()
+            },
         )
         .0
     }
@@ -2608,26 +2612,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
-        supports_completion_item_details: bool,
-    ) -> (Vec<CompletionItem>, bool) {
-        self.completion_with_incomplete_with_function_parens(
-            handle,
-            position,
-            import_format,
-            supports_completion_item_details,
-            false,
-            false,
-        )
-    }
-
-    pub fn completion_with_incomplete_with_function_parens(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-        import_format: ImportFormat,
-        supports_completion_item_details: bool,
-        complete_function_parens: bool,
-        supports_snippets: bool,
+        options: CompletionOptions,
     ) -> (Vec<CompletionItem>, bool) {
         // Check if position is in a disabled range (comments)
         if let Some(module) = self.get_module_info(handle) {
@@ -2637,14 +2622,8 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
-            handle,
-            position,
-            import_format,
-            supports_completion_item_details,
-            complete_function_parens,
-            supports_snippets,
-        );
+        let (mut results, is_incomplete) =
+            self.completion_sorted_opt_with_incomplete(handle, position, import_format, options);
         results.sort_by(|item1, item2| {
             item1
                 .sort_text
