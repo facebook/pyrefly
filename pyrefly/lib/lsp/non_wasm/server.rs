@@ -1959,11 +1959,6 @@ impl Server {
     /// Extract line and column numbers from TOML error messages
     /// Returns (line, column) with 1-based indexing, defaults to (1, 1)
     fn extract_line_col_from_toml_error(error_msg: &str) -> (usize, usize) {
-        // Common TOML error patterns:
-        // "TOML parse error at line 5, column 10"
-        // "expected ... at line 3"
-        // "invalid ... for key at line 7"
-
         let line = error_msg
             .split("line ")
             .nth(1)
@@ -2022,8 +2017,12 @@ impl Server {
             if !current_error_files.contains(previously_erroring_file) {
                 // File no longer has errors, publish empty diagnostics to clear
                 if let Ok(uri) = Url::from_file_path(previously_erroring_file) {
-                    self.connection
-                        .publish_diagnostics_for_uri(uri, Vec::new(), None);
+                    self.connection.publish_diagnostics_for_uri(
+                        uri,
+                        Vec::new(),
+                        None,
+                        DiagnosticSource::DidClose,
+                    );
                 }
             }
         }
@@ -2031,8 +2030,12 @@ impl Server {
         // Publish diagnostics for files with errors
         for (path, diagnostics) in config_diags {
             if let Ok(uri) = Url::from_file_path(&path) {
-                self.connection
-                    .publish_diagnostics_for_uri(uri, diagnostics, None);
+                self.connection.publish_diagnostics_for_uri(
+                    uri,
+                    diagnostics,
+                    None,
+                    DiagnosticSource::CommittingTransaction,
+                );
             }
         }
 
