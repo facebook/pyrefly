@@ -728,14 +728,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if !use_hint {
                             if !self.type_contains_var(hint_ty) {
                                 use_hint = true;
-                            } else if let Type::Union(options) = hint_ty {
-                                if options
+                            } else if let Type::Union(options) = hint_ty
+                                && options
                                     .members
                                     .iter()
                                     .any(|option| !self.type_contains_var(option))
-                                {
-                                    use_hint = true;
-                                }
+                            {
+                                use_hint = true;
                             }
                         }
                         let arg_ty = arg_pre.post_check(
@@ -789,14 +788,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if !use_hint {
                             if !self.type_contains_var(hint_ty) {
                                 use_hint = true;
-                            } else if let Type::Union(options) = hint_ty {
-                                if options
+                            } else if let Type::Union(options) = hint_ty
+                                && options
                                     .members
                                     .iter()
                                     .any(|option| !self.type_contains_var(option))
-                                {
-                                    use_hint = true;
-                                }
+                            {
+                                use_hint = true;
                             }
                         }
                         let arg_ty = arg_pre.post_check(

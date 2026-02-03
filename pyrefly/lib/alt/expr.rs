@@ -457,10 +457,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Vec::new()
                 };
                 let param_vars = self.allocate_lambda_param_vars(&param_ids);
-
+                let param_var_refs: Vec<(&Name, Var)> =
+                    param_vars.iter().map(|&(name, var)| (name, var)).collect();
                 // Pass any contextual information to the parameter bindings used in the lambda body as a side
                 // effect, by setting an answer for the vars created at binding time.
-                let return_hint = hint.and_then(|hint| self.decompose_lambda(hint, &param_vars));
+                let return_hint =
+                    hint.and_then(|hint| self.decompose_lambda(hint, &param_var_refs));
 
                 let mut params: Vec<Param> = if let Some(parameters) = &lambda.parameters {
                     param_vars

@@ -78,6 +78,23 @@ impl<'a> Hint<'a> {
 }
 
 impl<'a, 'b> HintRef<'a, 'b> {
+    pub fn new(ty: &'b Type, errors: Option<&'a ErrorCollector>) -> Self {
+        let (branches, source_branches) = match ty {
+            Type::Union(box Union { members, .. }) => (members.as_slice(), members.len().max(1)),
+            _ => (std::slice::from_ref(ty), 1),
+        };
+        Self {
+            union: ty,
+            branches,
+            errors,
+            source_branches,
+        }
+    }
+
+    pub fn soft(ty: &'b Type) -> Self {
+        Self::new(ty, None)
+    }
+
     pub fn ty(&self) -> &Type {
         self.union
     }
@@ -250,7 +267,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut f: impl FnMut(&Type) -> Type,
     ) -> Hint<'a> {
         let source_branches = hint.source_branches();
-        let mapped = hint.branches().iter().map(|branch| f(branch)).collect();
+        let mapped = hint.branches().iter().map(f).collect();
         let hint = self
             .hint_from_branches_vec(mapped, hint.errors())
             .expect("non-empty hint branches");
@@ -263,11 +280,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut f: impl FnMut(&Type) -> Option<Type>,
     ) -> Option<Hint<'a>> {
         let source_branches = hint.source_branches();
-        let mapped: Vec<Type> = hint
-            .branches()
-            .iter()
-            .filter_map(|branch| f(branch))
-            .collect();
+        let mapped: Vec<Type> = hint.branches().iter().filter_map(f).collect();
         self.hint_from_branches_vec(mapped, hint.errors())
             .map(|hint| hint.with_source_branches(source_branches))
     }
@@ -414,14 +427,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.stdlib
                     .dict(key.to_type(self.heap), value.to_type(self.heap)),
             );
-            if self.is_subset_eq(&dict_type, branch) {
-                if let (Some(key_ty), Some(value_ty)) = (
+            if self.is_subset_eq(&dict_type, branch)
+                && let (Some(key_ty), Some(value_ty)) = (
                     self.resolve_var_opt(branch, key),
                     self.resolve_var_opt(branch, value),
-                ) {
-                    key_types.push(key_ty);
-                    value_types.push(value_ty);
-                }
+                )
+            {
+                key_types.push(key_ty);
+                value_types.push(value_ty);
             }
         }
         let key = self
