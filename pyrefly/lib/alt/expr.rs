@@ -50,6 +50,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
+use vec1::vec1;
 use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
@@ -67,7 +68,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
-use crate::graph::index::Idx;
+use pyrefly_graph::index::Idx;
 use crate::types::callable::Callable;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -434,7 +435,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let param_vars = if let Some(parameters) = &lambda.parameters {
                     parameters
                         .iter_non_variadic_params()
-                        .map(|x| (&x.name().id, self.bindings().get_lambda_param(x.name())))
+                        .map(|x| (x.name().id.clone(), self.bindings().get_lambda_param(x.name())))
                         .collect()
                 } else {
                     Vec::new()
@@ -443,13 +444,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // effect, by setting an answer for the vars created at binding time.
                 let return_hint = hint.and_then(|hint| self.decompose_lambda(hint, &param_vars));
 
-                let mut params = param_vars.into_map(|(name, var)| {
-                    Param::Pos(
-                        name.clone(),
+                let mut params =
+                    param_vars.into_map(|(name, var)| Param::Pos(
+                        name,
                         self.solver().force_var(var),
                         Required::Required,
-                    )
-                });
+                    ));
                 if let Some(parameters) = &lambda.parameters {
                     params.extend(parameters.vararg.iter().map(|x| {
                         Param::VarArg(
@@ -481,21 +481,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
             Expr::List(x) => {
-                let elt_hint = hint.and_then(|ty| self.decompose_list(ty));
-                if x.is_empty() {
-                    let elem_ty = elt_hint.map_or_else(
-                        || {
-                            self.solver()
-                                .fresh_partial_contained(self.uniques, x.range)
-                                .to_type()
-                        },
-                        |hint| hint.to_type(),
-                    );
-                    self.stdlib.list(elem_ty).to_type()
-                } else {
-                    let elem_tys = self.elts_infer(&x.elts, elt_hint, errors);
-                    self.stdlib.list(self.unions(elem_tys)).to_type()
-                }
                 let elt_hint = hint.and_then(|ty| self.decompose_list(ty));
                 self.list_with_hint(x, elt_hint, errors)
             }
@@ -878,29 +863,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let flattened_items = Ast::flatten_dict_items(items);
-        let hints = hint.as_ref().map_or(Vec::new(), |hint| match hint.ty() {
-            Type::Union(box Union { members: ts, .. }) => ts
-                .iter()
-                .map(|ty| HintRef::new(ty, hint.errors()))
-                .collect(),
-            _ => vec![*hint],
-        });
-        for hint in hints.iter() {
-            let (typed_dict, is_update) = match hint.ty() {
-                Type::TypedDict(td) => (td, false),
-                Type::PartialTypedDict(td) => (td, true),
-                _ => continue,
-            };
-            let check_errors = self.error_collector();
-            let item_errors = self.error_collector();
-            self.check_dict_items_against_typed_dict(
-                &flattened_items,
-                typed_dict,
-                is_update,
-                range,
-                &check_errors,
-                &item_errors,
-            );
+        if let Some(hint_ref) = hint {
+            for branch in hint_ref.branches() {
+                let (typed_dict, is_update) = match branch {
+                    Type::TypedDict(td) => (td, false),
+                    Type::PartialTypedDict(td) => (td, true),
+                    _ => continue,
+                };
+                let check_errors = self.error_collector();
+                let item_errors = self.error_collector();
+                self.check_dict_items_against_typed_dict(
+                    &flattened_items,
+                    typed_dict,
+                    is_update,
+                    range,
+                    &check_errors,
+                    &item_errors,
+                );
 
                 // We use the TypedDict hint if it successfully matched or if there is only one hint, unless
                 // this is a "soft" type hint, in which case we don't want to raise any check errors.
@@ -1035,36 +1014,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 value_tys.push(value_t);
                             }
                         }
-                    }
-                    None => {
-                        let ty = self.expr_infer(&item.value, errors);
-                        if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
-                            if !key_t.is_error() {
-                                if let Some(key_hint) = &key_hint
-                                    && self.is_subset_eq(&key_t, key_hint.union())
-                                {
-                                    key_tys.push(key_hint.union().clone());
-                                } else {
-                                    key_tys.push(key_t);
-                                }
-                            }
-                            if !value_t.is_error() {
-                                if let Some(value_hint) = &value_hint
-                                    && self.is_subset_eq(&value_t, value_hint.union())
-                                {
-                                    value_tys.push(value_hint.union().clone());
-                                } else {
-                                    value_tys.push(value_t);
-                                }
-                            }
-                        } else {
-                            self.error(
-                                errors,
-                                item.value.range(),
-                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                                format!("Expected a mapping, got {}", self.for_display(ty)),
-                            );
-                        }
+                    } else {
+                        self.error(
+                            errors,
+                            x.value.range(),
+                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            format!("Expected a mapping, got {}", self.for_display(ty)),
+                        );
                     }
                 }
             });
@@ -1929,7 +1885,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         Type::any_implicit()
                     } else {
-                        self.solver().fresh_contained(self.uniques).to_type()
+                        self.solver()
+                            .fresh_partial_contained(self.uniques, x.range())
+                            .to_type()
                     }
                 },
                 |hint| hint.to_type(),

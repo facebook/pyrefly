@@ -44,6 +44,7 @@ use vec1::vec1;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
+use crate::alt::unwrap::HintRef;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::types::abstract_class::AbstractClassMembers;

@@ -18,6 +18,7 @@ use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 use crate::types::types::Union;
 use crate::types::types::Var;
+use pyrefly_util::visit::Visit;
 
 #[derive(Clone, Debug)]
 pub struct Hint<'a> {
@@ -78,6 +79,23 @@ impl<'a> Hint<'a> {
 }
 
 impl<'a, 'b> HintRef<'a, 'b> {
+    pub fn new(ty: &'b Type, errors: Option<&'a ErrorCollector>) -> Self {
+        let (branches, source_branches) = match ty {
+            Type::Union(box Union { members, .. }) => (members.as_slice(), members.len().max(1)),
+            _ => (std::slice::from_ref(ty), 1),
+        };
+        Self {
+            union: ty,
+            branches,
+            errors,
+            source_branches,
+        }
+    }
+
+    pub fn soft(ty: &'b Type) -> Self {
+        Self::new(ty, None)
+    }
+
     pub fn ty(&self) -> &Type {
         self.union
     }
@@ -98,6 +116,92 @@ impl<'a, 'b> HintRef<'a, 'b> {
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn fresh_var(&self) -> Var {
         self.solver().fresh_unwrap(self.uniques)
+    }
+
+    pub fn hint_from_branches(
+        &self,
+        branches: Vec1<Type>,
+        errors: Option<&'a ErrorCollector>,
+    ) -> Hint<'a> {
+        let union = self.unions(branches.clone().into_vec());
+        Hint::new(union, branches, errors)
+    }
+
+    pub fn hint_from_branches_vec(
+        &self,
+        branches: Vec<Type>,
+        errors: Option<&'a ErrorCollector>,
+    ) -> Option<Hint<'a>> {
+        Vec1::try_from_vec(branches)
+            .ok()
+            .map(|branches| self.hint_from_branches(branches, errors))
+    }
+
+    pub fn hint_from_type(&self, ty: Type, errors: Option<&'a ErrorCollector>) -> Hint<'a> {
+        match &ty {
+            Type::Union(box Union { members, .. }) => {
+                let branches =
+                    Vec1::try_from_vec(members.clone()).unwrap_or_else(|_| Vec1::new(ty.clone()));
+                Hint::new(ty, branches, errors)
+            }
+            _ => Hint::new(ty.clone(), Vec1::new(ty), errors),
+        }
+    }
+
+    pub fn hint_map<'b>(
+        &self,
+        hint: HintRef<'a, 'b>,
+        mut f: impl FnMut(&Type) -> Type,
+    ) -> Hint<'a> {
+        let source_branches = hint.source_branches();
+        let branches = hint.branches().iter().map(|branch| f(branch)).collect();
+        let branches =
+            Vec1::try_from_vec(branches).unwrap_or_else(|_| Vec1::new(hint.ty().clone()));
+        self.hint_from_branches(branches, hint.errors())
+            .with_source_branches(source_branches)
+    }
+
+    fn hint_filter_map<'b>(
+        &self,
+        hint: HintRef<'a, 'b>,
+        mut f: impl FnMut(&Type) -> Option<Type>,
+    ) -> Option<Hint<'a>> {
+        let source_branches = hint.source_branches();
+        let mut branches = Vec::new();
+        for branch in hint.branches() {
+            if let Some(mapped) = f(branch) {
+                branches.push(mapped);
+            }
+        }
+        self.hint_from_branches_vec(branches, hint.errors())
+            .map(|hint| hint.with_source_branches(source_branches))
+    }
+
+    pub fn type_contains_var(&self, ty: &Type) -> bool {
+        if ty.contains_type_variable() {
+            return true;
+        }
+        let mut contains = false;
+        ty.visit(&mut |t: &Type| {
+            if matches!(t, Type::Var(_)) {
+                contains = true;
+            }
+        });
+        contains
+    }
+
+    pub fn prefer_union_branch_without_vars(&self, ty: &Type) -> Option<Type> {
+        let Type::Union(box Union { members, .. }) = ty else {
+            return None;
+        };
+        let has_var = members.iter().any(|branch| self.type_contains_var(branch));
+        let has_non_var = members.iter().any(|branch| !self.type_contains_var(branch));
+        if !has_var || !has_non_var {
+            return None;
+        }
+        let mut reordered = members.clone();
+        reordered.sort_by_key(|branch| self.type_contains_var(branch));
+        Some(Type::union(reordered))
     }
 
     /// Resolve a var to a type, but only if it was pinned by the subtype
@@ -176,8 +280,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
-        branches.sort_by_key(|branch| self.type_contains_var(branch));
-        branches
     }
 
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
