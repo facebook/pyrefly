@@ -265,6 +265,8 @@ pub enum ErrorKind {
     RedundantCondition,
     /// Raised by a call to reveal_type().
     RevealType,
+    /// Passing a string to something that expects an iterable of strings.
+    StringAsIterable,
     /// An attribute is missing a type annotation and is initialized with the `None` literal.
     UnannotatedAttribute,
     /// A function parameter is missing a type annotation.
@@ -380,6 +382,7 @@ impl ErrorKind {
         match self {
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
+            ErrorKind::StringAsIterable => Severity::Warn,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitImport => Severity::Warn,

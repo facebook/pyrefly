@@ -1281,6 +1281,21 @@ The default severity of this diagnostic is `info`.
 
 `reveal_type` is a *directive* — it is always shown in CLI output regardless of the [`min-severity`](../configuration#min-severity) threshold, and is never subject to suppression or baseline exclusion. To hide it, set `reveal-type = "ignore"` in the [`errors`](../configuration#errors) table.
 
+## string-as-iterable
+
+This warning is raised when a string is passed to a parameter expecting an `Iterable[str]` or
+`Sequence[str]`. While `str` is technically iterable, it iterates by individual characters, which
+is often not what you intended.
+
+```python
+from typing import Iterable
+
+def takes_items(xs: Iterable[str]) -> None:
+    ...
+
+takes_items("hello")  # Passing `str` treats it as an iterable of characters
+```
+
 ## unannotated-attribute
 
 This error is raised when a class attribute is missing a type annotation and is initialized with the `None` literal. Without an explicit annotation, Pyrefly infers the type as `Any | None`, which reduces type safety. To fix it, add an explicit type annotation to the attribute.
