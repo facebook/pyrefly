@@ -1927,6 +1927,11 @@ impl<'a> Transaction<'a> {
             .exports(&self.lookup(module_data))
     }
 
+    pub(crate) fn get_exports_data(&self, handle: &Handle) -> Exports {
+        let module_data = self.get_module(handle);
+        self.lookup_export(&module_data)
+    }
+
     pub fn get_module_docstring_range(&self, handle: &Handle) -> Option<TextRange> {
         let module_data = self.get_module(handle);
         self.lookup_export(&module_data).docstring_range()

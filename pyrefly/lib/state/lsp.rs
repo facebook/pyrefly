@@ -1474,6 +1474,41 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    fn find_definition_for_dunder_all_entry(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        preference: FindPreference,
+    ) -> Option<FindDefinitionItemWithDocstring> {
+        let module_info = self.get_module_info(handle)?;
+        let exports = self.get_exports_data(handle);
+        let (_entry_range, name) = exports.dunder_all_name_at(position)?;
+
+        if let Some((definition_handle, export)) =
+            self.resolve_named_import(handle, module_info.name(), name.clone(), preference)
+        {
+            let definition_module = self.get_module_info(&definition_handle)?;
+            return Some(FindDefinitionItemWithDocstring {
+                metadata: DefinitionMetadata::VariableOrAttribute(export.symbol_kind),
+                definition_range: export.location,
+                module: definition_module,
+                docstring_range: export.docstring_range,
+                display_name: Some(name.to_string()),
+            });
+        }
+
+        if module_info.path().is_init() {
+            let submodule = module_info.name().append(&name);
+            if let Some(definition) =
+                self.find_definition_for_imported_module(handle, submodule, preference)
+            {
+                return Some(definition);
+            }
+        }
+
+        None
+    }
+
     fn find_definition_for_keyword_argument(
         &self,
         handle: &Handle,
@@ -1559,6 +1594,15 @@ impl<'a> Transaction<'a> {
             return vec![];
         };
         let covering_nodes = Ast::locate_node(&mod_module, position);
+
+        if covering_nodes
+            .iter()
+            .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+            && let Some(definition) =
+                self.find_definition_for_dunder_all_entry(handle, position, preference)
+        {
+            return vec![definition];
+        }
 
         match Self::identifier_from_covering_nodes(&covering_nodes) {
             Some(IdentifierWithContext {

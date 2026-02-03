@@ -20,6 +20,7 @@ use pyrefly_types::callable::Deprecation;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
@@ -177,6 +178,24 @@ impl Exports {
     /// Get the docstring for this module.
     pub fn docstring_range(&self) -> Option<TextRange> {
         self.0.docstring_range
+    }
+
+    /// If `position` is inside a user-specified `__all__` string entry, return its range and name.
+    pub fn dunder_all_name_at(&self, position: TextSize) -> Option<(TextRange, Name)> {
+        if self.0.definitions.dunder_all.kind != DunderAllKind::Specified {
+            return None;
+        }
+        self.0
+            .definitions
+            .dunder_all
+            .entries
+            .iter()
+            .find_map(|entry| match entry {
+                DunderAllEntry::Name(range, name) if range.contains_inclusive(position) => {
+                    Some((*range, name.clone()))
+                }
+                _ => None,
+            })
     }
 
     pub fn is_submodule_imported_implicitly(&self, name: &Name) -> bool {
