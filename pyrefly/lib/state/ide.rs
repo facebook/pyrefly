@@ -15,6 +15,8 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::gas::Gas;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -38,6 +40,13 @@ pub enum IntermediateDefinition {
     Local(Export),
     NamedImport(TextRange, ModuleName, Name, Option<TextRange>),
     Module(TextRange, ModuleName),
+}
+
+pub(crate) struct ImportEdit {
+    pub range: TextRange,
+    pub new_text: String,
+    pub display_text: String,
+    pub module_name: String,
 }
 
 pub fn key_to_intermediate_definition(
@@ -218,7 +227,7 @@ pub fn insert_import_edit(
     handle_to_import_from: Handle,
     export_name: &str,
     import_format: ImportFormat,
-) -> (TextSize, String, String) {
+) -> ImportEdit {
     let use_absolute_import = match import_format {
         ImportFormat::Absolute => true,
         ImportFormat::Relative => {
@@ -255,12 +264,7 @@ pub fn insert_import_edit_with_forced_import_format(
     handle_to_import_from: Handle,
     export_name: &str,
     use_absolute_import: bool,
-) -> (TextSize, String, String) {
-    let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
-        first_stmt.range().start()
-    } else {
-        ast.range.end()
-    };
+) -> ImportEdit {
     let module_name_to_import = if use_absolute_import {
         handle_to_import_from.module()
     } else if let Some(relative_module) = ModuleName::relative_module_name_between(
@@ -271,12 +275,104 @@ pub fn insert_import_edit_with_forced_import_format(
     } else {
         handle_to_import_from.module()
     };
+    let display_text = format!(
+        "from {} import {}",
+        module_name_to_import.as_str(),
+        export_name
+    );
+    if let Some((range, new_text)) =
+        find_import_merge_edit(ast, module_name_to_import.as_str(), export_name)
+    {
+        return ImportEdit {
+            range,
+            new_text,
+            display_text,
+            module_name: module_name_to_import.to_string(),
+        };
+    }
+
+    let insert_position = find_import_block_insertion_point(ast, module_name_to_import.as_str())
+        .unwrap_or_else(|| {
+            if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
+                first_stmt.range().start()
+            } else {
+                ast.range.end()
+            }
+        });
     let insert_text = format!(
         "from {} import {}\n",
         module_name_to_import.as_str(),
         export_name
     );
-    (position, insert_text, module_name_to_import.to_string())
+    ImportEdit {
+        range: TextRange::at(insert_position, TextSize::new(0)),
+        new_text: insert_text,
+        display_text,
+        module_name: module_name_to_import.to_string(),
+    }
+}
+
+fn find_import_merge_edit(
+    ast: &ModModule,
+    module_name: &str,
+    export_name: &str,
+) -> Option<(TextRange, String)> {
+    for stmt in import_block_stmts(ast) {
+        if let Stmt::ImportFrom(import_from) = stmt
+            && import_from_module_matches(import_from, module_name)
+        {
+            if let Some(range) = merge_range_for_import(import_from, export_name) {
+                return Some((range, format!(", {}", export_name)));
+            }
+        }
+    }
+    None
+}
+
+fn find_import_block_insertion_point(ast: &ModModule, module_name: &str) -> Option<TextSize> {
+    for stmt in import_block_stmts(ast) {
+        if let Stmt::ImportFrom(import_from) = stmt
+            && import_from_module_matches(import_from, module_name)
+        {
+            return Some(stmt.range().start());
+        }
+    }
+    None
+}
+
+fn import_block_stmts<'a>(ast: &'a ModModule) -> impl Iterator<Item = &'a Stmt> {
+    ast.body
+        .iter()
+        .skip_while(|stmt| is_docstring_stmt(stmt))
+        .take_while(|stmt| matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_)))
+}
+
+fn import_from_module_matches(import_from: &StmtImportFrom, module_name: &str) -> bool {
+    let dots = ".".repeat(import_from.level as usize);
+    let module = import_from
+        .module
+        .as_ref()
+        .map(|module| module.as_str())
+        .unwrap_or("");
+    format!("{dots}{module}") == module_name
+}
+
+fn merge_range_for_import(import_from: &StmtImportFrom, export_name: &str) -> Option<TextRange> {
+    let mut last_alias_end: Option<TextSize> = None;
+    for alias in &import_from.names {
+        if alias.name.as_str() == "*" {
+            return None;
+        }
+        if alias.name.as_str() == export_name && alias.asname.is_none() {
+            return None;
+        }
+        let alias_end = alias
+            .asname
+            .as_ref()
+            .map_or(alias.name.range.end(), |asname| asname.range.end());
+        last_alias_end = Some(alias_end);
+    }
+    last_alias_end.map(|end| TextRange::at(end, TextSize::new(0)))
 }
 
 /// Some handles must be imported in absolute style,

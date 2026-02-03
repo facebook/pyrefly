@@ -16,6 +16,7 @@ use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
 use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use tracing::error;
 
@@ -26,6 +27,7 @@ use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::ErrorKind;
 use crate::lsp::wasm::inlay_hints::ParameterAnnotation;
+use crate::state::ide::ImportEdit;
 use crate::state::ide::insert_import_edit_with_forced_import_format;
 use crate::state::lsp::AnnotationKind;
 use crate::state::require::Require;
@@ -303,7 +305,7 @@ impl InferArgs {
                             if let Some(ast) = transaction.get_ast(&handle) {
                                 let error_range = error.range();
                                 let unknown_name = module_info.code_at(error_range);
-                                let imports: Vec<(TextSize, String, String)> = transaction
+                                let imports: Vec<ImportEdit> = transaction
                                     .search_exports_exact(unknown_name)
                                     .into_iter()
                                     .map(|(handle_to_import_from, _)| {
@@ -348,17 +350,21 @@ impl InferArgs {
         fs_anyhow::write(file_path, result)
     }
 
-    fn add_imports_to_file(
-        file_path: &Path,
-        imports: Vec<(TextSize, String, String)>,
-    ) -> anyhow::Result<()> {
+    fn add_imports_to_file(file_path: &Path, imports: Vec<ImportEdit>) -> anyhow::Result<()> {
         let file_content = fs_anyhow::read_to_string(file_path)?;
         let mut result = file_content;
-        for (position, import, _) in imports {
-            let offset = (position).into();
-            if !result.contains(&import) {
-                result.insert_str(offset, &import);
+        let mut edits: Vec<(TextRange, String, String)> = imports
+            .into_iter()
+            .map(|edit| (edit.range, edit.new_text, edit.display_text))
+            .collect();
+        edits.sort_by_key(|(range, _, _)| range.start());
+        for (range, edit_text, display_text) in edits.into_iter().rev() {
+            if edit_text.starts_with("from ") || edit_text.starts_with("import ") {
+                if result.contains(&edit_text) || result.contains(&display_text) {
+                    continue;
+                }
             }
+            result.replace_range(range.start().to_usize()..range.end().to_usize(), &edit_text);
         }
         fs_anyhow::write(file_path, result)
     }

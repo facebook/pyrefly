@@ -518,8 +518,8 @@ impl Transaction<'_> {
                     continue;
                 }
                 let module_description = handle_to_import_from.module().as_str().to_owned();
-                let (insert_text, additional_text_edits, imported_module) = {
-                    let (position, insert_text, module_name) = insert_import_edit(
+                let (detail_text, additional_text_edits, imported_module) = {
+                    let import_edit = insert_import_edit(
                         &ast,
                         self.config_finder(),
                         handle.dupe(),
@@ -528,10 +528,14 @@ impl Transaction<'_> {
                         import_format,
                     );
                     let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                        new_text: insert_text.clone(),
+                        range: module_info.to_lsp_range(import_edit.range),
+                        new_text: import_edit.new_text.clone(),
                     };
-                    (insert_text, Some(vec![import_text_edit]), module_name)
+                    (
+                        format!("{}\n", import_edit.display_text),
+                        Some(vec![import_text_edit]),
+                        import_edit.module_name,
+                    )
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
