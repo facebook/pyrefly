@@ -56,7 +56,7 @@ struct CalledOverload<'f> {
 
 impl CalledOverload<'_> {
     fn num_errors(&self) -> usize {
-        self.call_errors.len_for_overload_matching() + self.specialization_errors.len()
+        self.call_errors.len() + self.specialization_errors.len()
     }
 }
 
@@ -853,7 +853,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let (call_errors, specialization_errors, res, expected_types) = try_call(hint);
         let (call_errors, specialization_errors, res, expected_types) = if tparams.is_some()
             && hint.is_some()
-            && call_errors.len_for_overload_matching() + specialization_errors.len() > 0
+            && call_errors.len() + specialization_errors.len() > 0
         {
             try_call(None)
         } else {

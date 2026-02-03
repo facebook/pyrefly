@@ -553,9 +553,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if got.is_error() || got.is_any() || want.is_any() {
             return;
         }
-        if want.contains_type_variable() {
-            return;
-        }
         if !matches!(got, Type::ClassType(cls) if cls.is_builtin("str")) {
             return;
         }
@@ -1241,7 +1238,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 let (got, ok) = self.check_expr_argument(
                                     x,
                                     hint,
-                                    kw.range,
+                                    x.range(),
                                     arg_errors,
                                     call_errors,
                                     tcc,
