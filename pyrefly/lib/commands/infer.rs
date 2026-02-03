@@ -13,7 +13,8 @@ use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::base::UntypedDefBehavior;
 use pyrefly_config::finder::ConfigFinder;
-use pyrefly_python::module_name::{ModuleName, ModuleNameWithKind};
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::qname::QName;
 use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
@@ -24,13 +25,16 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
-use crate::commands::check::{self, Handles};
+use crate::commands::check::Handles;
+use crate::commands::check::{self};
 use crate::commands::config_finder::ConfigConfigurerWrapper;
-use crate::commands::files::{FilesArgs, get_project_config_for_current_dir};
+use crate::commands::files::FilesArgs;
+use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::ErrorKind;
 use crate::lsp::wasm::inlay_hints::ParameterAnnotation;
-use crate::state::ide::{ImportEdit, insert_import_edit_with_forced_import_format};
+use crate::state::ide::ImportEdit;
+use crate::state::ide::insert_import_edit_with_forced_import_format;
 use crate::state::lsp::AnnotationKind;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -378,9 +382,10 @@ impl InferArgs {
             }
             let module_info = error.module();
             let module_path = module_info.path().clone();
-            let config = state
-                .config_finder()
-                .python_file(ModuleNameWithKind::guaranteed(ModuleName::unknown()), &module_path);
+            let config = state.config_finder().python_file(
+                ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+                &module_path,
+            );
             let handle = config.handle_from_module_path(module_path);
             if let Some(ast) = transaction.get_ast(&handle) {
                 let error_range = error.range();
@@ -850,8 +855,7 @@ def foo():
             return ExampleA()
         "#;
         let output = r#"
-        from file_two import ExampleA
-from file_two import get_a
+        from file_two import get_a, ExampleA
         def foo() -> ExampleA:
             return get_a()
         "#;
@@ -878,9 +882,7 @@ from file_two import get_a
             return ExampleB()
         "#;
         let output = r#"
-        from file_two import ExampleB
-from file_two import ExampleA
-from file_two import get_a, get_b
+        from file_two import get_a, get_b, ExampleB, ExampleA
         def foo() -> ExampleA:
             return get_a()
         def bar() -> ExampleB:
