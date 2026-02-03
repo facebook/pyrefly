@@ -4981,12 +4981,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     for decorator_key in decorators.iter().rev() {
                         let decorator = self.get_idx(*decorator_key);
                         let range = self.bindings().idx_to_key(*decorator_key).range();
-                        ty = self.apply_class_decorator(
-                            decorator.ty.clone(),
-                            ty,
-                            range,
-                            errors,
-                        );
+                        ty = self.apply_class_decorator(decorator.ty.clone(), ty, range, errors);
                     }
                     ty
                 }
