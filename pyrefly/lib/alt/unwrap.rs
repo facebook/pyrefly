@@ -78,6 +78,23 @@ impl<'a> Hint<'a> {
 }
 
 impl<'a, 'b> HintRef<'a, 'b> {
+    pub fn new(ty: &'b Type, errors: Option<&'a ErrorCollector>) -> Self {
+        let (branches, source_branches) = match ty {
+            Type::Union(box Union { members, .. }) => (members.as_slice(), members.len().max(1)),
+            _ => (std::slice::from_ref(ty), 1),
+        };
+        Self {
+            union: ty,
+            branches,
+            errors,
+            source_branches,
+        }
+    }
+
+    pub fn soft(ty: &'b Type) -> Self {
+        Self::new(ty, None)
+    }
+
     pub fn ty(&self) -> &Type {
         self.union
     }
@@ -98,6 +115,28 @@ impl<'a, 'b> HintRef<'a, 'b> {
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn fresh_var(&self) -> Var {
         self.solver().fresh_unwrap(self.uniques)
+    }
+
+    pub fn prefer_union_branch_without_vars(&self, ty: &Type) -> Option<Type> {
+        let Type::Union(box Union {
+            members,
+            display_name,
+        }) = ty
+        else {
+            return None;
+        };
+        if members.len() < 2 {
+            return None;
+        }
+        let mut reordered = members.clone();
+        reordered.sort_by_key(|branch| self.type_contains_var(branch));
+        if reordered.iter().eq(members.iter()) {
+            return None;
+        }
+        Some(Type::Union(Box::new(Union {
+            members: reordered,
+            display_name: display_name.clone(),
+        })))
     }
 
     /// Resolve a var to a type, but only if it was pinned by the subtype
@@ -183,7 +222,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         branches
     }
 
-    fn type_contains_var(&self, ty: &Type) -> bool {
+    pub fn type_contains_var(&self, ty: &Type) -> bool {
         ty.may_contain_quantified_var()
     }
 
@@ -243,7 +282,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         mut f: impl FnMut(&Type) -> Option<Type>,
     ) -> Option<Hint<'a>> {
         let source_branches = hint.source_branches();
-        let mapped: Vec<Type> = hint.branches().iter().filter_map(|branch| f(branch)).collect();
+        let mapped: Vec<Type> = hint
+            .branches()
+            .iter()
+            .filter_map(|branch| f(branch))
+            .collect();
         self.hint_from_branches_vec(mapped, hint.errors())
             .map(|hint| hint.with_source_branches(source_branches))
     }

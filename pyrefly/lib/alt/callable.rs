@@ -54,7 +54,6 @@ use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
 use crate::types::types::Type;
-use crate::types::types::Union;
 use crate::types::types::Var;
 
 /// Structure to turn TypeOrExprs into Types.
@@ -481,28 +480,6 @@ impl<'a> PosParam<'a> {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn prefer_union_branch_without_vars(&self, ty: &Type) -> Option<Type> {
-        let Type::Union(box Union {
-            members,
-            display_name,
-        }) = ty
-        else {
-            return None;
-        };
-        if members.len() < 2 {
-            return None;
-        }
-        let mut reordered = members.clone();
-        reordered.sort_by_key(|member| member.may_contain_quantified_var());
-        if reordered.iter().eq(members.iter()) {
-            return None;
-        }
-        Some(Type::Union(Box::new(Union {
-            members: reordered,
-            display_name: display_name.clone(),
-        })))
-    }
-
     fn is_param_spec_args(&self, x: &CallArg, q: &Quantified, errors: &ErrorCollector) -> bool {
         match x {
             CallArg::Star(x, _) => {
@@ -672,7 +649,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if !self.type_contains_var(hint_ty) {
                                 use_hint = true;
                             } else if let Type::Union(options) = hint_ty {
-                                if options.iter().any(|option| !self.type_contains_var(option)) {
+                                if options
+                                    .members
+                                    .iter()
+                                    .any(|option| !self.type_contains_var(option))
+                                {
                                     use_hint = true;
                                 }
                             }
@@ -727,7 +708,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             if !self.type_contains_var(hint_ty) {
                                 use_hint = true;
                             } else if let Type::Union(options) = hint_ty {
-                                if options.iter().any(|option| !self.type_contains_var(option)) {
+                                if options
+                                    .members
+                                    .iter()
+                                    .any(|option| !self.type_contains_var(option))
+                                {
                                     use_hint = true;
                                 }
                             }

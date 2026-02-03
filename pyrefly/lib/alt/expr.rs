@@ -35,7 +35,6 @@ use pyrefly_types::types::Forallable;
 use pyrefly_types::types::Union;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
-use pyrefly_util::prelude::VecExt;
 use pyrefly_util::suggest::best_suggestion;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
@@ -46,9 +45,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprGenerator;
-use ruff_python_ast::ExprLambda;
 use ruff_python_ast::ExprList;
-use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
@@ -65,6 +62,7 @@ use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -73,7 +71,6 @@ use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
 use crate::alt::unwrap::HintRef;
-use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
@@ -84,13 +81,6 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
-<<<<<<< HEAD
-||||||| parent of 434a44124 (fmt)
-use crate::types::callable::Callable;
-=======
-use crate::graph::index::Idx;
-use crate::types::callable::Callable;
->>>>>>> 434a44124 (fmt)
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -448,10 +438,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Vec::new()
                 };
                 let param_vars = self.allocate_lambda_param_vars(&param_ids);
-
+                let param_var_refs: Vec<(&Name, Var)> =
+                    param_vars.iter().map(|&(name, var)| (name, var)).collect();
                 // Pass any contextual information to the parameter bindings used in the lambda body as a side
                 // effect, by setting an answer for the vars created at binding time.
-                let return_hint = hint.and_then(|hint| self.decompose_lambda(hint, &param_vars));
+                let return_hint =
+                    hint.and_then(|hint| self.decompose_lambda(hint, &param_var_refs));
 
                 let mut params: Vec<Param> = if let Some(parameters) = &lambda.parameters {
                     param_vars
@@ -521,22 +513,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
             Expr::List(x) => {
-                let elt_hint = hint.and_then(|ty| self.decompose_list(ty));
-                if x.is_empty() {
-                    let elem_ty = elt_hint.map_or_else(
-                        || {
-                            self.solver()
-                                .fresh_partial_contained(self.uniques, x.range)
-                                .to_type(self.heap)
-                        },
-                        |hint| hint.to_type(),
-                    );
-                    self.heap.mk_class_type(self.stdlib.list(elem_ty))
-                } else {
-                    let elem_tys = self.elts_infer(&x.elts, elt_hint, errors);
-                    self.heap
-                        .mk_class_type(self.stdlib.list(self.unions(elem_tys)))
-                }
                 let elt_hint = hint.and_then(|ty| self.decompose_list(ty));
                 self.list_with_hint(x, elt_hint, errors)
             }
@@ -1342,85 +1318,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         t_acc
     }
 
-    fn lambda_infer(
-        &self,
-        lambda: &ExprLambda,
-        hint: Option<HintRef>,
-        errors: &ErrorCollector,
-    ) -> Type {
-        let param_vars: Vec<(Name, Var)> = if let Some(parameters) = &lambda.parameters {
-            parameters
-                .iter_non_variadic_params()
-                .map(|x| {
-                    (
-                        x.name().id.clone(),
-                        self.bindings().get_lambda_param(x.name()),
-                    )
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let param_states = param_vars
-            .iter()
-            .map(|(_, var)| self.solver().snapshot_unwrap_var(*var))
-            .collect::<Vec<_>>();
-        let return_hint = hint.and_then(|hint| self.decompose_lambda(hint, &param_vars));
-
-        let ret = self.expr_infer_type_no_trace(
-            &lambda.body,
-            return_hint.as_ref().map(|hint| hint.as_ref()),
-            errors,
-        );
-        let ret = self.solver().expand_vars(ret);
-
-        let mut params = param_vars
-            .iter()
-            .map(|(name, var)| {
-                Param::Pos(
-                    name.clone(),
-                    self.solver().force_var(*var),
-                    Required::Required,
-                )
-            })
-            .collect::<Vec<_>>();
-        if let Some(parameters) = &lambda.parameters {
-            params.extend(parameters.vararg.iter().map(|x| {
-                Param::VarArg(
-                    Some(x.name.id.clone()),
-                    self.solver()
-                        .force_var(self.bindings().get_lambda_param(&x.name)),
-                )
-            }));
-            params.extend(parameters.kwarg.iter().map(|x| {
-                Param::Kwargs(
-                    Some(x.name.id.clone()),
-                    self.solver()
-                        .force_var(self.bindings().get_lambda_param(&x.name)),
-                )
-            }));
-        }
-        let params = Params::List(ParamList::new(params));
-        for ((_, var), state) in param_vars.iter().zip(param_states.into_iter()) {
-            self.solver().restore_unwrap_var(*var, state);
-        }
-        Type::Callable(Box::new(Callable { params, ret }))
-    }
-
-    fn lambda_param_type_info(&self, name: &ExprName) -> Option<TypeInfo> {
-        let key = Key::BoundName(ShortIdentifier::expr_name(name));
-        let idx = self.bindings().key_to_idx(&key);
-        self.lambda_param_type_info_from_idx(idx)
-    }
-
-    fn lambda_param_type_info_from_idx(&self, idx: Idx<Key>) -> Option<TypeInfo> {
-        match self.bindings().get(idx) {
-            Binding::Forward(next) => self.lambda_param_type_info_from_idx(*next),
-            Binding::LambdaParameter(var) => Some(TypeInfo::of_ty(var.to_type())),
-            _ => None,
-        }
-    }
-
     /// Infers types for `if` clauses in the given comprehensions.
     /// This is for error detection only; the types are not used.
     fn ifs_infer(&self, comps: &[Comprehension], errors: &ErrorCollector) {
@@ -2033,7 +1930,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         Type::any_implicit()
                     } else {
-                        self.solver().fresh_contained(self.uniques).to_type()
+                        self.solver()
+                            .fresh_partial_contained(self.uniques, x.range())
+                            .to_type(self.heap)
                     }
                 },
                 |hint| hint.to_type(),

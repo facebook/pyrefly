@@ -9,7 +9,6 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use clap::Parser;
-use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::base::UntypedDefBehavior;
 use pyrefly_config::finder::ConfigFinder;
