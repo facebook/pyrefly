@@ -301,6 +301,8 @@ pub enum ErrorKind {
     RedundantCondition,
     /// Raised by a call to reveal_type().
     RevealType,
+    /// Passing a string to something that expects an iterable of strings.
+    StringAsIterable,
     /// DEPRECATED: use [ImplicitAnyAttribute] (`implicit-any-attribute`) instead.
     /// Kept so that existing `# pyrefly: ignore[unannotated-attribute]` comments
     /// and config entries continue to work. This variant is never emitted by
@@ -442,6 +444,7 @@ impl ErrorKind {
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::ExplicitAny => Severity::Ignore,
+            ErrorKind::StringAsIterable => Severity::Warn,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,
