@@ -1577,6 +1577,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.restore_decoratee_generics(decorated_value, application.decoratee_tparams)
     }
 
+    pub(crate) fn apply_class_decorator(
+        &self,
+        decorator: Type,
+        decoratee: Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let call_target =
+            self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
+        let arg = CallArg::ty(&decoratee, range);
+        self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
+    }
+
     /// For a type guard function, validate whether it has at least one
     /// positional argument.
     fn validate_type_guard_positional_argument_count(
