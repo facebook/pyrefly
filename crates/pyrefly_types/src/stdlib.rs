@@ -300,10 +300,6 @@ impl Stdlib {
         Self::primitive(&self.object)
     }
 
-    pub fn is_bootstrapping(&self) -> bool {
-        self.object.is_err()
-    }
-
     pub fn bool(&self) -> &ClassType {
         Self::primitive(&self.bool)
     }
