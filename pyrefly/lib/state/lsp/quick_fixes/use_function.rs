@@ -49,6 +49,7 @@ use crate::ModuleInfo;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
+use crate::state::lsp::ast_helpers::find_containing_function_def;
 
 /// Builds use-function refactor actions for the supplied selection.
 pub(crate) fn use_function_code_actions(
@@ -191,20 +192,29 @@ struct CallTarget {
     import_edit: Option<(TextRange, String)>,
 }
 
+/// Finds the top-level function that covers `position`, if any.
+///
+/// This reuses the same AST traversal as call hierarchy but filters out
+/// methods and nested functions.
 fn find_enclosing_top_level_function(
     ast: &ModModule,
     position: TextSize,
 ) -> Option<StmtFunctionDef> {
-    for stmt in &ast.body {
-        if let Stmt::FunctionDef(function_def) = stmt
-            && function_def.range().contains_inclusive(position)
-        {
-            return Some(function_def.clone());
-        }
+    let containing = find_containing_function_def(ast, position)?;
+    if containing.class_def.is_some() {
+        return None;
     }
-    None
+    let in_module_body = ast.body.iter().any(|stmt| {
+        matches!(
+            stmt,
+            Stmt::FunctionDef(function_def)
+                if function_def.range() == containing.function_def.range()
+        )
+    });
+    in_module_body.then(|| containing.function_def.clone())
 }
 
+/// Collects the positional parameters that we can safely rewrite.
 fn collect_supported_params(function_def: &StmtFunctionDef) -> Option<Vec<String>> {
     let parameters = &function_def.parameters;
     if parameters.vararg.is_some()
@@ -223,6 +233,7 @@ fn collect_supported_params(function_def: &StmtFunctionDef) -> Option<Vec<String
     Some(params)
 }
 
+/// Returns the single return expression for a trivial function body.
 fn extract_return_expr(function_def: &StmtFunctionDef) -> Option<&Expr> {
     let body_iter = function_def.body.iter();
     let mut body: Vec<&Stmt> = Vec::new();
@@ -241,6 +252,7 @@ fn extract_return_expr(function_def: &StmtFunctionDef) -> Option<&Expr> {
     }
 }
 
+/// Validates that `expr` is a matchable return expression and counts param uses.
 fn validate_return_expr(
     expr: &Expr,
     param_set: &HashSet<String>,
@@ -312,6 +324,7 @@ fn validate_return_expr(
     }
 }
 
+/// Validates an optional expression in a return expression.
 fn validate_opt_expr(
     expr: &Option<Box<Expr>>,
     param_set: &HashSet<String>,
@@ -322,6 +335,7 @@ fn validate_opt_expr(
         .unwrap_or(true)
 }
 
+/// Determines how the target module should call the function (import reuse or new import).
 fn call_target_for_module(
     target_handle: &Handle,
     ast: &ModModule,
@@ -363,6 +377,7 @@ fn call_target_for_module(
     })
 }
 
+/// Finds the imported name for a function (`from module import name as alias`).
 fn find_imported_function_name(
     ast: &ModModule,
     module_name: &str,
@@ -396,6 +411,7 @@ fn find_imported_function_name(
     None
 }
 
+/// Finds the local alias for a module import (`import module as alias`).
 fn find_imported_module_alias(ast: &ModModule, module_name: &str) -> Option<String> {
     for stmt in &ast.body {
         let Stmt::Import(StmtImport { names, .. }) = stmt else {
@@ -410,6 +426,7 @@ fn find_imported_module_alias(ast: &ModModule, module_name: &str) -> Option<Stri
     None
 }
 
+/// Returns the bound name for an import alias (`asname` or `name`).
 fn alias_name(alias: &Alias) -> String {
     alias
         .asname
@@ -419,38 +436,43 @@ fn alias_name(alias: &Alias) -> String {
         .to_owned()
 }
 
+/// Checks whether a module already defines a top-level binding named `name`.
 fn module_has_top_level_binding(ast: &ModModule, name: &str) -> bool {
     for stmt in &ast.body {
+        if let Some(defined_name) = match stmt {
+            Stmt::FunctionDef(def) => Some(def.name.id.as_str()),
+            Stmt::ClassDef(def) => Some(def.name.id.as_str()),
+            _ => None,
+        } {
+            if defined_name == name {
+                return true;
+            }
+            continue;
+        }
+
+        if let Stmt::Assign(assign) = stmt {
+            if assign
+                .targets
+                .iter()
+                .any(|target| target_binds_name(target, name))
+            {
+                return true;
+            }
+            continue;
+        }
+
+        if let Some(target) = match stmt {
+            Stmt::AnnAssign(ann) => Some(ann.target.as_ref()),
+            Stmt::AugAssign(aug) => Some(aug.target.as_ref()),
+            _ => None,
+        } {
+            if target_binds_name(target, name) {
+                return true;
+            }
+            continue;
+        }
+
         match stmt {
-            Stmt::FunctionDef(def) => {
-                if def.name.id.as_str() == name {
-                    return true;
-                }
-            }
-            Stmt::ClassDef(def) => {
-                if def.name.id.as_str() == name {
-                    return true;
-                }
-            }
-            Stmt::Assign(assign) => {
-                if assign
-                    .targets
-                    .iter()
-                    .any(|target| matches!(target, Expr::Name(ExprName { id, .. }) if id.as_str() == name))
-                {
-                    return true;
-                }
-            }
-            Stmt::AnnAssign(ann) => {
-                if matches!(&*ann.target, Expr::Name(ExprName { id, .. }) if id.as_str() == name) {
-                    return true;
-                }
-            }
-            Stmt::AugAssign(aug) => {
-                if matches!(&*aug.target, Expr::Name(ExprName { id, .. }) if id.as_str() == name) {
-                    return true;
-                }
-            }
             Stmt::Import(StmtImport { names, .. }) => {
                 for alias in names {
                     if bound_name_for_import(alias) == name {
@@ -472,6 +494,12 @@ fn module_has_top_level_binding(ast: &ModModule, name: &str) -> bool {
     false
 }
 
+/// Checks whether an assignment target binds the given name.
+fn target_binds_name(target: &Expr, name: &str) -> bool {
+    matches!(target, Expr::Name(ExprName { id, .. }) if id.as_str() == name)
+}
+
+/// Returns the top-level name bound by an import statement.
 fn bound_name_for_import(alias: &Alias) -> &str {
     if let Some(asname) = &alias.asname {
         return asname.as_str();
@@ -479,6 +507,7 @@ fn bound_name_for_import(alias: &Alias) -> &str {
     alias.name.as_str().split('.').next().unwrap_or("")
 }
 
+/// Collects non-overlapping expression matches in a module.
 fn collect_matches(
     pattern: &FunctionPattern,
     ast: &ModModule,
@@ -529,6 +558,7 @@ fn collect_matches(
     matches
 }
 
+/// Matches a candidate expression against a pattern, recording parameter bindings.
 fn match_expr(
     pattern: &Expr,
     target: &Expr,
@@ -537,42 +567,84 @@ fn match_expr(
     bindings: &mut HashMap<String, ArgBinding>,
     module_info: &ModuleInfo,
 ) -> bool {
-    if let Expr::Name(ExprName { id, .. }) = pattern {
-        let name = id.as_str();
-        if param_set.contains(name) {
-            let duplicate = param_counts.get(name).copied().unwrap_or(0) > 1;
-            if let Some(existing) = bindings.get(name) {
-                if !duplicate {
-                    return true;
-                }
-                let Some(key) = argument_key(target, module_info) else {
-                    return false;
-                };
-                return existing.key.as_ref() == Some(&key);
-            }
-            if duplicate {
-                let Some(key) = argument_key(target, module_info) else {
-                    return false;
-                };
-                bindings.insert(
-                    name.to_owned(),
-                    ArgBinding {
-                        range: target.range(),
-                        key: Some(key),
-                    },
-                );
-            } else {
-                bindings.insert(
-                    name.to_owned(),
-                    ArgBinding {
-                        range: target.range(),
-                        key: None,
-                    },
-                );
-            }
-            return true;
-        }
+    if let Some(result) = match_param_binding(
+        pattern,
+        target,
+        param_set,
+        param_counts,
+        bindings,
+        module_info,
+    ) {
+        return result;
     }
+    match_expr_nodes(
+        pattern,
+        target,
+        param_set,
+        param_counts,
+        bindings,
+        module_info,
+    )
+}
+
+/// Matches a parameter placeholder and updates bindings if applicable.
+fn match_param_binding(
+    pattern: &Expr,
+    target: &Expr,
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> Option<bool> {
+    let Expr::Name(ExprName { id, .. }) = pattern else {
+        return None;
+    };
+    let name = id.as_str();
+    if !param_set.contains(name) {
+        return None;
+    }
+    let duplicate = param_counts.get(name).copied().unwrap_or(0) > 1;
+    if let Some(existing) = bindings.get(name) {
+        if !duplicate {
+            return Some(true);
+        }
+        let Some(key) = argument_key(target, module_info) else {
+            return Some(false);
+        };
+        return Some(existing.key.as_ref() == Some(&key));
+    }
+    if duplicate {
+        let Some(key) = argument_key(target, module_info) else {
+            return Some(false);
+        };
+        bindings.insert(
+            name.to_owned(),
+            ArgBinding {
+                range: target.range(),
+                key: Some(key),
+            },
+        );
+    } else {
+        bindings.insert(
+            name.to_owned(),
+            ArgBinding {
+                range: target.range(),
+                key: None,
+            },
+        );
+    }
+    Some(true)
+}
+
+/// Matches non-parameter expressions between pattern and target.
+fn match_expr_nodes(
+    pattern: &Expr,
+    target: &Expr,
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> bool {
     match (pattern, target) {
         (
             Expr::BooleanLiteral(ExprBooleanLiteral { value: lhs, .. }),
@@ -597,247 +669,57 @@ fn match_expr(
             Expr::EllipsisLiteral(ExprEllipsisLiteral { .. }),
             Expr::EllipsisLiteral(ExprEllipsisLiteral { .. }),
         ) => true,
-        (
-            Expr::Attribute(ExprAttribute {
-                value: lhs_value,
-                attr: lhs_attr,
-                ..
-            }),
-            Expr::Attribute(ExprAttribute {
-                value: rhs_value,
-                attr: rhs_attr,
-                ..
-            }),
-        ) => {
-            lhs_attr.id == rhs_attr.id
-                && match_expr(
-                    lhs_value,
-                    rhs_value,
-                    param_set,
-                    param_counts,
-                    bindings,
-                    module_info,
-                )
+        (Expr::Attribute(lhs), Expr::Attribute(rhs)) => {
+            match_attribute_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
         }
-        (
-            Expr::Subscript(ExprSubscript {
-                value: lhs_value,
-                slice: lhs_slice,
-                ..
-            }),
-            Expr::Subscript(ExprSubscript {
-                value: rhs_value,
-                slice: rhs_slice,
-                ..
-            }),
-        ) => {
-            match_expr(
-                lhs_value,
-                rhs_value,
-                param_set,
-                param_counts,
-                bindings,
-                module_info,
-            ) && match_expr(
-                lhs_slice,
-                rhs_slice,
-                param_set,
-                param_counts,
-                bindings,
-                module_info,
-            )
+        (Expr::Subscript(lhs), Expr::Subscript(rhs)) => {
+            match_subscript_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
         }
-        (
-            Expr::Slice(ExprSlice {
-                lower: lhs_lower,
-                upper: lhs_upper,
-                step: lhs_step,
-                ..
-            }),
-            Expr::Slice(ExprSlice {
-                lower: rhs_lower,
-                upper: rhs_upper,
-                step: rhs_step,
-                ..
-            }),
-        ) => {
-            match_opt_expr(
-                lhs_lower.as_deref(),
-                rhs_lower.as_deref(),
-                param_set,
-                param_counts,
-                bindings,
-                module_info,
-            ) && match_opt_expr(
-                lhs_upper.as_deref(),
-                rhs_upper.as_deref(),
-                param_set,
-                param_counts,
-                bindings,
-                module_info,
-            ) && match_opt_expr(
-                lhs_step.as_deref(),
-                rhs_step.as_deref(),
-                param_set,
-                param_counts,
-                bindings,
-                module_info,
-            )
+        (Expr::Slice(lhs), Expr::Slice(rhs)) => {
+            match_slice_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
         }
-        (
-            Expr::Tuple(ExprTuple { elts: lhs_elts, .. }),
-            Expr::Tuple(ExprTuple { elts: rhs_elts, .. }),
-        )
-        | (
-            Expr::List(ExprList { elts: lhs_elts, .. }),
-            Expr::List(ExprList { elts: rhs_elts, .. }),
-        )
-        | (Expr::Set(ExprSet { elts: lhs_elts, .. }), Expr::Set(ExprSet { elts: rhs_elts, .. })) => {
-            lhs_elts.len() == rhs_elts.len()
-                && lhs_elts.iter().zip(rhs_elts.iter()).all(|(lhs, rhs)| {
-                    match_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
-                })
+        (Expr::Tuple(lhs), Expr::Tuple(rhs)) => match_sequence_exprs(
+            &lhs.elts,
+            &rhs.elts,
+            param_set,
+            param_counts,
+            bindings,
+            module_info,
+        ),
+        (Expr::List(lhs), Expr::List(rhs)) => match_sequence_exprs(
+            &lhs.elts,
+            &rhs.elts,
+            param_set,
+            param_counts,
+            bindings,
+            module_info,
+        ),
+        (Expr::Set(lhs), Expr::Set(rhs)) => match_sequence_exprs(
+            &lhs.elts,
+            &rhs.elts,
+            param_set,
+            param_counts,
+            bindings,
+            module_info,
+        ),
+        (Expr::Dict(lhs), Expr::Dict(rhs)) => {
+            match_dict_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
         }
-        (
-            Expr::Dict(ExprDict {
-                items: lhs_items, ..
-            }),
-            Expr::Dict(ExprDict {
-                items: rhs_items, ..
-            }),
-        ) => {
-            lhs_items.len() == rhs_items.len()
-                && lhs_items.iter().zip(rhs_items.iter()).all(|(lhs, rhs)| {
-                    match_opt_expr(
-                        lhs.key.as_ref(),
-                        rhs.key.as_ref(),
-                        param_set,
-                        param_counts,
-                        bindings,
-                        module_info,
-                    ) && match_expr(
-                        &lhs.value,
-                        &rhs.value,
-                        param_set,
-                        param_counts,
-                        bindings,
-                        module_info,
-                    )
-                })
+        (Expr::UnaryOp(lhs), Expr::UnaryOp(rhs)) => {
+            match_unary_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
         }
-        (
-            Expr::UnaryOp(ExprUnaryOp {
-                op: lhs_op,
-                operand: lhs_operand,
-                ..
-            }),
-            Expr::UnaryOp(ExprUnaryOp {
-                op: rhs_op,
-                operand: rhs_operand,
-                ..
-            }),
-        ) => {
-            lhs_op == rhs_op
-                && match_expr(
-                    lhs_operand,
-                    rhs_operand,
-                    param_set,
-                    param_counts,
-                    bindings,
-                    module_info,
-                )
+        (Expr::BinOp(lhs), Expr::BinOp(rhs)) => {
+            match_binop_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
         }
-        (
-            Expr::BinOp(ExprBinOp {
-                op: lhs_op,
-                left: lhs_left,
-                right: lhs_right,
-                ..
-            }),
-            Expr::BinOp(ExprBinOp {
-                op: rhs_op,
-                left: rhs_left,
-                right: rhs_right,
-                ..
-            }),
-        ) => {
-            lhs_op == rhs_op
-                && match_expr(
-                    lhs_left,
-                    rhs_left,
-                    param_set,
-                    param_counts,
-                    bindings,
-                    module_info,
-                )
-                && match_expr(
-                    lhs_right,
-                    rhs_right,
-                    param_set,
-                    param_counts,
-                    bindings,
-                    module_info,
-                )
+        (Expr::BoolOp(lhs), Expr::BoolOp(rhs)) => {
+            match_boolop_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
         }
-        (
-            Expr::BoolOp(ExprBoolOp {
-                op: lhs_op,
-                values: lhs_values,
-                ..
-            }),
-            Expr::BoolOp(ExprBoolOp {
-                op: rhs_op,
-                values: rhs_values,
-                ..
-            }),
-        ) => {
-            lhs_op == rhs_op
-                && lhs_values.len() == rhs_values.len()
-                && lhs_values.iter().zip(rhs_values.iter()).all(|(lhs, rhs)| {
-                    match_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
-                })
+        (Expr::Compare(lhs), Expr::Compare(rhs)) => {
+            match_compare_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
         }
-        (
-            Expr::Compare(ExprCompare {
-                left: lhs_left,
-                ops: lhs_ops,
-                comparators: lhs_comparators,
-                ..
-            }),
-            Expr::Compare(ExprCompare {
-                left: rhs_left,
-                ops: rhs_ops,
-                comparators: rhs_comparators,
-                ..
-            }),
-        ) => {
-            lhs_ops == rhs_ops
-                && lhs_comparators.len() == rhs_comparators.len()
-                && match_expr(
-                    lhs_left,
-                    rhs_left,
-                    param_set,
-                    param_counts,
-                    bindings,
-                    module_info,
-                )
-                && lhs_comparators
-                    .iter()
-                    .zip(rhs_comparators.iter())
-                    .all(|(lhs, rhs)| {
-                        match_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
-                    })
-        }
-        (
-            Expr::Starred(ExprStarred {
-                value: lhs_value, ..
-            }),
-            Expr::Starred(ExprStarred {
-                value: rhs_value, ..
-            }),
-        ) => match_expr(
-            lhs_value,
-            rhs_value,
+        (Expr::Starred(lhs), Expr::Starred(rhs)) => match_expr(
+            lhs.value.as_ref(),
+            rhs.value.as_ref(),
             param_set,
             param_counts,
             bindings,
@@ -847,6 +729,225 @@ fn match_expr(
     }
 }
 
+/// Matches attribute expressions by name and value.
+fn match_attribute_expr(
+    lhs: &ExprAttribute,
+    rhs: &ExprAttribute,
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> bool {
+    lhs.attr.id == rhs.attr.id
+        && match_expr(
+            lhs.value.as_ref(),
+            rhs.value.as_ref(),
+            param_set,
+            param_counts,
+            bindings,
+            module_info,
+        )
+}
+
+/// Matches subscript expressions by value and slice.
+fn match_subscript_expr(
+    lhs: &ExprSubscript,
+    rhs: &ExprSubscript,
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> bool {
+    match_expr(
+        lhs.value.as_ref(),
+        rhs.value.as_ref(),
+        param_set,
+        param_counts,
+        bindings,
+        module_info,
+    ) && match_expr(
+        lhs.slice.as_ref(),
+        rhs.slice.as_ref(),
+        param_set,
+        param_counts,
+        bindings,
+        module_info,
+    )
+}
+
+/// Matches slice expressions by comparing each component.
+fn match_slice_expr(
+    lhs: &ExprSlice,
+    rhs: &ExprSlice,
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> bool {
+    match_opt_expr(
+        lhs.lower.as_deref(),
+        rhs.lower.as_deref(),
+        param_set,
+        param_counts,
+        bindings,
+        module_info,
+    ) && match_opt_expr(
+        lhs.upper.as_deref(),
+        rhs.upper.as_deref(),
+        param_set,
+        param_counts,
+        bindings,
+        module_info,
+    ) && match_opt_expr(
+        lhs.step.as_deref(),
+        rhs.step.as_deref(),
+        param_set,
+        param_counts,
+        bindings,
+        module_info,
+    )
+}
+
+/// Matches tuple/list/set elements in order.
+fn match_sequence_exprs(
+    lhs: &[Expr],
+    rhs: &[Expr],
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> bool {
+    lhs.len() == rhs.len()
+        && lhs
+            .iter()
+            .zip(rhs.iter())
+            .all(|(lhs, rhs)| match_expr(lhs, rhs, param_set, param_counts, bindings, module_info))
+}
+
+/// Matches dict expressions by comparing key/value pairs.
+fn match_dict_expr(
+    lhs: &ExprDict,
+    rhs: &ExprDict,
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> bool {
+    lhs.items.len() == rhs.items.len()
+        && lhs.items.iter().zip(rhs.items.iter()).all(|(lhs, rhs)| {
+            match_opt_expr(
+                lhs.key.as_ref(),
+                rhs.key.as_ref(),
+                param_set,
+                param_counts,
+                bindings,
+                module_info,
+            ) && match_expr(
+                &lhs.value,
+                &rhs.value,
+                param_set,
+                param_counts,
+                bindings,
+                module_info,
+            )
+        })
+}
+
+/// Matches unary operations by operator and operand.
+fn match_unary_expr(
+    lhs: &ExprUnaryOp,
+    rhs: &ExprUnaryOp,
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> bool {
+    lhs.op == rhs.op
+        && match_expr(
+            lhs.operand.as_ref(),
+            rhs.operand.as_ref(),
+            param_set,
+            param_counts,
+            bindings,
+            module_info,
+        )
+}
+
+/// Matches binary operations by operator and operands.
+fn match_binop_expr(
+    lhs: &ExprBinOp,
+    rhs: &ExprBinOp,
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> bool {
+    lhs.op == rhs.op
+        && match_expr(
+            lhs.left.as_ref(),
+            rhs.left.as_ref(),
+            param_set,
+            param_counts,
+            bindings,
+            module_info,
+        )
+        && match_expr(
+            lhs.right.as_ref(),
+            rhs.right.as_ref(),
+            param_set,
+            param_counts,
+            bindings,
+            module_info,
+        )
+}
+
+/// Matches boolean operations by operator and values.
+fn match_boolop_expr(
+    lhs: &ExprBoolOp,
+    rhs: &ExprBoolOp,
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> bool {
+    lhs.op == rhs.op
+        && match_sequence_exprs(
+            &lhs.values,
+            &rhs.values,
+            param_set,
+            param_counts,
+            bindings,
+            module_info,
+        )
+}
+
+/// Matches comparison expressions by operators and operands.
+fn match_compare_expr(
+    lhs: &ExprCompare,
+    rhs: &ExprCompare,
+    param_set: &HashSet<String>,
+    param_counts: &HashMap<String, usize>,
+    bindings: &mut HashMap<String, ArgBinding>,
+    module_info: &ModuleInfo,
+) -> bool {
+    lhs.ops == rhs.ops
+        && lhs.comparators.len() == rhs.comparators.len()
+        && match_expr(
+            lhs.left.as_ref(),
+            rhs.left.as_ref(),
+            param_set,
+            param_counts,
+            bindings,
+            module_info,
+        )
+        && lhs
+            .comparators
+            .iter()
+            .zip(rhs.comparators.iter())
+            .all(|(lhs, rhs)| match_expr(lhs, rhs, param_set, param_counts, bindings, module_info))
+}
+
+/// Matches optional expressions (Some/None pairs) in nested nodes.
 fn match_opt_expr(
     left: Option<&Expr>,
     right: Option<&Expr>,
@@ -864,6 +965,7 @@ fn match_opt_expr(
     }
 }
 
+/// Builds a stable key to compare repeated parameter bindings.
 fn argument_key(expr: &Expr, module_info: &ModuleInfo) -> Option<String> {
     match expr {
         Expr::Name(ExprName { id, .. }) => Some(id.as_str().to_owned()),
@@ -879,6 +981,7 @@ fn argument_key(expr: &Expr, module_info: &ModuleInfo) -> Option<String> {
     }
 }
 
+/// Builds a call expression text using the collected bindings.
 fn build_call_text(
     callee: &str,
     param_order: &[String],
