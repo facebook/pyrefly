@@ -13,7 +13,7 @@ use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::base::UntypedDefBehavior;
 use pyrefly_config::finder::ConfigFinder;
-use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_name::{ModuleName, ModuleNameWithKind};
 use pyrefly_python::qname::QName;
 use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
@@ -21,13 +21,16 @@ use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
 use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
-use crate::commands::check::Handles;
+use crate::commands::check::{self, Handles};
 use crate::commands::config_finder::ConfigConfigurerWrapper;
-use crate::commands::files::FilesArgs;
+use crate::commands::files::{FilesArgs, get_project_config_for_current_dir};
 use crate::commands::util::CommandExitStatus;
+use crate::config::error_kind::ErrorKind;
 use crate::lsp::wasm::inlay_hints::ParameterAnnotation;
+use crate::state::ide::{ImportEdit, insert_import_edit_with_forced_import_format};
 use crate::state::lsp::AnnotationKind;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -344,17 +347,60 @@ impl InferArgs {
                         .iter()
                         .find(|stmt| !is_docstring_stmt(stmt))
                         .map_or(ast.range.end(), |stmt| stmt.range().start());
-                    let mut imports: Vec<(TextSize, String, String)> = needed_imports
+                    let mut imports: Vec<ImportEdit> = needed_imports
                         .into_iter()
                         .map(|(module_name, name)| {
-                            let import_text =
-                                format!("from {} import {}\n", module_name.as_str(), name);
-                            (position, import_text, module_name.as_str().to_owned())
+                            let display_text =
+                                format!("from {} import {}", module_name.as_str(), name);
+                            ImportEdit {
+                                range: TextRange::at(position, TextSize::new(0)),
+                                new_text: format!("{display_text}\n"),
+                                display_text,
+                                module_name: module_name.as_str().to_owned(),
+                            }
                         })
                         .collect();
-                    imports.sort_by(|(_, a, _), (_, b, _)| a.cmp(b));
+                    imports.sort_by(|a, b| a.new_text.cmp(&b.new_text));
                     Self::add_imports_to_file(file_path, imports)?;
                 }
+            }
+        }
+        // Add imports for any remaining unknown names after inserting annotations.
+        let check_args = check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
+        let current_dir_config =
+            get_project_config_for_current_dir(ConfigOverrideArgs::default(), None)?.0;
+        let config_finder = ConfigFinder::new_constant(current_dir_config);
+        let state = holder.as_ref();
+        let (_, errors) = check_args.run_once(files_to_check, config_finder)?;
+        for error in errors {
+            if error.error_kind() != ErrorKind::UnknownName {
+                continue;
+            }
+            let module_info = error.module();
+            let module_path = module_info.path().clone();
+            let config = state
+                .config_finder()
+                .python_file(ModuleNameWithKind::guaranteed(ModuleName::unknown()), &module_path);
+            let handle = config.handle_from_module_path(module_path);
+            if let Some(ast) = transaction.get_ast(&handle) {
+                let error_range = error.range();
+                let unknown_name = module_info.code_at(error_range);
+                let imports: Vec<ImportEdit> = transaction
+                    .search_exports_exact(unknown_name, None)
+                    .expect("infer import search should not be cancelled")
+                    .into_iter()
+                    .map(|(handle_to_import_from, _)| {
+                        insert_import_edit_with_forced_import_format(
+                            &ast,
+                            handle.dupe(),
+                            handle_to_import_from.dupe(),
+                            unknown_name,
+                            true,
+                        )
+                    })
+                    .collect();
+                let path = error.path();
+                Self::add_imports_to_file(path.as_path(), imports)?;
             }
         }
         Ok(CommandExitStatus::Success)
@@ -377,17 +423,21 @@ impl InferArgs {
         fs_anyhow::write(file_path, result)
     }
 
-    fn add_imports_to_file(
-        file_path: &Path,
-        imports: Vec<(TextSize, String, String)>,
-    ) -> anyhow::Result<()> {
+    fn add_imports_to_file(file_path: &Path, imports: Vec<ImportEdit>) -> anyhow::Result<()> {
         let file_content = fs_anyhow::read_to_string(file_path)?;
         let mut result = file_content;
-        for (position, import, _) in imports {
-            let offset = (position).into();
-            if !result.contains(&import) {
-                result.insert_str(offset, &import);
+        let mut edits: Vec<(TextRange, String, String)> = imports
+            .into_iter()
+            .map(|edit| (edit.range, edit.new_text, edit.display_text))
+            .collect();
+        edits.sort_by_key(|(range, _, _)| range.start());
+        for (range, edit_text, display_text) in edits.into_iter().rev() {
+            if edit_text.starts_with("from ") || edit_text.starts_with("import ") {
+                if result.contains(&edit_text) || result.contains(&display_text) {
+                    continue;
+                }
             }
+            result.replace_range(range.start().to_usize()..range.end().to_usize(), &edit_text);
         }
         fs_anyhow::write(file_path, result)
     }
