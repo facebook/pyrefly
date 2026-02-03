@@ -47,10 +47,8 @@ use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
-use crate::types::class::ClassType;
 use crate::types::quantified::Quantified;
 use crate::types::types::Type;
-use crate::types::types::Union;
 use crate::types::types::Var;
 
 /// Structure to turn TypeOrExprs into Types.
@@ -472,16 +470,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if got.is_error() || got.is_any() || want.is_any() {
             return;
         }
-        if want.may_contain_quantified_var() {
+        let got_is_str = matches!(got, Type::ClassType(cls) if cls.is_builtin("str"));
+        if !got_is_str {
             return;
         }
-        if !self.is_definitely_str_like(got) {
-            return;
-        }
-        if self.want_explicitly_allows_str(want) {
-            return;
-        }
-        if !self.is_iterable_or_sequence_of_str(want) {
+        let want_is_iterable_str = match want {
+            Type::ClassType(cls) => {
+                let cls_object = cls.class_object();
+                let iterable = self.stdlib.iterable(Type::any_implicit());
+                let sequence = self.stdlib.sequence(Type::any_implicit());
+                let is_iterable =
+                    cls_object == iterable.class_object() || cls_object == sequence.class_object();
+                if !is_iterable {
+                    return;
+                }
+                matches!(
+                    cls.targs().as_slice(),
+                    [elem] if matches!(elem, Type::ClassType(elem_cls) if elem_cls.is_builtin("str"))
+                )
+            }
+            _ => false,
+        };
+        if !want_is_iterable_str {
             return;
         }
         let got_display = self
@@ -499,70 +509,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "Did you mean to pass an iterable of strings?".to_owned(),
             ],
         );
-    }
-
-    fn want_explicitly_allows_str(&self, ty: &Type) -> bool {
-        let ty = self.solver().expand_vars(ty.clone());
-        self.want_explicitly_allows_str_inner(&ty)
-    }
-
-    fn want_explicitly_allows_str_inner(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Union(box Union { members, .. }) => members
-                .iter()
-                .any(|member| self.want_explicitly_allows_str_inner(member)),
-            _ => self.is_str_like_leaf(ty),
-        }
-    }
-
-    fn is_definitely_str_like(&self, ty: &Type) -> bool {
-        let ty = self.solver().expand_vars(ty.clone());
-        self.is_definitely_str_like_inner(&ty)
-    }
-
-    fn is_definitely_str_like_inner(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Union(box Union { members, .. }) => members
-                .iter()
-                .all(|member| self.is_definitely_str_like_inner(member)),
-            _ => self.is_str_like_leaf(ty),
-        }
-    }
-
-    fn is_str_like_leaf(&self, ty: &Type) -> bool {
-        match ty {
-            Type::ClassType(cls) if cls.is_builtin("str") => true,
-            Type::LiteralString(_) => true,
-            Type::Literal(lit) if lit.value.is_string() => true,
-            _ => false,
-        }
-    }
-
-    fn is_iterable_or_sequence_of_str(&self, ty: &Type) -> bool {
-        let ty = self.solver().expand_vars(ty.clone());
-        self.is_iterable_or_sequence_of_str_inner(&ty)
-    }
-
-    fn is_iterable_or_sequence_of_str_inner(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Union(box Union { members, .. }) => members
-                .iter()
-                .any(|member| self.is_iterable_or_sequence_of_str_inner(member)),
-            Type::ClassType(cls) if self.is_iterable_or_sequence_class(cls) => {
-                match cls.targs().as_slice().first() {
-                    Some(elem) => self.is_definitely_str_like_inner(elem),
-                    None => false,
-                }
-            }
-            _ => false,
-        }
-    }
-
-    fn is_iterable_or_sequence_class(&self, cls: &ClassType) -> bool {
-        let cls_object = cls.class_object();
-        let iterable = self.stdlib.iterable(Type::any_implicit());
-        let sequence = self.stdlib.sequence(Type::any_implicit());
-        cls_object == iterable.class_object() || cls_object == sequence.class_object()
     }
 
     fn is_param_spec_args(&self, x: &CallArg, q: &Quantified, errors: &ErrorCollector) -> bool {
