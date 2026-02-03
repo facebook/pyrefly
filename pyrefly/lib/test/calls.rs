@@ -169,9 +169,10 @@ def takes_iter(xs: Iterable[str]) -> None: ...
 def takes_seq(xs: Sequence[str]) -> None: ...
 def takes_iter_or_str(xs: Iterable[str] | str) -> None: ...
 
-takes_iter("hello")  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
-takes_seq("hello")  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
-takes_iter_or_str("hello")
+s: str = "hello"
+takes_iter(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+takes_seq(s)  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+takes_iter_or_str(s)
 takes_iter(["hello"])
     "#,
 );
