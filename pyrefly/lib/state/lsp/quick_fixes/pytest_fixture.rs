@@ -291,7 +291,7 @@ fn import_edits_for_type(
         );
         let position = import_edit.range.start();
         let insert_text = import_edit.insert_text;
-        // Only dedup against full import lines: merge edits have `new_text` like
+        // Only dedup against full import lines: merge edits have `insert_text` like
         // `, X`, and a substring check for that would spuriously match unrelated
         // code (function args, type annotations). Merge edits are already
         // deduplicated inside `merge_range_for_import`.
