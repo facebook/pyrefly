@@ -275,6 +275,10 @@ impl Stdlib {
         Self::new_with_bootstrapping(true, PythonVersion::default(), &|_, _| None, &|_, _| None)
     }
 
+    pub fn is_bootstrapping(&self) -> bool {
+        self.object.is_err()
+    }
+
     fn unwrap<T>(x: &StdlibResult<T>) -> &T {
         match x {
             Ok(x) => x,

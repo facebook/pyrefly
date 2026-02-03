@@ -1254,6 +1254,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        if self.stdlib.is_bootstrapping() {
+            return decoratee;
+        }
         let call_target =
             self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
         let arg = CallArg::ty(&decoratee, range);
