@@ -554,6 +554,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if got.is_error() || got.is_any() || want.is_any() {
             return;
         }
+        if want.contains_type_variable() {
+            return;
+        }
         if !self.is_definitely_str_like(got) {
             return;
         }
