@@ -59,7 +59,7 @@ struct CalledOverload<'f> {
 
 impl CalledOverload<'_> {
     fn num_errors(&self) -> usize {
-        self.call_errors.len_for_overload_matching() + self.specialization_errors.len()
+        self.call_errors.len() + self.specialization_errors.len()
     }
 }
 
@@ -388,7 +388,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     msg,
                 );
             }
-<<<<<<< HEAD
             errors.extend(closest_overload.call_errors);
             if let Ok(specialization_errors) =
                 Vec1::try_from_vec(closest_overload.specialization_errors)
@@ -404,11 +403,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 closest_overload.res,
                 closest_overload.func.1.signature.clone(),
             )
-||||||| parent of e36024e96 (update)
-            (res, func.1.signature.clone())
-=======
-            (closest_overload.res, closest_overload.func.1.signature.clone())
->>>>>>> e36024e96 (update)
         } else {
             // Build a string showing the argument types for error messages
             let mut arg_type_strs = Vec::new();
@@ -548,28 +542,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None, // don't use the hint yet, it shouldn't influence overload selection
                 ctor_targs,
             );
-<<<<<<< HEAD
             self.solver().restore_vars(snapshot);
             let n_errors = called_overload.num_errors();
             if n_errors == 0 {
-||||||| parent of e36024e96 (update)
-            if called_overload.call_errors.is_empty_for_overload_matching() {
-=======
-            if called_overload.call_errors.is_empty() {
->>>>>>> e36024e96 (update)
                 matched_overloads.push(called_overload);
             } else {
                 match &closest_unmatched_overload {
-<<<<<<< HEAD
                     Some(overload) if overload.num_errors() <= n_errors => {}
-||||||| parent of e36024e96 (update)
-                    Some(overload)
-                        if overload.call_errors.len_for_overload_matching()
-                            <= called_overload.call_errors.len_for_overload_matching() => {}
-=======
-                    Some(overload)
-                        if overload.call_errors.len() <= called_overload.call_errors.len() => {}
->>>>>>> e36024e96 (update)
                     _ => {
                         closest_unmatched_overload = Some(called_overload);
                     }
@@ -684,14 +663,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 None, // don't use the hint yet, it shouldn't influence overload selection
                                 &None,
                             );
-<<<<<<< HEAD
                             self.solver().restore_vars(snapshot);
                             res.num_errors() == 0
-||||||| parent of e36024e96 (update)
-                            res.call_errors.is_empty_for_overload_matching()
-=======
-                            res.call_errors.is_empty()
->>>>>>> e36024e96 (update)
                         })
                         .map(|(split_point, _)| split_point + 1)
                 };
@@ -876,34 +849,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // We want to use our hint to contextually type the arguments, but errors resulting
         // from the hint should not influence overload selection. If there are call errors, we
         // try again without a hint in case we can still match this overload.
-<<<<<<< HEAD
         let (call_errors, specialization_errors, res, expected_types) = try_call(hint);
         let (call_errors, specialization_errors, res, expected_types) = if tparams.is_some()
             && hint.is_some()
-            && call_errors.len_for_overload_matching() + specialization_errors.len() > 0
+            && call_errors.len() + specialization_errors.len() > 0
         {
             try_call(None)
         } else {
             (call_errors, specialization_errors, res, expected_types)
         };
-||||||| parent of e36024e96 (update)
-        let (call_errors, res, expected_types) = try_call(hint);
-        let (call_errors, res, expected_types) =
-            if tparams.is_some() && hint.is_some() && !call_errors.is_empty_for_overload_matching()
-            {
-                try_call(None)
-            } else {
-                (call_errors, res, expected_types)
-            };
-=======
-        let (call_errors, res, expected_types) = try_call(hint);
-        let (call_errors, res, expected_types) =
-            if tparams.is_some() && hint.is_some() && !call_errors.is_empty() {
-                try_call(None)
-            } else {
-                (call_errors, res, expected_types)
-            };
->>>>>>> e36024e96 (update)
 
         CalledOverload {
             func: callable,
