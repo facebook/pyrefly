@@ -32,7 +32,6 @@ use ruff_text_size::TextRange;
 use starlark_map::ordered_map::OrderedMap;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use vec1::Vec1;
 use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
@@ -508,7 +507,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let got = self.expr_infer_type_info_with_hint(
             expr,
-            Some(HintRef::new(hint, Some(call_errors))),
+            Some(HintRefOld::new(hint, Some(call_errors))),
             arg_errors,
         );
         let ok = self.check_type(got.ty(), hint, range, call_errors, tcc);
@@ -523,6 +522,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         if got.is_error() || got.is_any() || want.is_any() {
+            return;
+        }
+        if want.contains_type_variable() {
             return;
         }
         if !self.is_definitely_str_like(got) {

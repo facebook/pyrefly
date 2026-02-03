@@ -59,7 +59,7 @@ struct CalledOverload<'f> {
 
 impl CalledOverload<'_> {
     fn num_errors(&self) -> usize {
-        self.call_errors.len() + self.specialization_errors.len()
+        self.call_errors.len_for_overload_matching() + self.specialization_errors.len()
     }
 }
 
@@ -825,24 +825,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut overload_ctor_targs = ctor_targs.as_ref().map(|x| (**x).clone());
         let tparams = callable.0.as_deref();
 
-        let call_errors = self.error_collector();
-        let (res, specialization_errors, expected_types) = self.callable_infer(
-            callable.1.signature.clone(),
-            Some(&metadata.kind),
-            tparams,
-            self_obj.cloned(),
-            args,
-            keywords,
-            arguments_range,
-            errors,
-            &call_errors,
-            // We intentionally drop the context here, as arg errors don't need it,
-            // and if there are any call errors, we'll log a "No matching overloads"
-            // error with the necessary context.
-            None,
-            hint,
-            overload_ctor_targs.as_mut(),
-        );
+        let mut try_call = |hint| {
+            let call_errors = self.error_collector();
+            let (res, specialization_errors, expected_types) = self.callable_infer(
+                callable.1.signature.clone(),
+                Some(&metadata.kind),
+                tparams,
+                self_obj.cloned(),
+                args,
+                keywords,
+                arguments_range,
+                errors,
+                &call_errors,
+                // We intentionally drop the context here, as arg errors don't need it,
+                // and if there are any call errors, we'll log a "No matching overloads"
+                // error with the necessary context.
+                None,
+                hint,
+                overload_ctor_targs.as_mut(),
+            );
+            (call_errors, specialization_errors, res, expected_types)
+        };
+        // We want to use our hint to contextually type the arguments, but errors resulting
+        // from the hint should not influence overload selection. If there are call errors, we
+        // try again without a hint in case we can still match this overload.
+        let (call_errors, specialization_errors, res, expected_types) = try_call(hint);
+        let (call_errors, specialization_errors, res, expected_types) = if tparams.is_some()
+            && hint.is_some()
+            && call_errors.len_for_overload_matching() + specialization_errors.len() > 0
+        {
+            try_call(None)
+        } else {
+            (call_errors, specialization_errors, res, expected_types)
+        };
 
         CalledOverload {
             func: callable,

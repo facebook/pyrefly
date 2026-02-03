@@ -212,6 +212,20 @@ impl ErrorCollector {
         self.errors.lock().len()
     }
 
+    /// Returns the number of errors relevant to overload matching.
+    /// Warnings should not disqualify an overload, so we skip them here.
+    pub fn len_for_overload_matching(&self) -> usize {
+        let mut errors = self.errors.lock();
+        errors
+            .iter()
+            .filter(|err| err.error_kind() != ErrorKind::StringAsIterable)
+            .count()
+    }
+
+    pub fn is_empty_for_overload_matching(&self) -> bool {
+        self.len_for_overload_matching() == 0
+    }
+
     /// Checks whether an error is suppressed, considering ignore-all directives,
     /// per-line suppressions, and (for errors inside multi-line f/t-strings)
     /// suppressions on the f-string's start or end lines.
