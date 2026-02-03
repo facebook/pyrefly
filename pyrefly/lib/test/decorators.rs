@@ -403,7 +403,7 @@ testcase!(
     r#"
 from typing import reveal_type
 
-def to_int(cls) -> int:
+def to_int(cls: type) -> int:
     return 42
 
 @to_int
