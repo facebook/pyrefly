@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
+
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
@@ -250,6 +252,32 @@ fn position_of_function_name(source: &str, function_name: &str) -> TextSize {
         .unwrap_or_else(|| panic!("missing function `{}`", function_name));
     let name_start = start + "def ".len();
     TextSize::try_from(name_start).unwrap()
+}
+
+fn compute_use_function_actions(
+    files: &[(&'static str, &str)],
+    function_module: &'static str,
+    function_name: &str,
+) -> (
+    HashMap<&'static str, ModuleInfo>,
+    Vec<LocalRefactorCodeAction>,
+) {
+    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::Everything);
+    let transaction = state.transaction();
+    let mut module_infos = HashMap::new();
+    for (name, _) in files {
+        let handle = handles.get(name).unwrap();
+        module_infos.insert(*name, transaction.get_module_info(handle).unwrap());
+    }
+    let handle = handles.get(function_module).unwrap();
+    let module_info = module_infos
+        .get(function_module)
+        .expect("missing function module");
+    let position = position_of_function_name(module_info.contents(), function_name);
+    let actions = transaction
+        .use_function_code_actions(handle, TextRange::new(position, position))
+        .unwrap_or_default();
+    (module_infos, actions)
 }
 
 fn assert_no_extract_variable_action(code: &str) {
@@ -1798,24 +1826,12 @@ my_var = 3 ** 2
     let mod2 = r#"
 another_var = 4 ** 2
 "#;
-    let (handles, state) = mk_multi_file_state_assert_no_errors(
-        &[("mod1", mod1), ("mod2", mod2)],
-        Require::Everything,
-    );
-    let handle = handles.get("mod1").unwrap();
-    let transaction = state.transaction();
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let position = position_of_function_name(module_info.contents(), "square");
-    let actions = transaction
-        .use_function_code_actions(handle, TextRange::new(position, position))
-        .unwrap_or_default();
+    let (module_infos, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "square");
     assert_eq!(1, actions.len(), "expected one use-function action");
     let edits = &actions[0].edits;
-    let updated_mod1 = apply_refactor_edits_for_module(&module_info, edits);
-    let mod2_info = transaction
-        .get_module_info(handles.get("mod2").unwrap())
-        .unwrap();
-    let updated_mod2 = apply_refactor_edits_for_module(&mod2_info, edits);
+    let updated_mod1 = apply_refactor_edits_for_module(module_infos.get("mod1").unwrap(), edits);
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
     let expected_mod1 = r#"
 def square(p):
     return p ** 2
@@ -1844,27 +1860,15 @@ another_var = 4 ** 2
 import mod1 as m
 value = 5 ** 2
 "#;
-    let (handles, state) = mk_multi_file_state_assert_no_errors(
+    let (module_infos, actions) = compute_use_function_actions(
         &[("mod1", mod1), ("mod2", mod2), ("mod3", mod3)],
-        Require::Everything,
+        "mod1",
+        "square",
     );
-    let handle = handles.get("mod1").unwrap();
-    let transaction = state.transaction();
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let position = position_of_function_name(module_info.contents(), "square");
-    let actions = transaction
-        .use_function_code_actions(handle, TextRange::new(position, position))
-        .unwrap_or_default();
     assert_eq!(1, actions.len(), "expected one use-function action");
     let edits = &actions[0].edits;
-    let mod2_info = transaction
-        .get_module_info(handles.get("mod2").unwrap())
-        .unwrap();
-    let mod3_info = transaction
-        .get_module_info(handles.get("mod3").unwrap())
-        .unwrap();
-    let updated_mod2 = apply_refactor_edits_for_module(&mod2_info, edits);
-    let updated_mod3 = apply_refactor_edits_for_module(&mod3_info, edits);
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let updated_mod3 = apply_refactor_edits_for_module(module_infos.get("mod3").unwrap(), edits);
     let expected_mod2 = r#"
 from mod1 import square as sq
 another_var = sq(4)
@@ -1890,27 +1894,15 @@ value = 5 ** 2
     let mod3 = r#"
 another_var = 4 ** 2
 "#;
-    let (handles, state) = mk_multi_file_state_assert_no_errors(
+    let (module_infos, actions) = compute_use_function_actions(
         &[("mod1", mod1), ("mod2", mod2), ("mod3", mod3)],
-        Require::Everything,
+        "mod1",
+        "square",
     );
-    let handle = handles.get("mod1").unwrap();
-    let transaction = state.transaction();
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let position = position_of_function_name(module_info.contents(), "square");
-    let actions = transaction
-        .use_function_code_actions(handle, TextRange::new(position, position))
-        .unwrap_or_default();
     assert_eq!(1, actions.len(), "expected one use-function action");
     let edits = &actions[0].edits;
-    let mod2_info = transaction
-        .get_module_info(handles.get("mod2").unwrap())
-        .unwrap();
-    let mod3_info = transaction
-        .get_module_info(handles.get("mod3").unwrap())
-        .unwrap();
-    let updated_mod2 = apply_refactor_edits_for_module(&mod2_info, edits);
-    let updated_mod3 = apply_refactor_edits_for_module(&mod3_info, edits);
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let updated_mod3 = apply_refactor_edits_for_module(module_infos.get("mod3").unwrap(), edits);
     let expected_mod2 = r#"
 mod1 = 10
 value = 5 ** 2
@@ -1938,27 +1930,15 @@ from mod1 import double as d
 a = 2
 total = a + a
 "#;
-    let (handles, state) = mk_multi_file_state_assert_no_errors(
+    let (module_infos, actions) = compute_use_function_actions(
         &[("mod1", mod1), ("mod2", mod2), ("mod3", mod3)],
-        Require::Everything,
+        "mod1",
+        "double",
     );
-    let handle = handles.get("mod1").unwrap();
-    let transaction = state.transaction();
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let position = position_of_function_name(module_info.contents(), "double");
-    let actions = transaction
-        .use_function_code_actions(handle, TextRange::new(position, position))
-        .unwrap_or_default();
     assert_eq!(1, actions.len(), "expected one use-function action");
     let edits = &actions[0].edits;
-    let mod2_info = transaction
-        .get_module_info(handles.get("mod2").unwrap())
-        .unwrap();
-    let mod3_info = transaction
-        .get_module_info(handles.get("mod3").unwrap())
-        .unwrap();
-    let updated_mod2 = apply_refactor_edits_for_module(&mod2_info, edits);
-    let updated_mod3 = apply_refactor_edits_for_module(&mod3_info, edits);
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let updated_mod3 = apply_refactor_edits_for_module(module_infos.get("mod3").unwrap(), edits);
     let expected_mod2 = r#"
 import mod1
 value = mod1.double(3)
@@ -1983,23 +1963,11 @@ def square(p):
 first = 2 ** 2
 second = 3 ** 2
 "#;
-    let (handles, state) = mk_multi_file_state_assert_no_errors(
-        &[("mod1", mod1), ("mod2", mod2)],
-        Require::Everything,
-    );
-    let handle = handles.get("mod1").unwrap();
-    let transaction = state.transaction();
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let position = position_of_function_name(module_info.contents(), "square");
-    let actions = transaction
-        .use_function_code_actions(handle, TextRange::new(position, position))
-        .unwrap_or_default();
+    let (module_infos, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "square");
     assert_eq!(1, actions.len(), "expected one use-function action");
     let edits = &actions[0].edits;
-    let mod2_info = transaction
-        .get_module_info(handles.get("mod2").unwrap())
-        .unwrap();
-    let updated_mod2 = apply_refactor_edits_for_module(&mod2_info, edits);
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
     let expected_mod2 = r#"
 import mod1
 first = mod1.square(2)
@@ -2017,23 +1985,11 @@ def inc(x):
     let mod2 = r#"
 value = (2 + 1) + 1
 "#;
-    let (handles, state) = mk_multi_file_state_assert_no_errors(
-        &[("mod1", mod1), ("mod2", mod2)],
-        Require::Everything,
-    );
-    let handle = handles.get("mod1").unwrap();
-    let transaction = state.transaction();
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let position = position_of_function_name(module_info.contents(), "inc");
-    let actions = transaction
-        .use_function_code_actions(handle, TextRange::new(position, position))
-        .unwrap_or_default();
+    let (module_infos, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "inc");
     assert_eq!(1, actions.len(), "expected one use-function action");
     let edits = &actions[0].edits;
-    let mod2_info = transaction
-        .get_module_info(handles.get("mod2").unwrap())
-        .unwrap();
-    let updated_mod2 = apply_refactor_edits_for_module(&mod2_info, edits);
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
     let expected_mod2 = r#"
 import mod1
 value = mod1.inc(2 + 1)
@@ -2050,17 +2006,8 @@ def both(a, b):
     let mod2 = r#"
 value = True and False
 "#;
-    let (handles, state) = mk_multi_file_state_assert_no_errors(
-        &[("mod1", mod1), ("mod2", mod2)],
-        Require::Everything,
-    );
-    let handle = handles.get("mod1").unwrap();
-    let transaction = state.transaction();
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let position = position_of_function_name(module_info.contents(), "both");
-    let actions = transaction
-        .use_function_code_actions(handle, TextRange::new(position, position))
-        .unwrap_or_default();
+    let (_, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "both");
     assert!(
         actions.is_empty(),
         "expected no use-function actions for boolean operators"
@@ -2076,17 +2023,8 @@ def between(a, b, c):
     let mod2 = r#"
 value = 1 < 2 < 3
 "#;
-    let (handles, state) = mk_multi_file_state_assert_no_errors(
-        &[("mod1", mod1), ("mod2", mod2)],
-        Require::Everything,
-    );
-    let handle = handles.get("mod1").unwrap();
-    let transaction = state.transaction();
-    let module_info = transaction.get_module_info(handle).unwrap();
-    let position = position_of_function_name(module_info.contents(), "between");
-    let actions = transaction
-        .use_function_code_actions(handle, TextRange::new(position, position))
-        .unwrap_or_default();
+    let (_, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "between");
     assert!(
         actions.is_empty(),
         "expected no use-function actions for chained comparisons"

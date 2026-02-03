@@ -78,6 +78,7 @@ use crate::types::module::ModuleType;
 use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
+pub(crate) mod ast_helpers;
 mod dict_completions;
 mod quick_fixes;
 
