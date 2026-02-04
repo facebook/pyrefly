@@ -309,6 +309,73 @@ how a particular function is used within a call stack.
   preload="metadata"
 />
 ---
+### Refactor: Pull Member Up and Push Member Down
+
+Pull a method from a subclass to a superclass, or push a method from a superclass to a subclass.
+
+Pull Member Up
+<video
+  src="/videos/pull-up-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Push Member Down
+<video
+  src="/videos/push-down-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Convert to Package and Convert to Module
+
+Convert to Package takes .py file and moves it to a package directory with all logic moved into an __init__.py file.
+
+<video
+  src="/videos/convert-to-package.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Convert to Module takes an existing package with all logic defined in its __init__.py and creates a named .py file from it.
+
+<video
+  src="/videos/convert-to-module.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+### Refactor: Move function to top level
+
+Takes a function nested within another function or statement and moves it to the top level of the module.
+
+<video
+  src="/videos/top-level-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+---
+
 
 ## Planned features
 
@@ -358,7 +425,7 @@ The following configuration options are IDE-specific and exposed as VSCode setti
 - Disable certain language services
   - `python.pyrefly.disabledLanguageServices` [json: {}]: a config to disable certain lsp methods from pyrefly. For example, if you want go-to definition but not find-references.
 - Disable type errors
-  - `python.pyrefly.displayTypeErrors` [enum: default, force-on, force-off, error-missing-imports]: If `'default'`, Pyrefly will only provide type check squiggles in the IDE if your file is covered by a [Pyrefly configuration](../configuration). If `'force-off'`, Pyrefly will never provide type check squiggles in the IDE. If `'force-on'`, Pyrefly will always provide type check squiggles in the IDE. If `'error-missing-imports'`, Pyrefly will only show errors for missing imports and missing sources (`missing-import`, `missing-source`, and `missing-source-for-stubs`).
+  - `python.pyrefly.displayTypeErrors` [enum: default, force-on, force-off, error-missing-imports]: If `'default'`, Pyrefly will only provide type checking diagnostics in the IDE if your file is covered by a [Pyrefly configuration](../configuration). If `'force-off'`, Pyrefly will never provide type check diagnostics in the IDE. If `'force-on'`, Pyrefly will always provide type check diagnostics in the IDE. If `'error-missing-imports'`, Pyrefly will only show errors for missing imports and missing sources (`missing-import`, `missing-source`, and `missing-source-for-stubs`). Note that syntax errors (`invalid-syntax` and `parse-error`) are shown by default in every mode besides `force-off`.
 - Specify a custom Pyrefly Binary (lspPath)
   - `pyrefly.lspPath` [string: '']: If your platform is not supported, you can build pyrefly from source and specify the binary path with the `lspPath` config.
 - Use a specific interpreter
@@ -3012,6 +3079,27 @@ good: tuple[*Ts] = (...)
 # Only one TypeVarTuple is allowed in a list of type arguments:
 def two_tups[*Xs, *Ys](xs: tuple[*Xs], ys: tuple[*Ys]) -> None:
   ...
+```
+
+## invalid-variance
+
+An error caused by a type variable being used in a position incompatible with its declared variance.
+
+For example, a covariant type variable cannot be used in a contravariant position (such as a method parameter), and a contravariant type variable cannot be used in a covariant position (such as a return type).
+
+```python
+from typing import TypeVar, Generic
+
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class BadCovariant(Generic[T_co]):
+    # Error: covariant type variable used in contravariant position
+    def set_value(self, value: T_co) -> None: ...
+
+class BadContravariant(Generic[T_contra]):
+    # Error: contravariant type variable used in covariant position
+    def get_value(self) -> T_contra: ...
 ```
 
 ## invalid-yield

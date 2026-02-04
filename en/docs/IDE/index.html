@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.409aac25.css">
-<script src="/assets/js/runtime~main.957ecc42.js" defer="defer"></script>
-<script src="/assets/js/main.b016f9ed.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.aa389f56.js" defer="defer"></script>
+<script src="/assets/js/main.662ac4ac.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -66,7 +66,7 @@
 </li>
 <li>Disable type errors<!-- -->
 <ul>
-<li><code>python.pyrefly.displayTypeErrors</code> [enum: default, force-on, force-off, error-missing-imports]: If <code>&#x27;default&#x27;</code>, Pyrefly will only provide type check squiggles in the IDE if your file is covered by a <a href="/en/docs/configuration/">Pyrefly configuration</a>. If <code>&#x27;force-off&#x27;</code>, Pyrefly will never provide type check squiggles in the IDE. If <code>&#x27;force-on&#x27;</code>, Pyrefly will always provide type check squiggles in the IDE. If <code>&#x27;error-missing-imports&#x27;</code>, Pyrefly will only show errors for missing imports and missing sources (<code>missing-import</code>, <code>missing-source</code>, and <code>missing-source-for-stubs</code>).</li>
+<li><code>python.pyrefly.displayTypeErrors</code> [enum: default, force-on, force-off, error-missing-imports]: If <code>&#x27;default&#x27;</code>, Pyrefly will only provide type checking diagnostics in the IDE if your file is covered by a <a href="/en/docs/configuration/">Pyrefly configuration</a>. If <code>&#x27;force-off&#x27;</code>, Pyrefly will never provide type check diagnostics in the IDE. If <code>&#x27;force-on&#x27;</code>, Pyrefly will always provide type check diagnostics in the IDE. If <code>&#x27;error-missing-imports&#x27;</code>, Pyrefly will only show errors for missing imports and missing sources (<code>missing-import</code>, <code>missing-source</code>, and <code>missing-source-for-stubs</code>). Note that syntax errors (<code>invalid-syntax</code> and <code>parse-error</code>) are shown by default in every mode besides <code>force-off</code>.</li>
 </ul>
 </li>
 <li>Specify a custom Pyrefly Binary (lspPath)<!-- -->
