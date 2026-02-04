@@ -478,6 +478,116 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) {
+        if let Some(paramspec_var) = paramspec {
+            // If we're forwarding args to a callable ParamSpec, prefer an overload that
+            // matches those forwarded arguments instead of pinning P to the first overload.
+            let positional_params = params
+                .items()
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, param)| match param {
+                    Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) => Some((idx, ty)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if let Some((callable_param_idx, _param_ty)) =
+                positional_params.iter().rev().find(|(_, ty)| {
+                    let param_callable = match **ty {
+                        Type::Callable(ref callable) => Some(callable.as_ref()),
+                        Type::Function(ref func) => Some(&func.signature),
+                        _ => None,
+                    };
+                    param_callable.is_some_and(|callable| {
+                        matches!(
+                            &callable.params,
+                            Params::ParamSpec(_, pspec)
+                                if matches!(pspec, Type::Var(v) if *v == paramspec_var)
+                        )
+                    })
+                })
+            {
+                let last_positional_idx = positional_params.last().map(|(idx, _)| *idx);
+                if last_positional_idx == Some(*callable_param_idx) {
+                    let self_offset = usize::from(self_arg.is_some());
+                    if *callable_param_idx >= self_offset {
+                        let arg_index = *callable_param_idx - self_offset;
+                        if let Some(arg) = args.get(arg_index) {
+                            let arg_ty = match arg {
+                                CallArg::Arg(value) | CallArg::Star(value, _) => {
+                                    value.infer(self, arg_errors)
+                                }
+                            };
+                            let mut sigs = Vec::new();
+                            let mut push_sigs = |ty: Type| {
+                                let ty = if let Type::BoundMethod(method) = &ty {
+                                    self.bind_boundmethod(method, &mut |a, b| {
+                                        self.is_subset_eq(a, b)
+                                    })
+                                    .unwrap_or(ty)
+                                } else {
+                                    ty
+                                };
+                                for sig in ty.callable_signatures() {
+                                    sigs.push(sig.clone());
+                                }
+                            };
+                            match &arg_ty {
+                                Type::ClassType(cls) => {
+                                    if let Some(call_ty) = self.instance_as_dunder_call(cls) {
+                                        push_sigs(call_ty);
+                                    }
+                                }
+                                Type::SelfType(cls) => {
+                                    if let Some(call_ty) = self.self_as_dunder_call(cls) {
+                                        push_sigs(call_ty);
+                                    }
+                                }
+                                _ => {
+                                    push_sigs(arg_ty.clone());
+                                }
+                            }
+                            if sigs.len() > 1 {
+                                let forwarded_args = args.get(arg_index + 1..).unwrap_or(&[]);
+                                let mut selected = None;
+                                for sig in sigs {
+                                    let call_errors_local = self.error_collector();
+                                    let _ = self.callable_infer(
+                                        sig.clone(),
+                                        None,
+                                        None,
+                                        None,
+                                        forwarded_args,
+                                        keywords,
+                                        arguments_range,
+                                        &self.error_swallower(),
+                                        &call_errors_local,
+                                        None,
+                                        None,
+                                        None,
+                                    );
+                                    if call_errors_local.is_empty() {
+                                        selected = match &sig.params {
+                                            Params::List(list) => Some(list.clone()),
+                                            Params::Ellipsis | Params::Materialization => {
+                                                Some(ParamList::everything())
+                                            }
+                                            Params::ParamSpec(..) => None,
+                                        };
+                                        break;
+                                    }
+                                }
+                                if let Some(param_list) = selected {
+                                    let _ = self.is_subset_eq(
+                                        &Type::ParamSpecValue(param_list),
+                                        &Type::Var(paramspec_var),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // We want to work mostly with references, but some things are taken from elsewhere,
         // so have some owners to capture them.
         let param_list_owner = Owner::new();
