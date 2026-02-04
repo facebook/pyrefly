@@ -71,7 +71,7 @@ impl EndpointMethod {
         Self::from_attr(value)
     }
 
-    fn as_str(&self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Get => "GET",
             Self::Post => "POST",
@@ -200,8 +200,9 @@ fn endpoint_methods_from_call(call: &ExprCall) -> Option<Vec<EndpointMethod>> {
 
 fn methods_from_expr(expr: &Expr) -> Option<Vec<EndpointMethod>> {
     match expr {
-        Expr::StringLiteral(lit) => EndpointMethod::from_literal(&lit.value.to_string())
-            .map(|method| vec![method]),
+        Expr::StringLiteral(lit) => {
+            EndpointMethod::from_literal(&lit.value.to_string()).map(|method| vec![method])
+        }
         Expr::List(ExprList { elts, .. })
         | Expr::Tuple(ExprTuple { elts, .. })
         | Expr::Set(ExprSet { elts, .. }) => {
@@ -429,9 +430,9 @@ impl<'a> Transaction<'a> {
             if !prefix.is_empty() && !endpoint.path.starts_with(&prefix) {
                 continue;
             }
-            suggestions.entry(endpoint.path).or_insert_with(|| {
-                format!("{} endpoint", context.method.as_str())
-            });
+            suggestions
+                .entry(endpoint.path)
+                .or_insert_with(|| format!("{} endpoint", context.method.as_str()));
         }
         if suggestions.is_empty() {
             return;
