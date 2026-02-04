@@ -5,16 +5,27 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_server::RequestId;
 use lsp_types::DocumentDiagnosticReportResult;
 use lsp_types::Url;
 use pyrefly_util::stdlib::register_stdlib_paths;
+use pyrefly_config::environment::environment::PythonEnvironment;
+use lsp_types::notification::Notification as _;
+use lsp_types::notification::PublishDiagnostics;
+use lsp_types::request::Initialize;
+use lsp_types::request::Request as _;
+use lsp_types::request::WorkspaceConfiguration;
+use pyrefly_config::environment::environment::PythonEnvironment;
+use serde_json::Value;
 use serde_json::json;
 
 use crate::commands::lsp::IndexingMode;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Notification;
+use crate::lsp::non_wasm::protocol::Request;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
+use crate::test::lsp::lsp_interaction::object_model::LspMessageError;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
@@ -36,6 +47,118 @@ fn test_show_syntax_errors_without_config() {
         .diagnostic("syntax_errors.py")
         .expect_response(json!({"items": [{"code":"parse-error","codeDescription":{"href":"https://pyrefly.org/en/docs/error-kinds/#parse-error"},"message":"Parse error: Expected an indented block after `if` statement","range":{"end":{"character":1,"line":9},"start":{"character":0,"line":9}},"severity":1,"source":"Pyrefly"}], "kind": "full"}))
         .expect("Failed to receive expected response");
+}
+
+#[test]
+fn test_diagnostics_markdown_messages() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    let settings = InitializeSettings {
+        configuration: Some(None),
+        ..Default::default()
+    };
+    let mut params = interaction.client.get_initialize_params(&settings);
+    params["capabilities"]["textDocument"]["diagnostic"]["markupMessageSupport"] = json!(true);
+    interaction.client.send_message(Message::Request(Request {
+        id: RequestId::from(1),
+        method: Initialize::METHOD.to_owned(),
+        params,
+        activity_key: None,
+    }));
+    interaction
+        .client
+        .expect_any_message()
+        .expect("Failed to receive initialize response");
+    interaction.client.send_initialized();
+    if let Some(settings) = settings.configuration {
+        interaction
+            .client
+            .expect_any_message()
+            .expect("Failed to receive configuration request");
+        interaction.client.send_response::<WorkspaceConfiguration>(
+            RequestId::from(1),
+            settings.unwrap_or(json!([])),
+        );
+    }
+
+    interaction.client.did_open("syntax_errors.py");
+
+    interaction
+        .client
+        .expect_message("publishDiagnostics with markdown message", |msg| {
+            let Message::Notification(notification) = msg else {
+                return None;
+            };
+            if notification.method != PublishDiagnostics::METHOD {
+                return None;
+            }
+            let uri = notification
+                .params
+                .get("uri")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !uri.ends_with("syntax_errors.py") {
+                return None;
+            }
+            let diagnostics = notification
+                .params
+                .get("diagnostics")
+                .and_then(Value::as_array)
+                .ok_or_else(|| LspMessageError::Custom {
+                    description: "Missing diagnostics array".to_owned(),
+                });
+            let diagnostics = match diagnostics {
+                Ok(diagnostics) => diagnostics,
+                Err(err) => return Some(Err(err)),
+            };
+            let Some(diagnostic) = diagnostics.first() else {
+                return Some(Err(LspMessageError::Custom {
+                    description: "Expected at least one diagnostic".to_owned(),
+                }));
+            };
+            let message = diagnostic
+                .get("message")
+                .and_then(Value::as_object)
+                .ok_or_else(|| LspMessageError::Custom {
+                    description: "Expected markdown message object".to_owned(),
+                });
+            let message = match message {
+                Ok(message) => message,
+                Err(err) => return Some(Err(err)),
+            };
+            let kind = message.get("kind").and_then(Value::as_str);
+            let value = message.get("value").and_then(Value::as_str);
+            if kind != Some("markdown")
+                || value != Some("Parse error: Expected an indented block after `if` statement")
+            {
+                return Some(Err(LspMessageError::Custom {
+                    description: format!(
+                        "Unexpected markdown message: kind={kind:?} value={value:?}"
+                    ),
+                }));
+            }
+            Some(Ok(()))
+        })
+        .expect("Failed to receive markdown publishDiagnostics message");
+
+    interaction
+        .client
+        .diagnostic("syntax_errors.py")
+        .expect_response(json!({
+            "items": [{
+                "code":"parse-error",
+                "codeDescription":{"href":"https://pyrefly.org/en/docs/error-kinds/#parse-error"},
+                "message":{"kind":"markdown","value":"Parse error: Expected an indented block after `if` statement"},
+                "range":{"end":{"character":1,"line":9},"start":{"character":0,"line":9}},
+                "severity":1,
+                "source":"Pyrefly"
+            }],
+            "kind": "full"
+        }))
+        .expect("Failed to receive markdown diagnostic response");
+
+    interaction.shutdown().unwrap();
 }
 
 #[test]

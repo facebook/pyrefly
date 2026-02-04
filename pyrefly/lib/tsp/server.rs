@@ -22,6 +22,7 @@ use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::LspEvent;
+use crate::lsp::non_wasm::server::InitializeInfo;
 use crate::lsp::non_wasm::server::ProcessEvent;
 use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
@@ -138,7 +139,7 @@ impl<T: TspInterface> TspServer<T> {
 
 pub fn tsp_loop(
     lsp_server: impl TspInterface,
-    _initialization_params: InitializeParams,
+    _initialization: InitializeInfo,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     eprintln!("Reading TSP messages");

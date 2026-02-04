@@ -8,13 +8,13 @@
 use std::io::Write;
 
 use clap::Parser;
-use lsp_types::InitializeParams;
 use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::lsp::IndexingMode;
 use crate::commands::util::CommandExitStatus;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::server::Connection;
+use crate::lsp::non_wasm::server::InitializeInfo;
 use crate::lsp::non_wasm::server::initialize_finish;
 use crate::lsp::non_wasm::server::initialize_start;
 use crate::tsp::server::tsp_capabilities;
@@ -38,14 +38,15 @@ pub fn run_tsp(
     args: TspArgs,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
-    if let Some(initialize_params) = initialize_tsp_connection(&connection, args.indexing_mode)? {
+    if let Some(initialize_info) = initialize_tsp_connection(&connection, args.indexing_mode)? {
         // Create an LSP server instance for the TSP server to use.
         let lsp_queue = LspQueue::new();
         let surface = telemetry.surface();
         let lsp_server = crate::lsp::non_wasm::server::Server::new(
             connection,
             lsp_queue,
-            initialize_params.clone(),
+            initialize_info.params.clone(),
+            initialize_info.supports_diagnostic_markdown,
             args.indexing_mode,
             args.workspace_indexing_limit,
             false,
@@ -54,7 +55,7 @@ pub fn run_tsp(
         );
 
         // Reuse the existing lsp_loop but with TSP initialization
-        tsp_loop(lsp_server, initialize_params, telemetry)?;
+        tsp_loop(lsp_server, initialize_info, telemetry)?;
     }
     Ok(())
 }
@@ -62,16 +63,16 @@ pub fn run_tsp(
 fn initialize_tsp_connection(
     connection: &Connection,
     indexing_mode: IndexingMode,
-) -> anyhow::Result<Option<InitializeParams>> {
-    let Some((id, initialize_params)) = initialize_start(connection)? else {
+) -> anyhow::Result<Option<InitializeInfo>> {
+    let Some((id, initialize_info)) = initialize_start(connection)? else {
         return Ok(None);
     };
-    let capabilities = tsp_capabilities(indexing_mode, &initialize_params);
+    let capabilities = tsp_capabilities(indexing_mode, &initialize_info.params);
     // Note: TSP doesn't include serverInfo, unlike LSP
     if !initialize_finish(connection, id, capabilities, None)? {
         return Ok(None);
     }
-    Ok(Some(initialize_params))
+    Ok(Some(initialize_info))
 }
 
 impl TspArgs {
