@@ -268,7 +268,7 @@ fn on_class(
 }
 
 fn initial_inference_status(gp: &TParam) -> InferenceStatus {
-    let variance = pre_to_post_variance(gp.variance);
+    let variance = pre_to_post_variance(gp.variance());
     let (specified_variance, has_variance_inferred) = match variance {
         Variance::Bivariant => (None, false),
         _ => (Some(variance), true),

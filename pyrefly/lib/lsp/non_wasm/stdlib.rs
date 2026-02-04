@@ -59,16 +59,29 @@ pub fn should_show_stdlib_error(
 /// display modes, all errors are shown.
 pub fn should_show_error_for_display_mode(
     error: &Error,
-    display_mode: Option<DisplayTypeErrors>,
+    display_mode: DisplayTypeErrors,
+    display_status: TypeErrorDisplayStatus,
 ) -> bool {
-    if let Some(DisplayTypeErrors::ErrorMissingImports) = display_mode {
-        let error_kind = error.error_kind();
-        matches!(
-            error_kind,
-            ErrorKind::MissingImport | ErrorKind::MissingSource | ErrorKind::MissingSourceForStubs
-        )
-    } else {
-        true
+    match display_mode {
+        DisplayTypeErrors::ErrorMissingImports => {
+            let error_kind = error.error_kind();
+            matches!(
+                error_kind,
+                ErrorKind::MissingImport
+                    | ErrorKind::MissingSource
+                    | ErrorKind::MissingSourceForStubs
+                    | ErrorKind::ParseError
+                    | ErrorKind::InvalidSyntax
+            )
+        }
+        DisplayTypeErrors::ForceOff => false,
+        DisplayTypeErrors::Default
+            if matches!(display_status, TypeErrorDisplayStatus::NoConfigFile) =>
+        {
+            let error_kind = error.error_kind();
+            matches!(error_kind, ErrorKind::ParseError | ErrorKind::InvalidSyntax)
+        }
+        DisplayTypeErrors::Default | DisplayTypeErrors::ForceOn => true,
     }
 }
 

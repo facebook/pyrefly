@@ -461,10 +461,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.uniques,
             None,
             Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
         );
         let tparams = vec![TParam {
             quantified: q.clone(),
-            variance: PreInferenceVariance::Invariant,
         }];
         OverloadType::Forall(Forall {
             tparams: Arc::new(TParams::new(tparams)),

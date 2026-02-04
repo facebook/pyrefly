@@ -1014,6 +1014,8 @@ pub mod tests {
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedKind;
     use crate::tuple::Tuple;
+    use crate::type_alias::TypeAlias;
+    use crate::type_alias::TypeAliasStyle;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::type_var::TypeVar;
@@ -1022,8 +1024,6 @@ pub mod tests {
     use crate::types::OverloadType;
     use crate::types::TParam;
     use crate::types::TParams;
-    use crate::types::TypeAlias;
-    use crate::types::TypeAliasStyle;
 
     pub fn fake_class(name: &str, module: &str, range: u32) -> Class {
         let mi = Module::new(
@@ -1054,8 +1054,8 @@ pub mod tests {
                 kind,
                 None,
                 Restriction::Unrestricted,
+                PreInferenceVariance::Invariant,
             ),
-            variance: PreInferenceVariance::Invariant,
         }
     }
 
@@ -1398,7 +1398,7 @@ pub mod tests {
         assert_eq!(
             Type::type_form(Type::Union(Box::new(Union {
                 members: vec![nonlit1, nonlit2],
-                display_name: Some("MyUnion".to_owned())
+                display_name: Some("MyUnion".into())
             })))
             .to_string(),
             "type[MyUnion]"

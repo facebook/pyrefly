@@ -10,6 +10,7 @@ use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprFString;
+use ruff_python_ast::ExprTString;
 use ruff_python_ast::FStringPart;
 use ruff_python_ast::InterpolatedStringElement;
 use ruff_python_ast::ModModule;
@@ -220,6 +221,17 @@ impl Visit<Expr> for ExprFString {
     }
 }
 
+impl Visit<Expr> for ExprTString {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Expr)) {
+        self.value.iter().for_each(|x| {
+            x.elements.iter().for_each(|x| match x {
+                InterpolatedStringElement::Literal(_) => {}
+                InterpolatedStringElement::Interpolation(x) => f(&x.expression),
+            })
+        });
+    }
+}
+
 impl Visit for Expr {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Self)) {
         match self {
@@ -291,12 +303,7 @@ impl Visit for Expr {
                 x.recurse(f);
             }
             Expr::TString(x) => {
-                x.value.iter().for_each(|x| {
-                    x.elements.iter().for_each(|x| match x {
-                        InterpolatedStringElement::Literal(_) => {}
-                        InterpolatedStringElement::Interpolation(x) => f(&x.expression),
-                    })
-                });
+                x.recurse(f);
             }
             Expr::StringLiteral(_)
             | Expr::BytesLiteral(_)

@@ -466,15 +466,6 @@ impl<'a> BindingsBuilder<'a> {
         }
         let identifier = ShortIdentifier::new(name);
         let mut current = self.declare_current_idx(Key::Definition(identifier));
-        // Only create partial type bindings when infer_with_first_use is enabled.
-        // When disabled, we bind directly to the definition idx and skip the
-        // CompletedPartialType/PartialTypeWithUpstreamsCompleted indirection.
-        let pinned_idx = if self.infer_with_first_use() {
-            Some(self.idx_for_promise(Key::CompletedPartialType(identifier)))
-        } else {
-            None
-        };
-        let scope_idx = pinned_idx.unwrap_or_else(|| current.idx());
         let is_definitely_type_alias = if let Some((e, _)) = direct_ann
             && self.as_special_export(e) == Some(SpecialExport::TypeAlias)
         {
@@ -482,6 +473,15 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             self.is_definitely_type_alias_rhs(value.as_ref())
         };
+        // Only create partial type bindings when infer_with_first_use is enabled.
+        // When disabled, we bind directly to the definition idx and skip the
+        // CompletedPartialType/PartialTypeWithUpstreamsCompleted indirection.
+        let pinned_idx = if !is_definitely_type_alias && self.infer_with_first_use() {
+            Some(self.idx_for_promise(Key::CompletedPartialType(identifier)))
+        } else {
+            None
+        };
+        let scope_idx = pinned_idx.unwrap_or_else(|| current.idx());
         let mut tparams = None;
         if is_definitely_type_alias {
             let mut legacy = Some(LegacyTParamCollector::new(false));

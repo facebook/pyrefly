@@ -45,8 +45,8 @@ pub trait LookupExport {
     /// Get the wildcard exports for a module. Records a dependency on `module` regardless of if it exists.
     fn get_wildcard(&self, module: ModuleName) -> Option<Arc<SmallSet<Name>>>;
 
-    /// Get all export names for a module. Records a dependency on all changes to `module`.
-    fn get_every_export(&self, module: ModuleName) -> Option<SmallSet<Name>>;
+    /// Get all export names for a module. Records no dependencies.
+    fn get_every_export_untracked(&self, module: ModuleName) -> Option<SmallSet<Name>>;
 
     /// Check if a submodule is imported implicitly. Records a dependency on `name` from `module` regardless of if it exists.
     fn is_submodule_imported_implicitly(&self, module: ModuleName, name: &Name) -> bool;
@@ -343,7 +343,7 @@ mod tests {
             self.get(&module).map(|x| x.wildcard(self))
         }
 
-        fn get_every_export(&self, module: ModuleName) -> Option<SmallSet<Name>> {
+        fn get_every_export_untracked(&self, module: ModuleName) -> Option<SmallSet<Name>> {
             self.get(&module)
                 .map(|x| x.exports(self).keys().cloned().collect::<SmallSet<Name>>())
         }

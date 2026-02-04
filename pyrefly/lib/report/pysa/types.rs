@@ -14,6 +14,7 @@ use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Type;
 use pyrefly_types::types::Union;
 use serde::Serialize;
@@ -288,6 +289,12 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
                 .prepend_modifier(TypeModifier::Type)
         }
         Type::Tuple(_) => ClassNamesFromType::from_class(context.stdlib.tuple_object(), context),
+        Type::TypedDict(TypedDict::TypedDict(inner)) => {
+            ClassNamesFromType::from_class(inner.class_object(), context)
+        }
+        Type::TypedDict(TypedDict::Anonymous(_)) => {
+            ClassNamesFromType::from_class(context.stdlib.dict_object(), context)
+        }
         Type::Union(box Union {
             members: elements, ..
         }) if !elements.is_empty() => elements

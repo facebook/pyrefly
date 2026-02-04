@@ -2626,3 +2626,15 @@ def test2(arg: Mapping[str, int] | Iterable[tuple[str, int]]) -> None:
         assert_type(arg, Mapping[str, int] | Mapping[tuple[str, int], Any])
     "#,
 );
+
+testcase!(
+    test_narrow_sequence_to_tuple,
+    r#"
+from typing import Any, Sequence, assert_type
+
+def f(inputs: Sequence[int]):
+    assert isinstance(inputs, tuple)
+    for x in inputs:
+        assert_type(x, int)
+    "#,
+);

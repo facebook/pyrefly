@@ -440,3 +440,51 @@ def g(x: B[int]) -> A[int]:
     return x.get_a()
 "#,
 );
+
+// Regression test for forward references in class bodies causing stack overflow.
+// When a class has many fields where field[i] references field[i+1] (forward reference),
+// binding_to_type_class_body_unknown_name calls get_class_field_map just to check if
+// the name is a class field. This triggers computing ALL field types, and when a field's
+// type computation involves resolving another forward reference, it re-enters
+// get_class_field_map quadratically.
+
+const NUM_FORWARD_REF_FIELDS: usize = 600;
+
+fn env_forward_reference_class_fields() -> TestEnv {
+    let mut code = String::from(
+        r#"
+class Wrapper:
+    def __init__(self, value: "Wrapper | None") -> None:
+        self.value = value
+
+class Container:
+"#,
+    );
+
+    // Generate 600 fields where each references the next (forward reference)
+    for i in 0..NUM_FORWARD_REF_FIELDS {
+        if i < NUM_FORWARD_REF_FIELDS - 1 {
+            // Forward reference to the next field - currently produces unknown-name error
+            code.push_str(&format!(
+                "    FIELD_{} = Wrapper(FIELD_{})  # E: Could not find name `FIELD_{}`\n",
+                i,
+                i + 1,
+                i + 1
+            ));
+        } else {
+            // Last field has no forward reference
+            code.push_str(&format!("    FIELD_{} = Wrapper(None)\n", i));
+        }
+    }
+
+    TestEnv::one("forward_refs", &code)
+}
+
+testcase!(
+    bug = "Forward references in class bodies cause O(n^2) recursion depth, stack overflow at ~570 fields",
+    forward_reference_class_fields,
+    env_forward_reference_class_fields(),
+    r#"
+from forward_refs import Container
+"#,
+);

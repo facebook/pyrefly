@@ -71,7 +71,7 @@ impl<T: Default> UnwrapOrDefaultAndLog<T> for Option<T> {
 
 const TYPE_SEPARATORS: [char; 12] = [',', '|', '[', ']', '{', '}', '(', ')', '=', ':', '\'', '"'];
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DefinitionLocation {
     pub name: String,
     pub file: Option<src::File>,
@@ -92,22 +92,20 @@ fn join_names(base_name: &str, name: &str) -> String {
     }
 }
 
-fn all_modules(module_name: ModuleName) -> impl Iterator<Item = String> {
-    module_name
-        .components()
-        .into_iter()
-        .scan("".to_owned(), |module, component| {
-            *module = join_names(module, component.as_str());
-            Some(module.to_owned())
-        })
-}
-
-fn all_modules_with_range(module_id: &Identifier) -> impl Iterator<Item = (String, TextRange)> {
-    let offset = module_id.range().start();
-    all_modules(ModuleName::from_name(module_id.id())).map(move |name| {
-        let range = TextRange::at(offset, TextSize::try_from(name.len()).unwrap());
-        (name, range)
-    })
+fn all_modules_with_range(
+    module_name: ModuleName,
+    position: TextSize,
+) -> impl Iterator<Item = (String, TextRange)> {
+    module_name.components().into_iter().scan(
+        ("".to_owned(), position),
+        |(module, start), component| {
+            let name = component.as_str();
+            let range = TextRange::at(*start, TextSize::try_from(name.len()).unwrap());
+            *module = join_names(module, name);
+            *start = range.end() + TextSize::from(1);
+            Some((module.to_owned(), range))
+        },
+    )
 }
 
 fn range_without_decorators(range: TextRange, decorators: &[Decorator]) -> TextRange {
@@ -342,7 +340,7 @@ impl GleanState<'_> {
     fn module_facts(&mut self, range: TextRange) {
         let module_docstring_range = self.transaction.get_module_docstring_range(self.handle);
 
-        for name in all_modules(self.module_name) {
+        for (name, _) in all_modules_with_range(self.module_name, TextSize::ZERO) {
             self.record_name(name.clone());
             self.facts
                 .modules
@@ -1098,13 +1096,16 @@ impl GleanState<'_> {
             .iter()
             .flat_map(|import| {
                 let from_name = &import.name;
+                let module_name = ModuleName::from_name(from_name.id());
+                let position = from_name.range.start();
 
-                for (module, range) in all_modules_with_range(from_name) {
+                for (module, range) in all_modules_with_range(module_name, position) {
+                    let defs = self.find_definition(range.start());
                     self.record_name(module.clone());
                     self.add_xref(
                         DefinitionLocation {
                             name: module,
-                            file: None,
+                            file: defs.first().and_then(|x| x.file.clone()),
                         },
                         range,
                     );
@@ -1113,9 +1114,10 @@ impl GleanState<'_> {
                 if let Some(as_name) = &import.asname {
                     vec![self.make_import_fact(from_name, as_name, None, top_level_declaration)]
                 } else {
-                    all_modules_with_range(from_name)
+                    all_modules_with_range(module_name, position)
                         .map(|(module, range)| {
-                            let mod_id = Identifier::new(Name::new(module), range);
+                            let mod_range = TextRange::new(position, range.end());
+                            let mod_id = Identifier::new(Name::new(module), mod_range);
                             self.make_import_fact(&mod_id, &mod_id, None, top_level_declaration)
                         })
                         .collect()

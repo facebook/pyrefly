@@ -56,7 +56,7 @@ use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
-use crate::type_output::TypeOutput;
+use crate::type_alias::TypeAlias;
 use crate::type_var::PreInferenceVariance;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
@@ -103,11 +103,12 @@ impl Display for TParamsSource {
     }
 }
 
+// TODO: Consider removing TParam since it would be no longer needed
+// now that variance is pushed in quantified.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct TParam {
     pub quantified: Quantified,
-    pub variance: PreInferenceVariance,
 }
 
 impl Display for TParam {
@@ -147,6 +148,10 @@ impl TParam {
 
     pub fn restriction(&self) -> &Restriction {
         self.quantified.restriction()
+    }
+
+    pub fn variance(&self) -> PreInferenceVariance {
+        self.quantified.variance()
     }
 }
 
@@ -329,88 +334,6 @@ impl AnyStyle {
         match self {
             Self::Implicit | Self::Error => Type::Any(self),
             Self::Explicit => Type::Any(Self::Implicit),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub enum TypeAliasStyle {
-    /// A type alias declared with the `type` keyword
-    Scoped,
-    /// A type alias declared with a `: TypeAlias` annotation
-    LegacyExplicit,
-    /// An unannotated assignment that may be either an implicit type alias or an untyped value
-    LegacyImplicit,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct TypeAlias {
-    pub name: Box<Name>,
-    ty: Box<Type>,
-    pub style: TypeAliasStyle,
-    annotated_metadata: Box<[Type]>,
-}
-
-impl TypeAlias {
-    pub fn new(name: Name, ty: Type, style: TypeAliasStyle, annotated_metadata: Vec<Type>) -> Self {
-        Self {
-            name: Box::new(name),
-            ty: Box::new(ty),
-            style,
-            annotated_metadata: annotated_metadata.into_boxed_slice(),
-        }
-    }
-
-    pub fn annotated_metadata(&self) -> &[Type] {
-        &self.annotated_metadata
-    }
-
-    /// Gets the type contained within the type alias for use in a value
-    /// position - for example, for a function call or attribute access.
-    pub fn as_value(&self, stdlib: &Stdlib) -> Type {
-        if self.style == TypeAliasStyle::Scoped {
-            stdlib.type_alias_type().clone().to_type()
-        } else {
-            *self.ty.clone()
-        }
-    }
-
-    /// Gets the type contained within the type alias for use in a type
-    /// position - for example, in a variable type annotation. Note that
-    /// the caller is still responsible for untyping the type. That is,
-    /// `type X = int` is represented as `TypeAlias(X, type[int])`, and
-    /// `as_type` returns `type[int]`; the caller must turn it into `int`.
-    pub fn as_type(&self) -> Type {
-        *self.ty.clone()
-    }
-
-    pub fn fmt_with_type<O: TypeOutput>(
-        &self,
-        output: &mut O,
-        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
-        tparams: Option<&TParams>,
-    ) -> fmt::Result {
-        use pyrefly_util::display::commas_iter;
-        match (&self.style, tparams) {
-            (TypeAliasStyle::LegacyImplicit, _) => write_type(&self.ty, output),
-            (_, None) => {
-                output.write_str("TypeAlias[")?;
-                output.write_str(self.name.as_str())?;
-                output.write_str(", ")?;
-                write_type(&self.ty, output)?;
-                output.write_str("]")
-            }
-            (_, Some(tparams)) => {
-                output.write_str("TypeAlias[")?;
-                output.write_str(self.name.as_str())?;
-                output.write_str("[")?;
-                output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
-                output.write_str("], ")?;
-                write_type(&self.ty, output)?;
-                output.write_str("]")
-            }
         }
     }
 }
@@ -637,7 +560,7 @@ pub enum SuperObj {
 #[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
 pub struct Union {
     pub members: Vec<Type>,
-    pub display_name: Option<String>,
+    pub display_name: Option<Box<str>>,
 }
 
 impl PartialEq for Union {

@@ -15,18 +15,20 @@ use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> String {
     let files = [("main", code)];
-    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::indexing());
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
     let mut report = String::new();
     for (name, code) in &files {
         report.push_str("# ");
         report.push_str(name);
         report.push_str(".py\n");
         let handle = handles.get(name).unwrap();
-        for (pos, label_parts) in state
+        for hint_data in state
             .transaction()
             .inlay_hints(handle, hint_config)
             .unwrap()
         {
+            let pos = hint_data.position;
+            let label_parts = hint_data.label_parts;
             report.push_str(&code_frame_of_source_at_position(code, pos));
             report.push_str(" inlay-hint: `");
             // Concatenate label parts into a single string
@@ -430,7 +432,7 @@ result = my_function(MyType(), "hello")
 "#;
 
     let files = [("main", code)];
-    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::indexing());
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
     let handle = handles.get("main").unwrap();
 
     let hints = state
@@ -447,12 +449,12 @@ result = my_function(MyType(), "hello")
 
     let x_hint = hints
         .iter()
-        .find(|(_, parts)| parts.iter().any(|(text, _)| text == "x= "));
+        .find(|hint_data| hint_data.label_parts.iter().any(|(text, _)| text == "x= "));
 
     assert!(x_hint.is_some(), "Should have hint for parameter x");
 
-    if let Some((_, parts)) = x_hint {
-        let x_part = parts.iter().find(|(text, _)| text == "x= ");
+    if let Some(hint_data) = x_hint {
+        let x_part = hint_data.label_parts.iter().find(|(text, _)| text == "x= ");
         assert!(x_part.is_some());
 
         if let Some((text, location)) = x_part {
@@ -466,12 +468,12 @@ result = my_function(MyType(), "hello")
 
     let y_hint = hints
         .iter()
-        .find(|(_, parts)| parts.iter().any(|(text, _)| text == "y= "));
+        .find(|hint_data| hint_data.label_parts.iter().any(|(text, _)| text == "y= "));
 
     assert!(y_hint.is_some(), "Should have hint for parameter y");
 
-    if let Some((_, parts)) = y_hint {
-        let y_part = parts.iter().find(|(text, _)| text == "y= ");
+    if let Some(hint_data) = y_hint {
+        let y_part = hint_data.label_parts.iter().find(|(text, _)| text == "y= ");
         assert!(y_part.is_some());
 
         if let Some((_, location)) = y_part {
@@ -481,4 +483,49 @@ result = my_function(MyType(), "hello")
             );
         }
     }
+}
+
+#[test]
+fn test_unpacked_variables_are_not_insertable() {
+    let code = r#"
+def get_tuple() -> tuple[int, str]:
+    return (1, "hello")
+
+# Regular variable assignment - should be insertable
+result = get_tuple()
+
+# Unpacked variables - should NOT be insertable
+x, y = get_tuple()
+"#;
+
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
+    let handle = handles.get("main").unwrap();
+
+    let hints = state
+        .transaction()
+        .inlay_hints(handle, Default::default())
+        .unwrap();
+
+    // Should have 3 hints: result, x, and y
+    assert_eq!(hints.len(), 3, "Expected 3 hints");
+
+    // First hint is for 'result' - should be insertable
+    let result_hint = &hints[0];
+    assert!(
+        result_hint.insertable,
+        "Regular variable 'result' should be insertable"
+    );
+
+    let x_hint = &hints[1];
+    assert!(
+        !x_hint.insertable,
+        "Unpacked variable 'x' should NOT be insertable"
+    );
+
+    let y_hint = &hints[2];
+    assert!(
+        !y_hint.insertable,
+        "Unpacked variable 'y' should NOT be insertable"
+    );
 }

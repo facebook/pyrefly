@@ -334,14 +334,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
         // If we're assigning to something with an annotation, make sure the produced value is assignable to it
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
-            if ann.annotation.is_final() {
-                self.error(
-                    errors,
-                    x.range(),
-                    ErrorInfo::Kind(ErrorKind::BadAssignment),
-                    format!("Cannot assign to {} because it is marked final", ann.target),
-                );
-            }
+            self.check_final_reassignment(&ann, x.range(), errors);
             if let Some(ann_ty) = ann.ty(self.stdlib) {
                 return self.check_and_return_type(result, &ann_ty, x.range(), errors, tcc);
             }

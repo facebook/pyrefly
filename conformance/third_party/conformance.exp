@@ -824,6 +824,17 @@
     },
     {
       "code": -2,
+      "column": 6,
+      "concise_description": "Cannot redefine existing name `BadTypeAlias14` as a type alias",
+      "description": "Cannot redefine existing name `BadTypeAlias14` as a type alias",
+      "line": 52,
+      "name": "redefinition",
+      "severity": "error",
+      "stop_column": 20,
+      "stop_line": 52
+    },
+    {
+      "code": -2,
       "column": 5,
       "concise_description": "`type` statement is not allowed in this context",
       "description": "`type` statement is not allowed in this context",
@@ -9425,8 +9436,8 @@
     {
       "code": -2,
       "column": 8,
-      "concise_description": "`RATE` is marked final",
-      "description": "`RATE` is marked final",
+      "concise_description": "Cannot assign to variable `RATE` because it is marked final",
+      "description": "Cannot assign to variable `RATE` because it is marked final",
       "line": 71,
       "name": "bad-assignment",
       "severity": "error",
@@ -9579,8 +9590,8 @@
     {
       "code": -2,
       "column": 11,
-      "concise_description": "`ID1` is marked final",
-      "description": "`ID1` is marked final",
+      "concise_description": "Cannot assign to variable `ID1` because it is marked final",
+      "description": "Cannot assign to variable `ID1` because it is marked final",
       "line": 141,
       "name": "bad-assignment",
       "severity": "error",

@@ -1588,3 +1588,333 @@ fn test_dunder_all_star_import_error_clears() {
         errors_after.shown
     );
 }
+
+/// Test that adding a new definition invalidates importers of that name.
+/// When a new name is added to a module, modules that try to import it
+/// (and previously got an error) should be recomputed.
+#[test]
+fn test_name_existence_change_invalidates_importer() {
+    let mut i = Incremental::new();
+
+    // foo only has x
+    i.set("foo", "x = 1");
+    // main tries to import y which doesn't exist - should error
+    i.set(
+        "main",
+        "from foo import y # E: Could not import `y` from `foo`",
+    );
+    i.check(&["main", "foo"], &["main", "foo"]);
+
+    let main_handle = i.handle("main");
+
+    // Verify there's an error
+    let errors = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        !errors.shown.is_empty(),
+        "Expected error when importing non-existent name"
+    );
+
+    // Add y to foo - error should disappear
+    i.set("foo", "x = 1\ny = 2");
+    // main should be recomputed because y now exists
+    i.check_ignoring_expectations(&["foo"], &["foo", "main"]);
+
+    let errors_after = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        errors_after.shown.is_empty(),
+        "Expected no errors after adding y to foo, but got: {:?}",
+        errors_after.shown
+    );
+}
+
+/// Test that adding a name NOT in __all__ still invalidates importers of that name.
+/// __all__ controls what `from M import *` gets, but explicit imports like
+/// `from M import name` can access any name in the module. When that name is
+/// added or removed, importers should be invalidated.
+#[test]
+fn test_name_not_in_dunder_all_invalidates_importer() {
+    let mut i = Incremental::new();
+
+    // foo has __all__ = ["x"] but only x exists
+    i.set("foo", "__all__ = ['x']\nx = 1");
+    // main tries to import y which doesn't exist - should error
+    i.set(
+        "main",
+        "from foo import y # E: Could not import `y` from `foo`",
+    );
+    i.check(&["main", "foo"], &["main", "foo"]);
+
+    let main_handle = i.handle("main");
+
+    // Verify there's an error
+    let errors = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        !errors.shown.is_empty(),
+        "Expected error when importing non-existent name"
+    );
+
+    // Add y to foo, but NOT to __all__. The import should still work.
+    i.set("foo", "__all__ = ['x']\nx = 1\ny = 2");
+    // main should be recomputed because y now exists
+    i.check_ignoring_expectations(&["foo"], &["foo", "main"]);
+
+    let errors_after = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        errors_after.shown.is_empty(),
+        "Expected no errors after adding y to foo (even though y is not in __all__), but got: {:?}",
+        errors_after.shown
+    );
+}
+
+#[test]
+fn test_class_index_change_only_invalidates() {
+    let mut i = Incremental::new();
+
+    i.set("foo", "class A:\n    attr: int = 1");
+    i.set("bar", "from foo import A\nx = A.attr");
+    i.check(&["bar"], &["foo", "bar"]);
+
+    // Now add class B before A, shifting A to index 1
+    i.set(
+        "foo",
+        "class B:\n    other: str = 'hello'\nclass A:\n    attr: int = 1",
+    );
+    i.check(&["foo"], &["foo", "bar"]);
+}
+
+#[test]
+fn test_class_index_and_key_change_invalidates_dependents() {
+    let mut i = Incremental::new();
+
+    i.set("foo", "class A:\n    attr: int = 1");
+    i.set("bar", "from foo import A\nx = A.attr");
+    i.check(&["bar"], &["foo", "bar"]);
+
+    i.set(
+        "foo",
+        "class B:\n    other: str = 'hello'\nclass A:\n    attr: bool = True",
+    );
+    i.check(&["foo"], &["foo", "bar"]);
+}
+
+/// Test that when a function's deprecation metadata changes, dependents are invalidated.
+///
+/// This tests the `get_deprecated` metadata dependency. When a function gains or loses
+/// the `@deprecated` decorator, modules that import it should be recomputed so they
+/// can show or hide deprecation warnings.
+#[test]
+fn test_deprecation_metadata_change_invalidates() {
+    let mut i = Incremental::new();
+
+    // foo.f is NOT deprecated initially
+    i.set("foo", "def f() -> int: return 1");
+    // # E: comments are present for the second check when deprecation warnings appear
+    i.set("main", "from foo import f # E:\nx = f() # E:");
+    i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
+
+    // Add @deprecated decorator - main should be recomputed to show deprecation warning
+    i.set(
+        "foo",
+        "from warnings import deprecated\n@deprecated('use g instead')\ndef f() -> int: return 1",
+    );
+    i.check(&["foo", "main"], &["foo", "main"]);
+}
+
+/// Test that when a class's deprecation metadata changes, dependents are invalidated.
+///
+/// Similar to test_deprecation_metadata_change_invalidates but for classes.
+#[test]
+fn test_class_deprecation_metadata_change_invalidates() {
+    let mut i = Incremental::new();
+
+    // foo.C is NOT deprecated initially
+    i.set("foo", "class C:\n    x: int = 1");
+    // # E: comment is present for the second check when deprecation warning appears
+    i.set("main", "from foo import C # E:\nc = C()");
+    i.check_ignoring_expectations(&["foo", "main"], &["foo", "main"]);
+
+    // Add @deprecated decorator to class - main should be recomputed
+    i.set(
+        "foo",
+        "from warnings import deprecated\n@deprecated('use D instead')\nclass C:\n    x: int = 1",
+    );
+    i.check(&["foo", "main"], &["foo", "main"]);
+}
+
+/// Test that when an export changes from direct definition to re-export, dependents are invalidated.
+///
+/// This tests the `is_reexport` metadata dependency. When an export changes from being
+/// defined in this module to being re-exported from another module, dependents should
+/// be recomputed.
+///
+/// BUG: Currently, when an export changes from direct definition to re-export (with the
+/// same type), dependents are not invalidated. This means hover info and go-to-definition
+/// may show stale information.
+#[test]
+fn test_reexport_status_change_invalidates() {
+    let mut i = Incremental::new();
+
+    // foo.x is defined directly in foo
+    i.set("foo", "x: int = 1");
+    i.set("bar", "y: int = 2");
+    i.set("main", "from foo import x\nz = x + 1");
+    i.check(&["foo", "main"], &["foo", "main"]);
+
+    // Change foo.x to be a re-export from bar
+    // Since the type doesn't change (still int), main should still be recomputed
+    // so that go-to-definition points to bar.y instead of the old foo.x
+    i.set("foo", "from bar import y as x");
+    let res = i.unchecked(&["foo", "main"]);
+    assert!(res.changed.contains(&"foo".to_owned()));
+    assert!(res.changed.contains(&"bar".to_owned()));
+    // BUG: main should be recomputed but currently is not, because is_reexport
+    // metadata is not being tracked as a fine-grained dependency.
+    // Once the bug is fixed, uncomment the assertion below and remove the #[ignore]:
+    // assert!(res.changed.contains(&"main".to_owned()));
+}
+
+/// Test that when a re-export's source changes, dependents are invalidated.
+///
+/// When foo re-exports from bar, changing which module foo re-exports from
+/// should invalidate dependents.
+#[test]
+fn test_reexport_source_change_invalidates() {
+    let mut i = Incremental::new();
+
+    // foo re-exports x from bar
+    i.set("bar", "x: int = 1");
+    i.set("baz", "x: str = 'hello'");
+    i.set("foo", "from bar import x");
+    i.set("main", "from foo import x\ny = x + 1 # E:");
+    // Initial check - no error yet (x is int), but # E: is present for later
+    i.check_ignoring_expectations(&["foo", "main"], &["bar", "foo", "main"]);
+
+    // Change foo to re-export from baz instead - main should be recomputed (type changes)
+    // Now x is str, so x + 1 is a type error
+    i.set("foo", "from baz import x");
+    i.check(&["foo", "main"], &["baz", "foo", "main"]);
+}
+
+/// Test that when a special export changes, dependents are invalidated.
+///
+/// This tests the `is_special_export` metadata dependency. When a name gains or loses
+/// special export status (like TypeVar, cast, etc.), modules using it should be recomputed.
+/// Note: This is a somewhat contrived test since special exports are typically in stdlib,
+/// but it validates the dependency tracking.
+#[test]
+fn test_special_export_usage_change_invalidates() {
+    let mut i = Incremental::new();
+
+    // main uses cast from typing
+    i.set(
+        "main",
+        "from typing import cast\nx: int = cast(int, 'hello')",
+    );
+    i.check(&["main"], &["main"]);
+
+    // Change to use a different cast that's not special - main should be recomputed
+    i.set("foo", "def cast(ty, val): return val");
+    i.set("main", "from foo import cast\nx: int = cast(int, 'hello')");
+    i.check(&["foo", "main"], &["foo", "main"]);
+}
+
+/// Test that when a docstring changes, hover info is updated correctly.
+///
+/// This tests the `docstring_range` metadata dependency. When a function's docstring
+/// changes, the hover information should reflect the new docstring.
+/// Note: This test primarily validates that docstring changes trigger recomputation
+/// for accurate hover info, even if the type signature doesn't change.
+#[test]
+fn test_docstring_change_invalidates() {
+    let mut i = Incremental::new();
+
+    // foo.f has a docstring
+    i.set(
+        "foo",
+        "def f() -> int:\n    \"\"\"Original docstring.\"\"\"\n    return 1",
+    );
+    i.set("main", "from foo import f\nx = f()");
+    i.check(&["foo", "main"], &["foo", "main"]);
+
+    // Change the docstring - foo should be recomputed (main is not recomputed since
+    // the type signature didn't change)
+    i.set(
+        "foo",
+        "def f() -> int:\n    \"\"\"Updated docstring with new info.\"\"\"\n    return 1",
+    );
+    i.check(&["foo", "main"], &["foo"]);
+}
+
+/// Test that when a class docstring changes, it is properly recomputed.
+#[test]
+fn test_class_docstring_change_invalidates() {
+    let mut i = Incremental::new();
+
+    // foo.C has a docstring
+    i.set(
+        "foo",
+        "class C:\n    \"\"\"Original class docstring.\"\"\"\n    x: int = 1",
+    );
+    i.set("main", "from foo import C\nc = C()");
+    i.check(&["foo", "main"], &["foo", "main"]);
+
+    // Change the class docstring - foo should be recomputed (main is not recomputed
+    // since the type signature didn't change)
+    i.set(
+        "foo",
+        "class C:\n    \"\"\"Updated class docstring.\"\"\"\n    x: int = 1",
+    );
+    i.check(&["foo", "main"], &["foo"]);
+}
+
+/// Test that when __all__ contains Module entries (like `__all__.extend(other.__all__)`),
+/// changing those entries triggers wildcard fallback and invalidates star importers.
+///
+/// This tests the `wildcard_fallback` behavior in `changed_name_existence`.
+/// When __all__ contains Module entries that change, we can't compute the exact
+/// set of names that changed without a lookup, so we emit a coarse Wildcard signal.
+#[test]
+fn test_dunder_all_module_entry_change_invalidates() {
+    let mut i = Incremental::new();
+
+    // bar exports x
+    i.set("bar", "x = 1\n__all__ = ['x']");
+    // baz exports y
+    i.set("baz", "y = 2\n__all__ = ['y']");
+    // foo imports bar and re-exports bar's __all__
+    i.set(
+        "foo",
+        "import bar\nfrom bar import *\n__all__ = []\n__all__.extend(bar.__all__)",
+    );
+    // main does star import from foo and uses x
+    i.set("main", "from foo import *\nz = x");
+    i.check(
+        &["main", "foo", "bar", "baz"],
+        &["main", "foo", "bar", "baz"],
+    );
+
+    // Now change foo to re-export baz's __all__ instead of bar's
+    // This changes a Module entry in __all__, triggering wildcard fallback
+    i.set(
+        "foo",
+        "import baz\nfrom baz import *\n__all__ = []\n__all__.extend(baz.__all__)",
+    );
+    // main should be recomputed because the wildcard set changed
+    i.check_ignoring_expectations(&["foo"], &["foo", "main"]);
+}

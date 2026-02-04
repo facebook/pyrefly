@@ -501,14 +501,12 @@ fn test_stdlib_class_completion() {
         .unwrap();
 
     interaction.client.did_open("foo.py");
-    interaction.client.did_change("foo.py", "FirstHeader");
+    interaction.client.did_change("foo.py", "Proto");
     interaction
         .client
-        .completion("foo.py", 0, 11)
+        .completion("foo.py", 0, 5)
         .expect_completion_response_with(|list| {
-            list.items
-                .iter()
-                .any(|item| item.label == "FirstHeaderLineIsContinuationDefect")
+            list.items.iter().any(|item| item.label == "Protocol")
         })
         .unwrap();
 

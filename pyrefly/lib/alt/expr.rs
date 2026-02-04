@@ -570,12 +570,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => self.stdlib.str().clone().to_type(),
                 }
             }
-            Expr::TString(x) => self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::Unsupported),
-                "t-strings are not yet supported".to_owned(),
-            ),
+            Expr::TString(x) => {
+                x.visit(&mut |x| {
+                    self.expr_infer(x, errors);
+                });
+                if let Some(template) = self.stdlib.template() {
+                    template.clone().to_type()
+                } else {
+                    self.error(
+                        errors,
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "t-strings are only available in Python 3.14+".to_owned(),
+                    )
+                }
+            }
             Expr::StringLiteral(x) => Lit::from_string_literal(x).to_implicit_type(),
             Expr::BytesLiteral(x) => Lit::from_bytes_literal(x).to_implicit_type(),
             Expr::NumberLiteral(x) => match &x.value {
@@ -1706,133 +1715,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ));
         }
         TypeVarTuple::new(name, self.module().dupe(), default_value)
-    }
-
-    pub fn typealiastype_from_call(
-        &self,
-        name: Identifier,
-        x: &ExprCall,
-        errors: &ErrorCollector,
-    ) -> Option<(Expr, Vec<Expr>)> {
-        let mut arg_name = false;
-        let mut value = None;
-        let mut type_params = None;
-        let check_name_arg = |arg: &Expr| {
-            if let Expr::StringLiteral(lit) = arg {
-                if lit.value.to_str() != name.id.as_str() {
-                    self.error(
-                        errors,
-                        x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                        format!(
-                            "TypeAliasType must be assigned to a variable named `{}`",
-                            lit.value.to_str()
-                        ),
-                    );
-                }
-            } else {
-                self.error(
-                    errors,
-                    arg.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                    "Expected first argument of `TypeAliasType` to be a string literal".to_owned(),
-                );
-            }
-        };
-        if let Some(arg) = x.arguments.args.first() {
-            check_name_arg(arg);
-            arg_name = true;
-        }
-        if let Some(arg) = x.arguments.args.get(1) {
-            value = Some(arg.clone());
-        }
-        if let Some(arg) = x.arguments.args.get(2) {
-            self.error(
-                errors,
-                arg.range(),
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                "Unexpected positional argument to `TypeAliasType`".to_owned(),
-            );
-        }
-        for kw in &x.arguments.keywords {
-            match &kw.arg {
-                Some(id) => match id.id.as_str() {
-                    "name" => {
-                        if arg_name {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                                "Multiple values for argument `name`".to_owned(),
-                            );
-                        } else {
-                            check_name_arg(&kw.value);
-                            arg_name = true;
-                        }
-                    }
-                    "value" => {
-                        if value.is_some() {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                                "Multiple values for argument `value`".to_owned(),
-                            );
-                        } else {
-                            value = Some(kw.value.clone());
-                        }
-                    }
-                    "type_params" => {
-                        if let Expr::Tuple(tuple) = &kw.value {
-                            type_params = Some(tuple.elts.clone());
-                        } else {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                                "Value for argument `type_params` must be a tuple literal"
-                                    .to_owned(),
-                            );
-                        }
-                    }
-                    _ => {
-                        self.error(
-                            errors,
-                            kw.range,
-                            ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                            format!("Unexpected keyword argument `{}` to `TypeAliasType`", id.id),
-                        );
-                    }
-                },
-                _ => {
-                    self.error(
-                        errors,
-                        kw.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                        "Cannot pass unpacked keyword arguments to `TypeAliasType`".to_owned(),
-                    );
-                }
-            }
-        }
-        if !arg_name {
-            self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                "Missing `name` argument".to_owned(),
-            );
-        }
-        if let Some(value) = value {
-            Some((value, type_params.unwrap_or_default()))
-        } else {
-            self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                "Missing `value` argument".to_owned(),
-            );
-            None
-        }
     }
 
     /// Helper to infer element types for a list or set.

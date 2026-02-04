@@ -121,6 +121,8 @@ pub struct Stdlib {
     /// QNames for special forms (Literal, Any, Never, etc.) to enable go-to-definition for inlay hints.
     special_form_qnames: SmallMap<&'static str, QName>,
     generic_alias: StdlibResult<ClassType>,
+    // string.templatelib.Template for t-strings
+    template: Option<StdlibResult<ClassType>>,
 }
 
 impl Stdlib {
@@ -145,6 +147,7 @@ impl Stdlib {
         let enum_ = ModuleName::enum_();
         let type_checker_internals = ModuleName::type_checker_internals();
         let collections_abc = ModuleName::collections_abc();
+        let string_templatelib = ModuleName::string_templatelib();
 
         let lookup_generic =
             |module: ModuleName, name: &'static str, args: usize| match lookup_class(
@@ -261,6 +264,9 @@ impl Stdlib {
                 .then(|| lookup_concrete(types, "UnionType")),
             special_form_qnames,
             generic_alias: lookup_concrete(types, "GenericAlias"),
+            template: version
+                .at_least(3, 14)
+                .then(|| lookup_concrete(string_templatelib, "Template")),
         }
     }
 
@@ -470,6 +476,10 @@ impl Stdlib {
         Self::apply(&self.mapping, vec![key, value])
     }
 
+    pub fn mapping_object(&self) -> &Class {
+        &Self::unwrap(&self.mapping).0
+    }
+
     pub fn set(&self, x: Type) -> ClassType {
         Self::apply(&self.set, vec![x])
     }
@@ -583,5 +593,9 @@ impl Stdlib {
 
     pub fn generic_alias(&self) -> &ClassType {
         Self::primitive(&self.generic_alias)
+    }
+
+    pub fn template(&self) -> Option<&ClassType> {
+        Some(Self::primitive(self.template.as_ref()?))
     }
 }

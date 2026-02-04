@@ -1995,3 +1995,37 @@ result = [x for x in it]
         "Expected definition to jump to __iter__ method in comprehension, got: {report}"
     );
 }
+
+#[test]
+fn goto_def_in_fstring_simple() {
+    let code = r#"
+def f() -> int:
+    return 0
+
+y = f"hello {f()}"
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("def f()"),
+        "Expected definition to jump to function f, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_in_fstring_format_specifier() {
+    // TODO(T253793958): Fix go-to-definition in format string specifiers.
+    let code = r#"
+def f() -> int:
+    return 0
+
+x = 1
+y = f"hello {x:{f()}}"
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Definition Result:") && report.contains("None"),
+        "Expected definition to jump to function f, got: {report}"
+    );
+}

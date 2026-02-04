@@ -2335,7 +2335,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             None => {
-                if let Some(exports) = self.exports.get_every_export(module_name) {
+                if let Some(exports) = self.exports.get_every_export_untracked(module_name) {
                     res.extend(exports.iter().map(|name| AttrInfo {
                         name: name.clone(),
                         ty: None,

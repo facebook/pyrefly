@@ -629,29 +629,6 @@ fn return_shim_callees(
     })
 }
 
-static BASE_EXCEPTION_INIT_OVERRIDES: &[(&str, TargetType)] = &[
-    ("builtins.AttributeError.__init__", TargetType::Function),
-    ("builtins.ImportError.__init__", TargetType::Function),
-    ("builtins.NameError.__init__", TargetType::Function),
-    ("builtins.SyntaxError.__init__", TargetType::Function),
-    ("builtins.UnicodeDecodeError.__init__", TargetType::Function),
-    ("builtins.UnicodeEncodeError.__init__", TargetType::Function),
-    (
-        "builtins.UnicodeTranslateError.__init__",
-        TargetType::Function,
-    ),
-    ("re.error.__init__", TargetType::Function),
-    ("subprocess.TimeoutExpired.__init__", TargetType::Function),
-    (
-        "subprocess.CalledProcessError.__init__",
-        TargetType::Function,
-    ),
-    (
-        "email.errors.MessageDefect.__init__",
-        TargetType::AllOverrides,
-    ),
-];
-
 static TEST_MODULE_NAME: &str = "test";
 
 #[macro_export]
@@ -2320,14 +2297,9 @@ def main(x) -> None:
 "#,
     &|context: &ModuleContext| {
         let init_targets = vec![
-            create_call_target(
-                "builtins.BaseException.__init__",
-                TargetType::OverrideSubset(
-                    Vec1::try_from_vec(BASE_EXCEPTION_INIT_OVERRIDES.to_vec()).unwrap(),
-                ),
-            )
-            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
-            .with_receiver_class_for_test("builtins.Exception", context),
+            create_call_target("builtins.BaseException.__init__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("builtins.Exception", context),
         ];
         let new_targets = vec![
             create_call_target("builtins.BaseException.__new__", TargetType::Function)
@@ -4038,7 +4010,7 @@ def foo(e: Exception):
                         /* call_targets */ vec![],
                         /* init_targets */
                         vec![
-                            create_call_target("builtins.type.__init__", TargetType::AllOverrides)
+                            create_call_target("builtins.type.__init__", TargetType::Function)
                                 .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
                                 .with_receiver_class_for_test("builtins.type", context),
                         ],
@@ -4088,10 +4060,7 @@ def foo(error_type: Union[str, Type[Exception]]):
                         vec![
                             create_call_target(
                                 "builtins.BaseException.__init__",
-                                TargetType::OverrideSubset(
-                                    Vec1::try_from_vec(BASE_EXCEPTION_INIT_OVERRIDES.to_vec())
-                                        .unwrap(),
-                                ),
+                                TargetType::Function,
                             )
                             .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
                             .with_receiver_class_for_test("builtins.Exception", context),
@@ -4148,10 +4117,7 @@ def foo(error_type: Type[Exception]):
                         vec![
                             create_call_target(
                                 "builtins.BaseException.__init__",
-                                TargetType::OverrideSubset(
-                                    Vec1::try_from_vec(BASE_EXCEPTION_INIT_OVERRIDES.to_vec())
-                                        .unwrap(),
-                                ),
+                                TargetType::Function,
                             )
                             .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
                             .with_receiver_class_for_test("builtins.Exception", context),
@@ -7196,6 +7162,38 @@ def trivial_decorator(f: Callable[P, None]) -> Callable[P, None]:
                     unresolved_expression_callees(UnresolvedReason::UnexpectedPyreflyTarget),
                 ),
             ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_overriding_init,
+    TEST_MODULE_NAME,
+    r#"
+class A:
+  def __init__(self): pass
+  @classmethod
+  def make(cls) -> A:
+    return cls()  # TODO: Should resolve to Overrides{A.__init__}
+class B(A):
+  def __init__(self): pass
+"#,
+    &|context: &ModuleContext| {
+        let init_targets = vec![
+            create_call_target("test.A.__init__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.A", context),
+        ];
+        let new_targets = vec![
+            create_call_target("builtins.object.__new__", TargetType::Function)
+                .with_is_static_method(true),
+        ];
+        vec![(
+            "test.A.make",
+            vec![(
+                "6:12-6:17",
+                constructor_call_callees(init_targets, new_targets),
+            )],
         )]
     }
 );

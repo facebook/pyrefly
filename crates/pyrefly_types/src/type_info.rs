@@ -137,9 +137,6 @@ impl TypeInfo {
     }
 
     pub fn with_narrow(&self, facets: &Vec1<FacetKind>, ty: Type) -> Self {
-        if ty.is_error() {
-            return self.clone();
-        }
         let mut type_info = self.clone();
         type_info.add_narrow(facets, ty);
         type_info

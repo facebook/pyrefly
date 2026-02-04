@@ -40,6 +40,7 @@ pub mod simplify;
 pub mod special_form;
 pub mod stdlib;
 pub mod tuple;
+pub mod type_alias;
 pub mod type_info;
 pub mod type_output;
 pub mod type_var;

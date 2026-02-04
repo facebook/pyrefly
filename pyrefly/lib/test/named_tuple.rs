@@ -211,6 +211,23 @@ Pair(y="foo")  # E: Missing argument `x` in function `Pair.__new__`
 );
 
 testcase!(
+    test_named_tuple_custom_new_default,
+    r#"
+from typing import NamedTuple, Self
+
+class A(NamedTuple):
+    x: int
+
+class B(A):
+    def __new__(cls, x: int = 0) -> Self:
+        return super().__new__(cls, x)
+
+B()
+B(1)
+    "#,
+);
+
+testcase!(
     test_named_tuple_defaults,
     r#"
 from collections import namedtuple

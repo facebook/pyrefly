@@ -43,7 +43,7 @@ use crate::types::globals::ImplicitGlobal;
 
 /// What names from a module this module depends on.
 #[derive(Debug, Clone)]
-pub enum DependsOn {
+pub enum DependsOnNames {
     /// Depends on all exports (star import or `import x`).
     All,
     /// Depends on specific names (`from x import a, b`).
@@ -55,7 +55,7 @@ pub enum DependsOn {
 #[derive(Debug, Clone, Default)]
 pub struct SyntacticDeps {
     /// Map from module to what names are imported from it.
-    deps: HashMap<ModuleName, DependsOn>,
+    deps: HashMap<ModuleName, DependsOnNames>,
 }
 
 impl SyntacticDeps {
@@ -64,11 +64,11 @@ impl SyntacticDeps {
         match self.deps.entry(module) {
             std::collections::hash_map::Entry::Vacant(e) => {
                 let names = SmallSet1::new(name);
-                e.insert(DependsOn::Names(names));
+                e.insert(DependsOnNames::Names(names));
             }
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 // Only add if not already All
-                if let DependsOn::Names(names) = e.get_mut() {
+                if let DependsOnNames::Names(names) = e.get_mut() {
                     names.insert(name);
                 }
             }
@@ -77,13 +77,13 @@ impl SyntacticDeps {
 
     /// Add a wildcard dependency on a module (depends on all exports).
     pub fn add_wildcard(&mut self, module: ModuleName) {
-        self.deps.insert(module, DependsOn::All);
+        self.deps.insert(module, DependsOnNames::All);
     }
 
     /// Add a module-level dependency (for `import x` or `import x as y`).
     /// Module imports depend on all exports since accessing `x.foo` requires `foo` to exist.
     pub fn add_module(&mut self, module: ModuleName) {
-        self.deps.insert(module, DependsOn::All);
+        self.deps.insert(module, DependsOnNames::All);
     }
 
     /// Check if this module imports any of the changed names from the given module.
@@ -91,13 +91,15 @@ impl SyntacticDeps {
     pub fn imports_any(&self, module: ModuleName, changed_names: &SmallSet<Name>) -> bool {
         match self.deps.get(&module) {
             None => false,
-            Some(DependsOn::All) => true,
-            Some(DependsOn::Names(names)) => names.into_iter().any(|n| changed_names.contains(n)),
+            Some(DependsOnNames::All) => true,
+            Some(DependsOnNames::Names(names)) => {
+                names.into_iter().any(|n| changed_names.contains(n))
+            }
         }
     }
 
     /// Get the underlying deps map.
-    pub fn deps(&self) -> &HashMap<ModuleName, DependsOn> {
+    pub fn deps(&self) -> &HashMap<ModuleName, DependsOnNames> {
         &self.deps
     }
 

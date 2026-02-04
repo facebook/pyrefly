@@ -16,11 +16,15 @@ use uuid::Uuid;
 
 pub trait Telemetry: Send + Sync {
     fn record_event(&self, event: TelemetryEvent, process: Duration, error: Option<&Error>);
+    fn surface(&self) -> Option<String>;
 }
 pub struct NoTelemetry;
 
 impl Telemetry for NoTelemetry {
     fn record_event(&self, _event: TelemetryEvent, _process: Duration, _error: Option<&Error>) {}
+    fn surface(&self) -> Option<String> {
+        None
+    }
 }
 
 pub enum TelemetryEventKind {
@@ -65,6 +69,8 @@ pub struct TelemetryFileStats {
 pub struct TelemetryServerState {
     pub has_sourcedb: bool,
     pub id: Uuid,
+    /// The surface/entrypoint for the language server
+    pub surface: Option<String>,
 }
 
 #[derive(Default)]
