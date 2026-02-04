@@ -75,9 +75,10 @@ client = TestClient(app)
 client.get("/users")
 #           ^
 "#;
-    let report =
-        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
-    let def_start = code.find("list_users").expect("expected list_users definition");
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    let def_start = code
+        .find("list_users")
+        .expect("expected list_users definition");
     let def_end = def_start + "list_users".len();
     let expected = format!(
         "Definition Result:\n{}",
