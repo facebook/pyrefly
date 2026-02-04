@@ -2120,6 +2120,30 @@ def compute():
 }
 
 #[test]
+fn inline_method_for_class() {
+    let code = r#"
+class A:
+    def foo(self):
+        return 1
+
+    def bar(self):
+        self.foo()
+#        ^
+"#;
+    let updated = apply_first_inline_method_action(code).expect("expected inline method action");
+    let expected = r#"
+class A:
+    def foo(self):
+        return 1
+
+    def bar(self):
+        1
+#        ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
 fn inline_parameter_basic_refactor() {
     let code = r#"
 def add(a, b):
