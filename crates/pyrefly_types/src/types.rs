@@ -1590,6 +1590,15 @@ impl Type {
         })
     }
 
+    /// Simplify intersection types to their fallback type.
+    pub fn simplify_intersections(self) -> Self {
+        self.transform(&mut |ty| {
+            if let Type::Intersect(box (_, fallback)) = ty {
+                *ty = fallback.clone();
+            }
+        })
+    }
+
     /// Used prior to display to ensure unique variables don't leak out non-deterministically.
     pub fn deterministic_printing(self) -> Self {
         self.transform(&mut |ty| {
