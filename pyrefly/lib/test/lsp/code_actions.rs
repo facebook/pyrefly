@@ -366,6 +366,19 @@ fn compute_push_down_actions(
     })
 }
 
+fn compute_extract_superclass_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let selection = find_marked_range_with(code, "# SUPER-START", "# SUPER-END");
+    compute_move_actions(code, selection, |transaction, handle, selection| {
+        transaction.extract_superclass_code_actions(handle, selection)
+    })
+}
+
 #[test]
 fn basic_test() {
     let report = get_batched_lsp_operations_report_allow_error(
@@ -998,6 +1011,79 @@ class Base:
 class Child(Base):
     def foo(self):
         pass
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_basic() {
+    let code = r#"
+class Foo:
+    def a(self):
+        return 1
+    # SUPER-START
+    def b(self):
+        return 2
+    def c(self):
+        return 3
+    # SUPER-END
+    def d(self):
+        return 4
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class BaseFoo:
+    def b(self):
+        return 2
+    def c(self):
+        return 3
+
+class Foo(BaseFoo):
+    def a(self):
+        return 1
+    # SUPER-START
+    # SUPER-END
+    def d(self):
+        return 4
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_with_metaclass_inserts_pass() {
+    let code = r#"
+class Base:
+    pass
+
+class Meta(type):
+    pass
+
+class Foo(Base, metaclass=Meta):
+    # SUPER-START
+    def only(self):
+        pass
+    # SUPER-END
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class Base:
+    pass
+
+class Meta(type):
+    pass
+
+class BaseFoo:
+    def only(self):
+        pass
+
+class Foo(Base, BaseFoo, metaclass=Meta):
+    # SUPER-START
+    pass
+    # SUPER-END
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
