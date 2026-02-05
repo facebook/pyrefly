@@ -12,8 +12,10 @@ use itertools::Itertools;
 use pyrefly_types::callable::ArgCount;
 use pyrefly_types::callable::ArgCounts;
 use pyrefly_types::callable::Param;
-use pyrefly_types::callable::ParamList;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::tuple::Tuple;
+use pyrefly_types::type_output::OutputWithLocations;
+use pyrefly_types::type_output::TypeOutput;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -673,14 +675,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect();
         let mut has_kwargs = keywords.iter().any(|kw| kw.arg.is_none());
 
-        let mut used_params = Vec::new();
-        let mut omitted = false;
+        let mut elements = Vec::new();
+        let mut named_posonly = false;
+        let mut kwonly = false;
+        let mut in_omitted = false;
         let take_keyword = |name: &Name, names: &mut Vec<Name>| {
             if let Some(index) = names.iter().position(|candidate| candidate == name) {
                 names.remove(index);
                 true
             } else {
                 false
+            }
+        };
+        let format_param = |param: &Param| -> String {
+            let ctx = TypeDisplayContext::new(&[]);
+            let mut output = OutputWithLocations::new(&ctx);
+            let _ = param.fmt_with_type(&mut output, &|ty, out| {
+                let display_ty = self.solver().for_display(ty.clone());
+                out.write_type(&display_ty)
+            });
+            output
+                .parts()
+                .iter()
+                .map(|(part, _)| part.as_str())
+                .collect::<String>()
+        };
+        let mut push_ellipsis = |parts: &mut Vec<String>| {
+            if parts.last().map(|s| s.as_str()) != Some("...") {
+                parts.push("...".to_owned());
             }
         };
 
@@ -726,31 +748,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             };
 
-            if include {
-                used_params.push(param.clone());
-            } else {
-                omitted = true;
+            if !include {
+                in_omitted = true;
+                continue;
+            }
+
+            if named_posonly && !matches!(param, Param::PosOnly(Some(_), _, _)) {
+                elements.push("/".to_owned());
+                named_posonly = false;
+            }
+            if in_omitted {
+                push_ellipsis(&mut elements);
+                in_omitted = false;
+            }
+            if !kwonly && matches!(param, Param::KwOnly(..)) {
+                elements.push("*".to_owned());
+                kwonly = true;
+            }
+            elements.push(format_param(param));
+
+            if matches!(param, Param::PosOnly(Some(_), _, _)) {
+                named_posonly = true;
             }
         }
 
         if positional_remaining > 0 || star_remaining > 0 || has_kwargs || !keyword_names.is_empty()
         {
-            omitted = true;
+            in_omitted = true;
         }
 
-        let has_used_params = !used_params.is_empty();
-        let callable = Callable::list(ParamList::new(used_params), signature.ret.clone());
-        let mut display = format!(
-            "{}",
-            self.solver()
-                .for_display(self.heap.mk_callable_from(callable))
-        );
-        if omitted {
-            if let Some(close_paren) = display.find(") ->") {
-                let insert = if has_used_params { ", ..." } else { "..." };
-                display.insert_str(close_paren, insert);
-            }
+        if named_posonly {
+            elements.push("/".to_owned());
         }
-        display
+        if in_omitted {
+            push_ellipsis(&mut elements);
+        }
+        if elements.is_empty() {
+            elements.push("...".to_owned());
+        }
+
+        let ret_display = format!("{}", self.solver().for_display(signature.ret.clone()));
+        format!("({}) -> {}", elements.join(", "), ret_display)
     }
 }
