@@ -18,6 +18,8 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
@@ -36,6 +38,8 @@ use lsp_types::CodeActionParams;
 use lsp_types::CodeActionProviderCapability;
 use lsp_types::CodeActionResponse;
 use lsp_types::CodeActionTriggerKind;
+use lsp_types::CompletionItem;
+use lsp_types::CompletionItemKind;
 use lsp_types::CompletionList;
 use lsp_types::CompletionOptions;
 use lsp_types::CompletionParams;
@@ -248,11 +252,16 @@ use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
+use crate::lsp::non_wasm::mru::CompletionMru;
+use crate::lsp::non_wasm::mru::load_from_path_default;
+use crate::lsp::non_wasm::mru::save_to_path;
+use crate::lsp::non_wasm::mru::workspace_mru_path;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::protocol::read_lsp_message;
 use crate::lsp::non_wasm::protocol::write_lsp_message;
+use crate::lsp::non_wasm::queue::CompletionItemSelectedParams;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
@@ -533,6 +542,7 @@ pub struct Server {
     /// operations we have yet to process.
     uris_pending_close: Mutex<HashMap<String, usize>>,
     workspaces: Arc<Workspaces>,
+    completion_mru: RwLock<HashMap<PathBuf, CompletionMru>>,
     outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
     filewatcher_registered: AtomicBool,
@@ -1096,6 +1106,124 @@ impl Server {
         }
         info!("Could not convert uri to filepath: {}", uri);
         None
+    }
+
+    fn workspace_root_for_path(&self, path: &Path) -> PathBuf {
+        self.workspaces.get_with(path.to_path_buf(), |(root, _)| {
+            root.cloned()
+                .unwrap_or_else(|| path.parent().unwrap_or(path).to_path_buf())
+        })
+    }
+
+    fn now_epoch_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    fn completion_item_mru_key(item: &CompletionItem) -> Option<String> {
+        let label = item.label.trim();
+        if label.is_empty() {
+            return None;
+        }
+        let mut key = String::new();
+        key.push_str(label);
+        if let Some(kind) = item.kind {
+            key.push_str("|kind=");
+            key.push_str(&format!("{:?}", kind));
+        }
+        if item.additional_text_edits.is_some()
+            || item.kind == Some(CompletionItemKind::MODULE)
+            || item.label_details.is_some()
+        {
+            if let Some(detail) = &item.detail {
+                key.push_str("|detail=");
+                key.push_str(detail);
+            }
+            if let Some(label_details) = &item.label_details {
+                if let Some(detail) = &label_details.detail {
+                    key.push_str("|label_detail=");
+                    key.push_str(detail);
+                }
+                if let Some(description) = &label_details.description {
+                    key.push_str("|label_desc=");
+                    key.push_str(description);
+                }
+            }
+        }
+        Some(key)
+    }
+
+    fn completion_item_selected(&self, params: CompletionItemSelectedParams) {
+        let Some(path) = self.path_for_uri(&params.text_document.uri) else {
+            return;
+        };
+        let Some(key) = Self::completion_item_mru_key(&params.item) else {
+            return;
+        };
+        let workspace_root = self.workspace_root_for_path(&path);
+        let now = Self::now_epoch_secs();
+        let mut mru_map = self.completion_mru.write();
+        let mru = mru_map.entry(workspace_root.clone()).or_insert_with(|| {
+            let path = workspace_mru_path(&workspace_root);
+            load_from_path_default(&path)
+        });
+        mru.record(&key, now);
+        mru.prune(now);
+        let mru_snapshot = mru.clone();
+        drop(mru_map);
+        let path = workspace_mru_path(&workspace_root);
+        if let Err(err) = save_to_path(&mru_snapshot, &path) {
+            info!("Failed to save completion MRU data: {err}");
+        }
+    }
+
+    fn apply_completion_mru(&self, uri: &Url, items: &mut Vec<CompletionItem>) {
+        if items.is_empty() {
+            return;
+        }
+        let Some(path) = self.path_for_uri(uri) else {
+            return;
+        };
+        let workspace_root = self.workspace_root_for_path(&path);
+        let mut mru_map = self.completion_mru.write();
+        let mru_path = workspace_mru_path(&workspace_root);
+        let mru = mru_map
+            .entry(workspace_root)
+            .or_insert_with(|| load_from_path_default(&mru_path));
+        let mru_snapshot = mru.clone();
+        drop(mru_map);
+
+        let mut best_index = None;
+        let mut best_score = 0;
+        for (index, item) in items.iter().enumerate() {
+            let Some(key) = Self::completion_item_mru_key(item) else {
+                continue;
+            };
+            let Some(last_used) = mru_snapshot.last_used(&key) else {
+                continue;
+            };
+            if last_used > best_score {
+                best_score = last_used;
+                best_index = Some(index);
+            }
+        }
+        let Some(best_index) = best_index else {
+            return;
+        };
+        for item in items.iter_mut() {
+            item.preselect = None;
+        }
+        items[best_index].sort_text = Some("".to_owned());
+        items[best_index].preselect = Some(true);
+        items.sort_by(|item1, item2| {
+            item1
+                .sort_text
+                .cmp(&item2.sort_text)
+                .then_with(|| item1.label.cmp(&item2.label))
+                .then_with(|| item1.detail.cmp(&item2.detail))
+        });
     }
 
     fn extract_request_params_or_send_err_response<T>(
@@ -1905,6 +2033,7 @@ impl Server {
             cancellation_handles: Mutex::new(HashMap::new()),
             uris_pending_close: Mutex::new(HashMap::new()),
             workspaces,
+            completion_mru: RwLock::new(HashMap::new()),
             outgoing_request_id: AtomicI32::new(1),
             outgoing_requests: Mutex::new(HashMap::new()),
             filewatcher_registered: AtomicBool::new(false),
@@ -3336,6 +3465,8 @@ impl Server {
                 )
             })
             .unwrap_or_default();
+        let mut items = items;
+        self.apply_completion_mru(uri, &mut items);
         Ok(CompletionResponse::List(CompletionList {
             is_incomplete,
             items,

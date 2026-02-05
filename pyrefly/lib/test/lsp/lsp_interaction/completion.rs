@@ -5,7 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cell::RefCell;
+
 use itertools::Itertools;
+use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionResponse;
 use lsp_types::InsertTextFormat;
@@ -14,6 +17,8 @@ use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::request::Completion;
 use serde_json::json;
 
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Notification;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -218,6 +223,127 @@ fn test_completion_sorted_in_sorttext_order() {
                 .is_sorted_by_key(|x| (&x.sort_text, &x.label))
         })
         .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_mru_ranked() {
+    let root = get_test_files_root();
+    let workspace_root = root.path().join("basic");
+    let foo_path = workspace_root.join("foo.py");
+    let foo_uri = Url::from_file_path(&foo_path).unwrap().to_string();
+
+    let insert_text = "\nclass Alchemy:\n    pass\nclass Alpha:\n    pass\n\nAl";
+
+    // First session: select Alpha to populate MRU.
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(workspace_root.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": foo_uri.clone(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 10, "character": 0},
+                    "end": {"line": 10, "character": 0}
+                },
+                "text": insert_text
+            }],
+        }));
+
+    let captured = RefCell::new(None);
+    interaction
+        .client
+        .completion("foo.py", 16, 2)
+        .expect_completion_response_with(|list| {
+            *captured.borrow_mut() = Some(list.clone());
+            true
+        })
+        .unwrap();
+    let list = captured.into_inner().expect("expected completion list");
+    let alpha_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alpha")
+        .expect("expected Alpha completion");
+    let alchemy_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alchemy")
+        .expect("expected Alchemy completion");
+    assert!(alchemy_idx < alpha_idx, "expected default sort order");
+    let alpha_item: CompletionItem = list.items[alpha_idx].clone();
+
+    interaction
+        .client
+        .send_message(Message::Notification(Notification {
+            method: "pyrefly/completionItemSelected".to_owned(),
+            params: json!({
+                "textDocument": { "uri": foo_uri.clone() },
+                "item": alpha_item,
+            }),
+            activity_key: None,
+        }));
+
+    interaction.shutdown().unwrap();
+
+    // Second session: MRU should promote Alpha.
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(workspace_root.clone());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": foo_uri,
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 10, "character": 0},
+                    "end": {"line": 10, "character": 0}
+                },
+                "text": insert_text
+            }],
+        }));
+
+    let captured = RefCell::new(None);
+    interaction
+        .client
+        .completion("foo.py", 16, 2)
+        .expect_completion_response_with(|list| {
+            *captured.borrow_mut() = Some(list.clone());
+            true
+        })
+        .unwrap();
+    let list = captured.into_inner().expect("expected completion list");
+    let alpha_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alpha")
+        .expect("expected Alpha completion");
+    let alchemy_idx = list
+        .items
+        .iter()
+        .position(|item| item.label == "Alchemy")
+        .expect("expected Alchemy completion");
+    assert!(alpha_idx < alchemy_idx, "expected MRU sort order");
+    assert_eq!(list.items[alpha_idx].preselect, Some(true));
 
     interaction.shutdown().unwrap();
 }

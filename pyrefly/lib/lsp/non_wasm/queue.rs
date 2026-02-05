@@ -15,16 +15,19 @@ use crossbeam_channel::Select;
 use crossbeam_channel::SendError;
 use crossbeam_channel::Sender;
 use lsp_server::RequestId;
+use lsp_types::CompletionItem;
 use lsp_types::DidChangeConfigurationParams;
 use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::DidChangeWorkspaceFoldersParams;
 use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
 use lsp_types::DidSaveTextDocumentParams;
+use lsp_types::TextDocumentIdentifier;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use pyrefly_util::telemetry::TelemetryTaskId;
+use serde::Deserialize;
 use tracing::debug;
 use tracing::info;
 
@@ -57,12 +60,20 @@ pub enum LspEvent {
     DidCloseNotebookDocument(DidCloseNotebookDocumentParams),
     DidChangeNotebookDocument(DidChangeNotebookDocumentParams),
     DidSaveNotebookDocument(DidSaveNotebookDocumentParams),
+    CompletionItemSelected(CompletionItemSelectedParams),
     /// Inform the server that some configs' find caches are now invalid (stored in
     /// `server.invalidated_configs`), and that a new type check must occur.
     InvalidateConfigFind,
     LspResponse(Response),
     LspRequest(Request),
     Exit,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionItemSelectedParams {
+    pub text_document: TextDocumentIdentifier,
+    pub item: CompletionItem,
 }
 
 impl LspEvent {
@@ -82,6 +93,7 @@ impl LspEvent {
             Self::DidCloseNotebookDocument(_) => "DidCloseNotebookDocument".to_owned(),
             Self::DidChangeNotebookDocument(_) => "DidChangeNotebookDocument".to_owned(),
             Self::DidSaveNotebookDocument(_) => "DidSaveNotebookDocument".to_owned(),
+            Self::CompletionItemSelected(_) => "CompletionItemSelected".to_owned(),
             Self::LspResponse(_) => "LspResponse".to_owned(),
             Self::LspRequest(request) => format!("LspRequest({})", request.method,),
             Self::Exit => "Exit".to_owned(),
@@ -114,6 +126,7 @@ impl LspEvent {
             | Self::DidChangeNotebookDocument(_)
             | Self::InvalidateConfigFind
             | Self::Exit => LspEventKind::Mutation,
+            Self::CompletionItemSelected(_) => LspEventKind::Query,
             Self::LspRequest(_) => LspEventKind::Query,
         }
     }
