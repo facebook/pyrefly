@@ -885,6 +885,7 @@ pub fn capabilities(
                 CodeActionKind::REFACTOR_REWRITE,
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
+                CodeActionKind::SOURCE_FIX_ALL,
             ]),
             ..Default::default()
         })),
@@ -3394,6 +3395,32 @@ impl Server {
             && trigger_kind == CodeActionTriggerKind::AUTOMATIC
         {
             return (!actions.is_empty()).then_some(actions);
+        }
+        if let Some(edits) = transaction.redundant_cast_fix_all_edits(&handle) {
+            let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+            for (module, edit_range, new_text) in edits {
+                let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
+                    module,
+                    range: edit_range,
+                }) else {
+                    continue;
+                };
+                changes.entry(lsp_location.uri).or_default().push(TextEdit {
+                    range: lsp_location.range,
+                    new_text,
+                });
+            }
+            if !changes.is_empty() {
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: "Fix all redundant casts".to_owned(),
+                    kind: Some(CodeActionKind::SOURCE_FIX_ALL),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(changes),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }));
+            }
         }
         let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
             for action in refactors {

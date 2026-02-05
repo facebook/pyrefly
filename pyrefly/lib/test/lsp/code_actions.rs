@@ -764,6 +764,29 @@ x = x
 }
 
 #[test]
+fn redundant_cast_fix_all() {
+    let (handles, state) = mk_multi_file_state(
+        &[(
+            "main",
+            "from typing import cast\nx: int = 0\nx = cast(int, x)\ny = cast(int, x)\n",
+        )],
+        Require::Exports,
+        false,
+    );
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let edits = transaction
+        .redundant_cast_fix_all_edits(handle)
+        .unwrap_or_default();
+    let updated = apply_refactor_edits_for_module(&module_info, &edits);
+    assert_eq!(
+        "from typing import cast\nx: int = 0\nx = x\ny = x\n",
+        updated
+    );
+}
+
+#[test]
 fn test_import_from_stdlib() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[("a", "TypeVar('T')\n# ^")],

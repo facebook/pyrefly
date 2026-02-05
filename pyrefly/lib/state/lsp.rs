@@ -2038,6 +2038,36 @@ impl<'a> Transaction<'a> {
         (!actions.is_empty()).then_some(actions)
     }
 
+    pub fn redundant_cast_fix_all_edits(
+        &self,
+        handle: &Handle,
+    ) -> Option<Vec<(Module, TextRange, String)>> {
+        let module_info = self.get_module_info(handle)?;
+        let ast = self.get_ast(handle)?;
+        let errors = self.get_errors(vec![handle]).collect_errors().shown;
+        let mut edits = Vec::new();
+        for error in errors {
+            if error.error_kind() != ErrorKind::RedundantCast {
+                continue;
+            }
+            if let Some((_, module, range, replacement)) =
+                quick_fixes::redundant_cast::redundant_cast_code_action(
+                    &module_info,
+                    &ast,
+                    error.range(),
+                )
+            {
+                edits.push((module, range, replacement));
+            }
+        }
+        if edits.is_empty() {
+            None
+        } else {
+            edits.sort_by_key(|(_, range, _)| range.start());
+            Some(edits)
+        }
+    }
+
     pub fn extract_function_code_actions(
         &self,
         handle: &Handle,
