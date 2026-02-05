@@ -1385,8 +1385,11 @@ fn render_signature_diff(
     expected: &str,
     found: &str,
     expected_line: Option<usize>,
-    _found_line: Option<usize>,
+    found_line: Option<usize>,
 ) -> Option<Vec<String>> {
+    // `found_line` is currently unused but kept for potential future use in
+    // more detailed diagnostics that distinguish expected and found locations.
+    let _ = found_line;
     let (expected_params, expected_ret) = signature_parts(expected)?;
     let (found_params, found_ret) = signature_parts(found)?;
 
