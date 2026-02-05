@@ -36,6 +36,9 @@ use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprGenerator;
+use ruff_python_ast::ExprLambda;
+use ruff_python_ast::ExprList;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprStringLiteral;
@@ -48,8 +51,8 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
-use vec1::Vec1;
 use vec1::vec1;
+use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -57,6 +60,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::unwrap::Hint;
 use crate::alt::unwrap::HintRef;
+use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
@@ -65,6 +69,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
+use pyrefly_graph::index::Idx;
 use crate::types::callable::Callable;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -85,6 +90,7 @@ use crate::types::type_var::TypeVar;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
 use crate::types::types::Type;
+use crate::types::types::Var;
 
 #[derive(Debug, Clone, Copy)]
 pub enum TypeOrExpr<'a> {
@@ -265,6 +271,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> TypeInfo {
+        if let Some(hint_ref) = hint
+            && hint_ref.branches().len() > 1
+        {
+            return self.expr_infer_type_info_with_union_hint(x, hint_ref, errors);
+        }
         if let Some(self_type_annotation) = self.intercept_typing_self_use(x) {
             return self_type_annotation;
         }
@@ -318,6 +329,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         res
     }
 
+    fn expr_infer_type_info_with_union_hint(
+        &self,
+        x: &Expr,
+        hint: HintRef,
+        errors: &ErrorCollector,
+    ) -> TypeInfo {
+        let mut first_error = None;
+        for branch in hint.branches() {
+            let branch_hint = self
+                .hint_from_type(branch.clone(), hint.errors())
+                .with_source_branches(hint.source_branches());
+            let branch_errors = self.error_collector();
+            let info =
+                self.expr_infer_type_info_with_hint(x, Some(branch_hint.as_ref()), &branch_errors);
+            if branch_errors.is_empty() && self.is_subset_eq(info.ty(), branch) {
+                errors.extend(branch_errors);
+                return info;
+            }
+            if first_error.is_none() {
+                first_error = Some(branch_errors);
+            }
+        }
+        if let Some(errs) = first_error {
+            errors.extend(errs);
+        }
+        let fallback_errors = self.error_collector();
+        let fallback_hint = Vec1::try_from_vec(vec![hint.ty().clone()])
+            .ok()
+            .map(|branches| {
+                self.hint_from_branches(branches, hint.errors())
+                    .with_source_branches(hint.source_branches())
+            });
+        self.expr_infer_type_info_with_hint(
+            x,
+            fallback_hint.as_ref().map(|hint| hint.as_ref()),
+            &fallback_errors,
+        )
+    }
+
     fn expr_type_info(
         &self,
         x: &Expr,
@@ -339,11 +389,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> TypeInfo {
         match check {
             Some((hint, hint_errors, tcc)) if !hint.is_any() => {
-                let got = self.expr_infer_type_info_with_hint(
-                    x,
-                    Some(HintRef::new(hint, Some(hint_errors))),
-                    errors,
-                );
+                let owned_hint = self.hint_from_type(hint.clone(), Some(hint_errors));
+                let got = self.expr_infer_type_info_with_hint(x, Some(owned_hint.as_ref()), errors);
                 self.check_and_return_type_info(got, hint, x.range(), hint_errors, tcc)
             }
             _ => self.expr_infer_type_info_with_hint(x, None, errors),
@@ -389,7 +436,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let param_vars = if let Some(parameters) = &lambda.parameters {
                     parameters
                         .iter_non_variadic_params()
-                        .map(|x| (&x.name().id, self.bindings().get_lambda_param(x.name())))
+                        .map(|x| (x.name().id.clone(), self.bindings().get_lambda_param(x.name())))
                         .collect()
                 } else {
                     Vec::new()
@@ -398,13 +445,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // effect, by setting an answer for the vars created at binding time.
                 let return_hint = hint.and_then(|hint| self.decompose_lambda(hint, &param_vars));
 
-                let mut params = param_vars.into_map(|(name, var)| {
-                    Param::Pos(
-                        name.clone(),
+                let mut params =
+                    param_vars.into_map(|(name, var)| Param::Pos(
+                        name,
                         self.solver().force_var(var),
                         Required::Required,
-                    )
-                });
+                    ));
                 if let Some(parameters) = &lambda.parameters {
                     params.extend(parameters.vararg.iter().map(|x| {
                         Param::VarArg(
@@ -437,20 +483,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
             Expr::List(x) => {
                 let elt_hint = hint.and_then(|ty| self.decompose_list(ty));
-                if x.is_empty() {
-                    let elem_ty = elt_hint.map_or_else(
-                        || {
-                            self.solver()
-                                .fresh_partial_contained(self.uniques, x.range)
-                                .to_type()
-                        },
-                        |hint| hint.to_type(),
-                    );
-                    self.stdlib.list(elem_ty).to_type()
-                } else {
-                    let elem_tys = self.elts_infer(&x.elts, elt_hint, errors);
-                    self.stdlib.list(self.unions(elem_tys)).to_type()
-                }
+                self.list_with_hint(x, elt_hint, errors)
             }
             Expr::Dict(x) => self.dict_infer(&x.items, hint, x.range, errors),
             Expr::Set(x) => {
@@ -633,33 +666,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(want) = hint
             && self.is_subset_eq(&ty, want.ty())
         {
-            want.ty().clone()
+            let mut matched_branch = None;
+            for branch in want.branches() {
+                if self.is_subset_eq(&ty, branch) {
+                    matched_branch = Some(branch.clone());
+                    break;
+                }
+            }
+            matched_branch.unwrap_or_else(|| want.ty().clone())
         } else {
             ty.promote_implicit_literals(self.stdlib)
         }
     }
 
     fn tuple_infer(&self, x: &ExprTuple, hint: Option<HintRef>, errors: &ErrorCollector) -> Type {
-        let owner = Owner::new();
         let (hint_ts, default_hint) = if let Some(hint) = &hint {
             let (tuples, nontuples) = self.split_tuple_hint(hint.ty());
             // Combine hints from multiple tuples.
-            let mut element_hints: Vec<Vec1<&Type>> = Vec::new();
-            let mut default_hint = Vec::new();
+            let mut element_hints: Vec<Vec<Type>> = Vec::new();
+            let mut default_hint: Vec<Type> = Vec::new();
             for tuple in tuples {
                 let (cur_element_hints, cur_default_hint) = self.tuple_to_element_hints(tuple);
                 if let Some(cur_default_hint) = cur_default_hint {
                     // Use the default hint for any elements that this tuple doesn't provide per-element hints for.
                     for ts in element_hints.iter_mut().skip(cur_element_hints.len()) {
-                        ts.push(cur_default_hint);
+                        ts.push(cur_default_hint.clone());
                     }
-                    default_hint.push(cur_default_hint);
+                    default_hint.push(cur_default_hint.clone());
                 }
                 for (i, element_hint) in cur_element_hints.into_iter().enumerate() {
                     if i < element_hints.len() {
-                        element_hints[i].push(element_hint);
+                        element_hints[i].push(element_hint.clone());
                     } else {
-                        element_hints.push(vec1![element_hint]);
+                        element_hints.push(vec![element_hint.clone()]);
                     }
                 }
             }
@@ -675,21 +714,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .cloned()
                         .collect(),
                 );
-                let nontuple_element_hint =
-                    self.decompose_tuple(HintRef::new(&nontuple_hint, hint.errors()));
+                let nontuple_hint = self.hint_from_type(nontuple_hint, hint.errors());
+                let nontuple_element_hint = self.decompose_tuple(nontuple_hint.as_ref());
                 if let Some(nontuple_element_hint) = nontuple_element_hint {
-                    let nontuple_element_hint = owner.push(nontuple_element_hint.to_type());
+                    let nontuple_element_hint = nontuple_element_hint.to_type();
                     for ts in element_hints.iter_mut() {
-                        ts.push(nontuple_element_hint);
+                        ts.push(nontuple_element_hint.clone());
                     }
                     default_hint.push(nontuple_element_hint);
                 }
             }
             (
-                element_hints.into_map(|ts| self.types_to_hint(ts, hint.errors(), &owner)),
+                element_hints
+                    .into_iter()
+                    .map(|ts| Vec1::try_from_vec(ts).expect("non-empty element hint"))
+                    .map(|ts| self.types_to_hint(ts, hint.errors(), hint.source_branches()))
+                    .collect(),
                 Vec1::try_from_vec(default_hint)
                     .ok()
-                    .map(|ts| self.types_to_hint(ts, hint.errors(), &owner)),
+                    .map(|ts| self.types_to_hint(ts, hint.errors(), hint.source_branches())),
             )
         } else {
             (Vec::new(), None)
@@ -744,13 +787,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 _ => {
+                    let elem_hint_owned = if unbounded.is_empty() {
+                        hint_ts_iter.next().or_else(|| default_hint.clone())
+                    } else {
+                        None
+                    };
                     let ty = self.expr_infer_type_no_trace(
                         elt,
-                        if unbounded.is_empty() {
-                            hint_ts_iter.next().or(default_hint)
-                        } else {
-                            None
-                        },
+                        elem_hint_owned.as_ref().map(|hint| hint.as_ref()),
                         errors,
                     );
                     if unbounded.is_empty() {
@@ -811,21 +855,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn types_to_hint<'b>(
+    fn types_to_hint(
         &self,
-        ts: Vec1<&'b Type>,
-        errors: Option<&'b ErrorCollector>,
-        owner: &'b Owner<Type>,
-    ) -> HintRef<'b, 'b> {
-        if ts.len() == 1 {
-            let (t, _) = ts.split_off_first();
-            HintRef::new(t, errors)
-        } else {
-            HintRef::new(
-                owner.push(self.unions(ts.into_iter().cloned().collect())),
-                errors,
-            )
-        }
+        ts: Vec1<Type>,
+        errors: Option<&'a ErrorCollector>,
+        source_branches: usize,
+    ) -> Hint<'a> {
+        self.hint_from_branches(ts, errors)
+            .with_source_branches(source_branches)
     }
 
     fn dict_infer(
@@ -836,41 +873,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let flattened_items = Ast::flatten_dict_items(items);
-        let hints = hint.as_ref().map_or(Vec::new(), |hint| match hint.ty() {
-            Type::Union(box Union { members: ts, .. }) => ts
-                .iter()
-                .map(|ty| HintRef::new(ty, hint.errors()))
-                .collect(),
-            _ => vec![*hint],
-        });
-        for hint in hints.iter() {
-            let (typed_dict, is_update) = match hint.ty() {
-                Type::TypedDict(td) => (td, false),
-                Type::PartialTypedDict(td) => (td, true),
-                _ => continue,
-            };
-            let check_errors = self.error_collector();
-            let item_errors = self.error_collector();
-            self.check_dict_items_against_typed_dict(
-                &flattened_items,
-                typed_dict,
-                is_update,
-                range,
-                &check_errors,
-                &item_errors,
-            );
+        if let Some(hint_ref) = hint {
+            for branch in hint_ref.branches() {
+                let (typed_dict, is_update) = match branch {
+                    Type::TypedDict(td) => (td, false),
+                    Type::PartialTypedDict(td) => (td, true),
+                    _ => continue,
+                };
+                let check_errors = self.error_collector();
+                let item_errors = self.error_collector();
+                self.check_dict_items_against_typed_dict(
+                    &flattened_items,
+                    typed_dict,
+                    is_update,
+                    range,
+                    &check_errors,
+                    &item_errors,
+                );
 
-            // We use the TypedDict hint if it successfully matched or if there is only one hint, unless
-            // this is a "soft" type hint, in which case we don't want to raise any check errors.
-            if check_errors.is_empty()
-                || hints.len() == 1
-                    && hint
-                        .errors()
-                        .inspect(|errors| errors.extend(check_errors))
-                        .is_some()
-            {
-                errors.extend(item_errors);
-                return (*hint.ty()).clone();
+                // We use the TypedDict hint if it successfully matched or if there is only one hint, unless
+                // this is a "soft" type hint, in which case we don't want to raise any check errors.
+                if check_errors.is_empty()
+                    || hint_ref.source_branches() == 1
+                        && hint_ref
+                            .errors()
+                            .inspect(|errors| errors.extend(check_errors))
+                            .is_some()
+                {
+                    errors.extend(item_errors);
+                    return branch.clone();
+                }
             }
         }
         // Note that we don't need to filter out the TypedDict options here; any non-`dict` options
@@ -892,23 +924,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
-        let (key_hint, value_hint) = hint.map_or((None, None), |ty| self.decompose_dict(ty));
+        let (key_hint, value_hint) = if let Some(hint) = hint {
+            let (key_hint, value_hint) = self.decompose_dict(hint);
+            let key_hint = key_hint.or_else(|| self.decompose_iterable(hint));
+            (key_hint, value_hint)
+        } else {
+            (None, None)
+        };
         if items.is_empty() {
-            let key_ty = key_hint.map_or_else(
+            let key_ty = key_hint.as_ref().map_or_else(
                 || {
                     self.solver()
                         .fresh_partial_contained(self.uniques, range)
                         .to_type()
                 },
-                |ty| ty.to_type(),
+                |hint| hint.to_type(),
             );
-            let value_ty = value_hint.map_or_else(
+            let value_ty = value_hint.as_ref().map_or_else(
                 || {
                     self.solver()
                         .fresh_partial_contained(self.uniques, range)
                         .to_type()
                 },
-                |ty| ty.to_type(),
+                |hint| hint.to_type(),
             );
             self.stdlib.dict(key_ty, value_ty).to_type()
         } else {
@@ -970,18 +1008,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
                         if !key_t.is_error() {
                             if let Some(key_hint) = &key_hint
-                                && self.is_subset_eq(&key_t, key_hint.ty())
+                                && self.is_subset_eq(&key_t, key_hint.union())
                             {
-                                key_tys.push(key_hint.ty().clone());
+                                key_tys.push(key_hint.union().clone());
                             } else {
                                 key_tys.push(key_t);
                             }
                         }
                         if !value_t.is_error() {
                             if let Some(value_hint) = &value_hint
-                                && self.is_subset_eq(&value_t, value_hint.ty())
+                                && self.is_subset_eq(&value_t, value_hint.union())
                             {
-                                value_tys.push(value_hint.ty().clone());
+                                value_tys.push(value_hint.union().clone());
                             } else {
                                 value_tys.push(value_t);
                             }
@@ -1016,7 +1054,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.stdlib.dict(key_ty, value_ty).to_type()
         }
     }
-
     /// If this is a `dict` call that can be converted to an equivalent dict literal (e.g., `dict(x=1)` => `{'x': 1}`),
     /// return the items in the converted dict.
     fn call_to_dict(&self, callee_ty: &Type, args: &Arguments) -> Option<Vec<DictItem>> {
@@ -1173,6 +1210,85 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         t_acc
+    }
+
+    fn lambda_infer(
+        &self,
+        lambda: &ExprLambda,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let param_vars: Vec<(Name, Var)> = if let Some(parameters) = &lambda.parameters {
+            parameters
+                .iter_non_variadic_params()
+                .map(|x| {
+                    (
+                        x.name().id.clone(),
+                        self.bindings().get_lambda_param(x.name()),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let param_states = param_vars
+            .iter()
+            .map(|(_, var)| self.solver().snapshot_unwrap_var(*var))
+            .collect::<Vec<_>>();
+        let return_hint = hint.and_then(|hint| self.decompose_lambda(hint, &param_vars));
+
+        let ret = self.expr_infer_type_no_trace(
+            &lambda.body,
+            return_hint.as_ref().map(|hint| hint.as_ref()),
+            errors,
+        );
+        let ret = self.solver().expand_vars(ret);
+
+        let mut params = param_vars
+            .iter()
+            .map(|(name, var)| {
+                Param::Pos(
+                    name.clone(),
+                    self.solver().force_var(*var),
+                    Required::Required,
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(parameters) = &lambda.parameters {
+            params.extend(parameters.vararg.iter().map(|x| {
+                Param::VarArg(
+                    Some(x.name.id.clone()),
+                    self.solver()
+                        .force_var(self.bindings().get_lambda_param(&x.name)),
+                )
+            }));
+            params.extend(parameters.kwarg.iter().map(|x| {
+                Param::Kwargs(
+                    Some(x.name.id.clone()),
+                    self.solver()
+                        .force_var(self.bindings().get_lambda_param(&x.name)),
+                )
+            }));
+        }
+        let params = Params::List(ParamList::new(params));
+        for ((_, var), state) in param_vars.iter().zip(param_states.into_iter()) {
+            self.solver().restore_unwrap_var(*var, state);
+        }
+        Type::Callable(Box::new(Callable { params, ret }))
+    }
+
+    fn lambda_param_type_info(&self, name: &ExprName) -> Option<TypeInfo> {
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let idx = self.bindings().key_to_idx(&key);
+        self.lambda_param_type_info_from_idx(idx)
+    }
+
+    fn lambda_param_type_info_from_idx(&self, idx: Idx<Key>) -> Option<TypeInfo> {
+        match self.bindings().get(idx) {
+            Binding::Forward(next) => self.lambda_param_type_info_from_idx(*next),
+            Binding::LambdaParameter(var) => Some(TypeInfo::of_ty(var.to_type())),
+            _ => None,
+        }
     }
 
     /// Infers types for `if` clauses in the given comprehensions.
@@ -1727,8 +1843,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Vec<Type> {
         let star_hint = LazyCell::new(|| {
             elt_hint.as_ref().map(|hint| {
-                hint.as_ref()
-                    .map_ty(|ty| self.stdlib.iterable(ty.clone()).to_type())
+                self.hint_map(hint.as_ref(), |ty| {
+                    self.stdlib.iterable(ty.clone()).to_type()
+                })
             })
         });
         elts.map(|x| match x {
@@ -1758,6 +1875,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             ),
         })
+    }
+
+    fn list_with_hint(
+        &self,
+        x: &ExprList,
+        elt_hint: Option<Hint>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if x.is_empty() {
+            let elem_ty = elt_hint.as_ref().map_or_else(
+                || {
+                    if !self.solver().infer_with_first_use {
+                        self.error(
+                            errors,
+                            x.range(),
+                            ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                            "This expression is implicitly inferred to be `list[Any]`. Please provide an explicit type annotation.".to_owned(),
+                        );
+                        Type::any_implicit()
+                    } else {
+                        self.solver()
+                            .fresh_partial_contained(self.uniques, x.range())
+                            .to_type()
+                    }
+                },
+                |hint| hint.to_type(),
+            );
+            self.stdlib.list(elem_ty).to_type()
+        } else {
+            let elem_tys = self.elts_infer(&x.elts, elt_hint, errors);
+            self.stdlib.list(self.unions(elem_tys)).to_type()
+        }
     }
 
     fn intercept_typing_self_use(&self, x: &Expr) -> Option<TypeInfo> {

@@ -319,6 +319,12 @@ pub struct Solver {
     pub infer_with_first_use: bool,
 }
 
+#[derive(Clone)]
+pub enum UnwrapVarState {
+    Unwrap,
+    Answer(Type),
+}
+
 impl Display for Solver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (x, y) in self.variables.lock().iter() {
@@ -344,6 +350,24 @@ impl Solver {
 
     pub fn recurse<'a>(&self, var: Var, recurser: &'a VarRecurser) -> Option<Guard<'a, Var>> {
         self.variables.lock().recurse(var, recurser)
+    }
+
+    pub fn snapshot_unwrap_var(&self, var: Var) -> UnwrapVarState {
+        let variables = self.variables.lock();
+        match &*variables.get(var) {
+            Variable::Unwrap => UnwrapVarState::Unwrap,
+            Variable::Answer(ty) => UnwrapVarState::Answer(ty.clone()),
+            other => panic!("Expected lambda parameter var to be Unwrap or Answer, got {other:?}"),
+        }
+    }
+
+    pub fn restore_unwrap_var(&self, var: Var, state: UnwrapVarState) {
+        let variables = self.variables.lock();
+        let mut entry = variables.get_mut(var);
+        *entry = match state {
+            UnwrapVarState::Unwrap => Variable::Unwrap,
+            UnwrapVarState::Answer(ty) => Variable::Answer(ty),
+        };
     }
 
     /// Force all non-recursive Vars in `vars`.
