@@ -1043,3 +1043,13 @@ class Derived(Base):
     def __str__(self) -> str: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
     "#,
 );
+
+testcase!(
+    test_override_excludes_incompatible_self_overloads,
+    r#"
+class MyString(str):
+    # `str.upper()` has 2 overloads, the `self: LiteralString` one does not apply since `MyString` cannot be a `LiteralString`
+    def upper(self, locale: str = "en") -> str:
+        return super().upper()
+    "#,
+);

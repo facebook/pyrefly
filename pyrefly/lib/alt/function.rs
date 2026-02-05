@@ -1723,48 +1723,71 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     metadata: func.metadata.clone(),
                 })
             }),
-            Type::Overload(overload) => overload
-                .signatures
-                .try_mapped_ref(|x| match x {
-                    OverloadType::Function(f) => f
-                        .signature
-                        .split_first_param(&mut owner)
-                        .map(|(_, c)| {
-                            OverloadType::Function(Function {
-                                signature: c,
-                                metadata: f.metadata.clone(),
-                            })
-                        })
-                        .ok_or(()),
-                    OverloadType::Forall(forall) => forall
-                        .body
-                        .signature
-                        .split_first_param(&mut owner)
-                        .map(|(param, c)| {
-                            let c = self.instantiate_callable_self(
-                                &forall.tparams,
-                                obj,
-                                param,
-                                c,
-                                is_subset,
-                            );
-                            OverloadType::Forall(Forall {
-                                tparams: forall.tparams.clone(),
-                                body: Function {
-                                    signature: c,
-                                    metadata: forall.body.metadata.clone(),
+            Type::Overload(overload) => {
+                // First, bind all overloads by stripping the self parameter.
+                // Track which ones are compatible with the bound object type.
+                let bound: Vec<_> = overload
+                    .signatures
+                    .iter()
+                    .filter_map(|x| match x {
+                        OverloadType::Function(f) => {
+                            f.signature
+                                .split_first_param(&mut owner)
+                                .map(|(self_param, c)| {
+                                    let compatible = is_subset(obj, self_param);
+                                    (
+                                        compatible,
+                                        OverloadType::Function(Function {
+                                            signature: c,
+                                            metadata: f.metadata.clone(),
+                                        }),
+                                    )
+                                })
+                        }
+                        OverloadType::Forall(forall) => {
+                            forall.body.signature.split_first_param(&mut owner).map(
+                                |(self_param, c)| {
+                                    let compatible = is_subset(obj, self_param);
+                                    let c = self.instantiate_callable_self(
+                                        &forall.tparams,
+                                        obj,
+                                        self_param,
+                                        c,
+                                        is_subset,
+                                    );
+                                    (
+                                        compatible,
+                                        OverloadType::Forall(Forall {
+                                            tparams: forall.tparams.clone(),
+                                            body: Function {
+                                                signature: c,
+                                                metadata: forall.body.metadata.clone(),
+                                            },
+                                        }),
+                                    )
                                 },
-                            })
-                        })
-                        .ok_or(()),
-                })
-                .ok()
-                .map(|signatures| {
+                            )
+                        }
+                    })
+                    .collect();
+                let filtered_overloads: Vec<_> = bound
+                    .iter()
+                    .filter(|(compatible, _)| *compatible)
+                    .map(|(_, sig)| sig.clone())
+                    .collect();
+                // Filter to only compatible overloads if any exist, otherwise use all
+                let signatures = if filtered_overloads.is_empty() {
+                    bound.into_iter().map(|(_, sig)| sig).collect()
+                } else {
+                    filtered_overloads
+                };
+                Vec1::try_from_vec(signatures).ok().map(|signatures| {
                     Type::Overload(Overload {
                         signatures,
                         metadata: overload.metadata.clone(),
                     })
-                }),
+                })
+            }
             _ => None,
         }
     }
