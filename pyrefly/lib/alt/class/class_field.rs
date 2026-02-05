@@ -1324,7 +1324,7 @@ fn has_any_abstract(ty: &Type) -> bool {
 fn signature_parts(sig: &str) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
     let open = sig.find('(')?;
     let close = sig[open..].find(')')? + open;
-    if close <= open + 1 {
+    if close < open + 1 {
         return None;
     }
     let params = (open + 1)..close;
