@@ -16,6 +16,7 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::ParamList;
+use pyrefly_types::callable::Required;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_output::OutputWithLocations;
@@ -914,6 +915,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut named_posonly = false;
         let mut kwonly = false;
         let mut in_omitted = false;
+        let mut missing_required = false;
         let take_keyword = |name: &Name, names: &mut Vec<Name>| {
             if let Some(index) = names.iter().position(|candidate| candidate == name) {
                 names.remove(index);
@@ -984,6 +986,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
 
             if !include {
+                if matches!(param, Param::PosOnly(_, _, Required::Required))
+                    || matches!(param, Param::Pos(_, _, Required::Required))
+                    || matches!(param, Param::KwOnly(_, _, Required::Required))
+                {
+                    missing_required = true;
+                }
                 in_omitted = true;
                 continue;
             }
@@ -1023,6 +1031,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         let ret_display = format!("{}", self.solver().for_display(signature.ret.clone()));
-        format!("({}) -> {}", elements.join(", "), ret_display)
+        let mut display = format!("({}) -> {}", elements.join(", "), ret_display);
+        if missing_required {
+            display.push_str(" [missing required arguments]");
+        }
+        display
     }
 }
