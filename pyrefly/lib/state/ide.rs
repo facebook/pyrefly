@@ -242,7 +242,6 @@ const COMMON_MODULE_ALIASES: &[(&str, &str)] = &[
     ("tensorflow", "tf"),
     ("matplotlib", "mpl"),
     ("matplotlib.pyplot", "plt"),
-    ("math", "m"),
     ("scipy", "sp"),
     ("scipy.io", "spio"),
     ("panel", "pn"),
