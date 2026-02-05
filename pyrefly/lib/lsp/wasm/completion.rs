@@ -655,7 +655,45 @@ impl Transaction<'_> {
                     continue;
                 }
                 let module_name_str = module_name.as_str().to_owned();
-                let source = autoimport_source(&module_name_str);
+                let module_sort_text = autoimport_sort_text(&module_name_str).to_owned();
+                if let Some((parent_module_str, submodule_name)) =
+                    module_name.as_str().rsplit_once('.')
+                    && let Some(parent_handle) = self
+                        .import_handle(handle, ModuleName::from_str(parent_module_str), None)
+                        .finding()
+                {
+                    let (insert_text, additional_text_edits, imported_module) = {
+                        let (position, insert_text, module_name) = insert_import_edit(
+                            &ast,
+                            self.config_finder(),
+                            handle.dupe(),
+                            parent_handle,
+                            submodule_name,
+                            import_format,
+                        );
+                        let import_text_edit = TextEdit {
+                            range: module_info
+                                .to_lsp_range(TextRange::at(position, TextSize::new(0))),
+                            new_text: insert_text.clone(),
+                        };
+                        (insert_text, Some(vec![import_text_edit]), module_name)
+                    };
+                    let auto_import_label_detail = format!(" (import {imported_module})");
+                    completions.push(CompletionItem {
+                        label: submodule_name.to_owned(),
+                        detail: Some(insert_text),
+                        kind: Some(CompletionItemKind::MODULE),
+                        additional_text_edits,
+                        label_details: supports_completion_item_details.then_some(
+                            CompletionItemLabelDetails {
+                                detail: Some(auto_import_label_detail),
+                                description: Some(module_name_str.clone()),
+                            },
+                        ),
+                        sort_text: Some(module_sort_text.clone()),
+                        ..Default::default()
+                    });
+                }
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
                 {
                     let (import_text, additional_text_edits) = {
