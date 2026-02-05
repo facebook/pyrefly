@@ -19,6 +19,9 @@ use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::simplify::intersect;
+use pyrefly_types::type_var::PreInferenceVariance;
+use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::TParam;
 use pyrefly_types::types::TParams;
@@ -453,7 +456,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if flags.is_staticmethod {
             self_type = None;
         }
-        let (params, paramspec) = self.get_params_and_paramspec(
+        let (params, paramspec, inferred_tparams) = self.get_params_and_paramspec(
             def,
             stub_or_impl,
             &mut self_type,
@@ -466,6 +469,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter_map(|key| self.get_idx(*key).deref().parameter().cloned());
         tparams.extend(legacy_tparams);
+        // Add inferred tparams for unannotated parameters
+        tparams.extend(inferred_tparams);
         let tparams = self.validated_tparams(def.range, tparams, TParamsSource::Function, errors);
 
         let kind =
@@ -743,6 +748,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Determine the type and required-ness of a parameter.
+    /// Returns the type, requiredness, and an optional TParam if a fresh type variable was created
+    /// for an unannotated parameter.
+    /// If `skip_type_var` is true, we won't create a scoped type variable for unannotated params.
     fn get_param_type_and_requiredness(
         &self,
         name: &Identifier,
@@ -750,11 +758,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         stub_or_impl: FunctionStubOrImpl,
         self_type: &mut Option<Type>,
         hint: Option<Type>,
+        skip_type_var: bool,
         errors: &ErrorCollector,
-    ) -> (Type, Required) {
+    ) -> (Type, Required, Option<TParam>) {
         // We only want to use self for the first param, so take & replace with None
         let self_type = std::mem::take(self_type);
-        let (ty, mut required) = match self.bindings().get_function_param(name) {
+        let (ty, mut required, tparam) = match self.bindings().get_function_param(name) {
             FunctionParameter::Annotated(idx) => {
                 // If the parameter is annotated, we check the default value against the annotation
                 let param_ty = self.get_idx(*idx).annotation.get_type().clone();
@@ -768,18 +777,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     stub_or_impl,
                     errors,
                 );
-                (param_ty, required)
+                (param_ty, required, None)
             }
             FunctionParameter::Unannotated(var, _, _) => {
                 let required = self.get_requiredness(default, None, stub_or_impl, errors);
                 // If this is the first parameter and there is a self type, solve to `Self`.
                 // We only try to solve the first param for now. Other unannotated params
                 // are also Var. If a default value of type T is provided, it will resolve to Any | T.
-                // Otherwise, it will be forced to Any
+                // Otherwise, we create a scoped type variable bounded by Any.
                 if let Some(ty) = self_type {
                     self.solver().solve_parameter(*var, ty);
+                    (self.solver().force_var(*var), required, None)
                 } else if let Some(hint) = hint {
                     self.solver().solve_parameter(*var, hint);
+                    (self.solver().force_var(*var), required, None)
                 } else if let Required::Optional(Some(default_ty)) = &required {
                     self.solver().solve_parameter(
                         *var,
@@ -788,8 +799,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             default_ty.clone().promote_implicit_literals(self.stdlib),
                         ),
                     );
+                    (self.solver().force_var(*var), required, None)
+                } else if skip_type_var {
+                    // For vararg/kwargs, don't create scoped type variables
+                    (self.solver().force_var(*var), required, None)
+                } else {
+                    // Create a fresh scoped type variable bounded by Any.
+                    // The parameter type in the signature is T (the quantified type variable),
+                    // but inside the function body we check it as T & Any to allow operations.
+                    let quantified = Quantified::type_var(
+                        name.id.clone(),
+                        self.uniques,
+                        None,
+                        Restriction::Bound(Type::any_implicit()),
+                        PreInferenceVariance::Invariant,
+                    );
+                    let q_type = quantified.clone().to_type();
+                    let tparam = TParam { quantified };
+                    // Inside the function body, solve the Var to T & Any so operations work
+                    let body_check_ty =
+                        intersect(vec![q_type.clone(), Type::any_implicit()], q_type.clone());
+                    self.solver().solve_parameter(*var, body_check_ty);
+                    // Return the quantified type T for the signature (not T & Any)
+                    (q_type, required, Some(tparam))
                 }
-                (self.solver().force_var(*var), required)
             }
         };
         if let Required::Optional(Some(default)) = required {
@@ -798,7 +831,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // want to promote literals while inferring the type.
             required = Required::Optional(Some(default.explicit_literals()));
         }
-        (ty, required)
+        (ty, required, tparam)
     }
 
     fn get_params_and_paramspec(
@@ -809,11 +842,55 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorator_param_hints: &mut Option<DecoratorParamHints>,
         parent_param_hints: &mut Option<ParentParamHints>,
         errors: &ErrorCollector,
-    ) -> (Vec<Param>, Option<Quantified>) {
+    ) -> (Vec<Param>, Option<Quantified>, Vec<TParam>) {
         let mut paramspec_args = None;
         let mut paramspec_kwargs = None;
         let mut params = Vec::with_capacity(def.parameters.len());
-        params.extend(def.parameters.posonlyargs.iter().map(|x| {
+        let mut inferred_tparams = Vec::new();
+
+        // Count unannotated params that would need type variables (excluding self/cls/args/kwargs).
+        // We only create a scoped type variable when there's exactly one such param.
+        let unannotated_param_count = {
+            let is_method = self_type.is_some();
+            let mut count = 0;
+            for (i, x) in def.parameters.posonlyargs.iter().enumerate() {
+                if !(is_method && i == 0)
+                    && matches!(
+                        self.bindings().get_function_param(&x.parameter.name),
+                        FunctionParameter::Unannotated(_, _, _)
+                    )
+                {
+                    count += 1;
+                }
+            }
+            for (i, x) in def.parameters.args.iter().enumerate() {
+                let is_self_or_cls = is_method
+                    && def.parameters.posonlyargs.is_empty()
+                    && i == 0
+                    && (x.parameter.name.as_str() == "self" || x.parameter.name.as_str() == "cls");
+                if !is_self_or_cls
+                    && matches!(
+                        self.bindings().get_function_param(&x.parameter.name),
+                        FunctionParameter::Unannotated(_, _, _)
+                    )
+                {
+                    count += 1;
+                }
+            }
+            for x in def.parameters.kwonlyargs.iter() {
+                if matches!(
+                    self.bindings().get_function_param(&x.parameter.name),
+                    FunctionParameter::Unannotated(_, _, _)
+                ) {
+                    count += 1;
+                }
+            }
+            count
+        };
+        // Only create scoped type variables if there's exactly one unannotated param
+        let skip_type_var = unannotated_param_count != 1;
+
+        for x in def.parameters.posonlyargs.iter() {
             let decorator_hint = decorator_param_hints
                 .as_mut()
                 .and_then(|hint| hint.next_positional());
@@ -824,23 +901,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .as_mut()
                     .and_then(|hint| hint.take_posonly())
             };
-            let (ty, required) = self.get_param_type_and_requiredness(
+            let (ty, required, tparam) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
                 decorator_hint.or(parent_hint),
+                skip_type_var,
                 errors,
             );
-            Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
-        }));
+            if let Some(tp) = tparam {
+                inferred_tparams.push(tp);
+            }
+            params.push(Param::PosOnly(
+                Some(x.parameter.name.id.clone()),
+                ty,
+                required,
+            ));
+        }
 
         // See: https://typing.python.org/en/latest/spec/historical.html#positional-only-parameters
         let is_historical_args_usage =
             def.parameters.posonlyargs.is_empty() && def.parameters.kwonlyargs.is_empty();
         let mut seen_keyword_args = false;
 
-        params.extend(def.parameters.args.iter().map(|x| {
+        for x in def.parameters.args.iter() {
             let decorator_hint = decorator_param_hints
                 .as_mut()
                 .and_then(|hint| hint.next_positional());
@@ -851,14 +936,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .as_mut()
                     .and_then(|hint| hint.take_positional())
             };
-            let (ty, required) = self.get_param_type_and_requiredness(
+            let (ty, required, tparam) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
                 decorator_hint.or(parent_hint),
+                skip_type_var,
                 errors,
             );
+            if let Some(tp) = tparam {
+                inferred_tparams.push(tp);
+            }
 
             // If the parameter begins but does not end with "__", it is a positional-only parameter.
             // See: https://typing.python.org/en/latest/spec/historical.html#positional-only-parameters
@@ -874,31 +963,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                     );
                 }
-
-                Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
+                params.push(Param::PosOnly(
+                    Some(x.parameter.name.id.clone()),
+                    ty,
+                    required,
+                ));
             } else {
                 seen_keyword_args |=
                     x.parameter.name.as_str() != "self" && x.parameter.name.as_str() != "cls";
-                Param::Pos(x.parameter.name.id.clone(), ty, required)
+                params.push(Param::Pos(x.parameter.name.id.clone(), ty, required));
             }
-        }));
-        params.extend(def.parameters.vararg.iter().map(|x| {
+        }
+
+        for x in def.parameters.vararg.iter() {
             let parent_hint = parent_param_hints
                 .as_mut()
                 .and_then(|hint| hint.take_vararg());
-            let (ty, _) = self.get_param_type_and_requiredness(
+            // Always skip creating type variables for *args
+            let (ty, _, _) = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
                 stub_or_impl,
                 self_type,
                 parent_hint,
+                true,
                 errors,
             );
             if let Type::Args(q) = &ty {
                 paramspec_args = Some(q.clone());
             }
-            Param::VarArg(Some(x.name.id.clone()), ty)
-        }));
+            params.push(Param::VarArg(Some(x.name.id.clone()), ty));
+        }
+
         if paramspec_args.is_some()
             && let Some(param) = def.parameters.kwonlyargs.first()
         {
@@ -912,30 +1008,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             );
         }
-        params.extend(def.parameters.kwonlyargs.iter().map(|x| {
+
+        for x in def.parameters.kwonlyargs.iter() {
             let parent_hint = parent_param_hints
                 .as_mut()
                 .and_then(|hint| hint.take_kwonly(&x.parameter.name));
-            let (ty, required) = self.get_param_type_and_requiredness(
+            let (ty, required, tparam) = self.get_param_type_and_requiredness(
                 &x.parameter.name,
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
                 parent_hint,
+                skip_type_var,
                 errors,
             );
-            Param::KwOnly(x.parameter.name.id.clone(), ty, required)
-        }));
+            if let Some(tp) = tparam {
+                inferred_tparams.push(tp);
+            }
+            params.push(Param::KwOnly(x.parameter.name.id.clone(), ty, required));
+        }
+
         if let Some(x) = &def.parameters.kwarg {
             let parent_hint = parent_param_hints
                 .as_mut()
                 .and_then(|hint| hint.take_kwargs());
-            let (ty, _) = self.get_param_type_and_requiredness(
+            // Always skip creating type variables for **kwargs
+            let (ty, _, _) = self.get_param_type_and_requiredness(
                 &x.name,
                 None,
                 stub_or_impl,
                 self_type,
                 parent_hint,
+                true,
                 errors,
             );
             if let Type::Kwargs(q) = &ty {
@@ -1008,7 +1112,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .collect();
             None
         };
-        (params, paramspec)
+        (params, paramspec, inferred_tparams)
     }
 
     fn check_top_level_function_decorator(

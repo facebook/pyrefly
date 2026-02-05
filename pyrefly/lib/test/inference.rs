@@ -137,3 +137,13 @@ class A:
         self.x = None  # E: implicitly inferred to be `Any | None`
     "#,
 );
+
+testcase!(
+    test_scoped_type_var_for_unannotated_params,
+    r#"
+from typing import assert_type
+def foo(x):
+    return x
+assert_type(foo(1), int)
+    "#,
+);
