@@ -56,6 +56,7 @@ use ruff_text_size::TextSize;
 use serde::Deserialize;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::ModuleInfo;
 use crate::alt::answers_solver::AnswersSolver;
@@ -68,6 +69,7 @@ use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::completion::CompletionOptions;
 use crate::state::ide::IntermediateDefinition;
+use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
@@ -1964,15 +1966,48 @@ impl<'a> Transaction<'a> {
                             ));
                         }
 
+                        let mut aliased_modules = SmallSet::new();
+                        if let Some(module_name_str) = common_alias_target_module(unknown_name) {
+                            let module_name = ModuleName::from_str(module_name_str);
+                            if module_name != handle.module()
+                                && let Some(module_handle) =
+                                    self.import_handle(handle, module_name, None).finding()
+                            {
+                                let (position, insert_text, _) = import_regular_import_edit(
+                                    &ast,
+                                    module_handle,
+                                    Some(unknown_name),
+                                );
+                                let range = TextRange::at(position, TextSize::new(0));
+                                let title = format!("Insert import: `{}`", insert_text.trim());
+                                let is_private_import = module_name
+                                    .components()
+                                    .last()
+                                    .is_some_and(|component| component.as_str().starts_with('_'));
+                                code_actions.push((
+                                    title,
+                                    module_info.dupe(),
+                                    range,
+                                    insert_text,
+                                    false,
+                                    is_private_import,
+                                ));
+                                aliased_modules.insert(module_name);
+                            }
+                        }
+
                         for module_name in self.search_modules_fuzzy(unknown_name) {
                             if module_name == handle.module() {
+                                continue;
+                            }
+                            if aliased_modules.contains(&module_name) {
                                 continue;
                             }
                             if let Some(module_handle) =
                                 self.import_handle(handle, module_name, None).finding()
                             {
-                                let (position, insert_text) =
-                                    import_regular_import_edit(&ast, module_handle);
+                                let (position, insert_text, _) =
+                                    import_regular_import_edit(&ast, module_handle, None);
                                 let range = TextRange::at(position, TextSize::new(0));
                                 let title = format!("Insert import: `{}`", insert_text.trim());
                                 let is_private_import = module_name

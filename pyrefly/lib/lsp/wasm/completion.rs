@@ -30,11 +30,13 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
+use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
 use crate::state::lsp::FindPreference;
@@ -497,8 +499,7 @@ impl Transaction<'_> {
         // results for now. TODO: re-enable it once we no longer have perf issues.
         // We should not try to generate autoimport when the user has typed very few
         // characters. It's unhelpful to narrow down suggestions.
-        if identifier.as_str().len() >= MIN_CHARACTERS_TYPED_AUTOIMPORT
-            && let Some(ast) = self.get_ast(handle)
+        if let Some(ast) = self.get_ast(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
             let autoimport_source = |module_name: &str| {
@@ -508,8 +509,45 @@ impl Transaction<'_> {
                     CompletionSource::AutoimportPublic
                 }
             };
-            for (handle_to_import_from, name, export) in
-                self.search_exports_fuzzy(identifier.as_str())
+            let identifier_text = identifier.as_str();
+            let mut aliased_modules = SmallSet::new();
+            if let Some(module_name_str) = common_alias_target_module(identifier_text) {
+                let module_name = ModuleName::from_str(module_name_str);
+                if module_name != handle.module()
+                    && let Some(module_handle) =
+                        self.import_handle(handle, module_name, None).finding()
+                {
+                    let (position, insert_text, insert_name) =
+                        import_regular_import_edit(&ast, module_handle, Some(identifier_text));
+                    let import_text_edit = TextEdit {
+                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
+                        new_text: insert_text.clone(),
+                    };
+                    let auto_import_label_detail =
+                        format!(" (import {module_name_str} as {identifier_text})");
+                    completions.push(CompletionItem {
+                        label: insert_name.clone(),
+                        detail: Some(insert_text),
+                        kind: Some(CompletionItemKind::MODULE),
+                        additional_text_edits: Some(vec![import_text_edit]),
+                        label_details: supports_completion_item_details.then_some(
+                            CompletionItemLabelDetails {
+                                detail: Some(auto_import_label_detail),
+                                description: Some(module_name_str.to_owned()),
+                            },
+                        ),
+                        insert_text: Some(insert_name),
+                        sort_text: Some(autoimport_sort_text(module_name_str).to_owned()),
+                        ..Default::default()
+                    });
+                    aliased_modules.insert(module_name);
+                }
+            }
+
+            if identifier_text.len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
+                return;
+            }
+            for (handle_to_import_from, name, export) in self.search_exports_fuzzy(identifier_text)
             {
                 // Using handle itself doesn't always work because handles can be made separately and have different hashes
                 if handle_to_import_from.module() == handle.module()
@@ -563,8 +601,11 @@ impl Transaction<'_> {
                 });
             }
 
-            for module_name in self.search_modules_fuzzy(identifier.as_str()) {
+            for module_name in self.search_modules_fuzzy(identifier_text) {
                 if module_name == handle.module() {
+                    continue;
+                }
+                if aliased_modules.contains(&module_name) {
                     continue;
                 }
                 let module_name_str = module_name.as_str().to_owned();
@@ -572,8 +613,8 @@ impl Transaction<'_> {
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
                 {
                     let (insert_text, additional_text_edits) = {
-                        let (position, insert_text) =
-                            import_regular_import_edit(&ast, module_handle);
+                        let (position, insert_text, _) =
+                            import_regular_import_edit(&ast, module_handle, None);
                         let import_text_edit = TextEdit {
                             range: module_info
                                 .to_lsp_range(TextRange::at(position, TextSize::new(0))),

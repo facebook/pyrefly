@@ -234,19 +234,51 @@ pub fn insert_import_edit(
     )
 }
 
-/// Insert `import <>` import at the top of the file
+/// Common module aliases used for auto-imports.
+/// These are modeled after Pylance's built-in aliases.
+const COMMON_MODULE_ALIASES: &[(&str, &str)] = &[
+    ("numpy", "np"),
+    ("pandas", "pd"),
+    ("tensorflow", "tf"),
+    ("matplotlib", "mpl"),
+    ("matplotlib.pyplot", "plt"),
+    ("math", "m"),
+    ("scipy", "sp"),
+    ("scipy.io", "spio"),
+    ("panel", "pn"),
+    ("holoviews", "hv"),
+];
+
+pub fn common_alias_target_module(alias: &str) -> Option<&'static str> {
+    COMMON_MODULE_ALIASES
+        .iter()
+        .find(|(_, mapped_alias)| *mapped_alias == alias)
+        .map(|(module, _)| *module)
+}
+
+/// Insert `import <module>` (optionally with an alias) at the top of the file.
 pub fn import_regular_import_edit(
     ast: &ModModule,
     handle_to_import_from: Handle,
-) -> (TextSize, String) {
+    alias: Option<&str>,
+) -> (TextSize, String, String) {
     let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
         first_stmt.range().start()
     } else {
         ast.range.end()
     };
     let module_name_to_import = handle_to_import_from.module();
-    let insert_text = format!("import {}\n", module_name_to_import.as_str());
-    (position, insert_text)
+    let (insert_text, insert_name) = match alias {
+        Some(alias) => (
+            format!("import {} as {}\n", module_name_to_import.as_str(), alias),
+            alias.to_owned(),
+        ),
+        None => (
+            format!("import {}\n", module_name_to_import.as_str()),
+            module_name_to_import.as_str().to_owned(),
+        ),
+    };
+    (position, insert_text, insert_name)
 }
 
 pub fn insert_import_edit_with_forced_import_format(
