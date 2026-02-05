@@ -1219,10 +1219,10 @@ def f(x: int, y: int, z: int) -> int: ...
 def f(x: str, y: str, z: str, w: str) -> str: ...
 def f(x, y, z=None, w=None): return x
 
-f(1, 2)  # E: (x: int, y: int, ...) # !E: z: # !E: w:
-f(y=4)  # E: (..., y: int, ...) # !E: x: # !E: z:
-f(y="str")  # E: (..., y: int, ...) # !E: x: # !E: z:
-f(x="1", z="3")  # E: (x: int, ..., z: int) # !E: y:
+f(1, 2)  # E: (x: int, y: int, ...) -> int [missing required arguments] # !E: z: # !E: w:
+f(y=4)  # E: (..., y: int, ...) -> int [missing required arguments] # !E: x: # !E: z:
+f(y="str")  # E: (..., y: int, ...) -> int [missing required arguments] # !E: x: # !E: z:
+f(x="1", z="3")  # E: (x: int, ..., z: int) -> int [missing required arguments] # !E: y:
     "#,
 );
 
