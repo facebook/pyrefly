@@ -1308,8 +1308,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         // Check the __init__ method and whether it comes from object or has been overridden
         let (init_attr_ty, overrides_init) = if let Some(t) = self.get_dunder_init(cls, false) {
-            // Replace the return type with Self (the current class) and remove the self param
-            let t = t.set_callable_return_type_for_constructor(class_type.clone());
+            let t = if let Type::BoundMethod(ref method) = t {
+                // Strip self param and set return type to self's type (for generic handling)
+                self.bind_dunder_init_for_callable(method)
+                    .unwrap_or_else(|| {
+                        // Fallback: just set return type without stripping
+                        let ret_type = t
+                            .callable_first_param(self.heap)
+                            .unwrap_or_else(|| class_type.clone());
+                        let mut t = t.clone();
+                        t.visit_toplevel_callable_mut(&mut |c: &mut Callable| {
+                            c.ret = ret_type.clone()
+                        });
+                        t
+                    })
+            } else {
+                // For non-BoundMethod, just set return type (self param was not bound)
+                let ret_type = t
+                    .callable_first_param(self.heap)
+                    .unwrap_or_else(|| class_type.clone());
+                let mut t = t;
+                t.visit_toplevel_callable_mut(&mut |c: &mut Callable| c.ret = ret_type.clone());
+                t
+            };
             (t, true)
         } else {
             (default_constructor(), false)

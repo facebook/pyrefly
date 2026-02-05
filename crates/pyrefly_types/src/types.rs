@@ -21,7 +21,6 @@ use pyrefly_derive::VisitMut;
 use pyrefly_python::qname::QName;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::commas_iter;
-use pyrefly_util::owner::Owner;
 use pyrefly_util::uniques::Unique;
 use pyrefly_util::uniques::UniqueFactory;
 use pyrefly_util::visit::Visit;
@@ -1401,104 +1400,6 @@ impl Type {
             None
         } else {
             Some(unions(rets, heap))
-        }
-    }
-
-    /// When a constructor is cast used as a callable, we need to set its return type to the instance type.
-    /// If a `self` type is in the callable, then this is set as the return type and the `self` param is removed.
-    /// Otherwise, the return type is set to the class type.
-    pub fn set_callable_return_type_for_constructor(self, default_ret: Type) -> Type {
-        // For BoundMethod, extract the inner function type and transform it
-        if let Type::BoundMethod(box BoundMethod { func, .. }) = self {
-            return func
-                .as_type()
-                .strip_first_param_and_set_return_type(default_ret);
-        }
-
-        // For non-BoundMethod types, use the existing transform_toplevel_callable approach
-        let mut ty = self;
-        ty.transform_toplevel_callable(&mut |callable: &mut Callable| match &callable.params {
-            Params::List(param_list)
-                if let Some(first_param) = param_list.items().first()
-                    && let Param::Pos(_, self_ty, _) = first_param =>
-            {
-                callable.ret = self_ty.clone();
-            }
-            _ => {
-                callable.ret = default_ret.clone();
-            }
-        });
-        ty
-    }
-
-    /// Strip the first parameter from a callable type and set the return type to the first param's type.
-    /// Used for converting constructors to callables.
-    fn strip_first_param_and_set_return_type(self, default_ret: Type) -> Type {
-        let mut owner = Owner::new();
-
-        // Helper to transform a callable: set return type from self param and remove it
-        let transform_callable = |callable: Callable, owner: &mut Owner<Type>| {
-            if let Some((self_ty, rest)) = callable.split_first_param(owner) {
-                Callable {
-                    params: rest.params,
-                    ret: self_ty.clone(),
-                }
-            } else {
-                Callable {
-                    params: callable.params,
-                    ret: default_ret.clone(),
-                }
-            }
-        };
-
-        match self {
-            Type::Forall(box Forall {
-                tparams,
-                body: Forallable::Function(func),
-            }) => {
-                let new_callable = transform_callable(func.signature, &mut owner);
-                Type::Forall(Box::new(Forall {
-                    tparams,
-                    body: Forallable::Function(Function {
-                        signature: new_callable,
-                        metadata: func.metadata,
-                    }),
-                }))
-            }
-            Type::Function(box func) => {
-                let new_callable = transform_callable(func.signature, &mut owner);
-                Type::Function(Box::new(Function {
-                    signature: new_callable,
-                    metadata: func.metadata,
-                }))
-            }
-            Type::Overload(overload) => {
-                let new_signatures = overload.signatures.mapped(|sig| match sig {
-                    OverloadType::Function(func) => {
-                        let new_callable = transform_callable(func.signature, &mut owner);
-                        OverloadType::Function(Function {
-                            signature: new_callable,
-                            metadata: func.metadata,
-                        })
-                    }
-                    OverloadType::Forall(forall) => {
-                        let new_callable = transform_callable(forall.body.signature, &mut owner);
-                        OverloadType::Forall(Forall {
-                            tparams: forall.tparams,
-                            body: Function {
-                                signature: new_callable,
-                                metadata: forall.body.metadata,
-                            },
-                        })
-                    }
-                });
-                Type::Overload(Overload {
-                    signatures: new_signatures,
-                    metadata: overload.metadata,
-                })
-            }
-            // For other types, return unchanged
-            other => other,
         }
     }
 
