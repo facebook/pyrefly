@@ -275,6 +275,50 @@ fn test_completion_keywords() {
 }
 
 #[test]
+fn test_completion_sorts_incompatible_call_argument_last() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
+    let contents = "class Wanted:\n    pass\n\nclass Other:\n    pass\n\ndef needs_wanted(x: Wanted) -> None:\n    pass\n\nax_bad = Other()\nax_good = Wanted()\n\nneeds_wanted(ax)\n";
+
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": contents
+            }],
+        }));
+
+    interaction
+        .client
+        .completion("foo.py", 12, 15)
+        .expect_completion_response_with(|list| {
+            let bad_index = list.items.iter().position(|item| item.label == "ax_bad");
+            let good_index = list.items.iter().position(|item| item.label == "ax_good");
+            match (bad_index, good_index) {
+                (Some(bad), Some(good)) => good < bad,
+                _ => false,
+            }
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_import_completion_skips_hidden_directories() {
     let root = get_test_files_root();
     let workspace = root.path().join("basic");
