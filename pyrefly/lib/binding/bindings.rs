@@ -283,6 +283,8 @@ impl Bindings {
         let module_info = Module::new(module_name, module_path, contents);
         Self(Arc::new(BindingsInner {
             module_info,
+            python_version: PythonVersion::default(),
+            has_future_annotations: false,
             table: Default::default(),
             scope_trace: None,
             unused_parameters: Vec::new(),
