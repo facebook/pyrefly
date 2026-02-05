@@ -1841,7 +1841,7 @@ T = spio
             .transaction()
             .completion(handle, position, ImportFormat::Absolute, true);
     let autoimport = completions
-        .into_iter()
+        .iter()
         .find(|item| item.label == "spio")
         .expect("expected spio to be in completions");
     assert!(
@@ -1855,12 +1855,55 @@ T = spio
     assert_eq!(autoimport.insert_text.as_deref(), Some("spio"));
     let label_details = autoimport
         .label_details
+        .as_ref()
         .expect("auto import completion should include label details");
     assert_eq!(
         label_details.detail.as_deref(),
         Some(" (import scipy.io as spio)")
     );
     assert_eq!(label_details.description.as_deref(), Some("scipy.io"));
+    assert!(
+        !completions.iter().any(|item| item.label == "scipy.io"),
+        "expected alias completion to suppress non-aliased scipy.io module suggestion"
+    );
+}
+
+#[test]
+fn autoimport_common_alias_bypasses_min_char_threshold() {
+    let code = r#"
+T = np
+#     ^
+"#;
+    let files = [("main", code), ("numpy", "data = 1\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true);
+    let autoimport = completions
+        .iter()
+        .find(|item| item.label == "np")
+        .expect("expected np to be in completions");
+    assert!(
+        autoimport
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("import numpy as np")),
+        "expected alias import detail for np, got {:?}",
+        autoimport.detail
+    );
+    assert_eq!(autoimport.insert_text.as_deref(), Some("np"));
+    let label_details = autoimport
+        .label_details
+        .as_ref()
+        .expect("auto import completion should include label details");
+    assert_eq!(
+        label_details.detail.as_deref(),
+        Some(" (import numpy as np)")
+    );
+    assert_eq!(label_details.description.as_deref(), Some("numpy"));
 }
 
 #[test]
