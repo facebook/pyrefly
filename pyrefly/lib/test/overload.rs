@@ -1209,6 +1209,21 @@ g(x=1, y="hello")  # E: No matching overload found for function `g` called with 
 );
 
 testcase!(
+    test_overload_error_shows_truncated_signatures,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int, y: int, z: int) -> int: ...
+@overload
+def f(x: str, y: str, z: str, w: str) -> str: ...
+def f(x, y, z=None, w=None): return x
+
+f(1, 2)  # E: (x: int, y: int, ...) # !E: z: # !E: w:
+    "#,
+);
+
+testcase!(
     test_varargs_materialization,
     r#"
 from typing import Any, assert_type, overload

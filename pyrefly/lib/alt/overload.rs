@@ -12,6 +12,7 @@ use itertools::Itertools;
 use pyrefly_types::callable::ArgCount;
 use pyrefly_types::callable::ArgCounts;
 use pyrefly_types::callable::Param;
+use pyrefly_types::callable::ParamList;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
@@ -19,6 +20,7 @@ use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use vec1::Vec1;
@@ -390,9 +392,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .unwrap_or(overload.1.signature),
                     None => overload.1.signature,
                 };
-                let signature = self
-                    .solver()
-                    .for_display(self.heap.mk_callable_from(signature));
+                let signature =
+                    self.format_overload_signature_for_call(&signature, &args, &keywords);
                 msg.push(format!("{signature}{suffix}"));
             }
             // We intentionally discard closest_overload.call_errors. When no overload matches,
@@ -638,5 +639,118 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ctor_targs: overload_ctor_targs,
             call_errors,
         }
+    }
+
+    /// Format an overload signature, showing only the parameters used in the call.
+    fn format_overload_signature_for_call(
+        &self,
+        signature: &Callable,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+    ) -> String {
+        let full_signature = || {
+            format!(
+                "{}",
+                self.solver()
+                    .for_display(self.heap.mk_callable_from(signature.clone()))
+            )
+        };
+        let Params::List(params) = &signature.params else {
+            return full_signature();
+        };
+
+        let mut positional_remaining = args
+            .iter()
+            .filter(|arg| matches!(arg, CallArg::Arg(_)))
+            .count();
+        let mut star_remaining = args
+            .iter()
+            .filter(|arg| matches!(arg, CallArg::Star(..)))
+            .count();
+        let mut keyword_names: Vec<Name> = keywords
+            .iter()
+            .filter_map(|kw| kw.arg.map(|id| id.id.clone()))
+            .collect();
+        let mut has_kwargs = keywords.iter().any(|kw| kw.arg.is_none());
+
+        let mut used_params = Vec::new();
+        let mut omitted = false;
+        let take_keyword = |name: &Name, names: &mut Vec<Name>| {
+            if let Some(index) = names.iter().position(|candidate| candidate == name) {
+                names.remove(index);
+                true
+            } else {
+                false
+            }
+        };
+
+        for param in params.items() {
+            let include = match param {
+                Param::PosOnly(name, _, _) => {
+                    if positional_remaining > 0 {
+                        positional_remaining -= 1;
+                        true
+                    } else if let Some(name) = name {
+                        take_keyword(name, &mut keyword_names)
+                    } else {
+                        false
+                    }
+                }
+                Param::Pos(name, _, _) => {
+                    if positional_remaining > 0 {
+                        positional_remaining -= 1;
+                        let _ = take_keyword(name, &mut keyword_names);
+                        true
+                    } else {
+                        take_keyword(name, &mut keyword_names)
+                    }
+                }
+                Param::VarArg(..) => {
+                    if positional_remaining > 0 || star_remaining > 0 {
+                        positional_remaining = 0;
+                        star_remaining = 0;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Param::KwOnly(name, _, _) => take_keyword(name, &mut keyword_names),
+                Param::Kwargs(..) => {
+                    if has_kwargs || !keyword_names.is_empty() {
+                        has_kwargs = false;
+                        keyword_names.clear();
+                        true
+                    } else {
+                        false
+                    }
+                }
+            };
+
+            if include {
+                used_params.push(param.clone());
+            } else {
+                omitted = true;
+            }
+        }
+
+        if positional_remaining > 0 || star_remaining > 0 || has_kwargs || !keyword_names.is_empty()
+        {
+            omitted = true;
+        }
+
+        let has_used_params = !used_params.is_empty();
+        let callable = Callable::list(ParamList::new(used_params), signature.ret.clone());
+        let mut display = format!(
+            "{}",
+            self.solver()
+                .for_display(self.heap.mk_callable_from(callable))
+        );
+        if omitted {
+            if let Some(close_paren) = display.find(") ->") {
+                let insert = if has_used_params { ", ..." } else { "..." };
+                display.insert_str(close_paren, insert);
+            }
+        }
+        display
     }
 }
