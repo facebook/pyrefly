@@ -461,10 +461,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.uniques,
             None,
             Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
         );
         let tparams = vec![TParam {
             quantified: q.clone(),
-            variance: PreInferenceVariance::Invariant,
         }];
         OverloadType::Forall(Forall {
             tparams: Arc::new(TParams::new(tparams)),
@@ -969,7 +969,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                                 range,
                                 ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
-                                format!("TypedDict `{}` with non-read-only `extra_items` cannot be extended with required extra item `{}`", base.name(), name),
+                                format!("Cannot add required field `{}` to TypedDict `{}` with non-read-only `extra_items`", name, base.name()),
                             );
                         } else if !self.is_equal(field_ty, &ty) {
                             self.error(

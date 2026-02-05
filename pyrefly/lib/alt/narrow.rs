@@ -16,6 +16,7 @@ use pyrefly_types::facet::FacetKind;
 use pyrefly_types::facet::UnresolvedFacetChain;
 use pyrefly_types::facet::UnresolvedFacetKind;
 use pyrefly_types::simplify::intersect;
+use pyrefly_types::simplify::simplify_tuples;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
@@ -105,6 +106,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn is_final(&self, ty: &Type) -> bool {
+        let Type::ClassType(cls) = ty else {
+            return false;
+        };
+        let class = cls.class_object();
+        self.get_metadata_for_class(class).is_final()
+            || (self.get_enum_from_class(class).is_some()
+                && !self.get_enum_members(class).is_empty())
+    }
+
     fn intersect_impl(&self, left: &Type, right: &Type, fallback: &dyn Fn() -> Type) -> Type {
         let is_literal =
             |t: &Type| matches!(t, Type::Literal(_) | Type::LiteralString(_) | Type::None);
@@ -133,6 +144,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let fallback = fallback();
             if fallback.is_never() {
                 fallback
+            } else if matches!(left, Type::ClassType(_))
+                && matches!(right, Type::ClassType(_))
+                && (self.is_final(left) || self.is_final(right))
+            {
+                // The only way for `left & right` to exist is if it is an instance of a class that
+                // multiply inherits from both `left` and `right`'s classes. But at least one of
+                // the classes is final, so such a class does not exist.
+                Type::never()
             } else {
                 let left_base = self.disjoint_base(left);
                 let right_base = self.disjoint_base(right);
@@ -526,6 +545,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn tuple_len_eq(
+        &self,
+        tuple: &Tuple,
+        len: usize,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        match tuple {
+            Tuple::Concrete(elts) if elts.len() != len => Type::never(),
+            Tuple::Unpacked(box (prefix, _, suffix)) if prefix.len() + suffix.len() > len => {
+                Type::never()
+            }
+            Tuple::Unpacked(box (prefix, _, suffix)) if prefix.len() + suffix.len() == len => {
+                Type::concrete_tuple(prefix.iter().cloned().chain(suffix.clone()).collect())
+            }
+            Tuple::Unpacked(box (prefix, Type::Tuple(Tuple::Unbounded(middle)), suffix))
+                if prefix.len() + suffix.len() < len =>
+            {
+                let middle_elements = vec![(**middle).clone(); len - prefix.len() - suffix.len()];
+                Type::concrete_tuple(
+                    prefix
+                        .iter()
+                        .cloned()
+                        .chain(middle_elements)
+                        .chain(suffix.clone())
+                        .collect(),
+                )
+            }
+            Tuple::Unpacked(box (prefix, middle_var @ Type::Var(_), suffix)) => {
+                let forced_middle = self.force_for_narrowing(middle_var, range, errors);
+                let new_tuple =
+                    Tuple::Unpacked(Box::new((prefix.clone(), forced_middle, suffix.clone())));
+                self.tuple_len_eq(&simplify_tuples(new_tuple), len, range, errors)
+            }
+            Tuple::Unbounded(elements) => Type::concrete_tuple(vec![(**elements).clone(); len]),
+            _ => Type::Tuple(tuple.clone()),
+        }
+    }
+
+    fn tuple_len_not_eq(
+        &self,
+        tuple: &Tuple,
+        len: usize,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        match tuple {
+            Tuple::Concrete(elts) if elts.len() == len => Type::never(),
+            Tuple::Unpacked(box (prefix, middle_var @ Type::Var(_), suffix)) => {
+                let forced_middle = self.force_for_narrowing(middle_var, range, errors);
+                let new_tuple =
+                    Tuple::Unpacked(Box::new((prefix.clone(), forced_middle, suffix.clone())));
+                self.tuple_len_not_eq(&simplify_tuples(new_tuple), len, range, errors)
+            }
+            _ => Type::Tuple(tuple.clone()),
+        }
+    }
+
     fn atomic_narrow(
         &self,
         ty: &Type,
@@ -548,42 +625,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return ty.clone();
                 };
                 self.distribute_over_union(ty, |ty| match ty {
-                    Type::Tuple(Tuple::Concrete(elts)) if elts.len() != len => Type::never(),
-                    Type::Tuple(Tuple::Unpacked(box (prefix, _, suffix)))
-                        if prefix.len() + suffix.len() > len =>
-                    {
-                        Type::never()
-                    }
-                    Type::Tuple(Tuple::Unpacked(box (prefix, _, suffix)))
-                        if prefix.len() + suffix.len() == len =>
-                    {
-                        Type::concrete_tuple(prefix.iter().cloned().chain(suffix.clone()).collect())
-                    }
-                    Type::Tuple(Tuple::Unpacked(box (
-                        prefix,
-                        Type::Tuple(Tuple::Unbounded(middle)),
-                        suffix,
-                    ))) if prefix.len() + suffix.len() < len => {
-                        let middle_elements =
-                            vec![(**middle).clone(); len - prefix.len() - suffix.len()];
-                        Type::concrete_tuple(
-                            prefix
-                                .iter()
-                                .cloned()
-                                .chain(middle_elements)
-                                .chain(suffix.clone())
-                                .collect(),
-                        )
-                    }
-                    Type::Tuple(Tuple::Unbounded(elements)) => {
-                        Type::concrete_tuple(vec![(**elements).clone(); len])
-                    }
                     Type::ClassType(class)
                         if let Some(Tuple::Concrete(elts)) = self.as_tuple(class)
                             && elts.len() != len =>
                     {
                         Type::never()
                     }
+                    Type::Tuple(tuple) => self.tuple_len_eq(tuple, len, range, errors),
                     _ => ty.clone(),
                 })
             }
@@ -600,13 +648,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return ty.clone();
                 };
                 self.distribute_over_union(ty, |ty| match ty {
-                    Type::Tuple(Tuple::Concrete(elts)) if elts.len() == len => Type::never(),
                     Type::ClassType(class)
                         if let Some(Tuple::Concrete(elts)) = self.as_tuple(class)
                             && elts.len() == len =>
                     {
                         Type::never()
                     }
+                    Type::Tuple(tuple) => self.tuple_len_not_eq(tuple, len, range, errors),
                     _ => ty.clone(),
                 })
             }

@@ -231,6 +231,23 @@ def f(b: bool) -> int:
 );
 
 testcase!(
+    bug = "conformance: Unreachable code after NoReturn should not be type-checked",
+    test_return_never_unreachable_wrong_type,
+    r#"
+from typing import NoReturn
+
+def stop() -> NoReturn:
+    raise RuntimeError("stop")
+
+def f(x: int) -> int:
+    if x > 0:
+        return x
+    stop()
+    return "wrong type"  # E: Returned type `Literal['wrong type']` is not assignable to declared return type `int`
+"#,
+);
+
+testcase!(
     test_return_never_error_return,
     r#"
 def f(x: int): pass
@@ -541,5 +558,40 @@ class OverloadC:
         raise NotImplementedError()
     def f(self) -> int:
         return 0
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2141
+// List concatenation with contextual return type hint should work
+testcase!(
+    test_return_list_concat_contextual_hint,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self, x: int) -> None: ...
+
+class A(Base):
+    def foo(self, x: int) -> None:
+        print(x)
+
+class B(Base):
+    def foo(self, x: int) -> None:
+        pass
+
+# This should type-check without error: the return type hint list[Base]
+# provides context for inferring [A()] + [B()] as list[Base].
+def return_object(name: str) -> list[Base]:
+    return [A()] + [B()]
+
+# Non-list-returning variant still works (for comparison)
+def return_object_non_list(name: str) -> Base:
+    o = None
+    if name == "a":
+        o = A()
+    else:
+        o = B()
+    return o
 "#,
 );

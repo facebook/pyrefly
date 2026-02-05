@@ -227,6 +227,24 @@ def f(x: int, y: str | Literal[False]):
 "#,
 );
 
+// Regression test: generic function calls in `and` expressions should not
+// have the narrowed type from earlier branches used as a hint for type variable
+// inference. The narrowing of `bool` to `Literal[False]` is for the result of
+// the `and` expression, not for contextual typing of later generic calls.
+testcase!(
+    test_boolop_generic_call_hint,
+    r#"
+def f[U](u: U) -> U:
+    return u
+
+def caller(x: bool, y: bool) -> int:
+    if f(x) and f(y):
+        return 1
+    else:
+        return 0
+"#,
+);
+
 testcase!(
     test_unary_not_unknown,
     r#"

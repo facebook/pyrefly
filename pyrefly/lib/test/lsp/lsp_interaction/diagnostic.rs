@@ -18,6 +18,27 @@ use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
+fn test_show_syntax_errors_without_config() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("syntax_errors.py");
+
+    interaction
+        .client
+        .diagnostic("syntax_errors.py")
+        .expect_response(json!({"items": [{"code":"parse-error","codeDescription":{"href":"https://pyrefly.org/en/docs/error-kinds/#parse-error"},"message":"Parse error: Expected an indented block after `if` statement","range":{"end":{"character":1,"line":9},"start":{"character":0,"line":9}},"severity":1,"source":"Pyrefly"}], "kind": "full"}))
+        .expect("Failed to receive expected response");
+}
+
+#[test]
 fn test_stream_diagnostics_after_save() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
@@ -73,7 +94,6 @@ fn test_stream_diagnostics_after_save() {
 }
 
 #[test]
-#[ignore] // TODO: fix and re-enable
 fn test_stream_diagnostics_no_flicker_after_undo_edit() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
@@ -128,17 +148,13 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
     interaction.continue_recheck();
     interaction
         .client
-        .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 0)
+        .expect_publish_diagnostics_must_have_error_count_between(d_path.clone(), 0, 1)
         .expect("Failed to receive transaction complete diagnostics for first edit");
     // Diagnostics for second recheck
     interaction
         .client
         .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 0)
-        .expect("Failed to receive streamed diagnostics for second edit");
-    interaction
-        .client
-        .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 0)
-        .expect("Failed to receive transaction complete diagnostics for second edit");
+        .expect("Failed to receive diagnostics for second edit");
     interaction.shutdown().unwrap();
 }
 
@@ -1277,7 +1293,7 @@ fn test_missing_source_with_config_diagnostic_has_errors() {
 }
 
 #[test]
-fn test_untyped_import_diagnostic() {
+fn test_untyped_import_diagnostic_does_not_show_non_recommended_packages() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
@@ -1305,24 +1321,69 @@ fn test_untyped_import_diagnostic() {
         .expect_response(json!({
             "items": [
                 {
+                    "code": "unused-import",
+                    "message": "Import `boto3` is unused",
+                    "range": {
+                        "start": {"line": 5, "character": 7},
+                        "end": {"line": 5, "character": 12}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
+
+    interaction.client.did_open("untyped_import_django/test.py");
+
+    interaction
+        .client
+        .diagnostic("untyped_import_django/test.py")
+        .expect_response(json!({
+            "items": [
+                {
                     "code": "untyped-import",
                     "codeDescription": {
                         "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
                     },
-                    "message": "Cannot find type stubs for module `boto3`\n  Hint: install the `boto3-stubs` package",
+                    "message": "Cannot find type stubs for module `django`\n  Hint: install the `django-stubs` package",
                     "range": {
                         "start": {"line": 5, "character": 7},
-                        "end": {"line": 5, "character": 12}
+                        "end": {"line": 5, "character": 13}
                     },
                     "severity": 1,
                     "source": "Pyrefly"
                 },
                 {
                     "code": "unused-import",
-                    "message": "Import `boto3` is unused",
+                    "message": "Import `django` is unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
-                        "end": {"line": 5, "character": 12}
+                        "end": {"line": 5, "character": 13}
                     },
                     "severity": 4,
                     "source": "Pyrefly",

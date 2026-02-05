@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fmt;
@@ -19,9 +20,9 @@ use anyhow::Context as _;
 use dupe::Dupe as _;
 use itertools::Itertools as _;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::fs_anyhow;
+use pyrefly_util::interned_path::InternedPath;
 use serde::Deserialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -43,11 +44,11 @@ pub mod custom;
 pub(crate) enum Include {
     #[allow(unused)]
     Target(Target),
-    Path(ModulePathBuf),
+    Path(InternedPath),
 }
 
 impl Include {
-    pub fn path(path: ModulePathBuf) -> Self {
+    pub fn path(path: InternedPath) -> Self {
         Self::Path(path)
     }
 
@@ -200,14 +201,14 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub(crate) struct PythonLibraryManifest {
     pub deps: SmallSet<Target>,
-    pub srcs: SmallMap<ModuleName, Vec1<ModulePathBuf>>,
+    pub srcs: SmallMap<ModuleName, Vec1<InternedPath>>,
     #[serde(default)]
     pub relative_to: Option<PathBuf>,
     #[serde(flatten)]
     pub sys_info: SysInfo,
     pub buildfile_path: PathBuf,
     #[serde(default, skip)]
-    pub packages: SmallMap<ModuleName, Vec1<ModulePathBuf>>,
+    pub packages: SmallMap<ModuleName, Vec1<InternedPath>>,
 }
 
 impl PythonLibraryManifest {
@@ -229,29 +230,30 @@ impl PythonLibraryManifest {
         if let Some(relative_to) = &mut self.relative_to {
             *relative_to = root.join(&relative_to);
         }
-        let relative_to = self.relative_to.as_deref().unwrap_or(root);
+
+        // VSCode resolves symlinks, so we also need to so our lookups
+        // will match what VSCode (and our language server) give us.
+        let relative_to = self
+            .relative_to
+            .as_deref()
+            .map(|p| p.canonicalize().map(Cow::Owned).unwrap_or(Cow::Borrowed(p)))
+            .unwrap_or(Cow::Borrowed(root));
+        let rewrite_paths = |paths: &mut Vec1<InternedPath>| {
+            paths.iter_mut().for_each(|p| {
+                let mut file = relative_to.join(&**p);
+                if !p.starts_with(&self.buildfile_path) && self.relative_to.is_none() {
+                    // do the same as above, but cover the case where `relative_to` isn't relevant
+                    file = file.canonicalize().unwrap_or(file);
+                }
+                *p = InternedPath::new(file)
+            })
+        };
         self.srcs.iter_mut().for_each(|(_, paths)| {
-            paths.iter_mut().for_each(|p| {
-                let resolved = relative_to.join(&**p);
-                // canonicalize it, since VSCode will do it for us anyway and
-                // then path lookups won't work
-                // TODO(connernilsen): do we need to store canonicalized files and
-                // buck-provided files?
-                let file = resolved.canonicalize().unwrap_or(resolved);
-                *p = ModulePathBuf::new(file)
-            })
+            rewrite_paths(paths);
         });
-        self.packages.iter_mut().for_each(|(_, paths)| {
-            paths.iter_mut().for_each(|p| {
-                let resolved = relative_to.join(&**p);
-                // canonicalize it, since VSCode will do it for us anyway and
-                // then path lookups won't work
-                // TODO(connernilsen): do we need to store canonicalized files and
-                // buck-provided files?
-                let file = resolved.canonicalize().unwrap_or(resolved);
-                *p = ModulePathBuf::new(file)
-            })
-        });
+        self.packages
+            .iter_mut()
+            .for_each(|(_, paths)| rewrite_paths(paths));
         self.buildfile_path = root.join(&self.buildfile_path);
     }
 
@@ -267,7 +269,7 @@ impl PythonLibraryManifest {
     ///
     /// See: <https://github.com/facebook/buck2/blob/main/prelude/python/tools/wheel.py>
     fn fill_implicit_packages(&mut self) {
-        let mut packages: SmallMap<ModuleName, Vec1<ModulePathBuf>> = SmallMap::new();
+        let mut packages: SmallMap<ModuleName, Vec1<InternedPath>> = SmallMap::new();
 
         for (module_name, paths) in &self.srcs {
             let first_path = paths.first();
@@ -294,7 +296,7 @@ impl PythonLibraryManifest {
                 path.pop();
                 packages
                     .entry(parent)
-                    .or_insert_with(|| vec1![ModulePathBuf::from_path(&path)]);
+                    .or_insert_with(|| vec1![InternedPath::from_path(&path)]);
                 name = parent;
             }
         }
@@ -580,12 +582,12 @@ mod tests {
     fn map_srcs(
         srcs: &[(&str, &[&str])],
         prefix_paths: Option<&str>,
-    ) -> SmallMap<ModuleName, Vec1<ModulePathBuf>> {
+    ) -> SmallMap<ModuleName, Vec1<InternedPath>> {
         let prefix = prefix_paths.map(Path::new);
         let map_path = |p| {
             prefix.map_or_else(
-                || ModulePathBuf::from_path(Path::new(p)),
-                |prefix| ModulePathBuf::new(prefix.join(p)),
+                || InternedPath::from_path(Path::new(p)),
+                |prefix| InternedPath::new(prefix.join(p)),
             )
         };
         srcs.iter()
@@ -607,12 +609,12 @@ mod tests {
     fn map_implicit_packages(
         inits: &[(&str, &[&str])],
         prefix_paths: Option<&str>,
-    ) -> SmallMap<ModuleName, Vec1<ModulePathBuf>> {
+    ) -> SmallMap<ModuleName, Vec1<InternedPath>> {
         let prefix = prefix_paths.map(Path::new);
         let map_path = |p| {
             prefix.map_or_else(
-                || ModulePathBuf::from_path(Path::new(p)),
-                |prefix| ModulePathBuf::new(prefix.join(p)),
+                || InternedPath::from_path(Path::new(p)),
+                |prefix| InternedPath::new(prefix.join(p)),
             )
         };
         inits

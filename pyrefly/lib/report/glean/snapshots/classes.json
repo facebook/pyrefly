@@ -946,6 +946,15 @@
                     "key": {
                       "name": {
                         "id": 0,
+                        "key": "classes.typing.Generic"
+                      }
+                    }
+                  },
+                  {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
                         "key": "typing.Generic"
                       }
                     }
@@ -1873,6 +1882,29 @@
           "spans": [
             {
               "length": 6,
+              "start": 20
+            },
+            {
+              "length": 6,
+              "start": 54
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "classes.typing"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 6,
               "start": 218
             }
           ],
@@ -1897,7 +1929,45 @@
           ],
           "target": {
             "id": 0,
+            "key": "classes.typing.TypeVar"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 7,
+              "start": 27
+            }
+          ],
+          "target": {
+            "id": 0,
             "key": "typing.TypeVar"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "classes.py"
+          },
+          "spans": [
+            {
+              "length": 7,
+              "start": 61
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "classes.typing.Generic"
           }
         }
       },
@@ -2060,6 +2130,16 @@
               },
               "target": {
                 "id": 0,
+                "key": "classes.typing"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 20
+              },
+              "target": {
+                "id": 0,
                 "key": "typing"
               }
             },
@@ -2071,6 +2151,16 @@
               "target": {
                 "id": 0,
                 "key": "classes.Animal"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 54
+              },
+              "target": {
+                "id": 0,
+                "key": "classes.typing"
               }
             },
             {
@@ -2100,7 +2190,27 @@
               },
               "target": {
                 "id": 0,
+                "key": "classes.typing.TypeVar"
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 27
+              },
+              "target": {
+                "id": 0,
                 "key": "typing.TypeVar"
+              }
+            },
+            {
+              "source": {
+                "length": 7,
+                "start": 61
+              },
+              "target": {
+                "id": 0,
+                "key": "classes.typing.Generic"
               }
             },
             {

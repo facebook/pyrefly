@@ -35,6 +35,7 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::BoundMethodType;
@@ -896,9 +897,10 @@ impl<'a> CalleesWithLocation<'a> {
                     vec![self.callee_from_function(func, call_target, call_arguments)]
                 }
                 Forallable::Callable(_) => self.for_callable(callee_range),
-                Forallable::TypeAlias(t) => {
+                Forallable::TypeAlias(TypeAliasData::Value(t)) => {
                     self.callee_from_type(&t.as_type(), call_target, callee_range, call_arguments)
                 }
+                Forallable::TypeAlias(TypeAliasData::Ref(_)) => vec![],
             },
             Type::SelfType(c) | Type::ClassType(c) => {
                 self.callee_from_mro(c.class_object(), "__call__", |_solver, c| {
@@ -911,9 +913,10 @@ impl<'a> CalleesWithLocation<'a> {
             }
             Type::Any(_) => vec![],
             Type::Literal(_) => vec![],
-            Type::TypeAlias(t) => {
+            Type::TypeAlias(box TypeAliasData::Value(t)) => {
                 self.callee_from_type(&t.as_type(), call_target, callee_range, call_arguments)
             }
+            Type::TypeAlias(box TypeAliasData::Ref(_)) => vec![],
             _ => panic!(
                 "unexpected type at [{}]: {ty:?}",
                 self.module_info.display_range(callee_range)

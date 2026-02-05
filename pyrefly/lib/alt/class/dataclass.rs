@@ -18,6 +18,7 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
+use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -228,16 +229,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     continue;
                 }
 
-                self.error(
-                    errors,
+                let cls = descriptor_cls.name();
+                errors.add(
                     range,
                     ErrorInfo::Kind(ErrorKind::BadClassDefinition),
-                    format!(
-                        "Non-data descriptor `{name}` in dataclass is unsound. \
-                         The dataclass __init__ writes to the instance dict, \
-                         shadowing the descriptor. Add a __set__ method to make \
-                         it a data descriptor."
-                    ),
+                    vec1![
+                        format!("Cannot set field `{name}` to non-data descriptor `{cls}`"),
+                        format!("Hint: add a `__set__` method to make `{cls}` a data descriptor"),
+                    ],
                 );
             }
         }
@@ -290,16 +289,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let (Some(get_ty), Some(set_ty)) = (get_return_ty, set_value_ty) {
                     // Check if the __get__ return type is assignable to the __set__ value type.
                     if !self.is_subset_eq(&get_ty, &set_ty) {
-                        self.error(
-                            errors,
+                        let cls = descriptor_cls.name();
+                        errors.add(
                             range,
                             ErrorInfo::Kind(ErrorKind::BadClassDefinition),
-                            format!(
-                                "Data descriptor `{name}` has incompatible default: \
-                                 `__get__` returns `{get_ty}` which is not assignable to \
-                                 `__set__` value type `{set_ty}`. The class-level descriptor \
-                                 value cannot be used as a default."
-                            ),
+                            vec1![
+                                format!("Cannot set field `{name}` to data descriptor `{cls}` with inconsistent types"),
+                                format!("Return type `{get_ty}` of `{cls}.__get__` is not assignable to value type `{set_ty}` of `{cls}.__set__`"),
+                            ],
                         );
                     }
                 }

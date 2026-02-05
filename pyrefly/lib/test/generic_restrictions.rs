@@ -1040,3 +1040,39 @@ def f[T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]: ...
 reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]
 "#,
 );
+
+testcase!(
+    bug = "conformance: Should error on unbound TypeVars in various scopes",
+    test_typevar_scoping_restrictions,
+    r#"
+from typing import TypeVar, Generic, TypeAlias
+from collections.abc import Iterable
+
+T = TypeVar("T")
+S = TypeVar("S")
+
+# Unbound TypeVar S used in generic function body
+def fun_3(x: T) -> list[T]:
+    y: list[T] = []  # OK
+    z: list[S] = []  # should error: S not in scope
+    return y
+
+# Unbound TypeVar S in class body (not in method)
+class Bar(Generic[T]):
+    an_attr: list[S] = []  # should error: S not in scope
+
+# Nested class using outer class's TypeVar
+class Outer(Generic[T]):
+    class Bad(Iterable[T]):  # should error: T from outer not in scope
+        ...
+    class AlsoBad:
+        x: list[T]  # should error: T from outer not in scope
+
+    alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
+
+# Unbound TypeVars at global scope
+global_var1: T  # should error
+global_var2: list[T] = []  # should error
+list[T]()  # should error
+"#,
+);

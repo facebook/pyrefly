@@ -12,6 +12,7 @@ use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_util::display::count;
+use pyrefly_util::display::pluralize;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -888,12 +889,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let range = keywords.first().map_or(arguments_range, |kw| kw.range);
             let msg = if missing_unnamed_posonly == 0 {
                 format!(
-                    "Missing positional argument{} {}",
-                    if missing_named_posonly.len() == 1 {
-                        ""
-                    } else {
-                        "s"
-                    },
+                    "Missing {} {}",
+                    pluralize(missing_named_posonly.len(), "positional argument"),
                     missing_named_posonly
                         .iter()
                         .map(|name| format!("`{name}`"))

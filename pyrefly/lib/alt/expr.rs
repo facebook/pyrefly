@@ -18,6 +18,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::literal::LitStyle;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -570,12 +571,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => self.stdlib.str().clone().to_type(),
                 }
             }
-            Expr::TString(x) => self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::Unsupported),
-                "t-strings are not yet supported".to_owned(),
-            ),
+            Expr::TString(x) => {
+                x.visit(&mut |x| {
+                    self.expr_infer(x, errors);
+                });
+                if let Some(template) = self.stdlib.template() {
+                    template.clone().to_type()
+                } else {
+                    self.error(
+                        errors,
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "t-strings are only available in Python 3.14+".to_owned(),
+                    )
+                }
+            }
             Expr::StringLiteral(x) => Lit::from_string_literal(x).to_implicit_type(),
             Expr::BytesLiteral(x) => Lit::from_bytes_literal(x).to_implicit_type(),
             Expr::NumberLiteral(x) => match &x.value {
@@ -655,7 +665,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if !nontuples.is_empty() {
                 // The non-tuple options may contain a type like Sequence[T] that provides an additional default hint.
-                // Filter out top-level Vars: they don't provide any hints, and we don't want to pin them.
+                // TODO: we filter out top-level Vars to prevent premature pinning
+                // (https://github.com/facebook/pyrefly/issues/105), but this also prevents us from picking up hints
+                // from Quantified restrictions. See test::contextual::test_sequence_hint_in_typevar_bound.
                 let nontuple_hint = self.unions(
                     nontuples
                         .into_iter()
@@ -1116,17 +1128,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let should_discard = |t: &Type, r: TextRange| self.as_bool(t, r, errors) == Some(!target);
 
         let mut t_acc = Type::never();
+        // Separate accumulator for soft hints - uses un-narrowed types.
+        // The narrowing of bool/int/str to literals is for the result type of the boolop,
+        // not for contextual typing of subsequent expressions.
+        let mut hint_acc: Option<Type> = None;
         let last_index = values.len() - 1;
         for (i, value) in values.iter().enumerate() {
             // If there isn't a hint for the overall expression, use the preceding branches as a "soft" hint
             // for the next one. Most useful for expressions like `optional_list or []`.
-            let hint = hint.or_else(|| {
-                if t_acc.is_never() {
-                    None
-                } else {
-                    Some(HintRef::soft(&t_acc))
-                }
-            });
+            let hint = hint.or_else(|| hint_acc.as_ref().map(HintRef::soft));
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
             // If this is not the last entry, we have to make a type-dependent decision and also narrow the
@@ -1141,6 +1151,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for t in t.into_unions() {
                 // If we reach the last value, we should always keep it.
                 if i == last_index || !should_discard(&t, value.range()) {
+                    // Accumulate un-narrowed type for hints
+                    hint_acc = Some(match hint_acc {
+                        None => t.clone(),
+                        Some(acc) => self.union(acc, t.clone()),
+                    });
+                    // Narrow the type for the result of the boolop
                     let t = if i != last_index && t == self.stdlib.bool().clone().to_type() {
                         Lit::Bool(target).to_implicit_type()
                     } else if i != last_index && t == self.stdlib.int().clone().to_type() && !target
@@ -1702,133 +1718,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         TypeVarTuple::new(name, self.module().dupe(), default_value)
     }
 
-    pub fn typealiastype_from_call(
-        &self,
-        name: Identifier,
-        x: &ExprCall,
-        errors: &ErrorCollector,
-    ) -> Option<(Expr, Vec<Expr>)> {
-        let mut arg_name = false;
-        let mut value = None;
-        let mut type_params = None;
-        let check_name_arg = |arg: &Expr| {
-            if let Expr::StringLiteral(lit) = arg {
-                if lit.value.to_str() != name.id.as_str() {
-                    self.error(
-                        errors,
-                        x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                        format!(
-                            "TypeAliasType must be assigned to a variable named `{}`",
-                            lit.value.to_str()
-                        ),
-                    );
-                }
-            } else {
-                self.error(
-                    errors,
-                    arg.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                    "Expected first argument of `TypeAliasType` to be a string literal".to_owned(),
-                );
-            }
-        };
-        if let Some(arg) = x.arguments.args.first() {
-            check_name_arg(arg);
-            arg_name = true;
-        }
-        if let Some(arg) = x.arguments.args.get(1) {
-            value = Some(arg.clone());
-        }
-        if let Some(arg) = x.arguments.args.get(2) {
-            self.error(
-                errors,
-                arg.range(),
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                "Unexpected positional argument to `TypeAliasType`".to_owned(),
-            );
-        }
-        for kw in &x.arguments.keywords {
-            match &kw.arg {
-                Some(id) => match id.id.as_str() {
-                    "name" => {
-                        if arg_name {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                                "Multiple values for argument `name`".to_owned(),
-                            );
-                        } else {
-                            check_name_arg(&kw.value);
-                            arg_name = true;
-                        }
-                    }
-                    "value" => {
-                        if value.is_some() {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                                "Multiple values for argument `value`".to_owned(),
-                            );
-                        } else {
-                            value = Some(kw.value.clone());
-                        }
-                    }
-                    "type_params" => {
-                        if let Expr::Tuple(tuple) = &kw.value {
-                            type_params = Some(tuple.elts.clone());
-                        } else {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                                "Value for argument `type_params` must be a tuple literal"
-                                    .to_owned(),
-                            );
-                        }
-                    }
-                    _ => {
-                        self.error(
-                            errors,
-                            kw.range,
-                            ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                            format!("Unexpected keyword argument `{}` to `TypeAliasType`", id.id),
-                        );
-                    }
-                },
-                _ => {
-                    self.error(
-                        errors,
-                        kw.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                        "Cannot pass unpacked keyword arguments to `TypeAliasType`".to_owned(),
-                    );
-                }
-            }
-        }
-        if !arg_name {
-            self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                "Missing `name` argument".to_owned(),
-            );
-        }
-        if let Some(value) = value {
-            Some((value, type_params.unwrap_or_default()))
-        } else {
-            self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                "Missing `value` argument".to_owned(),
-            );
-            None
-        }
-    }
-
     /// Helper to infer element types for a list or set.
     fn elts_infer(
         &self,
@@ -2261,6 +2150,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     })
                 }
+                // TODO(rechen): handle generic recursive aliases
+                Type::TypeAlias(box TypeAliasData::Ref(_)) => Type::any_implicit(),
                 t => self.error(
                     errors,
                     range,

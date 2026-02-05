@@ -299,7 +299,7 @@ def nested():
     config["user"][""]
 #                  ^
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
@@ -315,7 +315,7 @@ def nested():
     config["user"][""]
 #           ^
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();
@@ -1321,17 +1321,9 @@ Completion Results:
 - (Function) isinstance
 - (Class) DivisionImpossible: from decimal import DivisionImpossible
 
-- (Class) FirstHeaderLineIsContinuationDefect: from email.errors import FirstHeaderLineIsContinuationDefect
-
-- (Class) MissingHeaderBodySeparatorDefect: from email.errors import MissingHeaderBodySeparatorDefect
-
 - (Function) disjoint_base: from typing_extensions import disjoint_base
 
-- (Function) distributions: from importlib.metadata import distributions
-
 - (Function) fix_missing_locations: from ast import fix_missing_locations
-
-- (Function) packages_distributions: from importlib.metadata import packages_distributions
 
 - (Function) timerfd_settime_ns: from os import timerfd_settime_ns
 
@@ -1465,6 +1457,31 @@ foo('
 Completion Results:
 - (Value) 'bar': Literal['bar'] inserting `bar`
 - (Value) 'foo': Literal['foo'] inserting `foo`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_match_value() {
+    let code = r#"
+from typing import Literal
+x: Literal['a', 'b'] = 'a'
+match x:
+    case ':
+#         ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+5 |     case ':
+              ^
+Completion Results:
+- (Value) 'a': Literal['a'] inserting `a`
+- (Value) 'b': Literal['b'] inserting `b`
 "#
         .trim(),
         report.trim(),
@@ -1879,15 +1896,85 @@ T = Literal
 2 | T = Literal
             ^
 Completion Results:
-- (Variable) AnyOrLiteralStr: from _typeshed import AnyOrLiteralStr
-
 - (Variable) Literal: from typing import Literal
 
 - (Variable) Literal: from typing_extensions import Literal
 
 - (Variable) LiteralString: from typing import LiteralString
 
+- (Variable) AnyOrLiteralStr: from _typeshed import AnyOrLiteralStr
+
 - (Variable) StrOrLiteralStr: from _typeshed import StrOrLiteralStr
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_prefers_public_reexport_for_dotted_private_module() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("_foo_bar", "Thing = 1\n"),
+            ("foo.bar", "from _foo_bar import Thing\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from foo.bar import Thing
+
+- (Variable) Thing: from _foo_bar import Thing
+
+
+
+# _foo_bar.py
+
+# foo.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_prefers_shorter_module() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("a.b", "Thing = 1\n"),
+            ("a.b.c", "Thing = 2\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from a.b import Thing
+
+- (Variable) Thing: from a.b.c import Thing
+
+
+
+# a.b.py
+
+# a.b.c.py
 "#
         .trim(),
         report.trim(),
@@ -1901,7 +1988,7 @@ T = foooooo
 #       ^
 "#;
     let files = [("main", code), ("bar", "foooooo = 1")];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
 
@@ -2593,7 +2680,7 @@ import sys
 x = sys.version
 #       ^
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let positions = extract_cursors_for_test(code);
     let txn = state.transaction();
@@ -2646,7 +2733,7 @@ class Constraint:
         self.pointwise_read_writes.
 #                                  ^
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), false);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let txn = state.transaction();

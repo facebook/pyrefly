@@ -13,7 +13,9 @@ use pyrefly_types::class::Class;
 #[cfg(test)]
 use pyrefly_types::class::ClassType;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Type;
 use pyrefly_types::types::Union;
 use serde::Serialize;
@@ -247,7 +249,9 @@ fn is_scalar_type(get: &Type, want: &Class, context: &ModuleContext) -> bool {
     }
     match get {
         Type::ClassType(class_type) => has_superclass(class_type.class_object(), want, context),
-        Type::TypeAlias(alias) => is_scalar_type(&alias.as_type(), want, context),
+        Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+            is_scalar_type(&alias.as_type(), want, context)
+        }
         _ => false,
     }
 }
@@ -288,6 +292,12 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
                 .prepend_modifier(TypeModifier::Type)
         }
         Type::Tuple(_) => ClassNamesFromType::from_class(context.stdlib.tuple_object(), context),
+        Type::TypedDict(TypedDict::TypedDict(inner)) => {
+            ClassNamesFromType::from_class(inner.class_object(), context)
+        }
+        Type::TypedDict(TypedDict::Anonymous(_)) => {
+            ClassNamesFromType::from_class(context.stdlib.dict_object(), context)
+        }
         Type::Union(box Union {
             members: elements, ..
         }) if !elements.is_empty() => elements
@@ -296,7 +306,9 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
             .reduce(|acc, next| acc.join_with(next))
             .unwrap()
             .sort_and_dedup(),
-        Type::TypeAlias(alias) => get_classes_of_type(&alias.as_type(), context),
+        Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+            get_classes_of_type(&alias.as_type(), context)
+        }
         _ => ClassNamesFromType::not_a_class(),
     }
 }

@@ -16,6 +16,8 @@ use std::mem;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::type_alias::TypeAliasData;
+use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -93,6 +95,13 @@ enum Variable {
     /// A loop-recursive variable, e.g. `x = None; while x is None: x = f()`
     /// The Variable tracks the prior type bound to this name before the loop.
     LoopRecursive(Type, LoopBound),
+    /// A reference to a recursive type alias, like `type X = int | list[X]`.
+    ///
+    /// These are created when, in the process of inferring a type for the RHS of a type alias,
+    /// we encounter the name of the same alias. Unlike most other variables, AliasRecursive
+    /// represents a known, fixed type and exists so that we can reference the type before we've
+    /// finished computing it.
+    AliasRecursive(TypeAliasRef),
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
     Unwrap,
     /// A variable used for a parameter type (either a function or lambda parameter).
@@ -147,6 +156,7 @@ impl Display for Variable {
                 }
             }
             Variable::LoopRecursive(t, _) => write!(f, "LoopRecursive(prior={t}, _)"),
+            Variable::AliasRecursive(r) => write!(f, "AliasRecursive({})", r.name),
             Variable::Recursive => write!(f, "Recursive"),
             Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
@@ -377,6 +387,10 @@ impl Solver {
                 *variable = Variable::Answer(Type::any_implicit());
                 None
             }
+            Variable::AliasRecursive(r) => {
+                *variable = Variable::Answer(Self::finish_alias_recursive(r));
+                None
+            }
             Variable::Parameter => {
                 unreachable!("Unexpected Variable::Parameter")
             }
@@ -453,6 +467,7 @@ impl Solver {
                 let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
                     Variable::PartialQuantified(q) => q.as_gradual_type(),
+                    Variable::AliasRecursive(r) => Self::finish_alias_recursive(r),
                     _ => Type::any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
@@ -901,6 +916,10 @@ impl Solver {
             })
     }
 
+    fn finish_alias_recursive(r: &TypeAliasRef) -> Type {
+        Type::TypeAlias(Box::new(TypeAliasData::Ref(r.clone())))
+    }
+
     /// Generate a fresh variable used to tie recursive bindings.
     pub fn fresh_recursive(&self, uniques: &UniqueFactory) -> Var {
         let v = Var::new(uniques);
@@ -914,6 +933,14 @@ impl Solver {
             v,
             Variable::LoopRecursive(prior_type, LoopBound::UpperBounds(vec![])),
         );
+        v
+    }
+
+    pub fn fresh_alias_recursive(&self, uniques: &UniqueFactory, r: TypeAliasRef) -> Var {
+        let v = Var::new(uniques);
+        self.variables
+            .lock()
+            .insert_fresh(v, Variable::AliasRecursive(r));
         v
     }
 
@@ -1353,7 +1380,7 @@ pub struct Subset<'a, Ans: LookupAnswer> {
     pub type_order: TypeOrder<'a, Ans>,
     gas: Gas,
     /// Recursive assumptions of pairs of types that is_subset_eq returns true for.
-    /// Used for structural typechecking of protocols.
+    /// Used for structural typechecking of protocols and recursive type aliases.
     pub recursive_assumptions: SmallSet<(Type, Type)>,
     /// Class-level recursive assumptions for protocol checks.
     /// When checking `got <: protocol` where got's type arguments contain Vars
@@ -1544,6 +1571,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
                     )),
+                    Variable::AliasRecursive(_) => Err(SubsetError::internal_error(
+                        "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
+                    )),
                     Variable::Answer(t1) => {
                         let t1 = t1.clone();
                         drop(v1_ref);
@@ -1636,6 +1666,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
+                    )),
+                    Variable::AliasRecursive(_) => Err(SubsetError::internal_error(
+                        "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
                     )),
                     Variable::Answer(t2) => {
                         let t2 = t2.clone();

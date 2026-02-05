@@ -48,7 +48,9 @@ use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingVariance;
+use crate::binding::binding::BindingVarianceCheck;
 use crate::binding::binding::ClassBinding;
+use crate::binding::binding::ClassDefData;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
@@ -64,6 +66,7 @@ use crate::binding::binding::KeyConsistentOverrideCheck;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
+use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -110,6 +113,7 @@ impl<'a> BindingsBuilder<'a> {
             mro_idx: self.idx_for_promise(KeyClassMro(def_index)),
             synthesized_fields_idx: self.idx_for_promise(KeyClassSynthesizedFields(def_index)),
             variance_idx: self.idx_for_promise(KeyVariance(def_index)),
+            variance_check_idx: self.idx_for_promise(KeyVarianceCheck(def_index)),
             consistent_override_check_idx: self
                 .idx_for_promise(KeyConsistentOverrideCheck(def_index)),
             abstract_class_check_idx: self.idx_for_promise(KeyAbstractClassCheck(def_index)),
@@ -192,7 +196,7 @@ impl<'a> BindingsBuilder<'a> {
             // usage tracking.
             if matches!(base_class, BaseClass::BaseClassExpr(..)) {
                 self.insert_binding(
-                    KeyExpect(base.range()),
+                    KeyExpect::TypeCheckBaseClassExpr(base.range()),
                     BindingExpect::TypeCheckBaseClassExpr(base),
                 );
             }
@@ -219,10 +223,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.error(
                         keyword.range(),
                         ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                        format!(
-                            "The use of unpacking in class header of `{}` is not supported",
-                            x.name
-                        ),
+                        "Unpacking is not supported in class header".to_owned(),
                     )
                 }
             });
@@ -358,7 +359,7 @@ impl<'a> BindingsBuilder<'a> {
             class_indices.class_idx,
             BindingClass::ClassDef(ClassBinding {
                 def_index: class_indices.def_index,
-                def: x,
+                def: ClassDefData::new(x),
                 parent: parent.dupe(),
                 fields,
                 tparams_require_binding,
@@ -370,6 +371,12 @@ impl<'a> BindingsBuilder<'a> {
             class_indices.variance_idx,
             BindingVariance {
                 class_key: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.variance_check_idx,
+            BindingVarianceCheck {
+                class_idx: class_indices.class_idx,
             },
         );
         self.insert_binding_idx(
@@ -505,11 +512,11 @@ impl<'a> BindingsBuilder<'a> {
                         );
                         None
                     }
-                    _ => {
+                    elts => {
                         self.error(
                             item.range(),
                             ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                            "Expected a pair".to_owned(),
+                            format!("Expected (name, type) pair, got {}-tuple", elts.len()),
                         );
                         None
                     }
@@ -695,6 +702,12 @@ impl<'a> BindingsBuilder<'a> {
             },
         );
         self.insert_binding_idx(
+            class_indices.variance_check_idx,
+            BindingVarianceCheck {
+                class_idx: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
             class_indices.consistent_override_check_idx,
             BindingConsistentOverrideCheck {
                 class_key: class_indices.class_idx,
@@ -791,7 +804,8 @@ impl<'a> BindingsBuilder<'a> {
                             self.error(
                                 item.range(),
                                 ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                                "Expected a key-value pair".to_owned(),
+                                "Unpacking is not supported in functional enum definition"
+                                    .to_owned(),
                             );
                             None
                         }
@@ -905,7 +919,7 @@ impl<'a> BindingsBuilder<'a> {
                         kw.value.range(),
                         ErrorInfo::Kind(ErrorKind::InvalidArgument),
                         format!(
-                            "Too many defaults values: expected up to {n_members}, got {n_defaults}",
+                            "Too many defaults: expected at most {n_members}, got {n_defaults}",
                         ),
                     );
                     let n_to_drop = n_defaults - n_members;
@@ -914,15 +928,15 @@ impl<'a> BindingsBuilder<'a> {
                     defaults.splice(n_members - n_defaults.., elts.map(|x| Some(x.clone())));
                 }
             } else {
-                let maybe_name = if let Some(name) = &kw.arg {
-                    format!(" `{name}`")
+                let msg = if let Some(name) = &kw.arg {
+                    format!("Unrecognized keyword argument `{name}`")
                 } else {
-                    "".to_owned()
+                    "Unpacking is not supported".to_owned()
                 };
                 self.error(
                     kw.range(),
                     ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                    format!("Unrecognized argument{maybe_name} for named tuple definition"),
+                    format!("{msg} in named tuple definition"),
                 );
             }
         }
@@ -1069,15 +1083,15 @@ impl<'a> BindingsBuilder<'a> {
             if let Some(kw_name) = recognized_kw {
                 base_class_keywords.push((kw_name.clone(), kw.value.clone()));
             } else {
-                let maybe_name = if let Some(name) = &kw.arg {
-                    format!(" `{name}`")
+                let msg = if let Some(name) = &kw.arg {
+                    format!("Unrecognized keyword argument `{name}`")
                 } else {
-                    "".to_owned()
+                    "Unpacking is not supported".to_owned()
                 };
                 self.error(
                     kw.range(),
                     ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                    format!("Unrecognized argument{maybe_name} for typed dictionary definition"),
+                    format!("{msg} in typed dictionary definition"),
                 );
             }
         }
@@ -1106,7 +1120,8 @@ impl<'a> BindingsBuilder<'a> {
                             self.error(
                                 item.range(),
                                 ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                                "Expected a key-value pair".to_owned(),
+                                "Unpacking is not supported in functional typed dictionary definition"
+                                    .to_owned(),
                             );
                             None
                         }

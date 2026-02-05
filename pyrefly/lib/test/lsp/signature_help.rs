@@ -204,7 +204,7 @@ foo(a=1, b="")
 #      ^
 "#;
     let files = [("main", code)];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let signature = state
@@ -488,7 +488,7 @@ foo(a=1, b="", c=True)
 #      ^
 "#;
     let files = [("main", code)];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let signature = state
@@ -556,7 +556,7 @@ foo(1, True)
 #      ^
 "#;
     let files = [("main", code)];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let signature = state
@@ -601,7 +601,7 @@ foo.method(x=1, y="test")
 #             ^
 "#;
     let files = [("main", code)];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let signature = state
@@ -653,7 +653,7 @@ foo(a=1, b="", c=True)
 #      ^
 "#;
     let files = [("main", code)];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(code)[0];
     let signature = state
@@ -731,7 +731,7 @@ greet()
 #     ^
 "#;
     let files = [("main", code)];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
     let handle = handles.get("main").unwrap();
     let cursors = extract_cursors_for_test(code);
 
@@ -793,7 +793,7 @@ calculate(1, 2)
 #            ^
 "#;
     let files = [("main", code)];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
     let handle = handles.get("main").unwrap();
     let cursors = extract_cursors_for_test(code);
 
@@ -850,7 +850,7 @@ lib.func(
 "#;
 
     let files = [("lib", lib_code), ("main", main_code)];
-    let (handles, state) = mk_multi_file_state(&files, Require::indexing(), false);
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
     let handle = handles.get("main").unwrap();
     let position = extract_cursors_for_test(main_code)[0];
 

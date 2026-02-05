@@ -61,7 +61,7 @@ import os.path
 def check_exists(path: str) -> bool:
     return os.path.exists(path)
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "No unused imports");
@@ -75,7 +75,7 @@ import os.path
 def foo() -> str:
     return "hello"
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "Import `os` is unused");
@@ -118,7 +118,7 @@ import os
 def get_cwd() -> str:
     return os.getcwd()
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "No unused imports");
@@ -132,7 +132,7 @@ import os
 def foo() -> str:
     return "hello"
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "Import `os` is unused");
@@ -146,7 +146,7 @@ from typing import List
 def process(items: List[str]):
     return [item.upper() for item in items]
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "No unused imports");
@@ -160,7 +160,7 @@ from typing import Dict, List
 def process(items: List[str]):
     return [item.upper() for item in items]
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "Import `Dict` is unused");
@@ -174,7 +174,7 @@ from typing import *
 def foo() -> str:
     return "hello"
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "No unused imports");
@@ -188,7 +188,7 @@ from __future__ import annotations
 def foo() -> str:
     return "hello"
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "No unused imports");
@@ -202,7 +202,7 @@ from __future__ import annotations as _annotations
 def foo() -> str:
     return "hello"
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "No unused imports");
@@ -218,7 +218,7 @@ def test() -> Generator[float, float, None]:
     while True:
         new = yield new - 1
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_variable_diagnostics(&state, handle);
     assert_eq!(report, "No unused variables");
@@ -233,7 +233,7 @@ def f():
     print(x)
     x = 7
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_variable_diagnostics(&state, handle);
     assert_eq!(report, "No unused variables");
@@ -250,7 +250,7 @@ def test_loop() -> str:
         foo = foo + 1
         continue
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_variable_diagnostics(&state, handle);
     assert_eq!(report, "No unused variables");
@@ -267,7 +267,7 @@ def test_loop_aug() -> str:
         foo += 1
         continue
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_variable_diagnostics(&state, handle);
     assert_eq!(report, "No unused variables");
@@ -281,7 +281,7 @@ def main():
     used_var = "this is used"
     print(used_var)
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_variable_diagnostics(&state, handle);
     assert_eq!(report, "Variable `unused_var` is unused");
@@ -297,7 +297,7 @@ fn test_from_import_as_same_name_is_reexport() {
     let code = r#"
 from math import tau as tau
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "No unused imports");
@@ -309,7 +309,7 @@ fn test_import_as_same_name_is_reexport() {
     let code = r#"
 import os as os
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "No unused imports");
@@ -321,7 +321,7 @@ fn test_import_as_different_name_still_unused() {
     let code = r#"
 import os as operating_system
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "Import `operating_system` is unused");
@@ -333,7 +333,7 @@ fn test_from_import_as_different_name_still_unused() {
     let code = r#"
 from math import tau as my_tau
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "Import `my_tau` is unused");

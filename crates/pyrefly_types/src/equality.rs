@@ -375,11 +375,11 @@ mod tests {
                 QuantifiedKind::TypeVar,
                 None,
                 Restriction::Unrestricted,
+                PreInferenceVariance::Invariant,
             );
 
             let tparams = TParams::new(vec![TParam {
                 quantified: q.clone(),
-                variance: PreInferenceVariance::Invariant,
             }]);
 
             Forallable::Function(Function {

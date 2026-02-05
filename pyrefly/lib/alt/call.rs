@@ -291,9 +291,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.as_call_target_impl(fallback, quantified, dunder_call)
             }
             Type::Any(style) => CallTargetLookup::Ok(Box::new(CallTarget::Any(style))),
-            Type::TypeAlias(ta) => {
-                self.as_call_target_impl(ta.as_value(self.stdlib), quantified, dunder_call)
-            }
+            Type::TypeAlias(ta) => self.as_call_target_impl(
+                self.get_type_alias(&ta).as_value(self.stdlib),
+                quantified,
+                dunder_call,
+            ),
             Type::ClassType(cls) => {
                 if let Some(quantified) = quantified {
                     self.quantified_instance_as_dunder_call(quantified.clone(), &cls)
@@ -852,7 +854,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         arguments_range,
                         ErrorInfo::new(ErrorKind::BadInstantiation, context),
-                        format!("`{}` can not be instantiated", cls.name()),
+                        format!("`{}` cannot be instantiated", cls.name()),
                     );
                 }
                 let metadata = self.get_metadata_for_class(cls.class_object());
@@ -1255,7 +1257,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Check the __init__ method and whether it comes from object or has been overridden
         let (init_attr_ty, overrides_init) = if let Some(mut t) = self.get_dunder_init(cls, false) {
             // Replace the return type with Self (the current class)
-            t.set_callable_return_type(class_type.clone());
+            t.set_callable_return_type_for_constructor(class_type.clone());
             (t, true)
         } else {
             (default_constructor(), false)

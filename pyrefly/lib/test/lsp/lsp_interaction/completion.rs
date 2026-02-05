@@ -8,6 +8,7 @@
 use itertools::Itertools;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionResponse;
+use lsp_types::InsertTextFormat;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::request::Completion;
@@ -51,6 +52,128 @@ fn test_completion_basic() {
         .client
         .completion("foo.py", 11, 1)
         .expect_completion_response_with(|list| list.items.iter().any(|item| item.label == "Bar"))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_function_parens_snippet() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "analysis": {
+                    "completeFunctionParens": true
+                }
+            }]))),
+            capabilities: Some(json!({
+                "textDocument": {
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": true
+                        }
+                    }
+                }
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 0}
+                },
+                "text": "def spam(x: int) -> None:\n    pass\n\nsp\n"
+            }],
+        }));
+
+    interaction
+        .client
+        .completion("foo.py", 3, 2)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "spam"
+                    && item.insert_text.as_deref() == Some("spam($0)")
+                    && item.insert_text_format == Some(InsertTextFormat::SNIPPET)
+            })
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_function_parens_disabled() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "analysis": {
+                    "completeFunctionParens": false
+                }
+            }]))),
+            capabilities: Some(json!({
+                "textDocument": {
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": true
+                        }
+                    }
+                }
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 0}
+                },
+                "text": "def spam(x: int) -> None:\n    pass\n\nsp\n"
+            }],
+        }));
+
+    interaction
+        .client
+        .completion("foo.py", 3, 2)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "spam"
+                    && item.insert_text.is_none()
+                    && item.insert_text_format != Some(InsertTextFormat::SNIPPET)
+            })
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -501,14 +624,12 @@ fn test_stdlib_class_completion() {
         .unwrap();
 
     interaction.client.did_open("foo.py");
-    interaction.client.did_change("foo.py", "FirstHeader");
+    interaction.client.did_change("foo.py", "Proto");
     interaction
         .client
-        .completion("foo.py", 0, 11)
+        .completion("foo.py", 0, 5)
         .expect_completion_response_with(|list| {
-            list.items
-                .iter()
-                .any(|item| item.label == "FirstHeaderLineIsContinuationDefect")
+            list.items.iter().any(|item| item.label == "Protocol")
         })
         .unwrap();
 
@@ -750,6 +871,51 @@ fn test_completion_autoimport_shown_when_local_no_longer_matches() {
                 .iter()
                 .any(|item| item.label == "UsersController");
             has_users_manager && !has_users_controller
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_deep_submodule_chain_reexport_completion() {
+    // Test completion on submodule attributes in `a.b.c.` after `import a.b.c`
+    // This tests that submodules are properly available for completion when using
+    // explicit re-exports (`from . import x as x` pattern).
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("deep_submodule_chain_reexport"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("main.py");
+
+    // Test completion on `a.b.` - should show `c` as a module
+    interaction
+        .client
+        .did_change("main.py", "import a.b.c\n\na.b.");
+    interaction
+        .client
+        .completion("main.py", 2, 4)
+        .expect_completion_response_with(|list| {
+            list.items
+                .iter()
+                .any(|item| item.label == "c" && item.kind == Some(CompletionItemKind::MODULE))
+        })
+        .unwrap();
+
+    // Test completion on `a.b.c.` - should show `D` as a class
+    interaction
+        .client
+        .did_change("main.py", "import a.b.c\n\na.b.c.");
+    interaction
+        .client
+        .completion("main.py", 2, 6)
+        .expect_completion_response_with(|list| {
+            list.items
+                .iter()
+                .any(|item| item.label == "D" && item.kind == Some(CompletionItemKind::CLASS))
         })
         .unwrap();
 

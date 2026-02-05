@@ -17,6 +17,7 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::read_only::ReadOnlyReason;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -409,13 +410,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
-        // First check exact (Type, Type) recursive assumptions
-        let recursive_check = (got.clone(), Type::ClassType(protocol.clone()));
-        if !self.recursive_assumptions.insert(recursive_check.clone()) {
-            // Assume recursive checks are true
-            return Ok(());
-        }
-
         // For class-level coinductive reasoning: if the `got` type's type arguments
         // contain Vars, we're likely in a recursive pattern (e.g., checking method return
         // types that reference the same classes). Use (Class, Class) matching to detect
@@ -429,22 +423,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             );
             if !self.class_protocol_assumptions.insert(key.clone()) {
                 // Coinductive: assume this recursive class-level check succeeds
-                self.recursive_assumptions.shift_remove(&recursive_check);
                 return Ok(());
             }
             Some(key)
         } else {
             None
         };
-
         let res = self.is_subset_protocol_inner(got, protocol);
-
         // Clean up assumptions
-        self.recursive_assumptions.shift_remove(&recursive_check);
         if let Some(key) = class_check {
             self.class_protocol_assumptions.shift_remove(&key);
         }
-
         res
     }
 
@@ -929,13 +918,43 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
     }
 
+    fn can_be_recursive(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) => self.type_order.is_protocol(cls.class_object()),
+            Type::TypeAlias(_) => true,
+            _ => false,
+        }
+    }
+
     /// Implementation of subset equality for Type, other than Var.
     pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
+        let recursive_check = if self.can_be_recursive(got) || self.can_be_recursive(want) {
+            Some((got.clone(), want.clone()))
+        } else {
+            None
+        };
+        if let Some(check) = &recursive_check
+            && !self.recursive_assumptions.insert(check.clone())
+        {
+            // Assume recursive checks are true
+            return Ok(());
+        }
+        let res = self.is_subset_eq_no_recursive_check(got, want);
+        if let Some(check) = &recursive_check {
+            self.recursive_assumptions.shift_remove(check);
+        }
+        res
+    }
+
+    fn is_subset_eq_no_recursive_check(
+        &mut self,
+        got: &Type,
+        want: &Type,
+    ) -> Result<(), SubsetError> {
         if matches!(got, Type::Materialization) {
-            return self
-                .is_subset_eq_impl(&self.type_order.stdlib().object().clone().to_type(), want);
+            return self.is_subset_eq(&self.type_order.stdlib().object().clone().to_type(), want);
         } else if matches!(want, Type::Materialization) {
-            return self.is_subset_eq_impl(got, &Type::never());
+            return self.is_subset_eq(got, &Type::never());
         }
         match (got, want) {
             (Type::Any(_), _) => {
@@ -947,6 +966,35 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Never(_), _) => Ok(()),
             (_, Type::ClassType(want)) if want.is_builtin("object") => {
                 Ok(()) // everything is an instance of `object`
+            }
+            (
+                Type::Forall(box Forall {
+                    body: Forallable::TypeAlias(got),
+                    ..
+                }),
+                Type::TypeAlias(box TypeAliasData::Ref(want)),
+            ) if *got.name() == want.name => {
+                // TODO(rechen): remove this once we support generic recursive aliases. Right now,
+                // we replace TypeAliasData::Ref with Any when subscripting, which messes up
+                // is_subset_eq comparisons between the Ref and the equivalent Value.
+
+                Ok(())
+            }
+            (Type::TypeAlias(box got), Type::TypeAlias(box want)) => self.is_subset_eq(
+                &self.type_order.untype_alias(got),
+                &self.type_order.untype_alias(want),
+            ),
+            (Type::TypeAlias(box TypeAliasData::Value(got)), _) => {
+                // We use `as_value` to get the alias's runtime type.
+                self.is_subset_eq(&got.as_value(self.type_order.stdlib()), want)
+            }
+            (Type::TypeAlias(box got @ TypeAliasData::Ref(_)), _) => {
+                // A TypeAliasData::Ref appears on the lhs when we're comparing it structurally
+                // against a TypeAliasData::Value, so we need its static, not runtime, type.
+                self.is_subset_eq(&self.type_order.untype_alias(got), want)
+            }
+            (_, Type::TypeAlias(box want)) => {
+                self.is_subset_eq(got, &self.type_order.untype_alias(want))
             }
             (Type::Quantified(q), Type::Ellipsis) | (Type::Ellipsis, Type::Quantified(q))
                 if q.kind() == QuantifiedKind::ParamSpec =>
@@ -1173,15 +1221,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (Type::ClassType(got), Type::ClassType(want))
                 if want.is_builtin("float")
-                    && (got.is_builtin("int") || got.is_builtin("bool")) =>
+                    && self.type_order.has_superclass(
+                        got.class_object(),
+                        self.type_order.stdlib().int().class_object(),
+                    ) =>
             {
                 Ok(())
             }
             (Type::ClassType(got), Type::ClassType(want))
                 if want.is_builtin("complex")
-                    && (got.is_builtin("int")
-                        || got.is_builtin("float")
-                        || got.is_builtin("bool")) =>
+                    && (self.type_order.has_superclass(
+                        got.class_object(),
+                        self.type_order.stdlib().int().class_object(),
+                    ) || self.type_order.has_superclass(
+                        got.class_object(),
+                        self.type_order.stdlib().float().class_object(),
+                    )) =>
             {
                 Ok(())
             }
@@ -1437,9 +1492,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 )
             }
             (_, Type::Forall(forall)) => self.is_subset_eq(got, &forall.body.clone().as_type()),
-            (Type::TypeAlias(ta), _) => {
-                self.is_subset_eq(&ta.as_value(self.type_order.stdlib()), want)
-            }
             _ => Err(SubsetError::Other),
         }
     }

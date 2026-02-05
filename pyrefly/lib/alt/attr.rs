@@ -40,10 +40,8 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::export::exports::Export;
-use crate::export::exports::ExportLocation;
-use crate::export::exports::Exports;
 use crate::solver::solver::SubsetError;
+use crate::state::loader::FindingOrError;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
@@ -1512,7 +1510,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AttributeBase1::SelfType(cls) => match self.get_self_attribute(cls, attr_name) {
                 Some(attr) => acc.found_class_attribute(attr, base),
-                None => acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base)),
+                None => {
+                    let metadata = self.get_metadata_for_class(cls.class_object());
+                    if metadata.has_base_any() {
+                        acc.found_type(Type::Any(AnyStyle::Implicit), base)
+                    } else {
+                        acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base))
+                    }
+                }
             },
             AttributeBase1::Intersect(bases, fallback) => {
                 // For now, only handle the simplest case: if exactly one base has a successful lookup, use it.
@@ -1673,10 +1678,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn get_module_exports(&self, module_name: ModuleName) -> Option<Exports> {
-        self.exports.get(module_name).finding()
-    }
-
     fn get_module_attr(&self, module: &ModuleType, attr_name: &Name) -> Option<Attribute> {
         // `module_name` could refer to a package, in which case we need to check if
         // `module_name.attr_name`:
@@ -1696,24 +1697,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         let module_name = ModuleName::from_parts(module.parts());
-        let module_exports = match self.get_module_exports(module_name) {
-            Some(x) => x,
-            None => return Some(Attribute::simple(Type::any_error())), // This module doesn't exist, we must have already errored
+
+        match self.exports.module_exists(module_name) {
+            FindingOrError::Finding(_) => (),
+            FindingOrError::Error(_) => return Some(Attribute::simple(Type::any_error())), // This module doesn't exist, we must have already errored
         };
 
-        if module_exports.exports(self.exports).contains_key(attr_name) {
+        if self.exports.export_exists(module_name, attr_name) {
             Some(Attribute::simple(
                 self.get_from_export(module_name, None, &KeyExport(attr_name.clone()))
                     .arc_clone(),
             ))
-        } else if module_exports.is_submodule_imported_implicitly(attr_name)
+        } else if self
+            .exports
+            .is_submodule_imported_implicitly(module_name, attr_name)
             && self
-                .get_module_exports(module_name.append(attr_name))
+                .exports
+                .module_exists(module_name.append(attr_name))
+                .finding()
                 .is_some()
         {
             Some(Attribute::simple(submodule.to_type()))
         } else if self
-            .get_module_exports(module_name.append(attr_name))
+            .exports
+            .module_exists(module_name.append(attr_name))
+            .finding()
             .is_some()
         {
             // The module isn't imported, but does exist on disk, so user must
@@ -1795,12 +1803,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.bool().clone()))
             }
             Type::Any(style) => acc.push(AttributeBase1::Any(style)),
-            Type::TypeAlias(ta) => self.as_attribute_base1(ta.as_value(self.stdlib), acc),
+            Type::TypeAlias(ta) => {
+                self.as_attribute_base1(self.get_type_alias(&ta).as_value(self.stdlib), acc)
+            }
             Type::Type(box Type::Tuple(tuple)) => self
                 .as_attribute_base1(Type::type_form(self.erase_tuple_type(tuple).to_type()), acc),
-            Type::Type(box Type::ClassType(class)) => acc.push(AttributeBase1::ClassObject(
-                ClassBase::ClassType(class.clone()),
-            )),
+            Type::Type(box Type::ClassType(class)) => {
+                let class_base = AttributeBase1::ClassObject(ClassBase::ClassType(class.clone()));
+                if !class.targs().is_empty() {
+                    // If the class type has type arguments, at runtime it's also a GenericAlias
+
+                    // FIXME:
+                    // If `C` is a generic class, then the type of the expression `C` is `type[C]`.
+                    // We're relying on this behaviour to give `C[int]` the
+                    // runtime generic alias type, but this is technically
+                    // incorrect as `type[C[int]]` should be instances of `type`
+                    // and not `GenericAlias`.
+                    // Therefore, if we ever have a value of `type[C[int]]`
+                    // (e.g. via inheritance), we should not treat it as a
+                    // `GenericAlias`. However, such cases are rare in practice.
+                    let generic_alias_base =
+                        AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
+                    // Since GenericAlias also exposes all class attributes, we need to intersect the two bases
+                    acc.push(AttributeBase1::Intersect(
+                        vec![generic_alias_base.clone(), class_base],
+                        vec![generic_alias_base],
+                    ));
+                } else {
+                    acc.push(class_base)
+                }
+            }
             Type::QuantifiedValue(q) => acc.push(AttributeBase1::QuantifiedValue(*q)),
             Type::Type(box Type::Quantified(quantified)) => match quantified.restriction() {
                 Restriction::Bound(ty) => {
@@ -1865,7 +1897,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 | SpecialForm::Protocol
                 | SpecialForm::Tuple,
             )) => acc.push(AttributeBase1::TypeAny(AnyStyle::Implicit)),
-            Type::Type(box Type::SpecialForm(SpecialForm::Type)) => {
+            Type::Type(box Type::SpecialForm(SpecialForm::Type))
+            | Type::Type(box Type::Type(box Type::Any(_))) => {
                 acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
                     self.stdlib.builtins_type().clone(),
                 )))
@@ -2153,7 +2186,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 #[derive(Debug, Clone)]
 pub enum AttrDefinition {
     FullyResolved(TextRangeWithModule),
-    PartiallyResolvedImportedModuleAttribute { module_name: ModuleName },
+    PartiallyResolvedImportedModuleAttribute {
+        module_name: ModuleName,
+    },
+    /// A submodule accessed as an attribute (e.g., `b` in `a.b` when `import a.b.c`).
+    /// The module_name is the full submodule path (e.g., `a.b`).
+    Submodule {
+        module_name: ModuleName,
+    },
 }
 
 #[derive(Debug)]
@@ -2259,70 +2299,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         expected_attribute_name: Option<&Name>,
         res: &mut Vec<AttrInfo>,
     ) {
+        // Check for submodule access first (takes precedence over exports, same as get_module_attr).
+        // This handles cases like `a.b.c` where `import a.b.c` was used - accessing `b` on `a`
+        // should resolve to the submodule `a.b`, not look for an export named `b` in `a`.
+        if let Some(attr_name) = expected_attribute_name {
+            let submodule = module.push_part(attr_name.clone());
+            if submodule.is_submodules_imported_directly() {
+                res.push(AttrInfo {
+                    name: attr_name.clone(),
+                    ty: None,
+                    is_deprecated: false,
+                    definition: Some(AttrDefinition::Submodule {
+                        module_name: ModuleName::from_parts(submodule.parts()),
+                    }),
+                    docstring_range: None,
+                    is_reexport: false,
+                });
+                return;
+            }
+        }
+
         let module_name = ModuleName::from_parts(module.parts());
-        if let Some(exports) = self.get_module_exports(module_name) {
-            match expected_attribute_name {
-                None => {
-                    res.extend(
-                        exports
-                            .exports(self.exports)
-                            .iter()
-                            .map(|(x, export_location)| AttrInfo {
-                                name: x.clone(),
-                                ty: None,
-                                is_deprecated: matches!(
-                                    export_location,
-                                    ExportLocation::ThisModule(Export {
-                                        deprecation: Some(_),
-                                        ..
-                                    })
-                                ),
-                                definition: Some(
-                                    AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                        module_name,
-                                    },
-                                ),
-                                docstring_range: match export_location {
-                                    ExportLocation::ThisModule(Export {
-                                        docstring_range, ..
-                                    }) => *docstring_range,
-                                    _ => None,
-                                },
-                                is_reexport: matches!(
-                                    export_location,
-                                    ExportLocation::OtherModule(..)
-                                ),
-                            }),
-                    );
-                }
-                Some(expected_attribute_name) => {
-                    if let Some(export_location) =
-                        exports.exports(self.exports).get(expected_attribute_name)
-                    {
-                        res.push(AttrInfo {
-                            name: expected_attribute_name.clone(),
-                            ty: None,
-                            is_deprecated: matches!(
-                                export_location,
-                                ExportLocation::ThisModule(Export {
-                                    deprecation: Some(_),
-                                    ..
-                                })
-                            ),
-                            definition: Some(
-                                AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                    module_name,
-                                },
-                            ),
-                            docstring_range: match export_location {
-                                ExportLocation::ThisModule(Export {
-                                    docstring_range, ..
-                                }) => *docstring_range,
-                                _ => None,
+        match expected_attribute_name {
+            Some(name) => {
+                if self.exports.export_exists(module_name, name) {
+                    res.push(AttrInfo {
+                        name: name.clone(),
+                        ty: None,
+                        is_deprecated: self.exports.get_deprecated(module_name, name).is_some(),
+                        definition: Some(
+                            AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                                module_name,
                             },
-                            is_reexport: matches!(export_location, ExportLocation::OtherModule(..)),
-                        });
-                    }
+                        ),
+                        docstring_range: self.exports.docstring_range(module_name, name),
+                        is_reexport: self.exports.is_reexport(module_name, name),
+                    });
+                }
+            }
+            None => {
+                if let Some(exports) = self.exports.get_every_export_untracked(module_name) {
+                    res.extend(exports.iter().map(|name| AttrInfo {
+                        name: name.clone(),
+                        ty: None,
+                        is_deprecated: self.exports.get_deprecated(module_name, name).is_some(),
+                        definition: Some(
+                            AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                                module_name,
+                            },
+                        ),
+                        docstring_range: self.exports.docstring_range(module_name, name),
+                        is_reexport: self.exports.is_reexport(module_name, name),
+                    }));
                 }
             }
         }
@@ -2340,9 +2368,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if include_types {
             for info in res {
-                if let Some(definition) = &info.definition
-                    && matches!(definition, AttrDefinition::FullyResolved(..))
-                {
+                if info.definition.is_some() {
                     let found_attrs = self
                         .lookup_attr_from_attribute_base(base.clone(), &info.name)
                         .found;

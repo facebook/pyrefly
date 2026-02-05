@@ -82,8 +82,8 @@ testcase!(
 from typing import assert_type, Self
 class A[T]:
     def __new__(cls: type[Self], x: T) -> Self: ...
-o = A[int].__new__(A[str], "foo") # E: `type[A[str]]` is not assignable to parameter `cls` with type `type[A[int]]` # E: Argument `Literal['foo']` is not assignable to parameter `x` with type `int` in function `A.__new__`
-assert_type(o, A[int])
+# A[int] is a generic alias, which doesn't resolve to custom __new__
+o = A[int].__new__(A[str], "foo") # E: Missing positional argument `args` in function `types.GenericAlias.__new__` # E: `A[str]` is not assignable to upper bound `GenericAlias` of type variable `Self@GenericAlias` # E: Argument `Literal['foo']` is not assignable to parameter `origin` with type `type[Any]` in function `types.GenericAlias.__new__`
     "#,
 );
 
@@ -254,7 +254,7 @@ testcase!(
     test_any_constructor,
     r#"
 from typing import Any
-Any()  # E: `Any` can not be instantiated
+Any()  # E: `Any` cannot be instantiated
     "#,
 );
 
@@ -305,8 +305,8 @@ from typing import Self, assert_type
 class A[T]:
     def __new__(cls: type[Self], x: T) -> Self: ...
 
-# Custom __new__ should continue to work correctly
-o = A[int].__new__(A[int], 42)
+# A[int] is a generic alias, which doesn't resolve to custom __new__
+o = A[int].__new__(A[int], 42) # E: Missing positional argument `args` in function `types.GenericAlias.__new__` # E: `A[int]` is not assignable to upper bound `GenericAlias` of type variable `Self@GenericAlias` # E: Argument `Literal[42]` is not assignable to parameter `origin` with type `type[Any]` in function `types.GenericAlias.__new__`
 assert_type(o, A[int])
 
 # Receiver type binding is preserved

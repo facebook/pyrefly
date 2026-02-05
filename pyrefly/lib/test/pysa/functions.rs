@@ -38,6 +38,7 @@ use crate::test::pysa::utils::get_class_ref;
 use crate::test::pysa::utils::get_function_ref;
 use crate::test::pysa::utils::get_handle_for_module_name;
 use crate::test::pysa::utils::get_method_ref;
+use crate::test::pysa::utils::get_property_setter_ref;
 
 fn create_function_definition(
     name: &str,
@@ -1113,6 +1114,72 @@ class C(B):
 );
 
 exported_functions_testcase!(
+    test_export_overridden_class_method,
+    r#"
+class A:
+    @classmethod
+    def method(cls):
+        pass
+
+class B(A):
+    @classmethod
+    def method(cls):
+        pass
+"#,
+    &|context: &ModuleContext| {
+        vec![
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(2, 7, 2, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "cls".into(),
+                        annotation: PysaType::from_type(
+                            &Type::Type(Box::new(Type::ClassType(ClassType::new(
+                                get_class("test", "A", context),
+                                Default::default(),
+                            )))),
+                            context,
+                        ),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_classmethod(true)
+            .with_defining_class(get_class_ref("test", "A", context)),
+            create_function_definition(
+                "method",
+                ScopeParent::Class {
+                    location: create_location(7, 7, 7, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "cls".into(),
+                        annotation: PysaType::from_type(
+                            &Type::Type(Box::new(Type::ClassType(ClassType::new(
+                                get_class("test", "B", context),
+                                Default::default(),
+                            )))),
+                            context,
+                        ),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_classmethod(true)
+            .with_defining_class(get_class_ref("test", "B", context))
+            .with_overridden_base_method(get_method_ref("test", "A", "method", context)),
+        ]
+    },
+);
+
+exported_functions_testcase!(
     test_export_overridden_base_method_class_field,
     r#"
 from dataclasses import dataclass
@@ -1270,15 +1337,13 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
                             ),
                             required: true,
                         },
-                        FunctionParameter::Pos {
-                            name: "x".into(),
+                        FunctionParameter::VarArg {
+                            name: None,
                             annotation: PysaType::any_implicit(),
-                            required: true,
                         },
-                        FunctionParameter::Pos {
-                            name: "y".into(),
+                        FunctionParameter::Kwargs {
+                            name: None,
                             annotation: PysaType::any_implicit(),
-                            required: true,
                         },
                     ],
                     PysaType::none(),
@@ -1354,6 +1419,146 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
             .with_is_def_statement(false)
             .with_defining_class(get_class_ref("test", "MyTuple", context))
             .with_overridden_base_method(get_method_ref("builtins", "tuple", "__new__", context)),
+        ]
+    },
+);
+
+exported_functions_testcase!(
+    test_export_abstract_property,
+    r#"
+from abc import abstractmethod
+
+class A:
+    @property
+    @abstractmethod
+    def my_property(self):
+        pass
+
+    @my_property.setter
+    @abstractmethod
+    def my_property(self, value):
+        pass
+
+class B(A):
+    @property
+    def my_property(self):
+        pass
+
+    @my_property.setter
+    def my_property(self, value):
+        pass
+"#,
+    &|context: &ModuleContext| {
+        let abstractmethod_ref = get_function_ref("abc", "abstractmethod", context);
+        vec![
+            create_function_definition(
+                "my_property",
+                ScopeParent::Class {
+                    location: create_location(4, 7, 4, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "A", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_property_getter(true)
+            .with_is_stub(true)
+            .with_defining_class(get_class_ref("test", "A", context))
+            .with_decorator_callees(HashMap::from([(
+                create_location(6, 6, 6, 20),
+                vec![Target::Function(abstractmethod_ref.clone())],
+            )])),
+            create_function_definition(
+                "my_property",
+                ScopeParent::Class {
+                    location: create_location(4, 7, 4, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::Pos {
+                            name: "self".into(),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "A", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "value".into(),
+                            annotation: PysaType::any_implicit(),
+                            required: true,
+                        },
+                    ],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_property_setter(true)
+            .with_is_stub(true)
+            .with_defining_class(get_class_ref("test", "A", context))
+            .with_decorator_callees(HashMap::from([(
+                create_location(11, 6, 11, 20),
+                vec![Target::Function(abstractmethod_ref.clone())],
+            )])),
+            create_function_definition(
+                "my_property",
+                ScopeParent::Class {
+                    location: create_location(15, 7, 15, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![FunctionParameter::Pos {
+                        name: "self".into(),
+                        annotation: PysaType::from_class(&get_class("test", "B", context), context),
+                        required: true,
+                    }],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_property_getter(true)
+            .with_defining_class(get_class_ref("test", "B", context))
+            .with_overridden_base_method(
+                // TODO(T225700656): This should refer to the property getter, not the setter.
+                get_property_setter_ref("test", "A", "my_property", context),
+            ),
+            create_function_definition(
+                "my_property",
+                ScopeParent::Class {
+                    location: create_location(15, 7, 15, 8),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::Pos {
+                            name: "self".into(),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "B", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::Pos {
+                            name: "value".into(),
+                            annotation: PysaType::any_implicit(),
+                            required: true,
+                        },
+                    ],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_property_setter(true)
+            .with_defining_class(get_class_ref("test", "B", context))
+            .with_overridden_base_method(get_property_setter_ref(
+                "test",
+                "A",
+                "my_property",
+                context,
+            )),
         ]
     },
 );

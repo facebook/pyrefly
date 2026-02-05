@@ -199,7 +199,7 @@ impl<'a> BindingsBuilder<'a> {
                     SizeExpectation::Eq(num_patterns)
                 };
                 self.insert_binding(
-                    KeyExpect(x.range),
+                    KeyExpect::UnpackedLength(x.range),
                     BindingExpect::UnpackedLength(subject_idx, x.range, expect),
                 );
                 narrow_ops
@@ -458,7 +458,7 @@ impl<'a> BindingsBuilder<'a> {
                 exhaustiveness_info
             {
                 self.insert_binding(
-                    KeyExpect(x.range),
+                    KeyExpect::MatchExhaustiveness(x.range),
                     BindingExpect::MatchExhaustiveness {
                         subject_idx,
                         narrowing_subject: narrowing_subject.clone(),

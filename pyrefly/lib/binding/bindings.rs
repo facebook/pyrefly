@@ -21,6 +21,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::types::Type;
 use pyrefly_util::display::DisplayWithCtx;
@@ -134,6 +135,9 @@ pub enum InitializedInFlow {
     Yes,
     Conditionally,
     No,
+    /// Initialization depends on whether these termination keys have Never type.
+    /// If ALL termination keys are Never, the variable is initialized; otherwise it may be uninitialized.
+    DeferredCheck(Vec<Idx<Key>>),
 }
 
 impl InitializedInFlow {
@@ -142,6 +146,14 @@ impl InitializedInFlow {
             InitializedInFlow::Yes => None,
             InitializedInFlow::Conditionally => Some(format!("`{name}` may be uninitialized")),
             InitializedInFlow::No => Some(format!("`{name}` is uninitialized")),
+            InitializedInFlow::DeferredCheck(_) => None, // Checked at solve time
+        }
+    }
+
+    pub fn deferred_termination_keys(&self) -> Option<&[Idx<Key>]> {
+        match self {
+            InitializedInFlow::DeferredCheck(keys) => Some(keys),
+            _ => None,
         }
     }
 }
@@ -208,6 +220,7 @@ pub struct BindingsBuilder<'a> {
     pub lookup: &'a dyn LookupExport,
     pub sys_info: &'a SysInfo,
     pub class_count: u32,
+    type_alias_count: u32,
     await_context: AwaitContext,
     errors: &'a ErrorCollector,
     solver: &'a Solver,
@@ -246,6 +259,31 @@ impl Bindings {
         let mut res = 0;
         table_for_each!(&self.0.table, |x: &BindingEntry<_>| res += x.1.len());
         res
+    }
+
+    /// Create a minimal Bindings for testing purposes.
+    ///
+    /// This creates a fake module with the given name and no actual bindings,
+    /// which is useful for creating distinguishable CalcIds in tests.
+    #[cfg(test)]
+    pub fn for_test(name: &str) -> Self {
+        use std::path::PathBuf;
+
+        use pyrefly_python::module::Module;
+        use pyrefly_python::module_path::ModulePath;
+
+        let module_name = ModuleName::from_str(name);
+        let module_path = ModulePath::filesystem(PathBuf::from(format!("/test/{}.py", name)));
+        let contents = Arc::new(String::new());
+        let module_info = Module::new(module_name, module_path, contents);
+        Self(Arc::new(BindingsInner {
+            module_info,
+            table: Default::default(),
+            scope_trace: None,
+            unused_parameters: Vec::new(),
+            unused_imports: Vec::new(),
+            unused_variables: Vec::new(),
+        }))
     }
 
     pub fn display<K: Keyed>(&self, idx: Idx<K>) -> impl Display + '_
@@ -420,6 +458,7 @@ impl Bindings {
             solver,
             uniques,
             class_count: 0,
+            type_alias_count: 0,
             await_context: AwaitContext::General,
             has_docstring: Ast::has_docstring(&x),
             scopes: Scopes::module(x.range, enable_trace),
@@ -826,9 +865,14 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn inject_builtins(&mut self, builtins_module: ModuleName, ignore_if_missing: bool) {
-        match self.lookup.get(builtins_module) {
-            FindingOrError::Finding(builtins_export) => {
-                for name in builtins_export.finding.wildcard(self.lookup).iter() {
+        match self.lookup.module_exists(builtins_module) {
+            FindingOrError::Error(err @ FindError::NotFound(..)) if !ignore_if_missing => {
+                let (_, msg) = err.display();
+                self.errors.internal_error(TextRange::default(), msg);
+            }
+            FindingOrError::Error(_) => (),
+            FindingOrError::Finding(_) => {
+                for name in self.lookup.get_wildcard(builtins_module).unwrap().iter() {
                     let key = Key::Import(name.clone(), TextRange::default());
                     let idx = self
                         .table
@@ -836,11 +880,6 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_name(name, idx, FlowStyle::Import(builtins_module, name.clone()));
                 }
             }
-            FindingOrError::Error(err @ FindError::NotFound(..)) if !ignore_if_missing => {
-                let (_, msg) = err.display();
-                self.errors.internal_error(TextRange::default(), msg);
-            }
-            FindingOrError::Error(_) => (),
         }
     }
 
@@ -892,6 +931,7 @@ impl<'a> BindingsBuilder<'a> {
             FlowStyle::Other
             | FlowStyle::ClassField { .. }
             | FlowStyle::PossiblyUninitialized
+            | FlowStyle::MaybeInitialized(_)
             | FlowStyle::Uninitialized => {
                 self.special_export_from_binding_idx(idx, visited_names, visited_keys)
             }
@@ -1739,6 +1779,12 @@ impl<'a> BindingsBuilder<'a> {
         let mut checker = std::mem::take(&mut self.semantic_checker);
         f(&mut checker, self);
         self.semantic_checker = checker;
+    }
+
+    pub fn type_alias_index(&mut self) -> TypeAliasIndex {
+        let res = TypeAliasIndex(self.type_alias_count);
+        self.type_alias_count += 1;
+        res
     }
 }
 

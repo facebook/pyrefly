@@ -10,13 +10,6 @@
   ],
   "aliases_newtype.py": [],
   "aliases_recursive.py": [
-    "Line 19: Expected 1 errors",
-    "Line 20: Expected 1 errors",
-    "Line 38: Expected 1 errors",
-    "Line 39: Expected 1 errors",
-    "Line 50: Expected 1 errors",
-    "Line 51: Expected 1 errors",
-    "Line 52: Expected 1 errors",
     "Line 63: Expected 1 errors",
     "Line 69: Expected 1 errors",
     "Line 72: Expected 1 errors",
@@ -25,7 +18,6 @@
   "aliases_type_statement.py": [
     "Line 82: Expected 1 errors",
     "Line 84: Expected 1 errors",
-    "Lines 51, 52: Expected error (tag 'TA14')",
     "Lines 88, 89: Expected error (tag 'RTA6+')"
   ],
   "aliases_typealiastype.py": [
@@ -59,9 +51,7 @@
   "callables_subtyping.py": [],
   "classes_classvar.py": [],
   "classes_override.py": [],
-  "constructors_call_init.py": [
-    "Line 107: Expected 1 errors"
-  ],
+  "constructors_call_init.py": [],
   "constructors_call_metaclass.py": [],
   "constructors_call_new.py": [],
   "constructors_call_type.py": [
@@ -77,14 +67,13 @@
     "Line 184: Expected 1 errors",
     "Line 195: Expected 1 errors",
     "Line 62: Unexpected errors ['Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`']",
-    "Line 164: Unexpected errors ['assert_type(Class7[Any], Class7[int]) failed']",
-    "Line 165: Unexpected errors ['assert_type(Class7[Any], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
+    "Line 165: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
     "Line 183: Unexpected errors ['assert_type(Class8[Any], Class8[str]) failed']"
   ],
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [
-    "Line 32: Unexpected errors ['Data descriptor `y` has incompatible default: `__get__` returns `Desc1 | int` which is not assignable to `__set__` value type `int`. The class-level descriptor value cannot be used as a default.']",
-    "Line 58: Unexpected errors ['Non-data descriptor `z` in dataclass is unsound. The dataclass __init__ writes to the instance dict, shadowing the descriptor. Add a __set__ method to make it a data descriptor.']",
+    "Line 32: Unexpected errors ['Cannot set field `y` to data descriptor `Desc1` with inconsistent types\\n  Return type `Desc1 | int` of `Desc1.__get__` is not assignable to value type `int` of `Desc1.__set__`']",
+    "Line 58: Unexpected errors ['Cannot set field `z` to non-data descriptor `Desc2`\\n  Hint: add a `__set__` method to make `Desc2` a data descriptor']",
     "Line 61: Unexpected errors ['assert_type(Desc2[int], list[int]) failed']",
     "Line 62: Unexpected errors ['assert_type(Desc2[str], list[str]) failed']",
     "Line 66: Unexpected errors ['assert_type(Desc2[int], int) failed']",

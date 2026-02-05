@@ -21,7 +21,9 @@ use ruff_python_ast::name::Name;
 
 use crate::class::ClassType;
 use crate::stdlib::Stdlib;
+use crate::type_var::PreInferenceVariance;
 use crate::type_var::Restriction;
+use crate::type_var::TypeVar;
 use crate::types::Type;
 
 #[derive(Debug, Clone, Eq)]
@@ -33,13 +35,22 @@ pub struct Quantified {
     pub kind: QuantifiedKind,
     pub default: Option<Type>,
     pub restriction: Restriction,
+    /// The *declared* variance of this type parameter, as specified by the user
+    /// For function type parameters, variance has no meaning
+    /// We store it here for convenience of our variance inference and checking
+    /// infrastructure so it can directly read it from the type
+    variance: PreInferenceVariance,
 }
 
 impl Quantified {
     pub fn with_restriction(self, restriction: Restriction) -> Self {
         Self {
             restriction,
-            ..self
+            unique: self.unique,
+            name: self.name,
+            kind: self.kind,
+            default: self.default,
+            variance: self.variance,
         }
     }
 }
@@ -74,6 +85,7 @@ impl Ord for Quantified {
             .then_with(|| self.kind.cmp(&other.kind))
             .then_with(|| self.default.cmp(&other.default))
             .then_with(|| self.restriction.cmp(&other.restriction))
+            .then_with(|| self.variance.cmp(&other.variance))
             .then_with(|| self.unique.cmp(&other.unique))
     }
 }
@@ -123,6 +135,7 @@ impl Quantified {
         kind: QuantifiedKind,
         default: Option<Type>,
         restriction: Restriction,
+        variance: PreInferenceVariance,
     ) -> Self {
         Quantified {
             unique,
@@ -130,6 +143,7 @@ impl Quantified {
             kind,
             default,
             restriction,
+            variance,
         }
     }
 
@@ -138,6 +152,7 @@ impl Quantified {
         uniques: &UniqueFactory,
         default: Option<Type>,
         restriction: Restriction,
+        variance: PreInferenceVariance,
     ) -> Self {
         Self::new(
             uniques.fresh(),
@@ -145,6 +160,18 @@ impl Quantified {
             QuantifiedKind::TypeVar,
             default,
             restriction,
+            variance,
+        )
+    }
+
+    /// Creates a Quantified from a TypeVar, extracting all relevant fields.
+    pub fn from_type_var(tv: &TypeVar, uniques: &UniqueFactory) -> Self {
+        Self::type_var(
+            tv.qname().id().clone(),
+            uniques,
+            tv.default().cloned(),
+            tv.restriction().clone(),
+            tv.variance(),
         )
     }
 
@@ -155,6 +182,7 @@ impl Quantified {
             QuantifiedKind::ParamSpec,
             default,
             Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
         )
     }
 
@@ -165,6 +193,7 @@ impl Quantified {
             QuantifiedKind::TypeVarTuple,
             default,
             Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
         )
     }
 
@@ -194,6 +223,10 @@ impl Quantified {
 
     pub fn restriction(&self) -> &Restriction {
         &self.restriction
+    }
+
+    pub fn variance(&self) -> PreInferenceVariance {
+        self.variance
     }
 
     pub fn is_type_var(&self) -> bool {

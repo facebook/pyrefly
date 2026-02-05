@@ -658,6 +658,25 @@
           "spans": [
             {
               "length": 3,
+              "start": 59
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "exports_all.U"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "exports_all.py"
+          },
+          "spans": [
+            {
+              "length": 3,
               "start": 77
             }
           ],
@@ -707,6 +726,16 @@
               "target": {
                 "id": 0,
                 "key": "exports_all.x"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 59
+              },
+              "target": {
+                "id": 0,
+                "key": "exports_all.U"
               }
             },
             {

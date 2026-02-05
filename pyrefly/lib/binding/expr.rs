@@ -334,15 +334,28 @@ impl<'a> BindingsBuilder<'a> {
             } => {
                 // Uninitialized local errors are only reported when we are neither in a stub
                 // nor a static type context.
-                if !used_in_static_type
-                    && !self.module_info.path().is_interface()
-                    && let Some(error_message) = is_initialized.as_error_message(&name.id)
-                {
-                    self.error(
-                        name.range,
-                        ErrorInfo::Kind(ErrorKind::UnboundName),
-                        error_message,
-                    );
+                if !used_in_static_type && !self.module_info.path().is_interface() {
+                    if let Some(termination_keys) = is_initialized
+                        .deferred_termination_keys()
+                        .map(|s| s.to_vec())
+                    {
+                        // Defer the uninitialized check to solve time.
+                        // At solve time, we'll check if all termination keys have Never type.
+                        self.insert_binding(
+                            KeyExpect::UninitializedCheck(name.range),
+                            BindingExpect::UninitializedCheck {
+                                name: name.id.clone(),
+                                range: name.range,
+                                termination_keys,
+                            },
+                        );
+                    } else if let Some(error_message) = is_initialized.as_error_message(&name.id) {
+                        self.error(
+                            name.range,
+                            ErrorInfo::Kind(ErrorKind::UnboundName),
+                            error_message,
+                        );
+                    }
                 }
 
                 // For static type context, create binding immediately since it
@@ -524,6 +537,10 @@ impl<'a> BindingsBuilder<'a> {
     /// Execute through the expr, ensuring every name has a binding.
     pub fn ensure_expr(&mut self, x: &mut Expr, usage: &mut Usage) {
         self.with_semantic_checker(|semantic, context| semantic.visit_expr(x, context));
+
+        // Track uses of `typing.Self` in class bodies so they can be properly bound
+        // to the current class during the solving phase.
+        self.track_potential_typing_self(x);
 
         match x {
             Expr::Attribute(attr) => {
@@ -821,7 +838,7 @@ impl<'a> BindingsBuilder<'a> {
             class_idx: self.scopes.current_method_context(),
         };
         self.insert_binding(
-            KeyExpect(attr.attr.range()),
+            KeyExpect::PrivateAttributeAccess(attr.attr.range()),
             BindingExpect::PrivateAttributeAccess(expect),
         );
     }

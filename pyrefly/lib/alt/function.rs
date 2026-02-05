@@ -29,7 +29,6 @@ use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
-use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -47,6 +46,7 @@ use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::SpecialDecorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::binding::binding::Binding;
+use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::Key;
@@ -369,7 +369,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn undecorated_function(
         &self,
-        def: &StmtFunctionDef,
+        def: &FunctionDefData,
         stub_or_impl: FunctionStubOrImpl,
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[Idx<KeyDecorator>],
@@ -487,7 +487,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn decorated_function_type(
         &self,
         def: &UndecoratedFunction,
-        stmt: &StmtFunctionDef,
+        stmt: &FunctionDefData,
         errors: &ErrorCollector,
     ) -> Arc<Type> {
         let mut ret = self
@@ -803,7 +803,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn get_params_and_paramspec(
         &self,
-        def: &StmtFunctionDef,
+        def: &FunctionDefData,
         stub_or_impl: FunctionStubOrImpl,
         self_type: &mut Option<Type>,
         decorator_param_hints: &mut Option<DecoratorParamHints>,
@@ -1291,7 +1291,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn validate_type_is_type_narrowing(
         &self,
         params: &[Param],
-        def: &StmtFunctionDef,
+        def: &FunctionDefData,
         defining_cls: &Option<Class>,
         is_staticmethod: bool,
         ty_narrow: &Type,

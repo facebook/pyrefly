@@ -401,6 +401,11 @@ impl Ignore {
     pub fn get(&self, line: &LineNumber) -> Option<&Vec<Suppression>> {
         self.ignores.get(line)
     }
+
+    /// Returns true if there are no suppressions.
+    pub fn is_empty(&self) -> bool {
+        self.ignores.is_empty() && self.ignore_all.is_empty()
+    }
 }
 
 #[cfg(test)]

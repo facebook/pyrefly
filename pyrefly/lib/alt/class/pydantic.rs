@@ -375,24 +375,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     "allow" | "ignore" => true,
                     "forbid" => false,
                     _ => {
-                        self.error(
-                    errors,
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidLiteral),
-                    "Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'"
-                        .to_owned(),
-                );
+                        self.invalid_extra_value_error(errors, range);
                         true
                     }
                 },
                 _ => {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::InvalidLiteral),
-                        "Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'"
-                            .to_owned(),
-                    );
+                    self.invalid_extra_value_error(errors, range);
                     true
                 }
             },
@@ -434,6 +422,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             strict: Some(strict),
             pydantic_model_kind,
         })
+    }
+
+    fn invalid_extra_value_error(&self, errors: &ErrorCollector, range: TextRange) {
+        self.error(
+            errors,
+            range,
+            ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+            "Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'".to_owned(),
+        );
     }
 
     fn get_bool_config_value(
@@ -480,15 +477,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let Some(val) = bound_val else { continue };
             if !self.is_subset_eq(val, field_ty) {
                 self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::BadArgumentType),
-                        format!(
-                            "Pydantic `{label}` value is of type `{}` but the field is annotated with `{}`",
-                            self.for_display(val.clone()),
-                            self.for_display(field_ty.clone())
-                        ),
-                    );
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    format!(
+                        "Pydantic `{label}` value has type `{}`, which is not assignable to field type `{}`",
+                        self.for_display(val.clone()),
+                        self.for_display(field_ty.clone())
+                    ),
+                );
             }
         }
         self.check_pydantic_range_default(field_name, keywords, range, errors);

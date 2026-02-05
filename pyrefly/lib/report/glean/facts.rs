@@ -32,3 +32,49 @@ pub enum GleanEntry {
 pub fn json(x: impl Serialize) -> Value {
     serde_json::to_value(x).unwrap()
 }
+
+pub trait GleanPredicate {
+    #[allow(non_snake_case)]
+    fn GLEAN_name() -> String;
+}
+
+pub trait CreateGleanEntry {
+    fn glean_entry(&self) -> GleanEntry;
+}
+
+impl<E> CreateGleanEntry for E
+where
+    E: GleanPredicate + Serialize,
+{
+    fn glean_entry(&self) -> GleanEntry {
+        GleanEntry::Predicate {
+            predicate: E::GLEAN_name(),
+            facts: vec![json(self)],
+        }
+    }
+}
+
+impl<E> CreateGleanEntry for Vec<E>
+where
+    E: GleanPredicate + Serialize,
+{
+    fn glean_entry(&self) -> GleanEntry {
+        GleanEntry::Predicate {
+            predicate: E::GLEAN_name(),
+            facts: self.iter().map(json).collect(),
+        }
+    }
+}
+
+impl<E> CreateGleanEntry for Option<E>
+where
+    E: GleanPredicate + Serialize + Clone,
+{
+    fn glean_entry(&self) -> GleanEntry {
+        let facts = self.clone().map_or(vec![], |x| vec![json(x)]);
+        GleanEntry::Predicate {
+            predicate: E::GLEAN_name(),
+            facts,
+        }
+    }
+}

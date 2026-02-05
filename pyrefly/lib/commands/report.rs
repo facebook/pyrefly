@@ -28,6 +28,7 @@ use crate::alt::answers::Answers;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingClass;
+use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMro;
@@ -249,12 +250,8 @@ impl ReportArgs {
                             ReturnTypeKind::ShouldValidateAnnotation { range, .. } => {
                                 Some(module.code_at(*range).to_owned())
                             }
-                            ReturnTypeKind::ShouldTrustAnnotation { .. } => {
-                                // For trusted annotations, get from AST
-                                fun.def
-                                    .returns
-                                    .as_ref()
-                                    .map(|ann| module.code_at(ann.range()).to_owned())
+                            ReturnTypeKind::ShouldTrustAnnotation { range, .. } => {
+                                Some(module.code_at(*range).to_owned())
                             }
                             _ => None,
                         }
@@ -292,10 +289,7 @@ impl ReportArgs {
     }
 
     /// Check if a function is completely annotated (has return annotation and all params annotated except self/cls)
-    fn is_function_completely_annotated(
-        bindings: &Bindings,
-        func_def: &ruff_python_ast::StmtFunctionDef,
-    ) -> bool {
+    fn is_function_completely_annotated(bindings: &Bindings, func_def: &FunctionDefData) -> bool {
         // Check return annotation
         let return_key = Key::ReturnType(ShortIdentifier::new(&func_def.name));
         let return_idx = bindings.key_to_idx(&return_key);
@@ -454,7 +448,7 @@ impl ReportArgs {
         let holder = Forgetter::new(state, false);
         let handles = Handles::new(expanded_file_list);
         let mut forgetter = Forgetter::new(
-            holder.as_ref().new_transaction(Require::Everything, None),
+            holder.as_ref().new_transaction(Require::Exports, None),
             true,
         );
 
@@ -469,10 +463,8 @@ impl ReportArgs {
         }
 
         let mut report: HashMap<String, FileReport> = HashMap::new();
-
+        transaction.run(handles.as_slice(), Require::Everything);
         for handle in handles {
-            transaction.run(&[handle.dupe()], Require::Everything);
-
             if let Some(bindings) = transaction.get_bindings(&handle)
                 && let Some(module) = transaction.get_module_info(&handle)
                 && let Some(answers) = transaction.get_answers(&handle)

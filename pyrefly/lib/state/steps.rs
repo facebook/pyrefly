@@ -21,6 +21,7 @@ use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::binding::bindings::Bindings;
+use crate::config::base::RecursionLimitConfig;
 use crate::config::base::UntypedDefBehavior;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::Exports;
@@ -43,6 +44,7 @@ pub struct Context<'a, Lookup> {
     pub lookup: &'a Lookup,
     pub untyped_def_behavior: UntypedDefBehavior,
     pub infer_with_first_use: bool,
+    pub recursion_limit_config: Option<RecursionLimitConfig>,
 }
 
 #[derive(Debug, Default, Dupe, Clone)]
@@ -83,28 +85,20 @@ pub enum Step {
     Solutions,
 }
 
-pub struct ComputeStep<Lookup: LookupExport + LookupAnswer>(
-    /// First you get given the `ModuleSteps`, from which you should grab what you need (cloning it).
-    /// Second you get given the configs, from which you should compute the result.
-    /// Third you get given the `ModuleSteps` to update.
-    pub Box<dyn Fn(&Steps) -> Box<dyn FnOnce(&Context<Lookup>) -> Box<dyn FnOnce(&mut Steps)>>>,
+pub struct ComputeStep(
+    /// A closure that updates the `Steps` with the computed result.
+    pub Box<dyn FnOnce(&mut Steps)>,
 );
 
 macro_rules! compute_step {
-    (<$ty:ty> $output:ident = $($input:ident),* $(,)? $(#$old_input:ident),*) => {
-        ComputeStep(Box::new(|steps: &Steps| {
-            let _ = steps; // Not used if $input is empty.
-            $(let $input = steps.$input.dupe().unwrap();)*
-            $(let $old_input = steps.$old_input.dupe();)*
-            Box::new(move |ctx: &Context<$ty>| {
-                let res = paste! { Step::[<step_ $output>] }(ctx, $($input,)* $($old_input,)* );
-                Box::new(move |steps: &mut Steps| {
-                    steps.$output = Some(res);
-                    steps.last_step = Some(paste! { Step::[<$output:camel>] });
-                })
-            })
+    ($steps:ident, $ctx:ident, $output:ident = $($input:ident),* $(,)?) => {{
+        $(let $input = $steps.$input.dupe().unwrap();)*
+        let res = paste! { Step::[<step_ $output>] }($ctx, $($input,)*);
+        ComputeStep(Box::new(move |steps: &mut Steps| {
+            steps.$output = Some(res);
+            steps.last_step = Some(paste! { Step::[<$output:camel>] });
         }))
-    };
+    }};
 }
 
 // The steps within this module are all marked `inline(never)` and given
@@ -118,13 +112,17 @@ impl Step {
         Sequence::last().unwrap()
     }
 
-    pub fn compute<Lookup: LookupExport + LookupAnswer>(self) -> ComputeStep<Lookup> {
+    pub fn compute<Lookup: LookupExport + LookupAnswer>(
+        self,
+        steps: &Steps,
+        ctx: &Context<Lookup>,
+    ) -> ComputeStep {
         match self {
-            Step::Load => compute_step!(<Lookup> load =),
-            Step::Ast => compute_step!(<Lookup> ast = load),
-            Step::Exports => compute_step!(<Lookup> exports = load, ast),
-            Step::Answers => compute_step!(<Lookup> answers = load, ast, exports),
-            Step::Solutions => compute_step!(<Lookup> solutions = load, answers),
+            Step::Load => compute_step!(steps, ctx, load =),
+            Step::Ast => compute_step!(steps, ctx, ast = load),
+            Step::Exports => compute_step!(steps, ctx, exports = load, ast),
+            Step::Answers => compute_step!(steps, ctx, answers = load, ast, exports),
+            Step::Solutions => compute_step!(steps, ctx, solutions = load, answers),
         }
     }
 
@@ -206,6 +204,7 @@ impl Step {
             ctx.require.compute_errors()
                 || ctx.require.keep_answers_trace()
                 || ctx.require.keep_answers(),
+            ctx.recursion_limit_config,
         );
         Arc::new(solutions)
     }

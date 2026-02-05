@@ -33,6 +33,7 @@ use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
+use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
@@ -213,10 +214,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn instantiate_type_var_tuple(&self) -> (TParams, Type) {
-        let quantified = Quantified::type_var_tuple(Name::new_static("Ts"), self.uniques, None);
+        let quantified = Quantified::new(
+            self.uniques.fresh(),
+            Name::new_static("Ts"),
+            QuantifiedKind::TypeVarTuple,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Covariant,
+        );
         let tparams = TParams::new(vec![TParam {
             quantified: quantified.clone(),
-            variance: PreInferenceVariance::Covariant,
         }]);
         let tuple_ty = Type::Tuple(Tuple::Unpacked(Box::new((
             Vec::new(),
