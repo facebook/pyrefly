@@ -722,6 +722,8 @@ pub enum KeyExpect {
     PrivateAttributeAccess(TextRange),
     /// Deferred uninitialized variable check.
     UninitializedCheck(TextRange),
+    /// Forward reference string literal in union type check.
+    ForwardRefUnion(TextRange),
 }
 
 impl Ranged for KeyExpect {
@@ -735,7 +737,8 @@ impl Ranged for KeyExpect {
             | KeyExpect::Bool(range)
             | KeyExpect::MatchExhaustiveness(range)
             | KeyExpect::PrivateAttributeAccess(range)
-            | KeyExpect::UninitializedCheck(range) => *range,
+            | KeyExpect::UninitializedCheck(range)
+            | KeyExpect::ForwardRefUnion(range) => *range,
         }
     }
 }
@@ -752,6 +755,7 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::MatchExhaustiveness(r) => ("MatchExhaustiveness", r),
             KeyExpect::PrivateAttributeAccess(r) => ("PrivateAttributeAccess", r),
             KeyExpect::UninitializedCheck(r) => ("UninitializedCheck", r),
+            KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
         };
         write!(f, "KeyExpect::{}({})", name, ctx.display(range))
     }
@@ -839,6 +843,21 @@ pub enum BindingExpect {
         /// If any don't, the variable may be uninitialized.
         termination_keys: Vec<Idx<Key>>,
     },
+    /// Check for forward reference string literal in union type.
+    /// At runtime, `type.__or__` cannot handle string literals, so expressions
+    /// like `int | "str"` will raise a TypeError.
+    ForwardRefUnion {
+        /// The left expression of the union.
+        left: Box<Expr>,
+        /// The right expression of the union.
+        right: Box<Expr>,
+        /// Whether the left side is a forward reference string literal.
+        left_is_forward_ref: bool,
+        /// Whether the right side is a forward reference string literal.
+        right_is_forward_ref: bool,
+        /// The range for error reporting (covers the whole union expression).
+        range: TextRange,
+    },
 }
 
 impl DisplayWith<Bindings> for BindingExpect {
@@ -923,6 +942,23 @@ impl DisplayWith<Bindings> for BindingExpect {
                     name,
                     ctx.module().display(range),
                     termination_keys
+                )
+            }
+            Self::ForwardRefUnion {
+                left,
+                right,
+                left_is_forward_ref,
+                right_is_forward_ref,
+                range,
+            } => {
+                write!(
+                    f,
+                    "ForwardRefUnion({}, {}, {}, {}, {})",
+                    m.display(left),
+                    m.display(right),
+                    left_is_forward_ref,
+                    right_is_forward_ref,
+                    m.display(range)
                 )
             }
         }

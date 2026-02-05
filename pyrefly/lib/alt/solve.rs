@@ -1892,6 +1892,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
             }
+            BindingExpect::ForwardRefUnion {
+                left,
+                right,
+                left_is_forward_ref,
+                right_is_forward_ref,
+                range,
+            } => {
+                // Check if one side is a forward reference string literal and the other
+                // side is a plain type. At runtime, `type.__or__` cannot handle string
+                // literals, so expressions like `int | "str"` will raise a TypeError.
+                // Parameterized generics (like `C[int]`), TypeVars, and other special
+                // forms handle `|` with strings correctly, so we only error for
+                // non-parameterized ClassType.
+                let lhs = self.expr_infer(left, errors);
+                let rhs = self.expr_infer(right, errors);
+                if let Some(l) = self.untype_opt(lhs.clone(), left.range(), errors)
+                    && let Some(r) = self.untype_opt(rhs.clone(), right.range(), errors)
+                {
+                    let is_plain_type =
+                        |t: &Type| matches!(t, Type::ClassType(cls) if cls.targs().is_empty());
+                    if (*left_is_forward_ref && is_plain_type(&r))
+                        || (*right_is_forward_ref && is_plain_type(&l))
+                    {
+                        self.error(
+                            errors,
+                            *range,
+                            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                            "Cannot use `|` operator with forward reference string literal and type"
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
         }
         Arc::new(EmptyAnswer)
     }

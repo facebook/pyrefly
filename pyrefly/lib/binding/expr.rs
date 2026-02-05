@@ -16,6 +16,7 @@ use ruff_python_ast::Comprehension;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprBoolOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprLambda;
@@ -24,9 +25,8 @@ use ruff_python_ast::ExprNoneLiteral;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
-use ruff_python_ast::HasNodeIndex;
 use ruff_python_ast::Identifier;
-use ruff_python_ast::NodeIndex;
+use ruff_python_ast::Operator;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -904,12 +904,6 @@ impl<'a> BindingsBuilder<'a> {
                 match Ast::parse_type_literal(literal) {
                     Ok(expr) => {
                         *x = expr;
-                        // This is used to distinguish names coming from parsed
-                        // literals from other names.
-                        if x.is_name_expr() {
-                            // Mark as coming from a parsed literal using a non-NONE value
-                            x.node_index().set(NodeIndex::from(0));
-                        }
                         self.ensure_type_impl(x, tparams_builder, true);
                     }
                     Err(_) => {
@@ -954,6 +948,46 @@ impl<'a> BindingsBuilder<'a> {
                     static_type_usage,
                     tparams_builder,
                 );
+            }
+            Expr::BinOp(ExprBinOp {
+                left,
+                op: Operator::BitOr,
+                right,
+                range,
+                ..
+            }) => {
+                // Check if either side is a string literal BEFORE recursing,
+                // since ensure_type_impl will parse and replace them.
+                let left_was_string_literal = matches!(&**left, Expr::StringLiteral(_));
+                let right_was_string_literal = matches!(&**right, Expr::StringLiteral(_));
+
+                // Recurse into children to handle string literal parsing
+                self.ensure_type_impl(left, tparams_builder, in_string_literal);
+                self.ensure_type_impl(right, tparams_builder, in_string_literal);
+
+                // A forward reference is a string literal that parsed to a simple name
+                // (like "str"), not a complex type (like "list[str]" which parses to a subscript)
+                let left_is_forward_ref = left_was_string_literal && left.is_name_expr();
+                let right_is_forward_ref = right_was_string_literal && right.is_name_expr();
+
+                // Only create the check if at least one side is a forward ref,
+                // and we're not in Python 3.14+ or with future annotations
+                // (which make annotations lazy and avoid the runtime error)
+                if (left_is_forward_ref || right_is_forward_ref)
+                    && !self.sys_info.version().at_least(3, 14)
+                    && !self.scopes.has_future_annotations()
+                {
+                    self.insert_binding(
+                        KeyExpect::ForwardRefUnion(*range),
+                        BindingExpect::ForwardRefUnion {
+                            left: Box::new((**left).clone()),
+                            right: Box::new((**right).clone()),
+                            left_is_forward_ref,
+                            right_is_forward_ref,
+                            range: *range,
+                        },
+                    );
+                }
             }
             _ => {
                 x.recurse_mut(&mut |x| self.ensure_type_impl(x, tparams_builder, in_string_literal))
