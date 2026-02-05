@@ -4249,16 +4249,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .callable_return_type()
                     .unwrap_or(Type::any_implicit())
             }
-            Binding::ClassDef(x, _decorators) => match &self.get_idx(*x).0 {
+            Binding::ClassDef(x, decorators) => match &self.get_idx(*x).0 {
                 None => Type::any_implicit(),
                 Some(cls) => {
-                    // TODO: analyze the class decorators. At the moment, we don't actually support any type-level
-                    // analysis of class decorators (the decorators we do support like dataclass-related ones are
-                    // handled via custom bindings).
-                    //
-                    // Note that all decorators have their own binding so they are still type checked for errors
-                    // *inside* the decorator, we just don't analyze the application.
-                    Type::ClassDef(cls.dupe())
+                    let mut ty = Type::ClassDef(cls.dupe());
+                    for decorator_key in decorators.iter().rev() {
+                        let decorator = self.get_idx(*decorator_key);
+                        let range = self.bindings().idx_to_key(*decorator_key).range();
+                        ty = self.apply_class_decorator(decorator.ty.clone(), ty, range, errors);
+                    }
+                    ty
                 }
             },
             Binding::AnnotatedType(ann, val) => match self.get_idx(*ann).ty(self.stdlib) {

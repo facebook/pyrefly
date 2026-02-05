@@ -1247,6 +1247,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         inferred_ty
     }
 
+    pub(crate) fn apply_class_decorator(
+        &self,
+        decorator: Type,
+        decoratee: Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if self.stdlib.is_bootstrapping() {
+            return decoratee;
+        }
+        let preserves_class = match &decorator {
+            Type::KwCall(call) => {
+                call.func_metadata
+                    .flags
+                    .dataclass_transform_metadata
+                    .is_some()
+                    || call.has_function_kind(FunctionKind::Dataclass)
+                    || call.has_function_kind(FunctionKind::DataclassTransform)
+                    || call.has_function_kind(FunctionKind::DisjointBase)
+                    || call.has_function_kind(FunctionKind::Final)
+                    || call.has_function_kind(FunctionKind::RuntimeCheckable)
+                    || call.has_function_kind(FunctionKind::TotalOrdering)
+            }
+            _ => decorator.visit_toplevel_func_metadata(&|meta| {
+                meta.flags.dataclass_transform_metadata.is_some()
+                    || matches!(
+                        meta.kind,
+                        FunctionKind::Dataclass
+                            | FunctionKind::DataclassTransform
+                            | FunctionKind::DisjointBase
+                            | FunctionKind::Final
+                            | FunctionKind::RuntimeCheckable
+                            | FunctionKind::TotalOrdering
+                    )
+            }),
+        };
+        if preserves_class {
+            return decoratee;
+        }
+        let call_target =
+            self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
+        let arg = CallArg::ty(&decoratee, range);
+        self.call_infer(call_target, &[arg], &[], range, errors, None, None, None)
+    }
+
     /// For a type guard function, validate whether it has at least one
     /// positional argument.
     fn validate_type_guard_positional_argument_count(
