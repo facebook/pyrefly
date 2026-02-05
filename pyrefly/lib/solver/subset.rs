@@ -97,6 +97,32 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         l_args: &[Param],
         u_args: &[Param],
     ) -> Result<(), SubsetError> {
+        // If either side has both `*args: Any` and `**kwargs: Any`, we treat the whole
+        // signature as `...` for purposes of assignability, even if other params are present
+        fn has_any_args_and_kwargs(args: &[Param]) -> bool {
+            let has_vararg_any = args
+                .iter()
+                .any(|p| matches!(p, Param::VarArg(_, Type::Any(_))));
+            let has_kwargs_any = args
+                .iter()
+                .any(|p| matches!(p, Param::Kwargs(_, Type::Any(_))));
+            has_vararg_any && has_kwargs_any
+        }
+        // Don't short-circuit because we may want to pin/solve variables
+        let result = self.is_subset_param_list_impl(l_args, u_args);
+        if has_any_args_and_kwargs(l_args) || has_any_args_and_kwargs(u_args) {
+            Ok(())
+        } else {
+            result
+        }
+    }
+
+    /// Can a function with l_args be called as a function with u_args?
+    fn is_subset_param_list_impl(
+        &mut self,
+        l_args: &[Param],
+        u_args: &[Param],
+    ) -> Result<(), SubsetError> {
         let mut l_args = l_args.iter();
         let mut u_args = u_args.iter();
         let mut l_arg = l_args.next();
