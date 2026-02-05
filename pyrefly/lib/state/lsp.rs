@@ -1922,7 +1922,8 @@ impl<'a> Transaction<'a> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
         let errors = self.get_errors(vec![handle]).collect_errors().shown;
-        let mut code_actions = Vec::new();
+        let mut import_actions = Vec::new();
+        let mut other_actions = Vec::new();
         for error in errors {
             match error.error_kind() {
                 ErrorKind::UnknownName => {
@@ -1954,7 +1955,7 @@ impl<'a> Transaction<'a> {
                                 .last()
                                 .is_some_and(|component| component.as_str().starts_with('_'));
 
-                            code_actions.push((
+                            import_actions.push((
                                 title,
                                 module_info.dupe(),
                                 range,
@@ -1979,7 +1980,7 @@ impl<'a> Transaction<'a> {
                                     .components()
                                     .last()
                                     .is_some_and(|component| component.as_str().starts_with('_'));
-                                code_actions.push((
+                                import_actions.push((
                                     title,
                                     module_info.dupe(),
                                     range,
@@ -1991,12 +1992,25 @@ impl<'a> Transaction<'a> {
                         }
                     }
                 }
+                ErrorKind::RedundantCast => {
+                    let error_range = error.range();
+                    if let Some(action) = quick_fixes::redundant_cast::redundant_cast_code_action(
+                        &module_info,
+                        &ast,
+                        error_range,
+                    ) {
+                        let call_range = action.2;
+                        if error_range.contains_range(range) || call_range.contains_range(range) {
+                            other_actions.push(action);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
 
         // Sort code actions: non-private first, then non-deprecated, then alphabetically
-        code_actions.sort_by(
+        import_actions.sort_by(
             |(title1, _, _, _, is_deprecated1, is_private1),
              (title2, _, _, _, is_deprecated2, is_private2)| {
                 match (is_private1, is_private2) {
@@ -2013,17 +2027,15 @@ impl<'a> Transaction<'a> {
 
         // Keep only the first suggestion for each unique import text (after sorting,
         // this will be the public/non-deprecated version)
-        code_actions.dedup_by(|a, b| a.3 == b.3);
+        import_actions.dedup_by(|a, b| a.3 == b.3);
 
         // Drop the deprecated flag and return
-        Some(
-            code_actions
-                .into_iter()
-                .map(|(title, module, range, insert_text, _, _)| {
-                    (title, module, range, insert_text)
-                })
-                .collect(),
-        )
+        let mut actions: Vec<(String, Module, TextRange, String)> = import_actions
+            .into_iter()
+            .map(|(title, module, range, insert_text, _, _)| (title, module, range, insert_text))
+            .collect();
+        actions.extend(other_actions);
+        (!actions.is_empty()).then_some(actions)
     }
 
     pub fn extract_function_code_actions(

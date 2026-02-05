@@ -731,6 +731,39 @@ my_export
 }
 
 #[test]
+fn redundant_cast_quickfix() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "from typing import cast\nx: int = 0\nx = cast(int, x)\n#   ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | x = cast(int, x)
+        ^
+Code Actions Results:
+# Title: Remove redundant cast
+
+## Before:
+from typing import cast
+x: int = 0
+x = cast(int, x)
+#   ^
+## After:
+from typing import cast
+x: int = 0
+x = x
+#   ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
 fn test_import_from_stdlib() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[("a", "TypeVar('T')\n# ^")],
