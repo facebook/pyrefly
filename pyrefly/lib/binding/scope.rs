@@ -1017,6 +1017,8 @@ pub struct Scope {
     forks: Vec<Fork>,
     /// Tracking imports in the current scope (module-level only)
     imports: SmallMap<Name, ImportUsage>,
+    /// Whether `from __future__ import annotations` is present (module-level only)
+    has_future_annotations: bool,
     /// Tracking variables in the current scope (module, function, and method scopes)
     variables: SmallMap<Name, VariableUsage>,
     /// Depth of finally blocks we're in. Resets in new function scopes (PEP 765).
@@ -1036,6 +1038,7 @@ impl Scope {
             loops: Default::default(),
             forks: Default::default(),
             imports: SmallMap::new(),
+            has_future_annotations: false,
             variables: SmallMap::new(),
             finally_depth: 0,
             with_depth: 0,
@@ -1844,6 +1847,23 @@ impl Scopes {
 
     pub fn register_future_import(&mut self, name: &Identifier) {
         self.register_import_internal(name, true);
+    }
+
+    pub fn set_has_future_annotations(&mut self) {
+        // Only set on module scope, similar to register_import_internal
+        if matches!(self.current().kind, ScopeKind::Module) {
+            self.current_mut().has_future_annotations = true;
+        }
+    }
+
+    pub fn has_future_annotations(&self) -> bool {
+        // Look up through scopes to find the module scope's flag
+        for scope in self.iter_rev() {
+            if matches!(scope.kind, ScopeKind::Module) {
+                return scope.has_future_annotations;
+            }
+        }
+        false
     }
 
     /// Register an import that uses the `X as X` pattern (e.g., `import os as os`

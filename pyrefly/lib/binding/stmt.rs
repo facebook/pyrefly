@@ -1375,7 +1375,7 @@ impl<'a> BindingsBuilder<'a> {
                 if m == ModuleName::future() {
                     self.scopes.register_future_import(&asname);
                     if x.name.id.as_str() == "annotations" {
-                        self.has_future_annotations = true;
+                        self.scopes.set_has_future_annotations();
                     }
                 } else if is_reexport {
                     self.scopes.register_reexport_import(&asname);

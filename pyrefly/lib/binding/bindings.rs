@@ -239,8 +239,6 @@ pub struct BindingsBuilder<'a> {
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
     /// BoundName lookups deferred until after AST traversal
     deferred_bound_names: Vec<DeferredBoundName>,
-    /// Whether `from __future__ import annotations` is present
-    pub has_future_annotations: bool,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -485,7 +483,6 @@ impl Bindings {
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_syntax_errors: RefCell::new(Vec::new()),
             deferred_bound_names: Vec::new(),
-            has_future_annotations: false,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -515,6 +512,7 @@ impl Bindings {
 
         let unused_imports = builder.scopes.collect_module_unused_imports();
         builder.record_unused_imports(unused_imports);
+        let has_future_annotations = builder.scopes.has_future_annotations();
         let scope_trace = builder.scopes.finish();
 
         let semantic_errors = builder.semantic_syntax_errors.into_inner();
@@ -548,7 +546,7 @@ impl Bindings {
         Self(Arc::new(BindingsInner {
             module_info,
             python_version: builder.sys_info.version(),
-            has_future_annotations: builder.has_future_annotations,
+            has_future_annotations,
             table: builder.table,
             scope_trace: if enable_trace {
                 Some(scope_trace)
@@ -1819,7 +1817,7 @@ impl<'a> SemanticSyntaxContext for BindingsBuilder<'a> {
     }
 
     fn future_annotations_or_stub(&self) -> bool {
-        self.has_future_annotations
+        self.scopes.has_future_annotations()
             || self.module_info.source_type() == ruff_python_ast::PySourceType::Stub
     }
 
