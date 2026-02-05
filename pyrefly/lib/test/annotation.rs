@@ -25,6 +25,7 @@ assert_type(D.x, int)  # E: assert_type(Any, int) failed
 
 testcase!(
     test_union_operator_with_bare_string_literal,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
 from typing import assert_type, TypeVar, Generic
 T = TypeVar("T")
@@ -39,16 +40,14 @@ ok3 = list["str" | T]
 ok4 = (int) | (str)
 ok5: "str" | C[int] = "foo"
 ok6: C[int] | "str" = "foo"
-"#,
-);
 
-// Test that the error is raised for Python 3.13 (explicit version)
-testcase!(
-    test_union_operator_with_bare_string_literal_py313,
-    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
-    r#"
-bad1: int | "str" = "foo"  # E: Cannot use `|` operator with forward reference string literal and type
-bad2: "str" | int = "foo"  # E: Cannot use `|` operator with forward reference string literal and type
+# More complex types in quotes - current implementation only detects simple names
+# so "list[str]" (which parses to a subscript, not a name) is not detected
+ok7: int | "list[str]" = []
+ok8: "list[str]" | int = []
+
+# Both sides in quotes - no error since both sides need to be resolved
+ok9: "int" | "list[str]" = 1
 "#,
 );
 
@@ -72,5 +71,16 @@ testcase!(
 from __future__ import annotations
 ok1: int | "str" = "foo"
 ok2: "str" | int = "foo"
+"#,
+);
+
+// Test type alias with forward reference string literal
+// TypeAliasType is treated as a plain type, so the error is detected
+testcase!(
+    test_union_operator_with_type_alias,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+type IntAlias = int
+bad1: IntAlias | "str" = "foo"  # E: Cannot use `|` operator with forward reference string literal and type
 "#,
 );
