@@ -6,6 +6,7 @@
  */
 
 use crate::test::util::TestEnv;
+use crate::test::util::init_test;
 use crate::testcase;
 
 testcase!(
@@ -37,6 +38,58 @@ class B(A):
         return x + y
  "#,
 );
+
+testcase!(
+    test_override_signature_diff,
+    r#"
+from abc import ABC
+
+class A(ABC):
+    def foo(self, a: int, b: int, c: int):
+        raise NotImplementedError()
+
+class B(A):
+    def foo(self):  # E: Signature mismatch:
+        x = 1
+        print(x)
+ "#,
+);
+
+#[test]
+fn test_override_signature_diff_snapshot() {
+    init_test();
+    let code = r#"
+from abc import ABC
+
+class A(ABC):
+    def foo(self, a: int, b: int, c: int):
+        raise NotImplementedError()
+
+class B(A):
+    def foo(self):
+        x = 1
+        print(x)
+"#;
+    let (state, handle) = TestEnv::one("main", code).to_state();
+    let errors = state
+        .transaction()
+        .get_errors(&[handle("main")])
+        .collect_errors();
+    let messages: Vec<String> = errors.shown.iter().map(|e| e.msg().to_string()).collect();
+    assert_eq!(messages.len(), 1, "Expected one error, got {messages:?}");
+    let expected = r#"Class member `B.foo` overrides parent class `A` in an inconsistent manner
+  `B.foo` has type `BoundMethod[B, (self: B) -> None]`, which is not assignable to `BoundMethod[B, (self: B, a: int, b: int, c: int) -> Unknown]`, the type of `A.foo`
+  Signature mismatch:
+  expected: def foo(self: B, a: int, b: int, c: int) -> Unknown: ...
+                           ^^^^^^^^^^^^^^^^^^^^^^^^     ^^^^^^^ return type
+                           |
+                           parameters
+  found:    def foo(self: B) -> None: ...
+                          ^     ^^^^ return type
+                          |
+                          parameters"#;
+    assert_eq!(messages[0], expected);
+}
 
 testcase!(
     test_override_basic_field,

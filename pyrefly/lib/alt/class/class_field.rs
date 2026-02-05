@@ -36,6 +36,9 @@ use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::ResultExt;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
+use ruff_annotate_snippets::Level as SnippetLevel;
+use ruff_annotate_snippets::Renderer as SnippetRenderer;
+use ruff_annotate_snippets::Snippet as SnippetBlock;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::helpers::is_dunder;
@@ -77,6 +80,8 @@ use crate::types::callable::Param;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::display::LspDisplayMode;
+use crate::types::display::TypeDisplayContext;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::literal::Lit;
 use crate::types::quantified::Quantified;
@@ -1314,6 +1319,163 @@ fn has_any_abstract(ty: &Type) -> bool {
         Type::Union(union) => union.members.iter().any(|item| item.is_abstract_method()),
         _ => ty.is_abstract_method(),
     }
+}
+
+fn signature_parts(sig: &str) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+    let open = sig.find('(')?;
+    let close = sig[open..].find(')')? + open;
+    if close <= open + 1 {
+        return None;
+    }
+    let params = (open + 1)..close;
+    let arrow = sig[close..].find(" -> ")? + close;
+    let ret_start = arrow + " -> ".len();
+    let ret_end = if let Some(pos) = sig[ret_start..].rfind(": ...") {
+        ret_start + pos
+    } else if let Some(pos) = sig[ret_start..].rfind(':') {
+        ret_start + pos
+    } else {
+        sig.len()
+    };
+    Some((params, ret_start..ret_end))
+}
+
+fn diff_ranges(
+    expected: &str,
+    found: &str,
+) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+    if expected == found {
+        return None;
+    }
+    let expected_bytes = expected.as_bytes();
+    let found_bytes = found.as_bytes();
+    let mut lcp = 0;
+    while lcp < expected_bytes.len()
+        && lcp < found_bytes.len()
+        && expected_bytes[lcp] == found_bytes[lcp]
+    {
+        lcp += 1;
+    }
+    let mut lcs = 0;
+    while expected_bytes.len() > lcp + lcs
+        && found_bytes.len() > lcp + lcs
+        && expected_bytes[expected_bytes.len() - 1 - lcs]
+            == found_bytes[found_bytes.len() - 1 - lcs]
+    {
+        lcs += 1;
+    }
+    let expected_end = expected_bytes.len().saturating_sub(lcs);
+    let found_end = found_bytes.len().saturating_sub(lcs);
+    let expected_span = if expected_end > lcp {
+        lcp..expected_end
+    } else {
+        let pos = lcp.min(expected_bytes.len().saturating_sub(1));
+        pos..(pos + 1)
+    };
+    let found_span = if found_end > lcp {
+        lcp..found_end
+    } else {
+        let pos = lcp.min(found_bytes.len().saturating_sub(1));
+        pos..(pos + 1)
+    };
+    Some((expected_span, found_span))
+}
+
+fn render_signature_diff(
+    expected: &str,
+    found: &str,
+    expected_line: Option<usize>,
+    _found_line: Option<usize>,
+) -> Option<Vec<String>> {
+    let (expected_params, expected_ret) = signature_parts(expected)?;
+    let (found_params, found_ret) = signature_parts(found)?;
+
+    let expected_prefix = "expected: ";
+    let found_prefix = "found:    ";
+    let expected_line_text = format!("{expected_prefix}{expected}");
+    let found_line_text = format!("{found_prefix}{found}");
+
+    let line_start = expected_line.unwrap_or(1);
+    let mut source = expected_line_text.clone();
+    source.push('\n');
+    source.push_str(&found_line_text);
+    let found_offset = expected_line_text.len() + 1;
+
+    let mut annotations = Vec::new();
+    if let Some((exp_span, found_span)) = diff_ranges(
+        &expected[expected_params.clone()],
+        &found[found_params.clone()],
+    ) {
+        annotations.push(
+            SnippetLevel::Error
+                .span(
+                    (expected_prefix.len() + expected_params.start + exp_span.start)
+                        ..(expected_prefix.len() + expected_params.start + exp_span.end),
+                )
+                .label("parameters"),
+        );
+        annotations.push(
+            SnippetLevel::Error
+                .span(
+                    (found_offset + found_prefix.len() + found_params.start + found_span.start)
+                        ..(found_offset + found_prefix.len() + found_params.start + found_span.end),
+                )
+                .label("parameters"),
+        );
+    }
+    if let Some((exp_span, found_span)) =
+        diff_ranges(&expected[expected_ret.clone()], &found[found_ret.clone()])
+    {
+        annotations.push(
+            SnippetLevel::Error
+                .span(
+                    (expected_prefix.len() + expected_ret.start + exp_span.start)
+                        ..(expected_prefix.len() + expected_ret.start + exp_span.end),
+                )
+                .label("return type"),
+        );
+        annotations.push(
+            SnippetLevel::Error
+                .span(
+                    (found_offset + found_prefix.len() + found_ret.start + found_span.start)
+                        ..(found_offset + found_prefix.len() + found_ret.start + found_span.end),
+                )
+                .label("return type"),
+        );
+    }
+
+    if annotations.is_empty() {
+        return None;
+    }
+
+    let mut snippet = SnippetBlock::source(&source).line_start(line_start);
+    for ann in annotations {
+        snippet = snippet.annotation(ann);
+    }
+    let message = SnippetLevel::None.title("").snippet(snippet);
+    let rendered = SnippetRenderer::plain().render(message).to_string();
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("Signature mismatch:".to_owned());
+    for line in rendered.lines() {
+        if let Some(idx) = line.find('|') {
+            let (left, right) = line.split_at(idx);
+            if left.trim().is_empty() || left.trim().chars().all(|c| c.is_ascii_digit()) {
+                let mut trimmed = right.trim_start_matches('|');
+                if trimmed.starts_with(' ') {
+                    trimmed = &trimmed[1..];
+                }
+                if trimmed.is_empty() {
+                    continue;
+                }
+                lines.push(trimmed.to_owned());
+                continue;
+            }
+        }
+        if !line.trim().is_empty() {
+            lines.push(line.to_owned());
+        }
+    }
+    Some(lines)
 }
 
 /// Determine if a class field should be treated as a method (getting method binding behavior). It is if:
@@ -3052,14 +3214,70 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ) => Some((
                     ErrorKind::BadParamNameOverride,
                     format!("Got parameter name `{child}`, expected `{parent}`"),
+                    Vec::new(),
                 )),
-                Err(error) => Some((
-                    ErrorKind::BadOverride,
-                    error.to_error_msg(cls.name(), parent.name(), field_name),
-                )),
+                Err(error) => {
+                    let mut diff_lines = Vec::new();
+                    if let AttrSubsetError::Covariant { got, want, .. }
+                    | AttrSubsetError::Invariant { got, want, .. }
+                    | AttrSubsetError::Contravariant { got, want, .. } = &error
+                    {
+                        let got_sigs = got.callable_signatures();
+                        let want_sigs = want.callable_signatures();
+                        if got_sigs.len() == 1 && want_sigs.len() == 1 {
+                            let mut got_ctx = TypeDisplayContext::new(&[got]);
+                            got_ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
+                            let got_sig = got_ctx.display(got).to_string();
+
+                            let mut want_ctx = TypeDisplayContext::new(&[want]);
+                            want_ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
+                            let want_sig = want_ctx.display(want).to_string();
+
+                            let mut expected_line = None;
+                            let mut found_line = None;
+                            let parent_class = parent.class_object();
+                            if parent_class.module_path() == cls.module_path() {
+                                if let Some(parent_range) =
+                                    parent_class.field_decl_range(field_name)
+                                {
+                                    expected_line = Some(
+                                        parent_class
+                                            .module()
+                                            .display_range(parent_range)
+                                            .start
+                                            .line_within_file()
+                                            .get() as usize,
+                                    );
+                                }
+                                found_line = Some(
+                                    cls.module()
+                                        .display_range(range)
+                                        .start
+                                        .line_within_file()
+                                        .get() as usize,
+                                );
+                            }
+
+                            if let Some(lines) = render_signature_diff(
+                                &want_sig,
+                                &got_sig,
+                                expected_line,
+                                found_line,
+                            ) {
+                                diff_lines = lines;
+                            }
+                        }
+                    }
+
+                    Some((
+                        ErrorKind::BadOverride,
+                        error.to_error_msg(cls.name(), parent.name(), field_name),
+                        diff_lines,
+                    ))
+                }
                 Ok(()) => None,
             };
-            if let Some((kind, error)) = error {
+            if let Some((kind, error, extra_lines)) = error {
                 let msg = vec1![
                     format!(
                         "Class member `{}.{}` overrides parent class `{}` in an inconsistent manner",
@@ -3069,6 +3287,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                     error,
                 ];
+                let mut msg = msg;
+                for line in extra_lines {
+                    msg.push(line);
+                }
                 errors.add(range, ErrorInfo::Kind(kind), msg);
             }
         }

@@ -118,7 +118,12 @@ pub enum AttrSubsetError {
 }
 
 impl AttrSubsetError {
-    pub fn to_error_msg(self, child_class: &Name, parent_class: &Name, attr_name: &Name) -> String {
+    pub fn to_error_msg(
+        &self,
+        child_class: &Name,
+        parent_class: &Name,
+        attr_name: &Name,
+    ) -> String {
         match self {
             AttrSubsetError::NoAccess => {
                 format!("`{child_class}.{attr_name}` is not accessible from the instance")
@@ -155,20 +160,20 @@ impl AttrSubsetError {
                 want_is_property,
                 subset_error: _,
             } => {
-                let got_desc = if got_is_property {
+                let got_desc = if *got_is_property {
                     "Property getter for "
                 } else {
                     ""
                 };
-                let want_desc = if want_is_property {
+                let want_desc = if *want_is_property {
                     ", the property getter for "
                 } else {
                     ", the type of "
                 };
                 format!(
                     "{got_desc}`{child_class}.{attr_name}` has type `{}`, which is not assignable to `{}`{want_desc}`{parent_class}.{attr_name}`",
-                    got.deterministic_printing(),
-                    want.deterministic_printing()
+                    got.clone().deterministic_printing(),
+                    want.clone().deterministic_printing()
                 )
             }
             AttrSubsetError::Invariant {
@@ -178,8 +183,8 @@ impl AttrSubsetError {
             } => {
                 format!(
                     "`{child_class}.{attr_name}` has type `{}`, which is not consistent with `{}` in `{parent_class}.{attr_name}` (the type of read-write attributes cannot be changed)",
-                    got.deterministic_printing(),
-                    want.deterministic_printing()
+                    got.clone().deterministic_printing(),
+                    want.clone().deterministic_printing()
                 )
             }
             AttrSubsetError::Contravariant {
@@ -188,15 +193,15 @@ impl AttrSubsetError {
                 got_is_property,
                 subset_error: _,
             } => {
-                let desc = if got_is_property {
+                let desc = if *got_is_property {
                     "The property setter for "
                 } else {
                     ""
                 };
                 format!(
                     "{desc}`{child_class}.{attr_name}` has type `{}`, which is not assignable from `{}`, the property getter for `{parent_class}.{attr_name}`",
-                    got.deterministic_printing(),
-                    want.deterministic_printing()
+                    got.clone().deterministic_printing(),
+                    want.clone().deterministic_printing()
                 )
             }
         }
