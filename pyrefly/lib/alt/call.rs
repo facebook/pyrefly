@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::typed_dict::TypedDictInner;
@@ -22,6 +23,7 @@ use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -52,6 +54,7 @@ use crate::types::class::ClassType;
 use crate::types::keywords::KwCall;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
+use crate::types::module::ModuleType;
 use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
@@ -1291,6 +1294,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .map_or_else(Type::any_implicit, |type_info| type_info.arc_clone_ty())
         } else {
             self.expand_vars_mut(&mut callee_ty);
+            // Best-effort validation for string-literal patch targets.
+            self.maybe_check_unittest_mock_patch_target(&callee_ty, &x.arguments, errors);
 
             let args;
             let kws;
@@ -1400,6 +1405,96 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::TypeIs(_) | Type::TypeGuard(_) => self.stdlib.bool().clone().to_type(),
                 other => other,
             }
+        }
+    }
+
+    fn maybe_check_unittest_mock_patch_target(
+        &self,
+        callee_ty: &Type,
+        arguments: &Arguments,
+        errors: &ErrorCollector,
+    ) {
+        if !self.is_unittest_mock_patcher_instance(callee_ty) {
+            return;
+        }
+        let Some(target_expr) = Self::unittest_mock_patch_target_expr(arguments) else {
+            return;
+        };
+        self.check_unittest_mock_patch_target_expr(target_expr, errors);
+    }
+
+    fn is_unittest_mock_patcher_instance(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) => {
+                let class = cls.class_object();
+                class.module_name() == ModuleName::from_str("unittest.mock")
+                    && class.name().as_str() == "_patcher"
+            }
+            _ => false,
+        }
+    }
+
+    fn unittest_mock_patch_target_expr<'b>(arguments: &'b Arguments) -> Option<&'b Expr> {
+        match arguments.args.first() {
+            Some(Expr::Starred(_)) | None => {}
+            Some(arg) => return Some(arg),
+        }
+        for kw in &arguments.keywords {
+            let Some(arg) = kw.arg.as_ref().map(|id| id.as_str()) else {
+                continue;
+            };
+            if arg == "target" {
+                return Some(&kw.value);
+            }
+        }
+        None
+    }
+
+    fn check_unittest_mock_patch_target_expr(&self, target_expr: &Expr, errors: &ErrorCollector) {
+        let Expr::StringLiteral(ExprStringLiteral { value, .. }) = target_expr else {
+            return;
+        };
+        let range = target_expr.range();
+        let target = value.to_str();
+        let parts: Vec<&str> = target.split('.').collect();
+        if parts.len() < 2 || parts.iter().any(|p| p.is_empty()) {
+            return;
+        }
+
+        // Follow unittest.mock's import behavior loosely: find the longest importable module prefix,
+        // then resolve the remaining components as attributes.
+        let mut module = None;
+        let mut module_prefix_len = 0;
+        for i in (1..parts.len()).rev() {
+            let candidate = ModuleName::from_str(&parts[..i].join("."));
+            if self.exports.module_exists(candidate).finding().is_some() {
+                module = Some(candidate);
+                module_prefix_len = i;
+                break;
+            }
+        }
+
+        let Some(module) = module else {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::MissingImport),
+                format!("Could not resolve module in `unittest.mock.patch` target `{target}`"),
+            );
+            return;
+        };
+
+        let mut base_ty = ModuleType::new_as(module).to_type();
+        for attr in &parts[module_prefix_len..] {
+            let attr_name = Name::new(*attr);
+            base_ty = self.type_of_attr_get(
+                &base_ty,
+                &attr_name,
+                range,
+                errors,
+                None,
+                "unittest.mock.patch target",
+            );
         }
     }
 
