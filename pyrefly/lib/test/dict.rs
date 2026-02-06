@@ -5,6 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use ruff_text_size::Ranged;
+use ruff_text_size::TextSize;
+
+use crate::test::util;
 use crate::testcase;
 
 testcase!(
@@ -201,7 +205,6 @@ assert_type(f(d), TD)  # E: assert_type(dict[str, int], TD)
 assert_type(f({"x": 0}), TD)  # E: `dict[str, int]` is not assignable to upper bound `TD`  # E: assert_type(dict[str, int], TD)
     "#,
 );
-
 // Regression test: deeply nested dict literals previously caused exponential memory growth
 // because AnonymousTypedDictInner stored the value type both in `fields` and a redundant
 // `value_type` field, doubling the cloned type tree at each nesting level. The fix removed
@@ -233,3 +236,23 @@ d = {"photo": [images[0]], "enabled": ["yes"]}
 same(d, [dict(photo=[images[0]], enabled=["yes"], **extra)])
     "#,
 );
+
+#[test]
+fn test_dict_literal_error_range_points_to_value() {
+    util::init_test();
+    let code = r#"x: dict[str, str] = {
+    "1": 2,
+}
+"#;
+    let (handle, state) = util::mk_state(code);
+    let errors = state
+        .transaction()
+        .get_errors([&handle])
+        .collect_errors()
+        .ordinary;
+    assert_eq!(errors.len(), 1);
+    let err = &errors[0];
+    let value_offset = code.find("2").expect("missing dict value literal");
+    let expected_start = TextSize::try_from(value_offset).unwrap();
+    assert_eq!(err.range().start(), expected_start);
+}
