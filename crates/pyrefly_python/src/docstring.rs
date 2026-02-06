@@ -54,53 +54,184 @@ impl Docstring {
     /// Clean a string literal ("""...""") and turn it into a docstring.
     pub fn clean(docstring: &str) -> String {
         let result = normalize_literal(docstring);
+        let lines: Vec<&str> = result.lines().collect();
+
+        if lines.is_empty() {
+            return String::new();
+        }
 
         // Remove the shortest amount of whitespace from the beginning of each line
-        let min_indent = minimal_indentation(result.lines().skip(1));
+        let min_indent = minimal_indentation(lines.iter().skip(1).copied());
 
-        result
-            .lines()
-            .enumerate()
-            .map(|(i, line)| {
-                if i == 0 {
-                    line.to_owned()
-                } else {
-                    let trimmed = &line[min_indent.min(line.len())..];
-                    let mut content = trimmed;
+        let mut output = Vec::new();
+        let mut pending_literal_block = false;
+        let mut pending_literal_block_indent = 0usize;
+        let mut code_block: Option<CodeBlockKind> = None;
+        let mut code_block_indent = 0usize;
+        let mut literal_block_marker_indent = 0usize;
 
-                    // Handle potential leading blockquote (`> `) for non-doctest lines
-                    let is_doctest_prompt = {
-                        let t = trimmed.trim_start();
-                        t.starts_with(">>>") && t.as_bytes().get(3).is_none_or(|b| *b != b'>')
-                    };
-                    if !is_doctest_prompt {
-                        while let Some(rest) = content.strip_prefix('>') {
-                            content = rest.strip_prefix(' ').unwrap_or(rest);
+        for (i, line) in lines.iter().enumerate() {
+            let raw_leading_spaces = leading_space_count(line);
+            let base_line = if i == 0 {
+                *line
+            } else {
+                &line[min_indent.min(line.len())..]
+            };
+            let mut current = base_line.to_owned();
+
+            let mut saw_literal_marker = false;
+            if let Some(updated) = strip_literal_block_marker(&current) {
+                current = updated;
+                pending_literal_block = true;
+                pending_literal_block_indent = raw_leading_spaces;
+                saw_literal_marker = true;
+            }
+
+            let trimmed_start = current.trim_start();
+            let is_blank = trimmed_start.is_empty();
+            let is_doctest_prompt = is_doctest_prompt(trimmed_start);
+            let leading_spaces = leading_space_count(&current);
+
+            if let Some(kind) = code_block {
+                match kind {
+                    CodeBlockKind::Doctest => {
+                        if !is_blank && !is_doctest_prompt {
+                            output.push("```".to_owned());
+                            code_block = None;
+                        } else {
+                            output.push(strip_code_indent(&current, code_block_indent));
+                            continue;
                         }
                     }
-
-                    // Replace remaining leading spaces with &nbsp; or they might be ignored in markdown parsers
-                    let leading_spaces = content.bytes().take_while(|&c| c == b' ').count();
-                    if leading_spaces > 0 {
-                        format!(
-                            "{}{}",
-                            "&nbsp;".repeat(leading_spaces),
-                            &content[leading_spaces..]
-                        )
-                    } else {
-                        content.to_owned()
+                    CodeBlockKind::Literal => {
+                        if !is_blank && raw_leading_spaces <= literal_block_marker_indent {
+                            output.push("```".to_owned());
+                            code_block = None;
+                        } else {
+                            output.push(strip_code_indent(&current, code_block_indent));
+                            continue;
+                        }
                     }
                 }
-            })
-            .collect::<Vec<_>>()
-            // Note: markdown doesn't break on just `\n`
-            .join("  \n")
+            }
+
+            if code_block.is_none() {
+                if is_doctest_prompt {
+                    code_block = Some(CodeBlockKind::Doctest);
+                    code_block_indent = leading_spaces;
+                    output.push("```python".to_owned());
+                    output.push(strip_code_indent(&current, code_block_indent));
+                    pending_literal_block = false;
+                    continue;
+                }
+
+                if pending_literal_block
+                    && !is_blank
+                    && raw_leading_spaces > pending_literal_block_indent
+                {
+                    code_block = Some(CodeBlockKind::Literal);
+                    code_block_indent = leading_spaces;
+                    literal_block_marker_indent = pending_literal_block_indent;
+                    output.push("```".to_owned());
+                    output.push(strip_code_indent(&current, code_block_indent));
+                    pending_literal_block = false;
+                    continue;
+                }
+
+                if pending_literal_block
+                    && !is_blank
+                    && raw_leading_spaces <= pending_literal_block_indent
+                    && !saw_literal_marker
+                {
+                    pending_literal_block = false;
+                }
+            }
+
+            // Handle potential leading blockquote (`> `) for non-doctest lines
+            let mut content = current.as_str();
+            if !is_doctest_prompt {
+                while let Some(rest) = content.strip_prefix('>') {
+                    content = rest.strip_prefix(' ').unwrap_or(rest);
+                }
+            }
+
+            // Replace remaining leading spaces with &nbsp; or they might be ignored in markdown parsers
+            let leading_spaces = content.bytes().take_while(|&c| c == b' ').count();
+            if leading_spaces > 0 {
+                output.push(format!(
+                    "{}{}",
+                    "&nbsp;".repeat(leading_spaces),
+                    &content[leading_spaces..]
+                ));
+            } else {
+                output.push(content.to_owned());
+            }
+        }
+
+        if code_block.is_some() {
+            output.push("```".to_owned());
+        }
+
+        // Note: markdown doesn't break on just `\n`
+        output.join("  \n")
     }
 
     /// Resolve the docstring to a string. This involves parsing the file to get the contents of the docstring and then cleaning it.
     pub fn resolve(&self) -> String {
         Self::clean(self.1.code_at(self.0))
     }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum CodeBlockKind {
+    Doctest,
+    Literal,
+}
+
+fn is_doctest_prompt(line: &str) -> bool {
+    if line.starts_with(">>>") {
+        return line.as_bytes().get(3).is_none_or(|b| *b != b'>');
+    }
+    if line.starts_with("...") {
+        return line.as_bytes().get(3).is_none_or(|b| *b != b'.');
+    }
+    false
+}
+
+fn strip_literal_block_marker(line: &str) -> Option<String> {
+    let trimmed = line.trim_end();
+    if trimmed == "::" {
+        if line.trim() == "::" {
+            return Some(String::new());
+        }
+        return Some(strip_one_trailing_colon(line));
+    }
+    if trimmed.ends_with("::") {
+        return Some(strip_one_trailing_colon(line));
+    }
+    None
+}
+
+fn strip_one_trailing_colon(line: &str) -> String {
+    let trimmed = line.trim_end();
+    let trimmed_len = trimmed.len();
+    if trimmed_len == 0 {
+        return line.to_owned();
+    }
+    if !trimmed.ends_with(':') {
+        return line.to_owned();
+    }
+    let trailing = &line[trimmed_len..];
+    let before_colon = &line[..trimmed_len - 1];
+    format!("{before_colon}{trailing}")
+}
+
+fn strip_code_indent(line: &str, indent: usize) -> String {
+    if line.trim().is_empty() {
+        return String::new();
+    }
+    let start = indent.min(line.len());
+    line[start..].to_owned()
 }
 
 fn normalize_literal(docstring: &str) -> String {
@@ -464,7 +595,18 @@ mod tests {
     fn test_docstring_preserves_doctest_prompt() {
         assert_eq!(
             Docstring::clean("\"\"\"Example\n>>> foo()\"\"\"").as_str(),
-            "Example  \n>>> foo()"
+            "Example  \n```python  \n>>> foo()  \n```"
+        );
+    }
+
+    #[test]
+    fn test_docstring_literal_block_uses_code_fence() {
+        assert_eq!(
+            Docstring::clean(
+                "\"\"\"Example::\n\n    >>> app = Flask(__name__)\n    >>> api = Api()\"\"\""
+            )
+            .as_str(),
+            "Example:  \n  \n```  \n>>> app = Flask(__name__)  \n>>> api = Api()  \n```"
         );
     }
 
