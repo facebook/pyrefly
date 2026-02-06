@@ -606,7 +606,7 @@ mod tests {
                 "\"\"\"Example::\n\n    >>> app = Flask(__name__)\n    >>> api = Api()\"\"\""
             )
             .as_str(),
-            "Example:  \n  \n```  \n>>> app = Flask(__name__)  \n>>> api = Api()  \n```"
+            "Example:  \n  \n```python  \n>>> app = Flask(__name__)  \n>>> api = Api()  \n```"
         );
     }
 
