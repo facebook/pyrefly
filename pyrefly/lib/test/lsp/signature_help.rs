@@ -117,6 +117,39 @@ Signature Help Result: active=0
 }
 
 #[test]
+fn signature_help_long_signature_multiline() {
+    let code = r#"
+def long_func(
+    a: dict[str, dict[str, dict[str, dict[str, int]]]],
+    b: dict[str, dict[str, dict[str, dict[str, int]]]],
+    c: dict[str, dict[str, dict[str, dict[str, int]]]],
+    d: dict[str, dict[str, dict[str, dict[str, int]]]],
+) -> None: ...
+
+long_func(
+#        ^
+    a={"x": {"y": {"z": {"w": 1}}}},
+    b={"x": {"y": {"z": {"w": 1}}}},
+    c={"x": {"y": {"z": {"w": 1}}}},
+    d={"x": {"y": {"z": {"w": 1}}}},
+)
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let signature = state
+        .transaction()
+        .get_signature_help_at(handle, position)
+        .expect("signature help available");
+    let label = &signature.signatures[0].label;
+    assert!(
+        label.contains('\n'),
+        "Expected multiline signature label, got: {label}"
+    );
+}
+
+#[test]
 fn positional_arguments_test() {
     let code = r#"
 def f(x: int, y: int, z: int) -> None: ...
