@@ -44,6 +44,7 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::TypeVarSpecializationError;
+use crate::state::loader::FindingOrError;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -1467,20 +1468,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut module_prefix_len = 0;
         for i in (1..parts.len()).rev() {
             let candidate = ModuleName::from_str(&parts[..i].join("."));
-            if self.exports.module_exists(candidate).finding().is_some() {
-                module = Some(candidate);
-                module_prefix_len = i;
-                break;
+            match self.exports.module_exists(candidate) {
+                FindingOrError::Finding(_) => {
+                    module = Some(candidate);
+                    module_prefix_len = i;
+                    break;
+                }
+                FindingOrError::Error(_) => {}
             }
         }
 
         let Some(module) = module else {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::Kind(ErrorKind::MissingImport),
-                format!("Could not resolve module in `unittest.mock.patch` target `{target}`"),
-            );
+            // If we can't resolve the module (or it is present but untyped/ignored), skip patch
+            // validation to avoid spurious failures when patching third-party libraries.
+            // This keeps the check focused on modules Pyrefly can actually analyze.
             return;
         };
 
