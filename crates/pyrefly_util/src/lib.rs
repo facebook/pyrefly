@@ -39,6 +39,7 @@ pub mod fs_anyhow;
 pub mod gas;
 pub mod globs;
 pub mod includes;
+pub mod interned_path;
 pub mod lined_buffer;
 pub mod lock;
 pub mod locked_map;

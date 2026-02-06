@@ -17,6 +17,7 @@ use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -53,11 +54,17 @@ pub(crate) fn inline_method_code_actions(
                 def.metadata.symbol_kind(),
                 Some(SymbolKind::Function | SymbolKind::Method)
             )
-    })?;
+    });
+    let mut function_def_ctx =
+        def.and_then(|def| find_function_def_with_context(ast.as_ref(), def.definition_range));
+    if function_def_ctx.is_none() {
+        function_def_ctx =
+            find_method_def_for_self_call(ast.as_ref(), call.range(), &callee_name, receiver_expr);
+    }
     let FunctionDefContext {
         function_def,
         in_class,
-    } = find_function_def_with_context(ast.as_ref(), def.definition_range)?;
+    } = function_def_ctx?;
     if !function_def.decorator_list.is_empty() {
         return None;
     }
@@ -159,6 +166,81 @@ fn find_function_def_with_context(
     }
 
     search_in_body(&ast.body, definition_range, false)
+}
+
+struct EnclosingMethod<'a> {
+    class_def: &'a StmtClassDef,
+    function_def: &'a StmtFunctionDef,
+}
+
+fn find_enclosing_method(ast: &ModModule, selection: TextRange) -> Option<EnclosingMethod<'_>> {
+    fn search_in_class<'a>(
+        class_def: &'a StmtClassDef,
+        selection: TextRange,
+    ) -> Option<EnclosingMethod<'a>> {
+        for stmt in &class_def.body {
+            match stmt {
+                Stmt::FunctionDef(function_def)
+                    if function_def.range().contains_range(selection) =>
+                {
+                    return Some(EnclosingMethod {
+                        class_def,
+                        function_def,
+                    });
+                }
+                Stmt::ClassDef(inner_class) => {
+                    if let Some(found) = search_in_class(inner_class, selection) {
+                        return Some(found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    for stmt in &ast.body {
+        if let Stmt::ClassDef(class_def) = stmt
+            && let Some(found) = search_in_class(class_def, selection)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_method_def_for_self_call(
+    ast: &ModModule,
+    selection: TextRange,
+    callee_name: &str,
+    receiver_expr: Option<&Expr>,
+) -> Option<FunctionDefContext> {
+    let receiver_name = match receiver_expr {
+        Some(Expr::Name(name)) => name.id.as_str(),
+        _ => return None,
+    };
+    let EnclosingMethod {
+        class_def,
+        function_def: enclosing_method,
+    } = find_enclosing_method(ast, selection)?;
+    if is_static_or_class_method(enclosing_method) {
+        return None;
+    }
+    let enclosing_receiver = first_parameter_name(&enclosing_method.parameters)?;
+    if enclosing_receiver != receiver_name {
+        return None;
+    }
+    for stmt in &class_def.body {
+        if let Stmt::FunctionDef(function_def) = stmt
+            && function_def.name.id.as_str() == callee_name
+        {
+            return Some(FunctionDefContext {
+                function_def: function_def.clone(),
+                in_class: true,
+            });
+        }
+    }
+    None
 }
 
 /// Returns true if the expression needs parentheses when inlined.

@@ -151,7 +151,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(call_expr) = e.as_call_expr()
             && self.is_django_field_nullable(call_expr)
         {
-            Some(self.union(maybe_narrowed_type, Type::None))
+            Some(self.union(maybe_narrowed_type, self.heap.mk_none()))
         } else {
             Some(maybe_narrowed_type)
         }
@@ -189,15 +189,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Get ManyRelatedManager class from django stubs
     fn get_manager_type(&self, target_model_type: Type) -> Option<Type> {
         let django_related_module = ModuleName::django_models_fields_related_descriptors();
-        let django_related_module_exports = self.exports.get(django_related_module).finding()?;
-        let manager_class_type = if django_related_module_exports
-            .exports(self.exports)
-            .contains_key(&MANYRELATEDMANAGER)
+        if !self
+            .exports
+            .export_exists(django_related_module, &MANYRELATEDMANAGER)
         {
-            self.get_from_export(django_related_module, None, &KeyExport(MANYRELATEDMANAGER))
-        } else {
             return None;
-        };
+        }
+        let manager_class_type =
+            self.get_from_export(django_related_module, None, &KeyExport(MANYRELATEDMANAGER));
 
         // Extract the Class from ClassDef
         let manager_class = match manager_class_type.as_ref() {
@@ -241,13 +240,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let class_name = Name::new(value.to_str());
                     let module_name = class.module_name();
 
-                    if self
-                        .exports
-                        .get(module_name)
-                        .finding()?
-                        .exports(self.exports)
-                        .contains_key(&class_name)
-                    {
+                    if self.exports.export_exists(module_name, &class_name) {
                         let model_type =
                             self.get_from_export(module_name, None, &KeyExport(class_name));
                         Some(self.class_def_to_instance_type(&model_type))
@@ -345,11 +338,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
                 .ok()
             })
-            .unwrap_or_else(Type::any_implicit);
+            .unwrap_or_else(|| self.heap.mk_any_implicit());
 
         // if value is optional, make the type optional
         let values_type = if has_empty {
-            self.union(base_value_type.clone(), Type::None)
+            self.union(base_value_type.clone(), self.heap.mk_none())
         } else {
             base_value_type
         };
@@ -363,7 +356,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (
                 CHOICES,
                 self.stdlib
-                    .list(Type::concrete_tuple(vec![values_type, label_type]))
+                    .list(self.heap.mk_concrete_tuple(vec![values_type, label_type]))
                     .to_type(),
             ),
         ];
@@ -380,14 +373,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), name);
         metadata.flags.property_metadata = Some(PropertyMetadata {
             role: PropertyRole::Getter,
-            getter: Type::any_error(),
+            getter: self.heap.mk_any_error(),
             setter: None,
             has_deleter: false,
         });
-        Type::Function(Box::new(Function {
+        self.heap.mk_function(Function {
             signature,
             metadata,
-        }))
+        })
     }
 
     /// Get the primary key field type for a Django model.
@@ -472,10 +465,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn get_display_method(&self, cls: &Class, method_name: &Name) -> ClassSynthesizedField {
         let params = vec![self.class_self_param(cls, false)];
         let ret = self.stdlib.str().clone().to_type();
-        ClassSynthesizedField::new(Type::Function(Box::new(Function {
+        ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), ret),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), method_name.clone()),
-        })))
+        }))
     }
 
     /// Returns the primary key type of the related model.
@@ -503,7 +496,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Get the pk type from the related model and make it nullable if needed
         let (pk_type, _) = self.get_pk_field_type(related_cls.class_object())?;
         if is_foreign_key_nullable {
-            Some(self.union(pk_type, Type::None))
+            Some(self.union(pk_type, self.heap.mk_none()))
         } else {
             Some(pk_type)
         }

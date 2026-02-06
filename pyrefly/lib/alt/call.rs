@@ -291,9 +291,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.as_call_target_impl(fallback, quantified, dunder_call)
             }
             Type::Any(style) => CallTargetLookup::Ok(Box::new(CallTarget::Any(style))),
-            Type::TypeAlias(ta) => {
-                self.as_call_target_impl(ta.as_value(self.stdlib), quantified, dunder_call)
-            }
+            Type::TypeAlias(ta) => self.as_call_target_impl(
+                self.get_type_alias(&ta).as_value(self.stdlib),
+                quantified,
+                dunder_call,
+            ),
             Type::ClassType(cls) => {
                 if let Some(quantified) = quantified {
                     self.quantified_instance_as_dunder_call(quantified.clone(), &cls)
@@ -334,7 +336,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Type(box Type::Intersect(box (_, fallback))) => {
                 // TODO(rechen): implement calling `type[A & B]`
-                self.as_call_target_impl(Type::type_form(fallback), quantified, dunder_call)
+                self.as_call_target_impl(self.heap.mk_type_form(fallback), quantified, dunder_call)
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
@@ -632,7 +634,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut dunder_new_ret = None;
         let (overrides_new, dunder_new_has_errors) =
             if let Some(new_method) = self.get_dunder_new(&cls) {
-                let cls_ty = Type::type_form(cls.clone().to_type());
+                let cls_ty = self.heap.mk_type_form(cls.clone().to_type());
                 let full_args = iter::once(CallArg::ty(&cls_ty, arguments_range))
                     .chain(args.iter().cloned())
                     .collect::<Vec<_>>();
@@ -760,7 +762,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let vs = self
                 .solver()
                 .freshen_class_targs(typed_dict.targs_mut(), self.uniques);
-            self.is_subset_eq(&typed_dict.clone().to_type(), hint.ty());
+            self.is_subset_eq(&typed_dict.clone().to_type(self.heap), hint.ty());
             self.solver().generalize_class_targs(typed_dict.targs_mut());
             vs
         } else {
@@ -852,7 +854,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         arguments_range,
                         ErrorInfo::new(ErrorKind::BadInstantiation, context),
-                        format!("`{}` can not be instantiated", cls.name()),
+                        format!("`{}` cannot be instantiated", cls.name()),
                     );
                 }
                 let metadata = self.get_metadata_for_class(cls.class_object());
@@ -1045,11 +1047,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     kws.0.insert(name.id.clone(), kw.value.infer(self, errors));
                 }
             }
-            Type::KwCall(Box::new(KwCall {
+            self.heap.mk_kw_call(KwCall {
                 func_metadata,
                 keywords: kws,
                 return_ty: res,
-            }))
+            })
         } else {
             res
         }
@@ -1130,10 +1132,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // and the class object as `objtype`.
         let (objtype, obj) = match base {
             DescriptorBase::Instance(classtype) => (
-                Type::ClassDef(classtype.class_object().dupe()),
-                Type::ClassType(classtype),
+                self.heap.mk_class_def(classtype.class_object().dupe()),
+                self.heap.mk_class_type(classtype),
             ),
-            DescriptorBase::ClassDef(class) => (Type::ClassDef(class), Type::None),
+            DescriptorBase::ClassDef(class) => (self.heap.mk_class_def(class), self.heap.mk_none()),
         };
         let args = [CallArg::ty(&obj, range), CallArg::ty(&objtype, range)];
         let call_target = self.as_call_target_or_error(
@@ -1159,7 +1161,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // When a descriptor is set on an instance, it gets the instance `class_type` and the value `got` as arguments.
         // Descriptor setters cannot be called on a class (an attempt to assign will overwrite the
         // descriptor itself rather than call the setter).
-        let instance = Type::ClassType(class_type);
+        let instance = self.heap.mk_class_type(class_type);
         let args = [CallArg::ty(&instance, range), got];
         let call_target = self.as_call_target_or_error(
             setter_method,
@@ -1231,11 +1233,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         // Default constructor that takes no args and returns Self.
+        let heap = self.heap;
         let default_constructor = || {
-            Type::Callable(Box::new(Callable::list(
+            heap.mk_callable_from(Callable::list(
                 ParamList::new(Vec::new()),
                 class_type.clone(),
-            )))
+            ))
         };
         // Check the __new__ method and whether it comes from object or has been overridden
         let (new_attr_ty, overrides_new) = if let Some(t) = self
@@ -1255,7 +1258,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Check the __init__ method and whether it comes from object or has been overridden
         let (init_attr_ty, overrides_init) = if let Some(mut t) = self.get_dunder_init(cls, false) {
             // Replace the return type with Self (the current class)
-            t.set_callable_return_type(class_type.clone());
+            t.set_callable_return_type_for_constructor(class_type.clone());
             (t, true)
         } else {
             (default_constructor(), false)
@@ -1285,7 +1288,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // we can't handle things like local aliases to super. If we hit a case where the binding
             // wasn't constructed, fall back to `Any`.
             self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range)))
-                .map_or_else(Type::any_implicit, |type_info| type_info.arc_clone_ty())
+                .map_or_else(
+                    || self.heap.mk_any_implicit(),
+                    |type_info| type_info.arc_clone_ty(),
+                )
         } else {
             self.expand_vars_mut(&mut callee_ty);
 

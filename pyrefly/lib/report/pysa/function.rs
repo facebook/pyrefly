@@ -409,9 +409,11 @@ pub fn should_export_decorated_function(
 // Requires `context` to be the module context of the decorated function.
 pub fn get_exported_decorated_function(
     key_decorated_function: Idx<KeyDecoratedFunction>,
+    skip_property_getter: bool,
     context: &ModuleContext,
 ) -> DecoratedFunction {
-    // Follow the successor chain to find either the last function or a function that is not an overload.
+    // Follow the successor chain to find either the last function, or a function that is not an overload,
+    // or a property setter when `skip_property_getter` is true.
     let mut last_decorated_function = key_decorated_function;
     loop {
         let binding_decorated_function = context.bindings.get(last_decorated_function);
@@ -420,7 +422,16 @@ pub fn get_exported_decorated_function(
             .answers
             .get_idx(binding_decorated_function.undecorated_idx)
             .unwrap();
-        if !undecorated_function.metadata.flags.is_overload {
+        let is_getter_but_should_skip = skip_property_getter
+            && undecorated_function
+                .metadata
+                .flags
+                .property_metadata
+                .as_ref()
+                .is_some_and(|property_metadata| {
+                    matches!(property_metadata.role, PropertyRole::Getter)
+                });
+        if !undecorated_function.metadata.flags.is_overload && !is_getter_but_should_skip {
             break;
         }
 
@@ -605,8 +616,11 @@ impl FunctionNode {
             }) => {
                 let binding = context.bindings.get(*definition);
                 if let Binding::Function(key_decorated_function, _, _) = binding {
-                    let exported_function =
-                        get_exported_decorated_function(*key_decorated_function, context);
+                    let exported_function = get_exported_decorated_function(
+                        *key_decorated_function,
+                        /* skip_property_getter */ false,
+                        context,
+                    );
                     Some(FunctionNode::DecoratedFunction(exported_function))
                 } else {
                     // TODO(T225700656): Handle special case
@@ -629,6 +643,7 @@ impl FunctionNode {
 
     pub fn exported_function_from_definition_item_with_docstring<'a>(
         item: &FindDefinitionItemWithDocstring,
+        skip_property_getter: bool,
         context: &ModuleContext<'a>,
     ) -> Option<(Self, ModuleContext<'a>)> {
         let handle = Handle::new(
@@ -636,14 +651,13 @@ impl FunctionNode {
             item.module.path().dupe(),
             context.handle.sys_info().dupe(),
         );
-        let context =
-            ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
+        let context = ModuleContext::create(handle, context.transaction, context.module_ids)?;
         let key_decorated_function =
             KeyDecoratedFunction(ShortIdentifier::from_text_range(item.definition_range));
         context
             .bindings
             .key_to_idx_hashed_opt(Hashed::new(&key_decorated_function))
-            .map(|idx| get_exported_decorated_function(idx, &context))
+            .map(|idx| get_exported_decorated_function(idx, skip_property_getter, &context))
             .map(|exported_function| (FunctionNode::DecoratedFunction(exported_function), context))
     }
 
@@ -714,28 +728,24 @@ impl FunctionNode {
         }
     }
 
-    fn is_property_getter(&self) -> bool {
+    fn property_role(&self) -> Option<PropertyRole> {
         match self {
             FunctionNode::DecoratedFunction(function) => function
                 .metadata()
                 .flags
                 .property_metadata
                 .as_ref()
-                .is_some_and(|meta| matches!(meta.role, PropertyRole::Getter)),
-            FunctionNode::ClassField { .. } => false,
+                .map(|metadata| metadata.role.clone()),
+            FunctionNode::ClassField { .. } => None,
         }
     }
 
-    fn is_property_setter(&self) -> bool {
-        match self {
-            FunctionNode::DecoratedFunction(function) => function
-                .metadata()
-                .flags
-                .property_metadata
-                .as_ref()
-                .is_some_and(|meta| matches!(meta.role, PropertyRole::Setter)),
-            FunctionNode::ClassField { .. } => false,
-        }
+    pub fn is_property_getter(&self) -> bool {
+        self.property_role() == Some(PropertyRole::Getter)
+    }
+
+    pub fn is_property_setter(&self) -> bool {
+        self.property_role() == Some(PropertyRole::Setter)
     }
 
     fn is_stub(&self) -> bool {

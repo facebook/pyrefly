@@ -32,7 +32,6 @@ use pyrefly_python::ignore::Tool;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
@@ -42,6 +41,7 @@ use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
 use pyrefly_util::globs::Globs;
+use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::telemetry::SubTaskTelemetry;
@@ -57,6 +57,7 @@ use tracing::debug;
 use tracing::error;
 
 use crate::base::ConfigBase;
+use crate::base::RecursionLimitConfig;
 use crate::base::UntypedDefBehavior;
 use crate::environment::environment::PythonEnvironment;
 use crate::environment::interpreters::Interpreters;
@@ -67,7 +68,7 @@ use crate::module_wildcard::Match;
 use crate::pyproject::PyProject;
 
 pub static GENERATED_FILE_CONFIG_OVERRIDE: LazyLock<
-    RwLock<SmallMap<ModulePathBuf, ArcId<ConfigFile>>>,
+    RwLock<SmallMap<InternedPath, ArcId<ConfigFile>>>,
 > = LazyLock::new(|| RwLock::new(SmallMap::new()));
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
@@ -817,6 +818,12 @@ impl ConfigFile {
                  self.root.enabled_ignores.as_ref().unwrap())
     }
 
+    /// Get the recursion limit configuration.
+    /// Returns None if not set (disabled).
+    pub fn recursion_limit_config(&self) -> Option<RecursionLimitConfig> {
+        ConfigBase::get_recursion_limit_config(&self.root)
+    }
+
     pub fn get_error_config(&self, path: &Path) -> ErrorConfig<'_> {
         ErrorConfig::new(
             self.errors(path),
@@ -879,23 +886,34 @@ impl ConfigFile {
     /// Get glob patterns that should be watched by a file watcher.
     /// We return a tuple of root (non-pattern part of the path) and a pattern.
     /// If pattern is None, then the root should contain the whole path to watch.
-    pub fn get_paths_to_watch(&self) -> Vec<WatchPattern<'_>> {
-        let mut result = Vec::new();
-        if let Some(source_db) = &self.source_db {
-            result.extend(source_db.get_paths_to_watch())
+    pub fn get_paths_to_watch(configs: &SmallSet<ArcId<ConfigFile>>) -> SmallSet<WatchPattern> {
+        let mut result = SmallSet::new();
+        let mut source_dbs = SmallSet::new();
+        for config in configs {
+            if let Some(source_db) = &config.source_db {
+                source_dbs.insert(source_db);
+            }
+            if let Some(config_root) = config.source.root() {
+                let config_root = InternedPath::from_path(config_root);
+                ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
+                    result.insert(WatchPattern::root(config_root, format!("**/{config}")));
+                });
+            }
+            config
+                .search_path()
+                .chain(config.site_package_path())
+                .cartesian_product(PYTHON_EXTENSIONS.iter().chain(COMPILED_FILE_SUFFIXES))
+                .for_each(|(s, suffix)| {
+                    result.insert(WatchPattern::root(
+                        InternedPath::from_path(s),
+                        format!("**/*.{suffix}"),
+                    ));
+                });
         }
-        let config_root = self.source.root();
-        if let Some(config_root) = config_root {
-            Self::CONFIG_FILE_NAMES.iter().for_each(|config| {
-                result.push(WatchPattern::root(config_root, format!("**/{config}")));
-            });
+
+        for source_db in source_dbs {
+            result.extend(source_db.get_paths_to_watch());
         }
-        self.search_path()
-            .chain(self.site_package_path())
-            .cartesian_product(PYTHON_EXTENSIONS.iter().chain(COMPILED_FILE_SUFFIXES))
-            .for_each(|(s, suffix)| {
-                result.push(WatchPattern::root(s, format!("**/*.{suffix}")));
-            });
         result
     }
 
@@ -1429,6 +1447,8 @@ mod tests {
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     permissive_ignores: None,
                     enabled_ignores: None,
+                    recursion_depth_limit: None,
+                    recursion_overflow_handler: None,
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
@@ -1447,6 +1467,8 @@ mod tests {
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         permissive_ignores: None,
                         enabled_ignores: None,
+                        recursion_depth_limit: None,
+                        recursion_overflow_handler: None,
                     }
                 }],
                 typeshed_path: None,
@@ -1829,6 +1851,8 @@ baseline = "baseline.json"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                recursion_depth_limit: None,
+                recursion_overflow_handler: None,
             },
             sub_configs: vec![
                 SubConfig {
@@ -2136,6 +2160,8 @@ baseline = "baseline.json"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                recursion_depth_limit: None,
+                recursion_overflow_handler: None,
             },
             sub_configs: vec![],
             ..Default::default()
@@ -2168,6 +2194,8 @@ baseline = "baseline.json"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                recursion_depth_limit: None,
+                recursion_overflow_handler: None,
             },
             sub_configs: vec![],
             ..Default::default()

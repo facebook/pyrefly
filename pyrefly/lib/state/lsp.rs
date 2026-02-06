@@ -15,10 +15,6 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use lsp_types::CompletionItem;
-use lsp_types::CompletionItemKind;
-use lsp_types::CompletionItemLabelDetails;
-use lsp_types::CompletionItemTag;
-use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
@@ -32,7 +28,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::display::LspDisplayMode;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -70,6 +66,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::wasm::completion::CompletionOptions;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -934,7 +931,9 @@ impl<'a> Transaction<'a> {
             Type::ClassType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
             Type::SelfType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
             Type::Union(box Union { members, .. }) => Self::callable_from_types(solver, members),
-            Type::TypeAlias(alias) => Self::callable_from_type(solver, alias.as_type()),
+            Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+                Self::callable_from_type(solver, alias.as_type())
+            }
             Type::Type(box inner) => Self::callable_from_type(solver, inner),
             Type::Quantified(box quantified) => match quantified.restriction {
                 Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
@@ -1122,6 +1121,16 @@ impl<'a> Transaction<'a> {
                 Some((
                     TextRangeWithModule::new(module_info, export.location),
                     export.docstring_range,
+                ))
+            }
+            AttrDefinition::Submodule { module_name } => {
+                // For submodule access (e.g., `b` in `a.b` when `import a.b.c`),
+                // resolve by finding the submodule's __init__.py
+                let def =
+                    self.find_definition_for_imported_module(handle, module_name, preference)?;
+                Some((
+                    TextRangeWithModule::new(def.module, def.definition_range),
+                    def.docstring_range,
                 ))
             }
         }
@@ -1469,6 +1478,41 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    fn find_definition_for_dunder_all_entry(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        preference: FindPreference,
+    ) -> Option<FindDefinitionItemWithDocstring> {
+        let module_info = self.get_module_info(handle)?;
+        let exports = self.get_exports_data(handle);
+        let (_entry_range, name) = exports.dunder_all_name_at(position)?;
+
+        if let Some((definition_handle, export)) =
+            self.resolve_named_import(handle, module_info.name(), name.clone(), preference)
+        {
+            let definition_module = self.get_module_info(&definition_handle)?;
+            return Some(FindDefinitionItemWithDocstring {
+                metadata: DefinitionMetadata::VariableOrAttribute(export.symbol_kind),
+                definition_range: export.location,
+                module: definition_module,
+                docstring_range: export.docstring_range,
+                display_name: Some(name.to_string()),
+            });
+        }
+
+        if module_info.path().is_init() {
+            let submodule = module_info.name().append(&name);
+            if let Some(definition) =
+                self.find_definition_for_imported_module(handle, submodule, preference)
+            {
+                return Some(definition);
+            }
+        }
+
+        None
+    }
+
     fn find_definition_for_keyword_argument(
         &self,
         handle: &Handle,
@@ -1554,6 +1598,15 @@ impl<'a> Transaction<'a> {
             return vec![];
         };
         let covering_nodes = Ast::locate_node(&mod_module, position);
+
+        if covering_nodes
+            .iter()
+            .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+            && let Some(definition) =
+                self.find_definition_for_dunder_all_entry(handle, position, preference)
+        {
+            return vec![definition];
+        }
 
         match Self::identifier_from_covering_nodes(&covering_nodes) {
             Some(IdentifierWithContext {
@@ -1835,7 +1888,7 @@ impl<'a> Transaction<'a> {
         .map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
 
-    fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
+    pub(crate) fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
         let matcher = SkimMatcherV2::default().smart_case();
         let mut results = Vec::new();
 
@@ -2071,6 +2124,13 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<LocalRefactorCodeAction>> {
         quick_fixes::introduce_parameter::introduce_parameter_code_actions(self, handle, selection)
     }
+    pub fn convert_star_import_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::convert_star_import::convert_star_import_code_actions(self, handle, selection)
+    }
 
     /// Determines whether a module is a third-party package.
     ///
@@ -2152,13 +2212,34 @@ impl<'a> Transaction<'a> {
                     continue;
                 };
 
-                if direct_url.dir_info.editable
-                    && let Some(source_path) = direct_url.url.strip_prefix("file://")
-                {
-                    let source_path = PathBuf::from(source_path);
-                    if source_path.is_dir() {
-                        editable_paths.push(source_path);
-                    }
+                if !direct_url.dir_info.editable {
+                    continue;
+                }
+
+                // Parse the file:// URL and extract the path
+                let Ok(url) = lsp_types::Url::parse(&direct_url.url) else {
+                    continue;
+                };
+                if url.scheme() != "file" {
+                    continue;
+                }
+
+                let path_str = url.path();
+
+                // On Windows, file URLs look like file:///C:/path
+                // url.path() returns "/C:/path", we need to strip the leading "/"
+                #[cfg(windows)]
+                let path_str = path_str.strip_prefix('/').unwrap_or(path_str);
+
+                // Decode percent-encoded characters (e.g., %20 -> space)
+                let Ok(decoded) = percent_encoding::percent_decode_str(path_str).decode_utf8()
+                else {
+                    continue;
+                };
+
+                let source_path = PathBuf::from(decoded.as_ref());
+                if source_path.is_dir() {
+                    editable_paths.push(source_path);
                 }
             }
         }
@@ -2558,252 +2639,49 @@ impl<'a> Transaction<'a> {
         Some(references)
     }
 
-    fn add_builtins_autoimport_completions(
+    /// Suggest Literal values when completing inside a `match` value pattern.
+    ///
+    /// We can't reuse the call-argument literal completion path here because
+    /// `case <value>:` isn't a call site, so we never get parameter types to
+    /// infer literals from. Instead, we look for a match value/singleton
+    /// pattern at the cursor and pull the `match` subject's type to surface
+    /// its Literal members.
+    pub(crate) fn add_match_literal_completions(
         &self,
         handle: &Handle,
-        identifier: Option<&Identifier>,
-        completions: &mut Vec<CompletionItem>,
-    ) {
-        if let Some(builtin_handle) = self
-            .import_handle(handle, ModuleName::builtins(), None)
-            .finding()
-        {
-            let builtin_exports = self.get_exports(&builtin_handle);
-            for (name, location) in builtin_exports.iter() {
-                if let Some(identifier) = identifier
-                    && SkimMatcherV2::default()
-                        .smart_case()
-                        .fuzzy_match(name.as_str(), identifier.as_str())
-                        .is_none()
-                {
-                    continue;
-                }
-                let kind = match location {
-                    ExportLocation::OtherModule(..) => continue,
-                    ExportLocation::ThisModule(export) => export
-                        .symbol_kind
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
-                };
-                completions.push(CompletionItem {
-                    label: name.as_str().to_owned(),
-                    detail: None,
-                    kind,
-                    data: Some(serde_json::json!("builtin")),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-
-    fn add_autoimport_completions(
-        &self,
-        handle: &Handle,
-        identifier: &Identifier,
-        completions: &mut Vec<CompletionItem>,
-        import_format: ImportFormat,
-        supports_completion_item_details: bool,
-    ) {
-        // Auto-import can be slow. Let's only return results if there are no local
-        // results for now. TODO: re-enable it once we no longer have perf issues.
-        // We should not try to generate autoimport when the user has typed very few
-        // characters. It's unhelpful to narrow down suggestions.
-        if identifier.as_str().len() >= MIN_CHARACTERS_TYPED_AUTOIMPORT
-            && let Some(ast) = self.get_ast(handle)
-            && let Some(module_info) = self.get_module_info(handle)
-        {
-            for (handle_to_import_from, name, export) in
-                self.search_exports_fuzzy(identifier.as_str())
-            {
-                // Using handle itself doesn't always work because handles can be made separately and have different hashes
-                if handle_to_import_from.module() == handle.module()
-                    || handle_to_import_from.module() == ModuleName::builtins()
-                {
-                    continue;
-                }
-                let depth = handle_to_import_from.module().components().len();
-                let module_description = handle_to_import_from.module().as_str().to_owned();
-                let (insert_text, additional_text_edits, imported_module) = {
-                    let (position, insert_text, module_name) = insert_import_edit(
-                        &ast,
-                        self.config_finder(),
-                        handle.dupe(),
-                        handle_to_import_from,
-                        &name,
-                        import_format,
-                    );
-                    let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                        new_text: insert_text.clone(),
-                    };
-                    (insert_text, Some(vec![import_text_edit]), module_name)
-                };
-                let auto_import_label_detail = format!(" (import {imported_module})");
-
-                completions.push(CompletionItem {
-                    label: name,
-                    detail: Some(insert_text),
-                    kind: export
-                        .symbol_kind
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
-                    additional_text_edits,
-                    label_details: supports_completion_item_details.then_some(
-                        CompletionItemLabelDetails {
-                            detail: Some(auto_import_label_detail),
-                            description: Some(module_description),
-                        },
-                    ),
-                    tags: if export.deprecation.is_some() {
-                        Some(vec![CompletionItemTag::DEPRECATED])
-                    } else {
-                        None
-                    },
-                    sort_text: Some(format!("4{}", depth)),
-                    ..Default::default()
-                });
-            }
-
-            for module_name in self.search_modules_fuzzy(identifier.as_str()) {
-                if module_name == handle.module() {
-                    continue;
-                }
-                let module_name_str = module_name.as_str().to_owned();
-                if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
-                {
-                    let (insert_text, additional_text_edits) = {
-                        let (position, insert_text) =
-                            import_regular_import_edit(&ast, module_handle);
-                        let import_text_edit = TextEdit {
-                            range: module_info
-                                .to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                            new_text: insert_text.clone(),
-                        };
-                        (insert_text, Some(vec![import_text_edit]))
-                    };
-                    let auto_import_label_detail = format!(" (import {module_name_str})");
-
-                    completions.push(CompletionItem {
-                        label: module_name_str.clone(),
-                        detail: Some(insert_text),
-                        kind: Some(CompletionItemKind::MODULE),
-                        additional_text_edits,
-                        label_details: supports_completion_item_details.then_some(
-                            CompletionItemLabelDetails {
-                                detail: Some(auto_import_label_detail),
-                                description: Some(module_name_str),
-                            },
-                        ),
-                        ..Default::default()
-                    });
-                }
-            }
-        }
-    }
-
-    /// Adds completions for local variables and returns true if we have added any
-    /// If an identifier is present, filter matches
-    fn add_local_variable_completions(
-        &self,
-        handle: &Handle,
-        identifier: Option<&Identifier>,
-        position: TextSize,
-        completions: &mut Vec<CompletionItem>,
-    ) -> bool {
-        let mut has_added_any = false;
-        if let Some(bindings) = self.get_bindings(handle)
-            && let Some(module_info) = self.get_module_info(handle)
-        {
-            for idx in bindings.available_definitions(position) {
-                let key = bindings.idx_to_key(idx);
-                let label = match key {
-                    Key::Definition(id) => module_info.code_at(id.range()),
-                    Key::Anywhere(id, _) => id,
-                    _ => continue,
-                };
-                if let Some(identifier) = identifier
-                    && SkimMatcherV2::default()
-                        .fuzzy_match(label, identifier.as_str())
-                        .is_none()
-                {
-                    continue;
-                }
-                let binding = bindings.get(idx);
-                let ty = self.get_type(handle, key);
-                let export_info = self.key_to_export(handle, key, FindPreference::default());
-
-                let kind = if let Some((_, ref export)) = export_info {
-                    export
-                        .symbol_kind
-                        .map_or(CompletionItemKind::VARIABLE, |k| {
-                            k.to_lsp_completion_item_kind()
-                        })
-                } else {
-                    binding
-                        .symbol_kind()
-                        .map_or(CompletionItemKind::VARIABLE, |k| {
-                            k.to_lsp_completion_item_kind()
-                        })
-                };
-
-                let is_deprecated = ty.as_ref().is_some_and(|t| {
-                    if let Type::ClassDef(cls) = t {
-                        self.ad_hoc_solve(handle, |solver| {
-                            solver.get_metadata_for_class(cls).deprecation().is_some()
-                        })
-                        .unwrap_or(false)
-                    } else {
-                        t.function_deprecation().is_some()
-                    }
-                });
-                let detail = ty.map(|t| t.to_string());
-                let documentation = self.get_documentation_from_export(export_info);
-
-                has_added_any = true;
-                completions.push(CompletionItem {
-                    label: label.to_owned(),
-                    detail,
-                    kind: Some(kind),
-                    documentation,
-                    tags: if is_deprecated {
-                        Some(vec![CompletionItemTag::DEPRECATED])
-                    } else {
-                        None
-                    },
-                    ..Default::default()
-                })
-            }
-        }
-        has_added_any
-    }
-
-    fn add_literal_completions(
-        &self,
-        handle: &Handle,
-        position: TextSize,
+        covering_nodes: &[AnyNodeRef],
         completions: &mut Vec<CompletionItem>,
         in_string_literal: bool,
     ) {
-        if let Some((callables, chosen_overload_index, active_argument, _)) =
-            self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(chosen_overload_index)
-            && let Some(params) =
-                Self::normalize_singleton_function_type_into_params(callable.clone())
-            && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
-            && let Some(param) = params.get(arg_index)
-        {
-            Self::add_literal_completions_from_type(
-                param.as_type(),
-                completions,
-                in_string_literal,
-            );
+        let mut is_match_value_pattern = false;
+        let mut subject = None;
+        for node in covering_nodes {
+            match node {
+                AnyNodeRef::PatternMatchValue(_) | AnyNodeRef::PatternMatchSingleton(_) => {
+                    is_match_value_pattern = true;
+                }
+                AnyNodeRef::StmtMatch(stmt_match) => {
+                    subject = Some(stmt_match.subject.as_ref());
+                }
+                _ => {}
+            }
+            if is_match_value_pattern && subject.is_some() {
+                break;
+            }
+        }
+        if !is_match_value_pattern {
+            return;
+        }
+        let Some(subject) = subject else {
+            return;
+        };
+        if let Some(subject_type) = self.get_type_trace(handle, subject.range()) {
+            Self::add_literal_completions_from_type(&subject_type, completions, in_string_literal);
         }
     }
 
-    // Kept for backwards compatibility - used by external callers (lsp/server.rs, playground.rs)
-    // who don't need the is_incomplete flag
+    // Kept for backwards compatibility - used by external callers who don't need the
+    // is_incomplete flag.
     pub fn completion(
         &self,
         handle: &Handle,
@@ -2815,7 +2693,10 @@ impl<'a> Transaction<'a> {
             handle,
             position,
             import_format,
-            supports_completion_item_details,
+            CompletionOptions {
+                supports_completion_item_details,
+                ..Default::default()
+            },
         )
         .0
     }
@@ -2826,7 +2707,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
-        supports_completion_item_details: bool,
+        options: CompletionOptions,
     ) -> (Vec<CompletionItem>, bool) {
         // Check if position is in a disabled range (comments)
         if let Some(module) = self.get_module_info(handle) {
@@ -2836,12 +2717,8 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
-            handle,
-            position,
-            import_format,
-            supports_completion_item_details,
-        );
+        let (mut results, is_incomplete) =
+            self.completion_sorted_opt_with_incomplete(handle, position, import_format, options);
         results.sort_by(|item1, item2| {
             item1
                 .sort_text
@@ -2870,204 +2747,6 @@ impl<'a> Transaction<'a> {
         ranges
     }
 
-    fn completion_sorted_opt_with_incomplete(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-        import_format: ImportFormat,
-        supports_completion_item_details: bool,
-    ) -> (Vec<CompletionItem>, bool) {
-        let mut result = Vec::new();
-        let mut is_incomplete = false;
-        match self.identifier_at(handle, position) {
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::ImportedName { module_name, .. },
-            }) => {
-                if let Some(handle) = self.import_handle(handle, module_name, None).finding() {
-                    // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
-                    // If the user might be typing the `import` keyword, add that as an autocomplete option.
-                    if "import".starts_with(identifier.as_str()) {
-                        result.push(CompletionItem {
-                            label: "import".to_owned(),
-                            kind: Some(CompletionItemKind::KEYWORD),
-                            ..Default::default()
-                        })
-                    }
-                    let exports = self.get_exports(&handle);
-                    for (name, export) in exports.iter() {
-                        let is_deprecated = match export {
-                            ExportLocation::ThisModule(export) => export.deprecation.is_some(),
-                            ExportLocation::OtherModule(_, _) => false,
-                        };
-                        result.push(CompletionItem {
-                            label: name.to_string(),
-                            // todo(kylei): completion kind for exports
-                            kind: Some(CompletionItemKind::VARIABLE),
-                            tags: if is_deprecated {
-                                Some(vec![CompletionItemTag::DEPRECATED])
-                            } else {
-                                None
-                            },
-                            ..Default::default()
-                        })
-                    }
-                }
-            }
-            // TODO: Handle relative import (via ModuleName::new_maybe_relative)
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::ImportedModule { .. },
-            }) => self
-                .import_prefixes(handle, ModuleName::from_name(identifier.id()))
-                .iter()
-                .for_each(|module_name| {
-                    result.push(CompletionItem {
-                        label: module_name
-                            .components()
-                            .last()
-                            .unwrap_or(&Name::empty())
-                            .to_string(),
-                        detail: Some(module_name.to_string()),
-                        kind: Some(CompletionItemKind::MODULE),
-                        ..Default::default()
-                    })
-                }),
-            Some(IdentifierWithContext {
-                identifier: _,
-                context: IdentifierContext::Attribute { base_range, .. },
-            }) => {
-                if let Some(answers) = self.get_answers(handle)
-                    && let Some(base_type) = answers.get_type_trace(base_range)
-                {
-                    self.ad_hoc_solve(handle, |solver| {
-                        solver
-                            .completions(base_type, None, true)
-                            .iter()
-                            .for_each(|x| {
-                                let kind = match x.ty {
-                                    Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
-                                    Some(Type::Function(_)) => Some(CompletionItemKind::FUNCTION),
-                                    _ => Some(CompletionItemKind::FIELD),
-                                };
-                                let ty = &x.ty;
-                                let detail =
-                                    ty.clone().map(|t| t.as_lsp_string(LspDisplayMode::Hover));
-                                let documentation = self.get_docstring_for_attribute(handle, x);
-                                result.push(CompletionItem {
-                                    label: x.name.as_str().to_owned(),
-                                    detail,
-                                    kind,
-                                    documentation,
-                                    sort_text: if x.is_reexport {
-                                        Some("1".to_owned())
-                                    } else {
-                                        None
-                                    },
-                                    tags: if x.is_deprecated {
-                                        Some(vec![CompletionItemTag::DEPRECATED])
-                                    } else {
-                                        None
-                                    },
-                                    ..Default::default()
-                                });
-                            });
-                    });
-                }
-            }
-            Some(IdentifierWithContext {
-                identifier,
-                context,
-            }) => {
-                if matches!(context, IdentifierContext::MethodDef { .. }) {
-                    Self::add_magic_method_completions(&identifier, &mut result);
-                }
-                self.add_kwargs_completions(handle, position, &mut result);
-                Self::add_keyword_completions(handle, &mut result);
-                let has_local_completions = self.add_local_variable_completions(
-                    handle,
-                    Some(&identifier),
-                    position,
-                    &mut result,
-                );
-                if !has_local_completions {
-                    self.add_autoimport_completions(
-                        handle,
-                        &identifier,
-                        &mut result,
-                        import_format,
-                        supports_completion_item_details,
-                    );
-                }
-                // Mark results as incomplete in the following cases so clients keep asking
-                // for completions as the user types more:
-                // 1. If identifier is below MIN_CHARACTERS_TYPED_AUTOIMPORT threshold,
-                //    autoimport completions are skipped and will be checked once threshold
-                //    is reached.
-                // 2. If local completions exist and blocked autoimport completions,
-                //    the local completions might not match as the user continues typing,
-                //    and autoimport completions should then be shown.
-                if identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT
-                    || has_local_completions
-                {
-                    is_incomplete = true;
-                }
-                self.add_builtins_autoimport_completions(handle, Some(&identifier), &mut result);
-            }
-            None => {
-                // todo(kylei): optimization, avoid duplicate ast walks
-                if let Some(mod_module) = self.get_ast(handle) {
-                    let nodes = Ast::locate_node(&mod_module, position);
-                    if nodes.is_empty() {
-                        Self::add_keyword_completions(handle, &mut result);
-                        self.add_local_variable_completions(handle, None, position, &mut result);
-                        self.add_builtins_autoimport_completions(handle, None, &mut result);
-                    }
-                    let in_string_literal = nodes
-                        .iter()
-                        .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)));
-                    self.add_literal_completions(handle, position, &mut result, in_string_literal);
-                    self.add_dict_key_completions(
-                        handle,
-                        mod_module.as_ref(),
-                        position,
-                        &mut result,
-                    );
-                    // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
-                    // in foo(<>), the first containing node is AnyNodeRef::ExprCall
-                    if let Some(first) = nodes.first()
-                        && matches!(first, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
-                    {
-                        self.add_kwargs_completions(handle, position, &mut result);
-                    }
-                }
-            }
-        }
-        for item in &mut result {
-            let sort_text = if item
-                .tags
-                .as_ref()
-                .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
-            {
-                "9"
-            } else if item.additional_text_edits.is_some() {
-                "4"
-            } else if item.label.starts_with("__") {
-                "3"
-            } else if item.label.as_str().starts_with("_") {
-                "2"
-            } else if let Some(sort_text) = &item.sort_text {
-                // 1 is reserved for re-exports
-                sort_text.as_str()
-            } else {
-                "0"
-            }
-            .to_owned();
-            item.sort_text = Some(sort_text);
-        }
-        (result, is_incomplete)
-    }
-
     fn export_from_location(
         &self,
         handle: &Handle,
@@ -3089,12 +2768,14 @@ impl<'a> Transaction<'a> {
     /// - Handles stdlib patterns where a public module (`io`) re-exports from a
     ///   private implementation module (`_io`).
     fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
-        let canonical_components = canonical.module().components();
+        let canonical_module = canonical.module();
+        let original_module = original.module();
+        let canonical_components = canonical_module.components();
         let canonical_component = canonical_components
             .last()
             .map(|name| name.as_str())
             .unwrap_or("");
-        let original_components = original.module().components();
+        let original_components = original_module.components();
         let original_component = original_components
             .last()
             .map(|name| name.as_str())
@@ -3106,15 +2787,23 @@ impl<'a> Transaction<'a> {
             return true;
         }
 
-        // Include re-export if original is a parent package of canonical
-        if canonical_components.len() > original_components.len() {
-            canonical_components
+        // Include re-export if original is a parent package of canonical.
+        if canonical_components.len() > original_components.len()
+            && canonical_components
                 .iter()
                 .zip(original_components.iter())
                 .all(|(c, o)| c == o)
-        } else {
-            false
+        {
+            return true;
         }
+        // Some stdlib shims encode dotted modules with underscores (e.g. _collections_abc).
+        if canonical_module.as_str().starts_with('_') && original_module.as_str().contains('.') {
+            let canonical_trim = canonical_module.as_str().trim_start_matches('_');
+            if canonical_trim == original_module.as_str().replace('.', "_") {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
@@ -3465,16 +3154,16 @@ impl<'a> CancellableTransaction<'a> {
 mod tests {
     use std::fs;
 
+    use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
 
     use super::Transaction;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
-    use crate::types::types::AnyStyle;
     use crate::types::types::Type;
 
     fn any_type() -> Type {
-        Type::Any(AnyStyle::Explicit)
+        TypeHeap::new().mk_any_explicit()
     }
 
     #[test]
@@ -3538,9 +3227,11 @@ mod tests {
         let source_dir = temp_dir.path().join("mypackage_source");
         fs::create_dir(&source_dir).unwrap();
 
+        // Use Url::from_file_path to construct a proper file URL that works on all platforms
+        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
         let direct_url_content = format!(
-            r#"{{"url": "file://{}", "dir_info": {{"editable": true}}}}"#,
-            source_dir.display()
+            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
+            source_url.as_str()
         );
         fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
 
@@ -3563,9 +3254,11 @@ mod tests {
         let source_dir = temp_dir.path().join("requests_source");
         fs::create_dir(&source_dir).unwrap();
 
+        // Use Url::from_file_path to construct a proper file URL that works on all platforms
+        let source_url = lsp_types::Url::from_file_path(&source_dir).unwrap();
         let direct_url_content = format!(
-            r#"{{"url": "file://{}", "dir_info": {{"editable": false}}}}"#,
-            source_dir.display()
+            r#"{{"url": "{}", "dir_info": {{"editable": false}}}}"#,
+            source_url.as_str()
         );
         fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
 
@@ -3599,9 +3292,11 @@ mod tests {
 
         let nonexistent_path = temp_dir.path().join("does_not_exist");
 
+        // Use Url::from_file_path to construct a proper file URL that works on all platforms
+        let nonexistent_url = lsp_types::Url::from_file_path(&nonexistent_path).unwrap();
         let direct_url_content = format!(
-            r#"{{"url": "file://{}", "dir_info": {{"editable": true}}}}"#,
-            nonexistent_path.display()
+            r#"{{"url": "{}", "dir_info": {{"editable": true}}}}"#,
+            nonexistent_url.as_str()
         );
         fs::write(dist_info.join("direct_url.json"), direct_url_content).unwrap();
 

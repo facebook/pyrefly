@@ -136,14 +136,19 @@ pub fn number_thousands(x: usize) -> impl Display {
         .join(",")
 }
 
+/// Pluralizes by tacking on an "s".
+pub fn pluralize(n: usize, descriptor: &str) -> String {
+    if n == 1 {
+        descriptor.to_owned()
+    } else {
+        format!("{}s", descriptor)
+    }
+}
+
 /// Format the number and descriptor word with the right pluralization.
 /// E.g., count(2, "cat") -> "2 cats". Pluralizes by tacking on an "s".
 pub fn count(n: usize, descriptor: &str) -> String {
-    format!(
-        "{} {descriptor}{}",
-        number_thousands(n),
-        if n == 1 { "" } else { "s" }
-    )
+    format!("{} {}", number_thousands(n), pluralize(n, descriptor))
 }
 
 #[cfg(test)]

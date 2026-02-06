@@ -357,10 +357,10 @@ class A:
 
 class B:
     def __init__(self, a: A):
-        a.x: int = 1  # E: Type cannot be declared in assignment to non-self attribute `a.x`
+        a.x: int = 1  # E: Cannot annotate non-self attribute `a.x`
 
 a: A = A()
-a.x: int = 5  # E: Type cannot be declared in assignment to non-self attribute `a.x`
+a.x: int = 5  # E: Cannot annotate non-self attribute `a.x`
     "#,
 );
 
@@ -1051,6 +1051,16 @@ class Test(B):
     def m2(cls) -> None:
         assert_type(super().z, Any)
     "#,
+);
+
+testcase!(
+    test_any_as_base_class_suppresses_missing_attribute_in_method,
+    r#"
+from typing import Any
+class MyTest(Any):
+    def foo(self):
+        self.bar()  # should not error: Any is in base-class hierarchy
+"#,
 );
 
 testcase!(

@@ -16,6 +16,7 @@ use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
 use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
@@ -72,6 +73,32 @@ impl VarianceMap {
     }
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct VarianceViolation {
+    pub range: TextRange,
+    pub var_name: Name,
+    pub position_variance: Variance,
+    pub declared_variance: PreInferenceVariance,
+}
+
+#[allow(dead_code)]
+impl VarianceViolation {
+    pub fn format_message(&self) -> String {
+        format!(
+            "Type variable `{}` is {} but is used in {} position",
+            self.var_name, self.declared_variance, self.position_variance
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct VarianceResult {
+    pub variance_map: VarianceMap,
+    pub violations: Vec<VarianceViolation>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct InferenceStatus {
     inferred_variance: Variance,
@@ -84,10 +111,157 @@ type InferenceMap = SmallMap<Name, InferenceStatus>;
 // Why is this not Class or ClassObject
 type VarianceEnv = SmallMap<Class, InferenceMap>;
 
+fn handle_tuple_type(
+    tuple: &Tuple,
+    variance: Variance,
+    inj: bool,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    match tuple {
+        Tuple::Concrete(concrete_types) => {
+            for ty in concrete_types {
+                on_type(variance, inj, ty, on_edge, on_var);
+            }
+        }
+        Tuple::Unbounded(unbounded_ty) => {
+            on_type(variance, inj, unbounded_ty, on_edge, on_var);
+        }
+        Tuple::Unpacked(boxed_parts) => {
+            let (before, middle, after) = &**boxed_parts;
+            for ty in before {
+                on_type(variance, inj, ty, on_edge, on_var);
+            }
+            on_type(variance, inj, middle, on_edge, on_var);
+            for ty in after {
+                on_type(variance, inj, ty, on_edge, on_var);
+            }
+        }
+    }
+}
+
+fn on_type(
+    variance: Variance,
+    inj: bool,
+    typ: &Type,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    match typ {
+        Type::Type(t) => {
+            on_type(variance, inj, t, on_edge, on_var);
+        }
+
+        Type::Function(t) => {
+            // Walk return type covariantly
+            on_type(variance, inj, &t.signature.ret, on_edge, on_var);
+
+            // Walk parameters contravariantly
+            match &t.signature.params {
+                Params::List(param_list) => {
+                    for param in param_list.items().iter() {
+                        let ty = param.as_type();
+                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                    }
+                }
+                Params::Ellipsis | Params::Materialization => {
+                    // Unknown params
+                }
+                Params::ParamSpec(prefix, param_spec) => {
+                    for (ty, _) in prefix.iter() {
+                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                    }
+                    on_type(variance.inv(), inj, param_spec, on_edge, on_var);
+                }
+            }
+        }
+
+        Type::ClassType(class) => {
+            let params = on_edge(class.class_object());
+            let targs = class.targs().as_slice();
+
+            // If targs is empty, nothing to do
+            if targs.is_empty() {
+                return;
+            }
+
+            // Zip params (from on_edge) with targs
+            // Note: if params.len() != targs.len(), zip will stop at the shorter one
+            for (status, ty) in params.values().zip(targs) {
+                // Use specified_variance if available (for externally defined TypeVars
+                // with explicit variance like covariant=True), otherwise use inferred.
+                let effective_variance = status
+                    .specified_variance
+                    .unwrap_or(status.inferred_variance);
+                on_type(
+                    variance.compose(effective_variance),
+                    status.has_variance_inferred,
+                    ty,
+                    on_edge,
+                    on_var,
+                );
+            }
+        }
+        Type::Quantified(q) => {
+            on_var(q.name(), variance, inj, q.variance());
+        }
+        Type::Union(box Union { members: tys, .. }) => {
+            for ty in tys {
+                on_type(variance, inj, ty, on_edge, on_var);
+            }
+        }
+        Type::Overload(t) => {
+            let sigs = &t.signatures;
+            for sig in sigs {
+                on_type(variance, inj, &sig.as_type(), on_edge, on_var);
+            }
+        }
+        Type::Callable(t) => {
+            // Walk return type covariantly
+            on_type(variance, inj, &t.ret, on_edge, on_var);
+
+            // Walk parameters contravariantly
+            match &t.params {
+                Params::List(param_list) => {
+                    for param in param_list.items().iter() {
+                        let ty = param.as_type();
+                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                    }
+                }
+                Params::Ellipsis | Params::Materialization => {
+                    // Unknown params
+                }
+                Params::ParamSpec(prefix, param_spec) => {
+                    for (ty, _) in prefix.iter() {
+                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                    }
+                    on_type(variance.inv(), inj, param_spec, on_edge, on_var);
+                }
+            }
+        }
+        Type::Tuple(t) => {
+            handle_tuple_type(t, variance, inj, on_edge, on_var);
+        }
+        Type::Forall(forall) => {
+            // Methods with type parameters are wrapped in Forall. We need to visit
+            // the body to find class-level type variables used within.
+            on_type(
+                variance,
+                inj,
+                &forall.body.clone().as_type(),
+                on_edge,
+                on_var,
+            );
+        }
+
+        _ => {}
+    }
+}
+
 fn on_class(
     class: &Class,
     on_edge: &mut impl FnMut(&Class) -> InferenceMap,
-    on_var: &mut impl FnMut(&Name, Variance, bool),
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
     get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
     get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
 ) {
@@ -96,139 +270,6 @@ fn on_class(
         let ends_with_double_underscore = name.ends_with("__");
 
         starts_with_underscore && !ends_with_double_underscore
-    }
-
-    fn handle_tuple_type(
-        tuple: &Tuple,
-        variance: Variance,
-        inj: bool,
-        on_edge: &mut impl FnMut(&Class) -> InferenceMap,
-        on_var: &mut impl FnMut(&Name, Variance, bool),
-    ) {
-        match tuple {
-            Tuple::Concrete(concrete_types) => {
-                for ty in concrete_types {
-                    on_type(variance, inj, ty, on_edge, on_var);
-                }
-            }
-            Tuple::Unbounded(unbounded_ty) => {
-                on_type(variance, inj, unbounded_ty, on_edge, on_var);
-            }
-            Tuple::Unpacked(boxed_parts) => {
-                let (before, middle, after) = &**boxed_parts;
-                for ty in before {
-                    on_type(variance, inj, ty, on_edge, on_var);
-                }
-                on_type(variance, inj, middle, on_edge, on_var);
-                for ty in after {
-                    on_type(variance, inj, ty, on_edge, on_var);
-                }
-            }
-        }
-    }
-
-    fn on_type(
-        variance: Variance,
-        inj: bool,
-        typ: &Type,
-        on_edge: &mut impl FnMut(&Class) -> InferenceMap,
-        on_var: &mut impl FnMut(&Name, Variance, bool),
-    ) {
-        match typ {
-            Type::Type(t) => {
-                on_type(variance, inj, t, on_edge, on_var);
-            }
-
-            Type::Function(t) => {
-                on_type(
-                    variance,
-                    inj,
-                    &Type::Callable(Box::new(t.signature.clone())),
-                    on_edge,
-                    on_var,
-                );
-            }
-
-            Type::ClassType(class) => {
-                let params = on_edge(class.class_object());
-                let targs = class.targs().as_slice();
-
-                // If targs is empty, nothing to do
-                if targs.is_empty() {
-                    return;
-                }
-
-                // Zip params (from on_edge) with targs
-                // Note: if params.len() != targs.len(), zip will stop at the shorter one
-                for (status, ty) in params.values().zip(targs) {
-                    // Use specified_variance if available (for externally defined TypeVars
-                    // with explicit variance like covariant=True), otherwise use inferred.
-                    let effective_variance = status
-                        .specified_variance
-                        .unwrap_or(status.inferred_variance);
-                    on_type(
-                        variance.compose(effective_variance),
-                        status.has_variance_inferred,
-                        ty,
-                        on_edge,
-                        on_var,
-                    );
-                }
-            }
-            Type::Quantified(q) => {
-                on_var(q.name(), variance, inj);
-            }
-            Type::Union(box Union { members: tys, .. }) => {
-                for ty in tys {
-                    on_type(variance, inj, ty, on_edge, on_var);
-                }
-            }
-            Type::Overload(t) => {
-                let sigs = &t.signatures;
-                for sig in sigs {
-                    on_type(variance, inj, &sig.as_type(), on_edge, on_var);
-                }
-            }
-            Type::Callable(t) => {
-                // Walk return type covariantly
-                on_type(variance, inj, &t.ret, on_edge, on_var);
-
-                // Walk parameters contravariantly
-                match &t.params {
-                    Params::List(param_list) => {
-                        for param in param_list.items().iter() {
-                            let ty = param.as_type();
-                            on_type(variance.inv(), inj, ty, on_edge, on_var);
-                        }
-                    }
-                    Params::Ellipsis | Params::Materialization => {
-                        // Unknown params
-                    }
-                    Params::ParamSpec(prefix, param_spec) => {
-                        for (ty, _) in prefix.iter() {
-                            on_type(variance.inv(), inj, ty, on_edge, on_var);
-                        }
-                        on_type(variance.inv(), inj, param_spec, on_edge, on_var);
-                    }
-                }
-            }
-            Type::Tuple(t) => {
-                handle_tuple_type(t, variance, inj, on_edge, on_var);
-            }
-            Type::Forall(forall) => {
-                // Methods with type parameters are wrapped in Forall. We need to visit
-                // the body to find class-level type variables used within.
-                on_type(
-                    variance,
-                    inj,
-                    &forall.body.clone().as_type(),
-                    on_edge,
-                    on_var,
-                );
-            }
-
-            _ => {}
-        }
     }
 
     for base_type in get_class_bases(class).iter() {
@@ -268,7 +309,7 @@ fn on_class(
 }
 
 fn initial_inference_status(gp: &TParam) -> InferenceStatus {
-    let variance = pre_to_post_variance(gp.variance);
+    let variance = pre_to_post_variance(gp.variance());
     let (specified_variance, has_variance_inferred) = match variance {
         Variance::Bivariant => (None, false),
         _ => (Some(variance), true),
@@ -310,7 +351,7 @@ fn initialize_environment_impl<'a>(
     let params = initial_inference_map(get_tparams(class).as_vec());
 
     environment.insert(class.dupe(), params.clone());
-    let mut on_var = |_name: &Name, _variance: Variance, _inj: bool| {};
+    let mut on_var = |_name: &Name, _variance: Variance, _inj: bool, _: PreInferenceVariance| {};
 
     // get the variance results of a given class c
     let mut on_edge = |c: &Class| {
@@ -335,7 +376,7 @@ fn initialize_environment<'a>(
     get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
     get_tparams: &impl Fn(&Class) -> Arc<TParams>,
 ) {
-    let mut on_var = |_name: &Name, _variance: Variance, _inj: bool| {};
+    let mut on_var = |_name: &Name, _variance: Variance, _inj: bool, _: PreInferenceVariance| {};
     let mut on_edge = |c: &Class| {
         initialize_environment_impl(c, environment, get_class_bases, get_fields, get_tparams)
     };
@@ -363,28 +404,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for (my_class, params) in env.iter() {
                     let mut new_params = params.clone();
 
-                    let mut on_var = |name: &Name, variance: Variance, has_inferred: bool| {
-                        if let Some(old_status) = new_params.get_mut(name) {
-                            let new_inferred_variance =
-                                variance.union(old_status.inferred_variance);
-                            // Mark as inferred if:
-                            // 1. It was already marked as inferred, OR
-                            // 2. The caller says this is an injective (reliable) constraint, OR
-                            // 3. The inferred variance is no longer Bivariant (we found a constraint)
-                            // Case 3 fixes self-referential types where `has_inferred` is always false
-                            // but we still discover variance constraints through the fixpoint iteration.
-                            let new_has_variance_inferred = old_status.has_variance_inferred
-                                || has_inferred
-                                || new_inferred_variance != Variance::Bivariant;
-                            if new_inferred_variance != old_status.inferred_variance
-                                || new_has_variance_inferred != old_status.has_variance_inferred
-                            {
-                                old_status.inferred_variance = new_inferred_variance;
-                                old_status.has_variance_inferred = new_has_variance_inferred;
-                                changed = true;
+                    let mut on_var =
+                        |name: &Name,
+                         variance: Variance,
+                         has_inferred: bool,
+                         _: PreInferenceVariance| {
+                            if let Some(old_status) = new_params.get_mut(name) {
+                                let new_inferred_variance =
+                                    variance.union(old_status.inferred_variance);
+                                // Mark as inferred if:
+                                // 1. It was already marked as inferred, OR
+                                // 2. The caller says this is an injective (reliable) constraint, OR
+                                // 3. The inferred variance is no longer Bivariant (we found a constraint)
+                                // Case 3 fixes self-referential types where `has_inferred` is always false
+                                // but we still discover variance constraints through the fixpoint iteration.
+                                let new_has_variance_inferred = old_status.has_variance_inferred
+                                    || has_inferred
+                                    || new_inferred_variance != Variance::Bivariant;
+                                if new_inferred_variance != old_status.inferred_variance
+                                    || new_has_variance_inferred != old_status.has_variance_inferred
+                                {
+                                    old_status.inferred_variance = new_inferred_variance;
+                                    old_status.has_variance_inferred = new_has_variance_inferred;
+                                    changed = true;
+                                }
                             }
-                        }
-                    };
+                        };
                     let mut on_edge = |c: &Class| env.get(c).cloned().unwrap_or_default();
                     on_class(
                         my_class,

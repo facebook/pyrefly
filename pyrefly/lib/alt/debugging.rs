@@ -100,6 +100,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(CalcId(bindings, idx)) => match idx {
                 AnyIdx::Key(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyExpect(idx) => self.show_binding_for_with(&bindings, idx),
+                AnyIdx::KeyTypeAlias(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyConsistentOverrideCheck(idx) => {
                     self.show_binding_for_with(&bindings, idx)
                 }
@@ -108,6 +109,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 AnyIdx::KeyClassBaseType(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyClassField(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyVariance(idx) => self.show_binding_for_with(&bindings, idx),
+                AnyIdx::KeyVarianceCheck(idx) => self.show_binding_for_with(&bindings, idx),
                 AnyIdx::KeyClassSynthesizedFields(idx) => {
                     self.show_binding_for_with(&bindings, idx)
                 }

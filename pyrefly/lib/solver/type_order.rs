@@ -10,9 +10,11 @@ use std::sync::Arc;
 use dupe::Clone_;
 use dupe::Copy_;
 use dupe::Dupe_;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::BoundMethod;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
@@ -167,5 +169,12 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Option<Type> {
         self.0.bind_boundmethod(m, is_subset)
+    }
+
+    pub fn untype_alias(self, ta: &TypeAliasData) -> Type {
+        let ty = self.0.get_type_alias(ta).as_type();
+        // We already validated the type when creating the type alias.
+        self.0
+            .untype(ty, TextRange::default(), &self.0.error_swallower())
     }
 }

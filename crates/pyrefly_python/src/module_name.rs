@@ -242,6 +242,10 @@ impl ModuleName {
         Self::from_str("_collections_abc")
     }
 
+    pub fn string_templatelib() -> Self {
+        Self::from_str("string.templatelib")
+    }
+
     pub fn pydantic() -> Self {
         Self::from_str("pydantic.main")
     }

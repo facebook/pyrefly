@@ -6,10 +6,10 @@
  */
 
 use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_types::literal::LitStyle;
 use ruff_python_ast::CmpOp;
-use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprUnaryOp;
@@ -84,7 +84,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 Some(&context),
                 "Expr::binop_infer",
-                true,
+                // Magic method lookup for operators should ignore __getattr__/__getattribute__.
+                false,
             );
             let Some(method_type_dunder) = method_type_dunder else {
                 continue;
@@ -131,37 +132,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (Tuple::Concrete(l), Tuple::Concrete(r)) => {
                 let mut elements = l.clone();
                 elements.extend(r.clone());
-                Type::concrete_tuple(elements)
+                self.heap.mk_concrete_tuple(elements)
             }
-            (Tuple::Unbounded(l), Tuple::Unbounded(r)) => {
-                Type::unbounded_tuple(self.union((**l).clone(), (**r).clone()))
-            }
+            (Tuple::Unbounded(l), Tuple::Unbounded(r)) => self
+                .heap
+                .mk_unbounded_tuple(self.union((**l).clone(), (**r).clone())),
             (Tuple::Concrete(l), r @ Tuple::Unbounded(_)) => {
-                Type::unpacked_tuple(l.clone(), Type::Tuple(r.clone()), Vec::new())
+                self.heap
+                    .mk_unpacked_tuple(l.clone(), self.heap.mk_tuple(r.clone()), Vec::new())
             }
             (l @ Tuple::Unbounded(_), Tuple::Concrete(r)) => {
-                Type::unpacked_tuple(Vec::new(), Type::Tuple(l.clone()), r.clone())
+                self.heap
+                    .mk_unpacked_tuple(Vec::new(), self.heap.mk_tuple(l.clone()), r.clone())
             }
             (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Concrete(r)) => {
                 let mut new_suffix = l_suffix.clone();
                 new_suffix.extend(r.clone());
-                Type::unpacked_tuple(l_prefix.clone(), l_middle.clone(), new_suffix)
+                self.heap
+                    .mk_unpacked_tuple(l_prefix.clone(), l_middle.clone(), new_suffix)
             }
             (Tuple::Concrete(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
                 let mut new_prefix = l.clone();
                 new_prefix.extend(r_prefix.clone());
-                Type::unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.clone())
+                self.heap
+                    .mk_unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.clone())
             }
             (Tuple::Unbounded(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
                 let mut middle = r_prefix.clone();
                 middle.push((**l).clone());
                 middle.push(
                     self.unwrap_iterable(r_middle)
-                        .unwrap_or(Type::any_implicit()),
+                        .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
-                Type::unpacked_tuple(
+                self.heap.mk_unpacked_tuple(
                     Vec::new(),
-                    Type::unbounded_tuple(self.unions(middle)),
+                    self.heap.mk_unbounded_tuple(self.unions(middle)),
                     r_suffix.clone(),
                 )
             }
@@ -170,11 +175,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 middle.push((**r).clone());
                 middle.push(
                     self.unwrap_iterable(l_middle)
-                        .unwrap_or(Type::any_implicit()),
+                        .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
-                Type::unpacked_tuple(
+                self.heap.mk_unpacked_tuple(
                     l_prefix.clone(),
-                    Type::unbounded_tuple(self.unions(middle)),
+                    self.heap.mk_unbounded_tuple(self.unions(middle)),
                     Vec::new(),
                 )
             }
@@ -186,15 +191,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 middle.extend(r_prefix.clone());
                 middle.push(
                     self.unwrap_iterable(l_middle)
-                        .unwrap_or(Type::any_implicit()),
+                        .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
                 middle.push(
                     self.unwrap_iterable(r_middle)
-                        .unwrap_or(Type::any_implicit()),
+                        .unwrap_or_else(|| self.heap.mk_any_implicit()),
                 );
-                Type::unpacked_tuple(
+                self.heap.mk_unpacked_tuple(
                     l_prefix.clone(),
-                    Type::unbounded_tuple(self.unions(middle)),
+                    self.heap.mk_unbounded_tuple(self.unions(middle)),
                     r_suffix.clone(),
                 )
             }
@@ -224,17 +229,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ];
             self.try_binop_calls(&calls_to_try, range, errors, &context)
         };
-        // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
-        // type hint when evaluating [X]
         let lhs;
         let rhs;
-        if matches!(&*x.left, Expr::List(_)) && x.op == Operator::Mult {
+        if Ast::is_list_literal_or_comprehension(&x.left) && x.op == Operator::Mult {
+            // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
+            // type hint when evaluating [X]
             rhs = self.expr_infer(&x.right, errors);
             if self.is_subset_eq(&rhs, &self.stdlib.int().clone().to_type()) {
                 lhs = self.expr_infer_with_hint(&x.left, hint, errors);
             } else {
                 lhs = self.expr_infer(&x.left, errors);
             }
+        } else if x.op == Operator::Add
+            && Ast::is_list_literal_or_comprehension(&x.left)
+            && Ast::is_list_literal_or_comprehension(&x.right)
+        {
+            // If both operands are list literals, pass the contextual hint down
+            lhs = self.expr_infer_with_hint(&x.left, hint, errors);
+            rhs = self.expr_infer_with_hint(&x.right, hint, errors);
         } else {
             lhs = self.expr_infer(&x.left, errors);
             rhs = self.expr_infer(&x.right, errors);
@@ -246,7 +258,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
             && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
         {
-            return Type::type_form(self.union(l, r));
+            return self.heap.mk_type_form(self.union(l, r));
         }
 
         self.distribute_over_union(&lhs, |lhs| {
@@ -263,12 +275,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
                     && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
                 {
-                    Type::type_form(self.union(l, r))
+                    self.heap.mk_type_form(self.union(l, r))
                 } else if x.op == Operator::Add
                     && ((matches!(lhs, Type::LiteralString(_)) && rhs.is_literal_string())
                         || (matches!(rhs, Type::LiteralString(_)) && lhs.is_literal_string()))
                 {
-                    Type::LiteralString(LitStyle::Implicit)
+                    self.heap.mk_literal_string(LitStyle::Implicit)
                 } else if x.op == Operator::Add
                     && let Type::Tuple(l) = lhs
                     && let Type::Tuple(r) = rhs
@@ -314,7 +326,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && base.is_literal_string()
                     && rhs.is_literal_string()
                 {
-                    Type::LiteralString(LitStyle::Implicit)
+                    self.heap.mk_literal_string(LitStyle::Implicit)
                 } else if x.op == Operator::Add
                     && let Type::Tuple(ref l) = base
                     && let Type::Tuple(r) = rhs
@@ -327,14 +339,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
         // If we're assigning to something with an annotation, make sure the produced value is assignable to it
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
-            if ann.annotation.is_final() {
-                self.error(
-                    errors,
-                    x.range(),
-                    ErrorInfo::Kind(ErrorKind::BadAssignment),
-                    format!("Cannot assign to {} because it is marked final", ann.target),
-                );
-            }
+            self.check_final_reassignment(&ann, x.range(), errors);
             if let Some(ann_ty) = ann.ty(self.stdlib) {
                 return self.check_and_return_type(result, &ann_ty, x.range(), errors, tcc);
             }

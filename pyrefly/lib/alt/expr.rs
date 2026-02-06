@@ -18,6 +18,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::literal::LitStyle;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -64,7 +65,6 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
-use crate::types::callable::Callable;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -82,7 +82,6 @@ use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
 use crate::types::type_var_tuple::TypeVarTuple;
-use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 
 #[derive(Debug, Clone, Copy)]
@@ -270,7 +269,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let res = match x {
             Expr::Name(x) => {
                 if Ast::is_synthesized_empty_name(x) {
-                    TypeInfo::of_ty(Type::any_error())
+                    TypeInfo::of_ty(self.heap.mk_any_error())
                 } else {
                     self.get(&Key::BoundName(ShortIdentifier::expr_name(x)))
                         .arc_clone()
@@ -431,7 +430,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return_hint.as_ref().map(|hint| hint.as_ref()),
                     errors,
                 );
-                Type::Callable(Box::new(Callable { params, ret }))
+                self.heap.mk_callable(params, ret)
             }
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
             Expr::List(x) => {
@@ -441,7 +440,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         || {
                             self.solver()
                                 .fresh_partial_contained(self.uniques, x.range)
-                                .to_type()
+                                .to_type(self.heap)
                         },
                         |hint| hint.to_type(),
                     );
@@ -459,7 +458,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         || {
                             self.solver()
                                 .fresh_partial_contained(self.uniques, x.range)
-                                .to_type()
+                                .to_type(self.heap)
                         },
                         |hint| hint.to_type(),
                     );
@@ -517,10 +516,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                     .into_ty();
                 if self.generator_expr_is_async(x) {
-                    self.stdlib.async_generator(yield_ty, Type::None).to_type()
-                } else {
                     self.stdlib
-                        .generator(yield_ty, Type::None, Type::None)
+                        .async_generator(yield_ty, self.heap.mk_none())
+                        .to_type()
+                } else {
+                    let none = self.heap.mk_none();
+                    self.stdlib
+                        .generator(yield_ty, none.clone(), none)
                         .to_type()
                 }
             }
@@ -566,16 +568,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
                 match Lit::from_fstring(x) {
                     Some(lit) => lit.to_implicit_type(),
-                    _ if all_literal_strings => Type::LiteralString(LitStyle::Implicit),
+                    _ if all_literal_strings => self.heap.mk_literal_string(LitStyle::Implicit),
                     _ => self.stdlib.str().clone().to_type(),
                 }
             }
-            Expr::TString(x) => self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::Unsupported),
-                "t-strings are not yet supported".to_owned(),
-            ),
+            Expr::TString(x) => {
+                x.visit(&mut |x| {
+                    self.expr_infer(x, errors);
+                });
+                if let Some(template) = self.stdlib.template() {
+                    template.clone().to_type()
+                } else {
+                    self.error(
+                        errors,
+                        x.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        "t-strings are only available in Python 3.14+".to_owned(),
+                    )
+                }
+            }
             Expr::StringLiteral(x) => Lit::from_string_literal(x).to_implicit_type(),
             Expr::BytesLiteral(x) => Lit::from_bytes_literal(x).to_implicit_type(),
             Expr::NumberLiteral(x) => match &x.value {
@@ -584,11 +595,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Number::Complex { .. } => self.stdlib.complex().clone().to_type(),
             },
             Expr::BooleanLiteral(x) => Lit::from_boolean_literal(x).to_implicit_type(),
-            Expr::NoneLiteral(_) => Type::None,
-            Expr::EllipsisLiteral(_) => Type::Ellipsis,
+            Expr::NoneLiteral(_) => self.heap.mk_none(),
+            Expr::EllipsisLiteral(_) => self.heap.mk_ellipsis(),
             Expr::Starred(ExprStarred { value, .. }) => {
                 let ty = self.expr_untype(value, TypeFormContext::TypeArgument, errors);
-                Type::Unpack(Box::new(ty))
+                self.heap.mk_unpack(ty)
             }
             Expr::Slice(x) => {
                 let elt_exprs = [x.lower.as_ref(), x.upper.as_ref(), x.step.as_ref()];
@@ -600,7 +611,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Expr::IpyEscapeCommand(x) => {
                 if self.module().is_notebook() {
-                    Type::any_implicit()
+                    self.heap.mk_any_implicit()
                 } else {
                     self.error(
                         errors,
@@ -655,7 +666,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if !nontuples.is_empty() {
                 // The non-tuple options may contain a type like Sequence[T] that provides an additional default hint.
-                // Filter out top-level Vars: they don't provide any hints, and we don't want to pin them.
+                // TODO: we filter out top-level Vars to prevent premature pinning
+                // (https://github.com/facebook/pyrefly/issues/105), but this also prevents us from picking up hints
+                // from Quantified restrictions. See test::contextual::test_sequence_hint_in_typevar_bound.
                 let nontuple_hint = self.unions(
                     nontuples
                         .into_iter()
@@ -713,10 +726,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         _ => {
                             if let Some(iterable_ty) = self.unwrap_iterable(&ty) {
                                 if !unbounded.is_empty() {
-                                    unbounded.push(Type::unbounded_tuple(self.unions(suffix)));
+                                    unbounded
+                                        .push(self.heap.mk_unbounded_tuple(self.unions(suffix)));
                                     suffix = Vec::new();
                                 }
-                                unbounded.push(Type::unbounded_tuple(iterable_ty));
+                                unbounded.push(self.heap.mk_unbounded_tuple(iterable_ty));
                                 hint_ts_iter.nth(usize::MAX);
                             } else {
                                 self.error(
@@ -752,11 +766,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if encountered_invalid_star {
             // We already produced the type error, and we can't really roll up a suitable outermost type here.
             // TODO(stroxler): should we really be producing a `tuple[Any]` here? We do at least know *something* about the type!
-            Type::any_error()
+            self.heap.mk_any_error()
         } else {
             match unbounded.as_slice() {
-                [] => Type::concrete_tuple(prefix),
-                [middle] => Type::unpacked_tuple(prefix, middle.clone(), suffix),
+                [] => self.heap.mk_concrete_tuple(prefix),
+                [middle] => self.heap.mk_unpacked_tuple(prefix, middle.clone(), suffix),
                 // We can't precisely model unpacking two unbounded iterables, so we'll keep any
                 // concrete prefix and suffix elements and merge everything in between into an unbounded tuple
                 _ => {
@@ -764,12 +778,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .iter()
                         .map(|t| {
                             self.unwrap_iterable(t)
-                                .unwrap_or(Type::Any(AnyStyle::Implicit))
+                                .unwrap_or_else(|| self.heap.mk_any_implicit())
                         })
                         .collect();
-                    Type::unpacked_tuple(
+                    self.heap.mk_unpacked_tuple(
                         prefix,
-                        Type::unbounded_tuple(self.unions(middle_types)),
+                        self.heap.mk_unbounded_tuple(self.unions(middle_types)),
                         suffix,
                     )
                 }
@@ -886,7 +900,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 || {
                     self.solver()
                         .fresh_partial_contained(self.uniques, range)
-                        .to_type()
+                        .to_type(self.heap)
                 },
                 |ty| ty.to_type(),
             );
@@ -894,7 +908,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 || {
                     self.solver()
                         .fresh_partial_contained(self.uniques, range)
-                        .to_type()
+                        .to_type(self.heap)
                 },
                 |ty| ty.to_type(),
             );
@@ -931,15 +945,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             typed_dict_fields.push((
                                 key_name,
                                 TypedDictField {
-                                    ty: if value_t == Type::None {
-                                        Type::union(vec![
-                                            Type::None,
+                                    ty: if value_t.is_none() {
+                                        self.heap.mk_union(vec![
+                                            self.heap.mk_none(),
                                             self.solver()
                                                 .fresh_partial_contained(
                                                     self.uniques,
                                                     x.value.range(),
                                                 )
-                                                .to_type(),
+                                                .to_type(self.heap),
                                         ])
                                     } else {
                                         value_t.clone()
@@ -988,16 +1002,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && typed_dict_fields.len() <= ANONYMOUS_TYPED_DICT_MAX_ITEMS
                 && !typed_dict_fields.is_empty()
             {
-                return Type::TypedDict(TypedDict::Anonymous(Box::new(AnonymousTypedDictInner {
-                    fields: typed_dict_fields,
-                    value_type: self.unions(value_tys),
-                })));
+                return self.heap.mk_typed_dict(TypedDict::Anonymous(Box::new(
+                    AnonymousTypedDictInner {
+                        fields: typed_dict_fields,
+                        value_type: self.unions(value_tys),
+                    },
+                )));
             }
             if key_tys.is_empty() {
-                key_tys.push(Type::any_error())
+                key_tys.push(self.heap.mk_any_error())
             }
             if value_tys.is_empty() {
-                value_tys.push(Type::any_error())
+                value_tys.push(self.heap.mk_any_error())
             }
             let key_ty = self.unions(key_tys);
             let value_ty = self.unions(value_tys);
@@ -1064,7 +1080,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let dict_type = self
             .stdlib
-            .dict(Type::any_implicit(), Type::any_implicit())
+            .dict(self.heap.mk_any_implicit(), self.heap.mk_any_implicit())
             .to_type();
         self.is_subset_eq(ty, &dict_type)
     }
@@ -1115,18 +1131,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             |t: &Type, r: TextRange| self.as_bool(t, r, errors) == Some(target);
         let should_discard = |t: &Type, r: TextRange| self.as_bool(t, r, errors) == Some(!target);
 
-        let mut t_acc = Type::never();
+        let mut t_acc = self.heap.mk_never();
+        // Separate accumulator for soft hints - uses un-narrowed types.
+        // The narrowing of bool/int/str to literals is for the result type of the boolop,
+        // not for contextual typing of subsequent expressions.
+        let mut hint_acc: Option<Type> = None;
         let last_index = values.len() - 1;
         for (i, value) in values.iter().enumerate() {
             // If there isn't a hint for the overall expression, use the preceding branches as a "soft" hint
             // for the next one. Most useful for expressions like `optional_list or []`.
-            let hint = hint.or_else(|| {
-                if t_acc.is_never() {
-                    None
-                } else {
-                    Some(HintRef::soft(&t_acc))
-                }
-            });
+            let hint = hint.or_else(|| hint_acc.as_ref().map(HintRef::soft));
             let mut t = self.expr_infer_with_hint(value, hint, errors);
             self.expand_vars_mut(&mut t);
             // If this is not the last entry, we have to make a type-dependent decision and also narrow the
@@ -1141,6 +1155,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for t in t.into_unions() {
                 // If we reach the last value, we should always keep it.
                 if i == last_index || !should_discard(&t, value.range()) {
+                    // Accumulate un-narrowed type for hints
+                    hint_acc = Some(match hint_acc {
+                        None => t.clone(),
+                        Some(acc) => self.union(acc, t.clone()),
+                    });
+                    // Narrow the type for the result of the boolop
                     let t = if i != last_index && t == self.stdlib.bool().clone().to_type() {
                         Lit::Bool(target).to_implicit_type()
                     } else if i != last_index && t == self.stdlib.int().clone().to_type() && !target
@@ -1271,32 +1291,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty.transform(&mut |ty| match ty {
             Type::SpecialForm(SpecialForm::Tuple) => {
                 Self::add_implicit_any_error(errors, range, "tuple", None);
-                *ty = Type::unbounded_tuple(Type::Any(AnyStyle::Implicit));
+                *ty = self.heap.mk_unbounded_tuple(self.heap.mk_any_implicit());
             }
             Type::SpecialForm(SpecialForm::Callable) => {
                 Self::add_implicit_any_error(errors, range, "Callable", None);
-                *ty = Type::callable_ellipsis(Type::Any(AnyStyle::Implicit))
+                *ty = self.heap.mk_callable_ellipsis(self.heap.mk_any_implicit())
             }
             Type::SpecialForm(SpecialForm::Type) => {
                 Self::add_implicit_any_error(errors, range, "type", None);
-                *ty = Type::type_form(Type::Any(AnyStyle::Implicit))
+                *ty = self.heap.mk_type_form(self.heap.mk_any_implicit())
             }
             Type::ClassDef(cls) => {
                 if cls.is_builtin("tuple") {
                     Self::add_implicit_any_error(errors, range, "tuple", None);
-                    *ty = Type::type_form(Type::unbounded_tuple(Type::Any(AnyStyle::Implicit)));
+                    *ty = self
+                        .heap
+                        .mk_type_form(self.heap.mk_unbounded_tuple(self.heap.mk_any_implicit()));
                 } else if cls.is_builtin("type") {
                     // `type`` is equivalent to `type[Any]`. As a result, the class def itself
                     // has type `type[type[Any]]`.
-                    *ty = Type::type_form(Type::type_form(Type::Any(AnyStyle::Implicit)));
+                    *ty = self
+                        .heap
+                        .mk_type_form(self.heap.mk_type_form(self.heap.mk_any_implicit()));
                 } else if cls.has_toplevel_qname("typing", "Any") {
-                    *ty = Type::type_form(Type::any_explicit())
+                    *ty = self.heap.mk_type_form(self.heap.mk_any_explicit())
                 } else {
-                    *ty = Type::type_form(self.promote(cls, range, errors));
+                    *ty = self.heap.mk_type_form(self.promote(cls, range, errors));
                 }
             }
             Type::ClassType(cls) if cls.is_builtin("type") => {
-                *ty = Type::type_form(Type::Any(AnyStyle::Implicit));
+                *ty = self.heap.mk_type_form(self.heap.mk_any_implicit());
             }
             _ => {}
         })
@@ -1702,133 +1726,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         TypeVarTuple::new(name, self.module().dupe(), default_value)
     }
 
-    pub fn typealiastype_from_call(
-        &self,
-        name: Identifier,
-        x: &ExprCall,
-        errors: &ErrorCollector,
-    ) -> Option<(Expr, Vec<Expr>)> {
-        let mut arg_name = false;
-        let mut value = None;
-        let mut type_params = None;
-        let check_name_arg = |arg: &Expr| {
-            if let Expr::StringLiteral(lit) = arg {
-                if lit.value.to_str() != name.id.as_str() {
-                    self.error(
-                        errors,
-                        x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                        format!(
-                            "TypeAliasType must be assigned to a variable named `{}`",
-                            lit.value.to_str()
-                        ),
-                    );
-                }
-            } else {
-                self.error(
-                    errors,
-                    arg.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                    "Expected first argument of `TypeAliasType` to be a string literal".to_owned(),
-                );
-            }
-        };
-        if let Some(arg) = x.arguments.args.first() {
-            check_name_arg(arg);
-            arg_name = true;
-        }
-        if let Some(arg) = x.arguments.args.get(1) {
-            value = Some(arg.clone());
-        }
-        if let Some(arg) = x.arguments.args.get(2) {
-            self.error(
-                errors,
-                arg.range(),
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                "Unexpected positional argument to `TypeAliasType`".to_owned(),
-            );
-        }
-        for kw in &x.arguments.keywords {
-            match &kw.arg {
-                Some(id) => match id.id.as_str() {
-                    "name" => {
-                        if arg_name {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                                "Multiple values for argument `name`".to_owned(),
-                            );
-                        } else {
-                            check_name_arg(&kw.value);
-                            arg_name = true;
-                        }
-                    }
-                    "value" => {
-                        if value.is_some() {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                                "Multiple values for argument `value`".to_owned(),
-                            );
-                        } else {
-                            value = Some(kw.value.clone());
-                        }
-                    }
-                    "type_params" => {
-                        if let Expr::Tuple(tuple) = &kw.value {
-                            type_params = Some(tuple.elts.clone());
-                        } else {
-                            self.error(
-                                errors,
-                                kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                                "Value for argument `type_params` must be a tuple literal"
-                                    .to_owned(),
-                            );
-                        }
-                    }
-                    _ => {
-                        self.error(
-                            errors,
-                            kw.range,
-                            ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                            format!("Unexpected keyword argument `{}` to `TypeAliasType`", id.id),
-                        );
-                    }
-                },
-                _ => {
-                    self.error(
-                        errors,
-                        kw.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                        "Cannot pass unpacked keyword arguments to `TypeAliasType`".to_owned(),
-                    );
-                }
-            }
-        }
-        if !arg_name {
-            self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                "Missing `name` argument".to_owned(),
-            );
-        }
-        if let Some(value) = value {
-            Some((value, type_params.unwrap_or_default()))
-        } else {
-            self.error(
-                errors,
-                x.range,
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                "Missing `value` argument".to_owned(),
-            );
-            None
-        }
-    }
-
     /// Helper to infer element types for a list or set.
     fn elts_infer(
         &self,
@@ -1923,7 +1820,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 base = self.solver().force_var(v);
             }
             if matches!(&base, Type::ClassDef(t) if t.name() == "tuple") {
-                base = Type::type_form(Type::SpecialForm(SpecialForm::Tuple));
+                base = self.heap.mk_type_form(self.heap.mk_special_form(SpecialForm::Tuple));
             }
             if let Type::Intersect(x) = base {
                 // TODO: Handle subscription of intersections properly.
@@ -1951,7 +1848,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     };
                     // TODO: Validate that `targ` refers to a "valid in-scope class or TypeVar"
                     // (https://typing.readthedocs.io/en/latest/spec/annotations.html#type-and-annotation-expressions)
-                    Type::type_form(Type::type_form(targ))
+                    self.heap.mk_type_form(self.heap.mk_type_form(targ))
                 }
                 // TODO: pyre_extensions.PyreReadOnly is a non-standard type system extension that marks read-only
                 // objects. We don't support it yet.
@@ -1996,7 +1893,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         &self.expr(slice, None, errors),
                         &self.stdlib.str().clone().to_type(),
                     ) {
-                        Type::ClassType(self.as_class_type_unchecked(cls))
+                        self.heap.mk_class_type(self.as_class_type_unchecked(cls))
                     } else {
                         self.error(
                             errors,
@@ -2012,7 +1909,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         && !metadata.has_base_any()
                         && !metadata.is_new_type()
                     {
-                        let class_ty = Type::ClassDef(cls.dupe());
+                        let class_ty = self.heap.mk_class_def(cls.dupe());
                         // TODO(stroxler): Add a new API, similar to `type_of_attr_get` but returning a
                         // LookupResult or an Optional type, that we could use here to avoid the double lookup.
                         if self.has_attr(&class_ty, &dunder::CLASS_GETITEM) {
@@ -2036,7 +1933,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(result) = class_getitem_result {
                         result
                     } else {
-                        Type::type_form(self.specialize(
+                        self.heap.mk_type_form(self.specialize(
                             &cls,
                             xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
                             range,
@@ -2047,13 +1944,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::Type(box Type::Quantified(quantified)) if quantified.is_type_var() => {
                     let quantified = *quantified;
                     let base_display_ty =
-                        Type::Type(Box::new(Type::Quantified(Box::new(quantified.clone()))));
+                        self.heap.mk_type(self.heap.mk_quantified(quantified.clone()));
                     if self.is_restricted_to_enum_class_def_type(&quantified) {
                         if self.is_subset_eq(
                             &self.expr(slice, None, errors),
                             &self.stdlib.str().clone().to_type(),
                         ) {
-                            quantified.to_type()
+                            quantified.to_type(self.heap)
                         } else {
                             self.error(
                                 errors,
@@ -2078,7 +1975,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Type::Type(inner) if self.is_enum_class_type(inner.as_ref()) => {
-                    let base_display_ty = Type::Type(inner.clone());
+                    let base_display_ty = self.heap.mk_type_form((*inner).clone());
                     let enum_value_ty = *inner;
                     if self.is_subset_eq(
                         &self.expr(slice, None, errors),
@@ -2235,7 +2132,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                                     msg,
                                 );
-                                Type::any_error()
+                                self.heap.mk_any_error()
                             }
                         }
                         _ => {
@@ -2261,6 +2158,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     })
                 }
+                // TODO(rechen): handle generic recursive aliases
+                Type::TypeAlias(box TypeAliasData::Ref(_)) => self.heap.mk_any_implicit(),
                 t => self.error(
                     errors,
                     range,

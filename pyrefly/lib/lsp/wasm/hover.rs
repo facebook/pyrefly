@@ -647,11 +647,12 @@ mod tests {
     use pyrefly_types::callable::FuncMetadata;
     use pyrefly_types::callable::Function;
     use pyrefly_types::callable::FunctionKind;
+    use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
 
     use super::*;
 
-    fn make_function_type(module_name: &str, func_name: &str) -> Type {
+    fn make_function_type(heap: &TypeHeap, module_name: &str, func_name: &str) -> Type {
         let module = Module::new(
             ModuleName::from_str(module_name),
             ModulePath::filesystem(PathBuf::from(format!("{module_name}.pyi"))),
@@ -665,22 +666,24 @@ mod tests {
             })),
             flags: FuncFlags::default(),
         };
-        Type::Function(Box::new(Function {
-            signature: Callable::ellipsis(Type::None),
+        heap.mk_function(Function {
+            signature: Callable::ellipsis(heap.mk_none()),
             metadata,
-        }))
+        })
     }
 
     #[test]
     fn fallback_uses_function_metadata() {
-        let ty = make_function_type("numpy", "arange");
+        let heap = TypeHeap::new();
+        let ty = make_function_type(&heap, "numpy", "arange");
         let fallback = fallback_hover_name_from_type(&ty);
         assert_eq!(fallback.as_deref(), Some("arange"));
     }
 
     #[test]
     fn fallback_recurses_through_type_wrapper() {
-        let ty = Type::Type(Box::new(make_function_type("pkg.subpkg", "run")));
+        let heap = TypeHeap::new();
+        let ty = heap.mk_type(make_function_type(&heap, "pkg.subpkg", "run"));
         let fallback = fallback_hover_name_from_type(&ty);
         assert_eq!(fallback.as_deref(), Some("run"));
     }

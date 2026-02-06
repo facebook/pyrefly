@@ -1435,6 +1435,97 @@ Definition Result:
 }
 
 #[test]
+fn dunder_all_entry_definition_test() {
+    let pkg = r#"
+from pkg.bar import Bar
+
+class Baz:
+    pass
+
+__all__ = (
+    "Bar",
+#    ^
+    "Baz",
+#    ^
+)
+"#;
+    let bar = r#"
+class Bar:
+    pass
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("pkg", pkg), ("pkg.bar", bar)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+8 |     "Bar",
+         ^
+Definition Result:
+2 | class Bar:
+          ^^^
+
+10 |     "Baz",
+          ^
+Definition Result:
+4 | class Baz:
+          ^^^
+
+
+# pkg.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn string_literal_not_in_dunder_all() {
+    let pkg = r#"
+class Foo:
+    pass
+
+x = "Foo"
+#    ^
+
+__all__ = ["Foo"]
+"#;
+    let report = get_batched_lsp_operations_report(&[("pkg", pkg)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+5 | x = "Foo"
+         ^
+Definition Result: None
+
+
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dunder_all_nonexistent_symbol() {
+    let pkg = r#"
+__all__ = ["NonExistent"]
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("pkg", pkg)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+2 | __all__ = ["NonExistent"]
+                 ^
+Definition Result: None
+
+
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn renamed_reexport() {
     let lib2 = r#"
 def foo() -> None: ...
@@ -1956,5 +2047,39 @@ result = [x for x in it]
     assert!(
         report.contains("__iter__"),
         "Expected definition to jump to __iter__ method in comprehension, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_in_fstring_simple() {
+    let code = r#"
+def f() -> int:
+    return 0
+
+y = f"hello {f()}"
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("def f()"),
+        "Expected definition to jump to function f, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_in_fstring_format_specifier() {
+    // TODO(T253793958): Fix go-to-definition in format string specifiers.
+    let code = r#"
+def f() -> int:
+    return 0
+
+x = 1
+y = f"hello {x:{f()}}"
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Definition Result:") && report.contains("None"),
+        "Expected definition to jump to function f, got: {report}"
     );
 }

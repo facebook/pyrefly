@@ -1421,7 +1421,7 @@ class Parent(TypedDict, extra_items=int):
 class GoodChild(Parent):
     x: NotRequired[int]
 class BadChild1(Parent):
-    x: Required[int]  # E: cannot be extended with required extra item `x`
+    x: Required[int]  # E: Cannot add required field `x`
 class BadChild2(Parent):
     x: NotRequired[bool]  # E: `bool` is not consistent with `extra_items` type `int`
     "#,
@@ -1541,9 +1541,9 @@ testcase!(
     test_functional_form_unexpected_keyword,
     r#"
 from typing import TypedDict
-X = TypedDict('X', {}, nonsense=True)  # E: Unrecognized argument `nonsense` for typed dictionary definition
+X = TypedDict('X', {}, nonsense=True)  # E: Unrecognized keyword argument `nonsense` in typed dictionary definition
 def f(kwargs):
-    Y = TypedDict('Y', {}, **kwargs)  # E: Unrecognized argument for typed dictionary definition
+    Y = TypedDict('Y', {}, **kwargs)  # E: Unpacking is not supported in typed dictionary definition
     "#,
 );
 
@@ -2216,4 +2216,13 @@ def test_empty_not_in(e: Empty, k: str):
     else:
         reveal_type(k)  # E: revealed type: Never
 "#,
+);
+
+testcase!(
+    test_illegal_unpacking_in_def,
+    r#"
+from typing import TypedDict
+def f() -> dict: ...
+X = TypedDict("X", {"k1": int, **f()})  # E: Unpacking is not supported
+    "#,
 );

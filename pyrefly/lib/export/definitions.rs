@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::collections::HashMap;
-
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
@@ -16,7 +14,6 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::Deprecation;
-use pyrefly_util::small_set1::SmallSet1;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ExceptHandler;
@@ -40,128 +37,6 @@ use starlark_map::small_set::SmallSet;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::types::globals::ImplicitGlobal;
-
-/// What names from a module this module depends on.
-#[derive(Debug, Clone)]
-pub enum DependsOn {
-    /// Depends on all exports (star import or `import x`).
-    All,
-    /// Depends on specific names (`from x import a, b`).
-    Names(SmallSet1<Name>),
-}
-
-/// Syntactic dependency information for fine-grained incremental invalidation.
-/// Tracks which names are imported from which modules.
-#[derive(Debug, Clone, Default)]
-pub struct SyntacticDeps {
-    /// Map from module to what names are imported from it.
-    deps: HashMap<ModuleName, DependsOn>,
-}
-
-impl SyntacticDeps {
-    /// Add a dependency on a specific name from a module.
-    pub fn add_named(&mut self, module: ModuleName, name: Name) {
-        match self.deps.entry(module) {
-            std::collections::hash_map::Entry::Vacant(e) => {
-                let names = SmallSet1::new(name);
-                e.insert(DependsOn::Names(names));
-            }
-            std::collections::hash_map::Entry::Occupied(mut e) => {
-                // Only add if not already All
-                if let DependsOn::Names(names) = e.get_mut() {
-                    names.insert(name);
-                }
-            }
-        }
-    }
-
-    /// Add a wildcard dependency on a module (depends on all exports).
-    pub fn add_wildcard(&mut self, module: ModuleName) {
-        self.deps.insert(module, DependsOn::All);
-    }
-
-    /// Add a module-level dependency (for `import x` or `import x as y`).
-    /// Module imports depend on all exports since accessing `x.foo` requires `foo` to exist.
-    pub fn add_module(&mut self, module: ModuleName) {
-        self.deps.insert(module, DependsOn::All);
-    }
-
-    /// Check if this module imports any of the changed names from the given module.
-    /// Returns true if we should invalidate (i.e., we might be affected by the change).
-    pub fn imports_any(&self, module: ModuleName, changed_names: &SmallSet<Name>) -> bool {
-        match self.deps.get(&module) {
-            None => false,
-            Some(DependsOn::All) => true,
-            Some(DependsOn::Names(names)) => names.into_iter().any(|n| changed_names.contains(n)),
-        }
-    }
-
-    /// Get the underlying deps map.
-    pub fn deps(&self) -> &HashMap<ModuleName, DependsOn> {
-        &self.deps
-    }
-
-    /// Get all modules that are depended upon.
-    pub fn modules(&self) -> impl Iterator<Item = &ModuleName> {
-        self.deps.keys()
-    }
-}
-
-/// Collects syntactic dependencies from all import statements in the AST,
-/// including those nested inside functions and classes.
-struct SyntacticDepsCollector {
-    module_name: ModuleName,
-    is_init: bool,
-    deps: SyntacticDeps,
-}
-
-impl SyntacticDepsCollector {
-    fn new(module_name: ModuleName, is_init: bool) -> Self {
-        Self {
-            module_name,
-            is_init,
-            deps: SyntacticDeps::default(),
-        }
-    }
-
-    fn collect(mut self, stmts: &[Stmt]) -> SyntacticDeps {
-        for stmt in stmts {
-            self.stmt(stmt);
-        }
-        self.deps
-    }
-
-    fn stmt(&mut self, stmt: &Stmt) {
-        match stmt {
-            Stmt::Import(x) => {
-                for a in &x.names {
-                    let imported_module = ModuleName::from_name(&a.name.id);
-                    self.deps.add_module(imported_module);
-                }
-            }
-            Stmt::ImportFrom(x) => {
-                let name = self.module_name.new_maybe_relative(
-                    self.is_init,
-                    x.level,
-                    x.module.as_ref().map(|x| &x.id),
-                );
-                if let Some(module) = name {
-                    for a in &x.names {
-                        if &a.name == "*" {
-                            self.deps.add_wildcard(module);
-                        } else {
-                            self.deps.add_named(module, a.name.id.clone());
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        // Recurse into all nested statements, including functions and classes.
-        // Unlike DefinitionsBuilder, we want to find imports in all scopes.
-        stmt.recurse(&mut |x| self.stmt(x));
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MutableCaptureKind {
@@ -201,6 +76,19 @@ pub enum DefinitionStyle {
     /// A statement like `del x` defines `x` in the current scope, even if `x` has no
     /// other definition.
     Delete,
+}
+
+impl DefinitionStyle {
+    /// Returns true if this definition style represents an import from another module.
+    pub fn is_import(&self) -> bool {
+        matches!(
+            self,
+            DefinitionStyle::ImportAs(..)
+                | DefinitionStyle::ImportAsEq(..)
+                | DefinitionStyle::Import(..)
+                | DefinitionStyle::ImportModule(..)
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -266,9 +154,6 @@ pub struct Definitions {
     pub deprecated: SmallMap<Name, Deprecation>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
-    /// Syntactic dependencies for fine-grained incremental invalidation.
-    /// Includes imports from all scopes (module-level and nested in functions/classes).
-    pub syntactic_deps: SyntacticDeps,
 }
 
 /// Whether `__all__` was explicitly defined by the user or synthesized from module definitions.
@@ -368,10 +253,6 @@ impl Definitions {
             inner: Definitions::default(),
         };
         builder.stmts(x);
-
-        // Collect syntactic deps from all imports (including nested in functions/classes)
-        let syntactic_deps = SyntacticDepsCollector::new(module_name, is_init).collect(x);
-        builder.inner.syntactic_deps = syntactic_deps;
 
         builder.inner
     }

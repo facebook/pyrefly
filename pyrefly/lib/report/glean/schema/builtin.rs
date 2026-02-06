@@ -16,6 +16,7 @@ use serde_json::Value;
 use serde_repr::*;
 
 use crate::report::glean::schema::*;
+use crate::report::glean::facts::GleanPredicate;
 // Schema version
 pub const VERSION: i64 = 1;
 pub const SCHEMA_ID: &str = "835e529061f1429222e801fbfe85f209";

@@ -294,6 +294,11 @@ impl Error {
     }
 
     pub fn is_ignored(&self, enabled_ignores: &SmallSet<Tool>) -> bool {
+        // UnusedIgnore errors cannot be suppressed - this prevents infinite loops
+        // where suppressing an unused-ignore creates another unused-ignore.
+        if self.error_kind == ErrorKind::UnusedIgnore {
+            return false;
+        }
         self.module.is_ignored(
             &self.display_range,
             self.error_kind.to_name(),

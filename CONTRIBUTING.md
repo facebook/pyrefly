@@ -138,7 +138,7 @@ Here's an overview of some important directories:
   edit these manually. Instead, run `test.py` and include any generated changes
   with your PR.
 - `test` - Markdown end-to-end tests for our IDE features
-- `website` - Source code for [pyrefly.org](pyrefly.org)
+- `website` - Source code for [pyrefly.org](https://pyrefly.org)
 
 ## License
 

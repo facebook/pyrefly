@@ -477,7 +477,7 @@ testcase!(
 from typing import Callable, overload
 class defaulty[K, V]:
     @overload
-    def __init__(self: defaulty[str, V], **kwargs: V) -> None: ...
+    def __init__(self: defaulty[str, V], **kwargs: V) -> None: ... # E: `__init__` method self type cannot reference class type parameter `V`
     @overload
     def __init__(self, default_factory: Callable[[], V] | None, /) -> None: ...
     def __init__(self, *args, **kwargs) -> None:
@@ -1361,5 +1361,35 @@ def g(x: str, y: int):
         assert_type(x, str)
     if f(y):
         assert_type(y, bool)
+    "#,
+);
+
+testcase!(
+    test_tuple_any_with_tuple_ambigious_overload,
+    r#"
+from typing import Any, Literal, Never, overload, assert_type
+
+@overload
+def ndim(shape: tuple[Never, ...]) -> int: ...
+@overload
+def ndim(shape: tuple[int]) -> Literal[1]: ...
+@overload
+def ndim(shape: tuple[int, int]) -> Literal[2]: ...
+@overload
+def ndim(shape: tuple[int, ...]) -> int: ...
+def ndim(shape: tuple[int, ...]) -> int:
+    return len(shape)
+
+def demo_gradual(s: tuple[Any, ...]):
+    assert_type(ndim(s), Any)
+
+def demo_one(s: tuple[int]):
+    assert_type(ndim(s), Literal[1])
+
+def demo_two(s: tuple[int, int]):
+    assert_type(ndim(s), Literal[2])
+
+def demo_variadic(s: tuple[int, ...]):
+    assert_type(ndim(s), int)
     "#,
 );

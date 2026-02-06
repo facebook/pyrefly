@@ -172,7 +172,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if enum_value_types.is_empty() {
                             // Assume Any, rather than Never, if there are no members because they may
                             // be created dynamically and we don't want downstream analysis to be incorrect.
-                            Type::any_implicit()
+                            self.heap.mk_any_implicit()
                         } else {
                             self.unions(enum_value_types)
                         }
@@ -213,7 +213,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Tuple(Tuple::Concrete(elements)) if is_django && elements.len() >= 2 => {
                 // The last element is the label.
                 let value_len = elements.len() - 1;
-                Type::concrete_tuple(elements.into_iter().take(value_len).collect())
+                self.heap
+                    .mk_concrete_tuple(elements.into_iter().take(value_len).collect())
             }
             ty => ty,
         };

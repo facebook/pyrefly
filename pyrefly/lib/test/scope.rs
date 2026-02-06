@@ -897,20 +897,3 @@ def f():
     x = "foo"
     "#,
 );
-
-testcase!(
-    test_captured_var_in_nested_function_with_flow_merge,
-    r#"
-from typing import Any, Mapping
-def test() -> Any:
-    x: Mapping[int, int]
-    x = {}
-    def nested(a: int, bs: list[int]) -> Any:
-        if not x[0]:
-            return None
-        for b in bs:
-            break
-        return x
-    return nested
-"#,
-);
