@@ -953,8 +953,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
-                    let ret =
-                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
+                    let swallowed_errors = self.error_swallower();
+                    let ret = self.call_infer(
+                        *call_target,
+                        &args,
+                        &kws,
+                        range,
+                        &swallowed_errors,
+                        None,
+                        None,
+                        None,
+                    );
                     if let Type::TypeGuard(t) = ret {
                         return *t;
                     }
@@ -966,8 +975,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
-                    let ret =
-                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
+                    let swallowed_errors = self.error_swallower();
+                    let ret = self.call_infer(
+                        *call_target,
+                        &args,
+                        &kws,
+                        range,
+                        &swallowed_errors,
+                        None,
+                        None,
+                        None,
+                    );
                     if let Type::TypeIs(t) = ret {
                         return self.distribute_over_union(&t, |right| {
                             self.intersect_with_fallback(ty, right, &|| {
@@ -997,8 +1015,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
-                    let ret =
-                        self.call_infer(*call_target, &args, &kws, range, errors, None, None, None);
+                    let swallowed_errors = self.error_swallower();
+                    let ret = self.call_infer(
+                        *call_target,
+                        &args,
+                        &kws,
+                        range,
+                        &swallowed_errors,
+                        None,
+                        None,
+                        None,
+                    );
                     if let Type::TypeIs(t) = ret {
                         return self.subtract(ty, &t);
                     }

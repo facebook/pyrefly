@@ -2574,6 +2574,20 @@ assert_type(is_str("hello"), bool)
 );
 
 testcase!(
+    test_typeguard_bad_specialization_no_duplicate,
+    r#"
+from typing import TypeGuard
+
+def f[T: str](x: T) -> TypeGuard[T]:
+    return True
+
+def g(x: int | str):
+    if f(x):  # E: `int | str` is not assignable to upper bound `str` of type variable `T`
+        pass
+    "#,
+);
+
+testcase!(
     test_isinstance_invalid_special_form,
     r#"
 from typing import Final
