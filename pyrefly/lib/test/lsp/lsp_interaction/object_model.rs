@@ -905,6 +905,35 @@ impl TestClient {
         Ok(())
     }
 
+    /// Wait for a publishDiagnostics notification for the given file path, regardless of error count.
+    pub fn expect_publish_diagnostics_for_file(
+        &self,
+        path: PathBuf,
+    ) -> Result<(), LspMessageError> {
+        self.expect_message(
+            &format!(
+                "publishDiagnostics notification for file: {}",
+                path.display()
+            ),
+            |msg| {
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    let params =
+                        serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
+                    if params.uri.to_file_path().unwrap() == path {
+                        Some(Ok(()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+        )?;
+        Ok(())
+    }
+
     /// Wait for a publishDiagnostics notification that has the correct path and count
     pub fn expect_publish_diagnostics_eventual_error_count(
         &self,
