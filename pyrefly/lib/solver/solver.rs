@@ -337,7 +337,7 @@ impl Display for Solver {
 
 /// A number chosen such that all practical types are less than this depth,
 /// but we don't want to stack overflow.
-const TYPE_LIMIT: usize = 20;
+const TYPE_LIMIT: usize = 10;
 
 impl Solver {
     /// Create a new solver.
