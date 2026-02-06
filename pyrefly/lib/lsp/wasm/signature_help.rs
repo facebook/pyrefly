@@ -37,6 +37,8 @@ use crate::types::callable::Param;
 use crate::types::callable::Params;
 use crate::types::types::Type;
 
+const SIGNATURE_HELP_MULTILINE_LABEL_THRESHOLD: usize = 100;
+
 pub(crate) fn is_constructor_call(callee_type: Type) -> bool {
     matches!(callee_type, Type::ClassDef(_))
         || matches!(callee_type, Type::Type(box Type::ClassType(_)))
@@ -315,9 +317,9 @@ impl Transaction<'_> {
             type_
         };
 
-        let label = display_type.as_lsp_string(LspDisplayMode::SignatureHelp);
-        let (parameters, active_parameter) = if let Some(params) =
-            Self::normalize_singleton_function_type_into_params(display_type)
+        let mut label = display_type.as_lsp_string(LspDisplayMode::SignatureHelp);
+        let (parameters, active_parameter, param_count) = if let Some(params) =
+            Self::normalize_singleton_function_type_into_params(display_type.clone())
         {
             // Create a type display context for consistent parameter formatting
             let param_types: Vec<&Type> = params.iter().map(|p| p.as_type()).collect();
@@ -342,10 +344,13 @@ impl Transaction<'_> {
                         }),
                 })
                 .collect();
-            (Some(parameter_info), active_parameter)
+            (Some(parameter_info), active_parameter, params.len())
         } else {
-            (None, None)
+            (None, None, 0)
         };
+        if param_count > 1 && label.len() > SIGNATURE_HELP_MULTILINE_LABEL_THRESHOLD {
+            label = display_type.as_lsp_string(LspDisplayMode::Hover);
+        }
         SignatureInformation {
             label,
             documentation: function_docstring.map(|docstring| {
