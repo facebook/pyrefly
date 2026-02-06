@@ -1939,28 +1939,6 @@
     },
     {
       "code": -2,
-      "column": 20,
-      "concise_description": "`Proto7` is not assignable to `Proto6`",
-      "description": "`Proto7` is not assignable to `Proto6`\n  `Proto7.__call__` has type `BoundMethod[Proto7, (self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None]`, which is not assignable to `BoundMethod[Proto7, (self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None]`, the type of `Proto6.__call__`",
-      "line": 157,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 157
-    },
-    {
-      "code": -2,
-      "column": 25,
-      "concise_description": "`Proto8` is not assignable to `Proto5[Any]`",
-      "description": "`Proto8` is not assignable to `Proto5[Any]`\n  `Proto8.__call__` has type `BoundMethod[Proto8, (self: Proto8) -> None]`, which is not assignable to `BoundMethod[Proto8, (self: Proto8, *args: Any, **kwargs: Any) -> None]`, the type of `Proto5.__call__`",
-      "line": 159,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 27,
-      "stop_line": 159
-    },
-    {
-      "code": -2,
       "column": 26,
       "concise_description": "`() -> str` is not assignable to `(int, ...) -> str`",
       "description": "`() -> str` is not assignable to `(int, ...) -> str`",
@@ -3265,17 +3243,6 @@
       "severity": "error",
       "stop_column": 5,
       "stop_line": 51
-    },
-    {
-      "code": -2,
-      "column": 23,
-      "concise_description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`",
-      "description": "Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`",
-      "line": 62,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 29,
-      "stop_line": 62
     },
     {
       "code": -2,

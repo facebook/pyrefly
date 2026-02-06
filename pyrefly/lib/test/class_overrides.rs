@@ -215,10 +215,11 @@ class Derived(Base):
 testcase!(
     test_override_parameter_kinds,
     r#"
-from typing import assert_type, override
+from typing import assert_type, override, Any
 
 class Base:
     def g(self, /, x: int, *args: str, y: bool, **kwargs: float) -> None: ...
+    def method(self, a: int, /, *args: Any, k: str, **kwargs: Any) -> None: ...
 
 class Derived(Base):
     @override
@@ -227,6 +228,29 @@ class Derived(Base):
         assert_type(args, tuple[str, ...])
         assert_type(y, bool)
         assert_type(kwargs, dict[str, float])
+    @override
+    def method(self, a: float, /, b: int, *, k: str, m: str) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual,
+    r#"
+from typing import override, Any
+
+class Base:
+    def method1(self, a: int, /, *args: Any, k: int, **kwargs: Any) -> None: ...
+
+class Derived(Base):
+    @override
+    def method1(self) -> None: ...
+
+class Base2:
+    def method1(self) -> None: ...
+
+class Derived2(Base2):
+    @override
+    def method1(self, a: int, /, *args: Any, k: int, **kwargs: Any) -> None: ...
     "#,
 );
 
