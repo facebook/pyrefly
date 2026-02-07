@@ -660,8 +660,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let name = class.name().as_str();
         match name {
-            "bool" | "int" | "float" | "complex" | "str" | "bytes" | "bytearray"
-            | "memoryview" => Some(name.to_owned()),
+            "bool" | "int" | "float" | "complex" | "str" | "bytes" | "bytearray" | "memoryview" => {
+                Some(name.to_owned())
+            }
             _ => None,
         }
     }
