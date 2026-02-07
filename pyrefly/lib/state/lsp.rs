@@ -1921,7 +1921,8 @@ impl<'a> Transaction<'a> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
         let errors = self.get_errors(vec![handle]).collect_errors().shown;
-        let mut code_actions = Vec::new();
+        let mut import_actions = Vec::new();
+        let mut generate_actions = Vec::new();
         for error in errors {
             match error.error_kind() {
                 ErrorKind::UnknownName => {
@@ -1953,7 +1954,7 @@ impl<'a> Transaction<'a> {
                                 .last()
                                 .is_some_and(|component| component.as_str().starts_with('_'));
 
-                            code_actions.push((
+                            import_actions.push((
                                 title,
                                 module_info.dupe(),
                                 range,
@@ -1978,7 +1979,7 @@ impl<'a> Transaction<'a> {
                                     .components()
                                     .last()
                                     .is_some_and(|component| component.as_str().starts_with('_'));
-                                code_actions.push((
+                                import_actions.push((
                                     title,
                                     module_info.dupe(),
                                     range,
@@ -1988,6 +1989,15 @@ impl<'a> Transaction<'a> {
                                 ));
                             }
                         }
+
+                        if let Some(mut actions) = quick_fixes::generate_code::generate_code_actions(
+                            &module_info,
+                            ast.as_ref(),
+                            error_range,
+                            unknown_name,
+                        ) {
+                            generate_actions.append(&mut actions);
+                        }
                     }
                 }
                 _ => {}
@@ -1995,7 +2005,7 @@ impl<'a> Transaction<'a> {
         }
 
         // Sort code actions: non-private first, then non-deprecated, then alphabetically
-        code_actions.sort_by(
+        import_actions.sort_by(
             |(title1, _, _, _, is_deprecated1, is_private1),
              (title2, _, _, _, is_deprecated2, is_private2)| {
                 match (is_private1, is_private2) {
@@ -2012,17 +2022,15 @@ impl<'a> Transaction<'a> {
 
         // Keep only the first suggestion for each unique import text (after sorting,
         // this will be the public/non-deprecated version)
-        code_actions.dedup_by(|a, b| a.3 == b.3);
+        import_actions.dedup_by(|a, b| a.3 == b.3);
 
         // Drop the deprecated flag and return
-        Some(
-            code_actions
-                .into_iter()
-                .map(|(title, module, range, insert_text, _, _)| {
-                    (title, module, range, insert_text)
-                })
-                .collect(),
-        )
+        let mut result: Vec<(String, Module, TextRange, String)> = import_actions
+            .into_iter()
+            .map(|(title, module, range, insert_text, _, _)| (title, module, range, insert_text))
+            .collect();
+        result.extend(generate_actions);
+        Some(result)
     }
 
     pub fn extract_function_code_actions(

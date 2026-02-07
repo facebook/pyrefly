@@ -10,6 +10,7 @@ pub(crate) mod extract_field;
 pub(crate) mod extract_function;
 mod extract_shared;
 pub(crate) mod extract_variable;
+pub(crate) mod generate_code;
 pub(crate) mod inline_method;
 pub(crate) mod inline_parameter;
 pub(crate) mod inline_variable;
