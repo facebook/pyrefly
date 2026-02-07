@@ -1845,7 +1845,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .insert((self.module().name(), id), var);
     }
 
-    fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
+    pub(crate) fn clear_lambda_param_vars(&self) {
+        self.thread_state.lambda_param_vars.borrow_mut().clear();
+    }
+
+    pub(crate) fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
         self.thread_state
             .lambda_param_vars
             .borrow()
@@ -1853,7 +1857,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .copied()
     }
 
-    fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
+    pub(crate) fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
         if let Some(var) = self.get_lambda_param_var(id) {
             var
         } else {
@@ -1873,6 +1877,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         id: LambdaParamId,
         owner: Option<Idx<Key>>,
     ) -> Var {
+        if let Some(var) = self.get_lambda_param_var(id) {
+            return var;
+        }
         if let Some(owner_idx) = owner {
             let _ = self.get_idx(owner_idx);
         }
@@ -2039,6 +2046,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // answer rather than the stale pre-iteration answer.
         if let Some(v) = calculation.get() {
             result = v;
+        }
+        if self.stack().is_empty() {
+            self.clear_lambda_param_vars();
         }
         result
     }
