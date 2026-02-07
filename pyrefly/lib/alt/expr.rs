@@ -587,7 +587,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             }
-            Expr::StringLiteral(x) => Lit::from_string_literal(x).to_implicit_type(),
+            Expr::StringLiteral(x) => match Lit::from_string_literal(x) {
+                Some(lit) => lit.to_implicit_type(),
+                None => self.heap.mk_literal_string(LitStyle::Implicit),
+            },
             Expr::BytesLiteral(x) => Lit::from_bytes_literal(x).to_implicit_type(),
             Expr::NumberLiteral(x) => match &x.value {
                 Number::Int(x) => Lit::from_int(x).to_implicit_type(),

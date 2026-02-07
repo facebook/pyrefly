@@ -7,6 +7,7 @@
 
 use std::slice;
 
+use pyrefly_types::literal::LitStyle;
 use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::prelude::SliceExt;
@@ -193,7 +194,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::NumberLiteral(n) if let Number::Int(i) = &n.value => {
                 literals.push(LitInt::from_ast(i).to_explicit_type())
             }
-            Expr::StringLiteral(x) => literals.push(Lit::from_string_literal(x).to_explicit_type()),
+            Expr::StringLiteral(x) => match Lit::from_string_literal(x) {
+                Some(lit) => literals.push(lit.to_explicit_type()),
+                None => literals.push(self.heap.mk_literal_string(LitStyle::Explicit)),
+            },
             Expr::BytesLiteral(x) => literals.push(Lit::from_bytes_literal(x).to_explicit_type()),
             Expr::BooleanLiteral(x) => {
                 literals.push(Lit::from_boolean_literal(x).to_explicit_type())

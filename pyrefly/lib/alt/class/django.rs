@@ -450,7 +450,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for element in elements {
             let inner_tuple = element.as_tuple_expr()?;
             let string_lit = inner_tuple.elts.first()?.as_string_literal_expr()?;
-            choice_literals.push(Lit::from_string_literal(string_lit).to_implicit_type());
+            choice_literals.push(Lit::from_string_literal(string_lit)?.to_implicit_type());
         }
 
         if choice_literals.is_empty() {
