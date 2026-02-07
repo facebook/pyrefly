@@ -60,7 +60,7 @@ async fn main() -> ExitCode {
     // Enable stack overflow backtraces for debugging.
     // This is unsafe and only intended for debug builds.
     #[cfg(not(windows))]
-    #[cfg(feature = "debug-stack-overflow")]
+    #[cfg(all(feature = "debug-stack-overflow", debug_assertions))]
     unsafe {
         backtrace_on_stack_overflow::enable();
     }
