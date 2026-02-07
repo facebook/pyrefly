@@ -57,6 +57,7 @@ use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::MethodDefinedAttribute;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::binding::NarrowUseLocation;
