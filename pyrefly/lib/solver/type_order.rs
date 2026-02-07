@@ -10,6 +10,7 @@ use std::sync::Arc;
 use dupe::Clone_;
 use dupe::Copy_;
 use dupe::Dupe_;
+use pyrefly_types::literal::Lit;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::BoundMethod;
@@ -96,6 +97,10 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
 
     pub fn get_enum_member_count(self, cls: &Class) -> Option<usize> {
         self.0.get_enum_member_count(cls)
+    }
+
+    pub fn get_enum_members(self, cls: &Class) -> SmallSet<Lit> {
+        self.0.get_enum_members(cls)
     }
 
     pub fn instance_as_dunder_call(self, class_type: &ClassType) -> Option<Type> {

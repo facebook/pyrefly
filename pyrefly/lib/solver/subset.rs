@@ -23,6 +23,7 @@ use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Union;
+use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
@@ -31,7 +32,7 @@ use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypedDictSubsetError;
-use crate::types::callable::Callable;
+use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -45,7 +46,6 @@ use crate::types::type_var::Restriction;
 use crate::types::type_var::Variance;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
-use crate::types::types::Overload;
 use crate::types::types::OverloadType;
 use crate::types::types::Type;
 
@@ -93,92 +93,140 @@ fn any<T>(
     Err(err.unwrap_or(SubsetError::Other))
 }
 
-#[derive(Clone, PartialEq, Eq)]
+const OVERLOAD_PARAM_EXPANSION_GAS: usize = 100;
+
+#[derive(Clone)]
 enum ParamTemplate {
-    PosOnly(Option<Name>),
-    Pos(Name),
-    KwOnly(Name),
+    PosOnly(Option<Name>, Required),
+    Pos(Name, Required),
+    KwOnly(Name, Required),
+    VarArg(Option<Name>),
+    Kwargs(Option<Name>),
 }
 
-fn param_template(param: &Param) -> Option<ParamTemplate> {
-    match param {
-        Param::PosOnly(name, ..) => Some(ParamTemplate::PosOnly(name.clone())),
-        Param::Pos(name, ..) => Some(ParamTemplate::Pos(name.clone())),
-        Param::KwOnly(name, ..) => Some(ParamTemplate::KwOnly(name.clone())),
-        Param::VarArg(..) | Param::Kwargs(..) => None,
+impl ParamTemplate {
+    fn from_param(param: &Param) -> Self {
+        match param {
+            Param::PosOnly(name, _, required) => {
+                ParamTemplate::PosOnly(name.clone(), required.clone())
+            }
+            Param::Pos(name, _, required) => ParamTemplate::Pos(name.clone(), required.clone()),
+            Param::KwOnly(name, _, required) => {
+                ParamTemplate::KwOnly(name.clone(), required.clone())
+            }
+            Param::VarArg(name, _) => ParamTemplate::VarArg(name.clone()),
+            Param::Kwargs(name, _) => ParamTemplate::Kwargs(name.clone()),
+        }
+    }
+
+    fn with_type(&self, ty: Type) -> Param {
+        match self {
+            ParamTemplate::PosOnly(name, required) => {
+                Param::PosOnly(name.clone(), ty, required.clone())
+            }
+            ParamTemplate::Pos(name, required) => Param::Pos(name.clone(), ty, required.clone()),
+            ParamTemplate::KwOnly(name, required) => {
+                Param::KwOnly(name.clone(), ty, required.clone())
+            }
+            ParamTemplate::VarArg(name) => Param::VarArg(name.clone(), ty),
+            ParamTemplate::Kwargs(name) => Param::Kwargs(name.clone(), ty),
+        }
     }
 }
 
-fn overload_union_single_param_callable(overload: &Overload) -> Option<Callable> {
-    let mut iter = overload.signatures.iter();
-    let first = iter.next()?;
-    let first_sig = match first {
-        OverloadType::Function(func) => &func.signature,
-        OverloadType::Forall(_) => return None,
-    };
-    if first_sig.ret.may_contain_quantified_var() {
-        return None;
+fn expand_type_for_overload<Ans: LookupAnswer>(
+    ty: Type,
+    type_order: TypeOrder<Ans>,
+) -> Vec<Type> {
+    match ty {
+        Type::Union(box Union { members: ts, .. }) => ts,
+        Type::ClassType(cls) if cls.is_builtin("bool") => vec![
+            Lit::Bool(true).to_implicit_type(),
+            Lit::Bool(false).to_implicit_type(),
+        ],
+        Type::ClassType(cls) => type_order
+            .get_enum_members(cls.class_object())
+            .into_iter()
+            .map(Lit::to_implicit_type)
+            .collect(),
+        Type::Type(box Type::Union(box Union { members: ts, .. })) => {
+            ts.into_map(|t| Type::Type(Box::new(t)))
+        }
+        Type::Tuple(Tuple::Concrete(elements)) => {
+            let mut count: usize = 1;
+            let mut changed = false;
+            let mut element_expansions = Vec::new();
+            for element in elements {
+                let element_expansion = expand_type_for_overload(element.clone(), type_order);
+                if element_expansion.is_empty() {
+                    element_expansions.push(vec![element].into_iter());
+                } else {
+                    let len = element_expansion.len();
+                    count = count.saturating_mul(len);
+                    if count > OVERLOAD_PARAM_EXPANSION_GAS {
+                        return Vec::new();
+                    }
+                    changed = true;
+                    element_expansions.push(element_expansion.into_iter());
+                }
+            }
+            if count <= OVERLOAD_PARAM_EXPANSION_GAS && changed {
+                element_expansions
+                    .into_iter()
+                    .multi_cartesian_product()
+                    .map(|elements| Type::Tuple(Tuple::Concrete(elements)))
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
     }
-    let Params::List(first_params) = &first_sig.params else {
-        return None;
-    };
-    let first_items = first_params.items();
-    if first_items.len() != 1 {
-        return None;
-    }
-    let first_param = &first_items[0];
-    if first_param.as_type().may_contain_quantified_var() {
-        return None;
-    }
-    let base_template = param_template(first_param)?;
-    let mut param_types = vec![first_param.as_type().clone()];
-    let mut return_types = vec![first_sig.ret.clone()];
-    let mut required_all = first_param.is_required();
+}
 
-    for sig in iter {
-        let sig = match sig {
-            OverloadType::Function(func) => &func.signature,
-            OverloadType::Forall(_) => return None,
-        };
-        if sig.ret.may_contain_quantified_var() {
-            return None;
+fn expand_param_list_for_overload<Ans: LookupAnswer>(
+    params: &ParamList,
+    type_order: TypeOrder<Ans>,
+) -> Option<Vec<ParamList>> {
+    let mut templates = Vec::with_capacity(params.len());
+    let mut expansions = Vec::with_capacity(params.len());
+    let mut count: usize = 1;
+    let mut changed = false;
+
+    for param in params.items() {
+        templates.push(ParamTemplate::from_param(param));
+        let expanded = expand_type_for_overload(param.as_type().clone(), type_order);
+        if expanded.is_empty() {
+            expansions.push(vec![param.as_type().clone()]);
+        } else {
+            changed = true;
+            count = count.saturating_mul(expanded.len());
+            if count > OVERLOAD_PARAM_EXPANSION_GAS {
+                return None;
+            }
+            expansions.push(expanded);
         }
-        let Params::List(params) = &sig.params else {
-            return None;
-        };
-        let items = params.items();
-        if items.len() != 1 {
-            return None;
-        }
-        let param = &items[0];
-        if param.as_type().may_contain_quantified_var() {
-            return None;
-        }
-        let template = param_template(param)?;
-        if template != base_template {
-            return None;
-        }
-        param_types.push(param.as_type().clone());
-        return_types.push(sig.ret.clone());
-        required_all &= param.is_required();
     }
 
-    let merged_param_ty = unions(param_types);
-    let merged_ret = unions(return_types);
-    let merged_required = if required_all {
-        Required::Required
-    } else {
-        Required::Optional(None)
-    };
-    let merged_param = match base_template {
-        ParamTemplate::PosOnly(name) => Param::PosOnly(name, merged_param_ty, merged_required),
-        ParamTemplate::Pos(name) => Param::Pos(name, merged_param_ty, merged_required),
-        ParamTemplate::KwOnly(name) => Param::KwOnly(name, merged_param_ty, merged_required),
-    };
-    Some(Callable::list(
-        ParamList::new(vec![merged_param]),
-        merged_ret,
-    ))
+    if !changed {
+        return None;
+    }
+
+    Some(
+        expansions
+            .into_iter()
+            .map(|tys| tys.into_iter())
+            .multi_cartesian_product()
+            .map(|tys| {
+                let params = templates
+                    .iter()
+                    .zip(tys)
+                    .map(|(template, ty)| template.with_type(ty))
+                    .collect();
+                ParamList::new(params)
+            })
+            .collect(),
+    )
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
@@ -1216,26 +1264,75 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 Ok(())
             }
             (Type::Overload(overload), u) => {
-                if u.is_toplevel_callable()
-                    && !u.may_contain_quantified_var()
-                    && u.callable_signatures()
-                        .first()
-                        .is_some_and(|sig| match &sig.params {
-                            Params::List(params) if params.len() == 1 => {
-                                matches!(params.items()[0].as_type(), Type::Union(_))
-                            }
-                            _ => false,
-                        })
-                    && let Some(callable) = overload_union_single_param_callable(overload)
-                    && self
-                        .is_subset_eq(&Type::Callable(Box::new(callable)), u)
-                        .is_ok()
+                let direct = any(overload.signatures.iter(), |l| self.is_subset_eq(&l.as_type(), u));
+                if direct.is_ok() {
+                    return direct;
+                }
+
+                let sigs = u.callable_signatures();
+                let sig = match sigs.as_slice() {
+                    [sig] => *sig,
+                    _ => return direct,
+                };
+                let Params::List(params) = &sig.params else {
+                    return direct;
+                };
+                if sig.ret.may_contain_quantified_var()
+                    || params
+                        .items()
+                        .iter()
+                        .any(|param| param.as_type().may_contain_quantified_var())
                 {
+                    return direct;
+                }
+
+                let mut overload_sigs = Vec::with_capacity(overload.signatures.len());
+                let mut overload_returns = Vec::with_capacity(overload.signatures.len());
+                for sig in overload.signatures.iter() {
+                    let OverloadType::Function(func) = sig else {
+                        return direct;
+                    };
+                    if func.signature.ret.may_contain_quantified_var() {
+                        return direct;
+                    }
+                    if let Params::List(params) = &func.signature.params {
+                        if params
+                            .items()
+                            .iter()
+                            .any(|param| param.as_type().may_contain_quantified_var())
+                        {
+                            return direct;
+                        }
+                    }
+                    overload_sigs.push(&func.signature);
+                    overload_returns.push(func.signature.ret.clone());
+                }
+
+                let Some(expanded_params) =
+                    expand_param_list_for_overload(params, self.type_order)
+                else {
+                    return direct;
+                };
+
+                if self
+                    .is_subset_eq(&unions(overload_returns), &sig.ret)
+                    .is_err()
+                {
+                    return direct;
+                }
+
+                let all_expansions_match = expanded_params.iter().all(|expanded| {
+                    let expanded = Params::List(expanded.clone());
+                    overload_sigs.iter().any(|overload_sig| {
+                        self.is_subset_params(&overload_sig.params, &expanded)
+                            .is_ok()
+                    })
+                });
+
+                if all_expansions_match {
                     Ok(())
                 } else {
-                    any(overload.signatures.iter(), |l| {
-                        self.is_subset_eq(&l.as_type(), u)
-                    })
+                    direct
                 }
             }
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
