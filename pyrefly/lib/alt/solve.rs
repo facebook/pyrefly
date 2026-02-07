@@ -1717,7 +1717,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let pin_partial_types = !self.solver().infer_with_first_use
                 || !matches!(
                     binding,
-                    Binding::NameAssign { .. } | Binding::PartialTypeWithUpstreamsCompleted(..)
+                    Binding::NameAssign { .. }
+                        | Binding::PartialTypeWithUpstreamsCompleted(..)
+                        | Binding::LambdaParameter(..)
                 );
             self.pin_all_placeholder_types(ty, pin_partial_types, range, errors);
             self.expand_vars_mut(ty);
