@@ -1979,7 +1979,7 @@ impl<'a> Transaction<'a> {
                                     Some(unknown_name),
                                 );
                                 let range = TextRange::at(position, TextSize::new(0));
-                                let title = format!("Insert import: `{}`", insert_text.trim());
+                                let title = format!("Use common alias: `{}`", insert_text.trim());
                                 let is_private_import = module_name
                                     .components()
                                     .last()
