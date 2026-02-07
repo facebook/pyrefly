@@ -57,8 +57,8 @@ use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
-use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodDefinedAttribute;
+use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::bindings::BindingTable;
@@ -2191,19 +2191,14 @@ impl Scopes {
             SmallMap::new();
         class_scope.method_defined_attributes().for_each(
             |(name, method, InstanceAttribute(value, annotation, range, _))| {
-                if !field_definitions.contains_key_hashed(name.as_ref()) {
-                    field_definitions.insert_hashed(
-                        name,
-                        (
-                            ClassFieldDefinition::DefinedInMethod {
-                                value,
-                                annotation,
-                                method,
-                            },
-                            range,
-                        ),
-                    );
-                }
+                method_defined_fields.entry_hashed(name).or_default().push(
+                    MethodDefinedAttribute {
+                        method,
+                        value,
+                        annotation,
+                        range,
+                    },
+                );
             },
         );
         method_defined_fields
