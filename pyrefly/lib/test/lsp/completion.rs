@@ -2631,11 +2631,12 @@ class Other:
 def needs_base(x: Base) -> None:
     pass
 
-exact_val = Base()
-compatible_val = Derived()
-incompatible_val = Other()
+val_exact = Base()
+val_compatible = Derived()
+val_incompatible = Other()
+val = val_exact
 
-needs_base(v)
+needs_base(val)
 #           ^
 "#;
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
@@ -2646,13 +2647,13 @@ needs_base(v)
 
     let exact_index = completions
         .iter()
-        .position(|item| item.label == "exact_val");
+        .position(|item| item.label == "val_exact");
     let compatible_index = completions
         .iter()
-        .position(|item| item.label == "compatible_val");
+        .position(|item| item.label == "val_compatible");
     let incompatible_index = completions
         .iter()
-        .position(|item| item.label == "incompatible_val");
+        .position(|item| item.label == "val_incompatible");
 
     let exact = exact_index.and_then(|idx| completions.get(idx));
     let compatible = compatible_index.and_then(|idx| completions.get(idx));
