@@ -1468,27 +1468,30 @@ impl<'a> Transaction<'a> {
         // Check; demand; check - the second check is guaranteed to work.
         for _ in 0..2 {
             let lock = module_data.state.read();
-            if let Some(solutions) = &lock.steps.solutions
-                && lock.epochs.checked == self.data.now
-                && lock.steps.last_step == Some(Step::Solutions)
-            {
-                return solutions.get_hashed_opt(key).duped();
-            } else if let Some(answers) = &lock.steps.answers {
-                let load = lock.steps.load.dupe().unwrap();
-                let answers = answers.dupe();
-                drop(lock);
-                let stdlib = self.get_stdlib(&module_data.handle);
-                let lookup = self.lookup(module_data);
-                return answers.1.solve_exported_key(
-                    &lookup,
-                    &lookup,
-                    &answers.0,
-                    &load.errors,
-                    &stdlib,
-                    &self.data.state.uniques,
-                    key,
-                    thread_state,
-                );
+            if lock.epochs.checked == self.data.now {
+                // Only use existing solutions or answers if the module data is current.
+                // Otherwise, the module might be dirty and require computation.
+                if let Some(solutions) = &lock.steps.solutions
+                    && lock.steps.last_step == Some(Step::Solutions)
+                {
+                    return solutions.get_hashed_opt(key).duped();
+                } else if let Some(answers) = &lock.steps.answers {
+                    let load = lock.steps.load.dupe().unwrap();
+                    let answers = answers.dupe();
+                    drop(lock);
+                    let stdlib = self.get_stdlib(&module_data.handle);
+                    let lookup = self.lookup(module_data);
+                    return answers.1.solve_exported_key(
+                        &lookup,
+                        &lookup,
+                        &answers.0,
+                        &load.errors,
+                        &stdlib,
+                        &self.data.state.uniques,
+                        key,
+                        thread_state,
+                    );
+                }
             }
             drop(lock);
             self.demand(&module_data, Step::Answers);
