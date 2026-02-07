@@ -2284,7 +2284,8 @@ class A:
         self.y = {"x": 0} if check else 42
 def f(a: A):
     x: TD = a.x
-    y: TD | int = a.y
+    # anoynmous typed dicts are promoted away when unioned
+    y: dict[str, int] | int = a.y
     "#,
 );
 
