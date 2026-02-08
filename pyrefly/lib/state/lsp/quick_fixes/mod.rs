@@ -16,4 +16,5 @@ pub(crate) mod inline_variable;
 pub(crate) mod introduce_parameter;
 pub(crate) mod move_members;
 pub(crate) mod move_module;
+pub(crate) mod pytest_fixture;
 pub(crate) mod types;

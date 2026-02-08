@@ -108,8 +108,14 @@ fn compute_extract_actions(
     Vec<Vec<(Module, TextRange, String)>>,
     Vec<String>,
 ) {
-    let (handles, state) =
-        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let pytest_stub = r#"
+def fixture(*args, **kwargs):
+    ...
+"#;
+    let (handles, state) = mk_multi_file_state_assert_no_errors(
+        &[("main", code), ("pytest", pytest_stub)],
+        Require::Everything,
+    );
     let handle = handles.get("main").unwrap();
     let transaction = state.transaction();
     let module_info = transaction.get_module_info(handle).unwrap();
@@ -2470,4 +2476,78 @@ def compute():
     return add(1)
 "#;
     assert_eq!(expected, updated);
+}
+
+#[test]
+fn pytest_fixture_type_annotation_code_actions() {
+    let conftest = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def answer():
+    return 42
+"#;
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def user():
+    return "alice"
+
+def test_one(answer, user):
+    print(answer, user)
+"#;
+    let (handles, state) = mk_multi_file_state_assert_no_errors(
+        &[("main", code), ("conftest", conftest)],
+        Require::Everything,
+    );
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let cursor = TextSize::try_from(code.find("answer, user").unwrap()).unwrap();
+    let selection = TextRange::new(cursor, cursor);
+
+    let actions = transaction
+        .pytest_fixture_type_annotation_code_actions(handle, selection, ImportFormat::Absolute)
+        .unwrap_or_default();
+    let titles: Vec<String> = actions.iter().map(|action| action.title.clone()).collect();
+    assert!(
+        titles.contains(&"Add pytest fixture parameter type annotation".to_owned()),
+        "expected single fixture parameter annotation action"
+    );
+    assert!(
+        titles.contains(&"Add all pytest fixture parameter type annotations".to_owned()),
+        "expected add-all fixture parameter annotation action"
+    );
+
+    let single_action = actions
+        .iter()
+        .find(|action| action.title == "Add pytest fixture parameter type annotation")
+        .expect("missing single fixture parameter annotation action");
+    let updated_single = apply_refactor_edits_for_module(&module_info, &single_action.edits);
+    assert!(
+        updated_single.contains("def test_one(answer: int, user):"),
+        "expected single action to annotate conftest fixture parameter"
+    );
+    assert!(
+        !updated_single.contains("def test_one(answer: int, user: str):"),
+        "single action should not annotate other fixture parameters"
+    );
+
+    let all_action = actions
+        .iter()
+        .find(|action| action.title == "Add all pytest fixture parameter type annotations")
+        .expect("missing add-all fixture parameter annotation action");
+    let updated_all = apply_refactor_edits_for_module(&module_info, &all_action.edits);
+    let expected = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def user():
+    return "alice"
+
+def test_one(answer: int, user: str):
+    print(answer, user)
+"#;
+    assert_eq!(expected.trim(), updated_all.trim());
 }

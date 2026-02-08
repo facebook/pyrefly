@@ -2026,6 +2026,20 @@ impl<'a> Transaction<'a> {
         )
     }
 
+    pub fn pytest_fixture_type_annotation_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+        import_format: ImportFormat,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::pytest_fixture::pytest_fixture_type_annotation_code_actions(
+            self,
+            handle,
+            selection,
+            import_format,
+        )
+    }
+
     pub fn extract_function_code_actions(
         &self,
         handle: &Handle,

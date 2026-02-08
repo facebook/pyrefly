@@ -3371,6 +3371,11 @@ impl Server {
                 }));
             }
         };
+        if let Some(pytest_actions) =
+            transaction.pytest_fixture_type_annotation_code_actions(&handle, range, import_format)
+        {
+            push_refactor_actions(pytest_actions);
+        }
         if let Some(refactors) = transaction.extract_field_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
