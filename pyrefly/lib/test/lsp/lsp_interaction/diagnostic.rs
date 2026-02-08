@@ -7,7 +7,7 @@
 
 use lsp_types::DocumentDiagnosticReportResult;
 use lsp_types::Url;
-use pyrefly_config::environment::environment::PythonEnvironment;
+use pyrefly_util::stdlib::register_stdlib_paths;
 use serde_json::json;
 
 use crate::commands::lsp::IndexingMode;
@@ -800,13 +800,11 @@ fn test_shows_stdlib_type_errors_with_force_on() {
         })
         .unwrap();
 
-    PythonEnvironment::get_interpreter_stdlib_path()
-        .write()
-        .insert(
-            test_files_root
-                .path()
-                .join("filtering_stdlib_errors/usr/lib/python3.12"),
-        );
+    register_stdlib_paths(vec![
+        test_files_root
+            .path()
+            .join("filtering_stdlib_errors/usr/lib/python3.12"),
+    ]);
 
     interaction.client.did_change_configuration();
 
@@ -858,13 +856,11 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         })
         .unwrap();
 
-    PythonEnvironment::get_interpreter_stdlib_path()
-        .write()
-        .insert(
-            test_files_root
-                .path()
-                .join("filtering_stdlib_errors/usr/lib/python3.12"),
-        );
+    register_stdlib_paths(vec![
+        test_files_root
+            .path()
+            .join("filtering_stdlib_errors/usr/lib/python3.12"),
+    ]);
 
     interaction.client.did_change_configuration();
 
@@ -901,13 +897,11 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         }))
         .unwrap();
 
-    PythonEnvironment::get_interpreter_stdlib_path()
-        .write()
-        .insert(
-            test_files_root
-                .path()
-                .join("filtering_stdlib_errors/usr/lib/python3.8"),
-        );
+    register_stdlib_paths(vec![
+        test_files_root
+            .path()
+            .join("filtering_stdlib_errors/usr/lib/python3.8"),
+    ]);
 
     interaction
         .client
@@ -963,13 +957,11 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         }))
         .unwrap();
 
-    PythonEnvironment::get_interpreter_stdlib_path()
-        .write()
-        .insert(
-            test_files_root
-                .path()
-                .join("filtering_stdlib_errors/usr/lib64/python3.12"),
-        );
+    register_stdlib_paths(vec![
+        test_files_root
+            .path()
+            .join("filtering_stdlib_errors/usr/lib64/python3.12"),
+    ]);
 
     interaction
         .client
@@ -1005,13 +997,11 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
 fn test_does_not_filter_out_stdlib_errors_with_default_displaytypeerrors() {
     let test_files_root = get_test_files_root();
 
-    PythonEnvironment::get_interpreter_stdlib_path()
-        .write()
-        .insert(
-            test_files_root
-                .path()
-                .join("filtering_stdlib_errors_with_default/usr/lib/python3.12"),
-        );
+    register_stdlib_paths(vec![
+        test_files_root
+            .path()
+            .join("filtering_stdlib_errors_with_default/usr/lib/python3.12"),
+    ]);
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());

@@ -444,10 +444,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         },
                         |hint| hint.to_type(),
                     );
-                    self.stdlib.list(elem_ty).to_type()
+                    self.heap.mk_class_type(self.stdlib.list(elem_ty))
                 } else {
                     let elem_tys = self.elts_infer(&x.elts, elt_hint, errors);
-                    self.stdlib.list(self.unions(elem_tys)).to_type()
+                    self.heap
+                        .mk_class_type(self.stdlib.list(self.unions(elem_tys)))
                 }
             }
             Expr::Dict(x) => self.dict_infer(&x.items, hint, x.range, errors),
@@ -462,10 +463,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         },
                         |hint| hint.to_type(),
                     );
-                    self.stdlib.set(elem_ty).to_type()
+                    self.heap.mk_class_type(self.stdlib.set(elem_ty))
                 } else {
                     let elem_tys = self.elts_infer(&x.elts, elem_hint, errors);
-                    self.stdlib.set(self.unions(elem_tys)).to_type()
+                    self.heap
+                        .mk_class_type(self.stdlib.set(self.unions(elem_tys)))
                 }
             }
             Expr::ListComp(x) => {
@@ -476,7 +478,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     elem_hint.as_ref().map(|hint| hint.as_ref()),
                     errors,
                 );
-                self.stdlib.list(elem_ty).to_type()
+                self.heap.mk_class_type(self.stdlib.list(elem_ty))
             }
             Expr::SetComp(x) => {
                 let elem_hint = hint.and_then(|ty| self.decompose_set(ty));
@@ -487,7 +489,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     elem_hint.as_ref().map(|hint| hint.as_ref()),
                     errors,
                 );
-                self.stdlib.set(elem_ty).to_type()
+                self.heap.mk_class_type(self.stdlib.set(elem_ty))
             }
             Expr::DictComp(x) => {
                 let (key_hint, value_hint) =
@@ -503,7 +505,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     value_hint.as_ref().map(|hint| hint.as_ref()),
                     errors,
                 );
-                self.stdlib.dict(key_ty, value_ty).to_type()
+                self.heap.mk_class_type(self.stdlib.dict(key_ty, value_ty))
             }
             Expr::Generator(x) => {
                 let yield_hint = hint.and_then(|hint| self.decompose_generator_yield(hint));
@@ -516,14 +518,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                     .into_ty();
                 if self.generator_expr_is_async(x) {
-                    self.stdlib
-                        .async_generator(yield_ty, self.heap.mk_none())
-                        .to_type()
+                    self.heap
+                        .mk_class_type(self.stdlib.async_generator(yield_ty, self.heap.mk_none()))
                 } else {
                     let none = self.heap.mk_none();
-                    self.stdlib
-                        .generator(yield_ty, none.clone(), none)
-                        .to_type()
+                    self.heap
+                        .mk_class_type(self.stdlib.generator(yield_ty, none.clone(), none))
                 }
             }
             Expr::Await(x) => {
@@ -569,7 +569,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match Lit::from_fstring(x) {
                     Some(lit) => lit.to_implicit_type(),
                     _ if all_literal_strings => self.heap.mk_literal_string(LitStyle::Implicit),
-                    _ => self.stdlib.str().clone().to_type(),
+                    _ => self.heap.mk_class_type(self.stdlib.str().clone()),
                 }
             }
             Expr::TString(x) => {
@@ -577,7 +577,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.expr_infer(x, errors);
                 });
                 if let Some(template) = self.stdlib.template() {
-                    template.clone().to_type()
+                    self.heap.mk_class_type(template.clone())
                 } else {
                     self.error(
                         errors,
@@ -587,12 +587,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
             }
-            Expr::StringLiteral(x) => Lit::from_string_literal(x).to_implicit_type(),
+            Expr::StringLiteral(x) => match Lit::from_string_literal(x) {
+                Some(lit) => lit.to_implicit_type(),
+                None => self.heap.mk_literal_string(LitStyle::Implicit),
+            },
             Expr::BytesLiteral(x) => Lit::from_bytes_literal(x).to_implicit_type(),
             Expr::NumberLiteral(x) => match &x.value {
                 Number::Int(x) => Lit::from_int(x).to_implicit_type(),
-                Number::Float(_) => self.stdlib.float().clone().to_type(),
-                Number::Complex { .. } => self.stdlib.complex().clone().to_type(),
+                Number::Float(_) => self.heap.mk_class_type(self.stdlib.float().clone()),
+                Number::Complex { .. } => self.heap.mk_class_type(self.stdlib.complex().clone()),
             },
             Expr::BooleanLiteral(x) => Lit::from_boolean_literal(x).to_implicit_type(),
             Expr::NoneLiteral(_) => self.heap.mk_none(),
@@ -912,7 +915,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 },
                 |ty| ty.to_type(),
             );
-            self.stdlib.dict(key_ty, value_ty).to_type()
+            self.heap.mk_class_type(self.stdlib.dict(key_ty, value_ty))
         } else {
             let mut typed_dict_fields = Vec::new();
             let mut can_create_anonymous_typed_dict = hint.is_none();
@@ -1017,7 +1020,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             let key_ty = self.unions(key_tys);
             let value_ty = self.unions(value_tys);
-            self.stdlib.dict(key_ty, value_ty).to_type()
+            self.heap.mk_class_type(self.stdlib.dict(key_ty, value_ty))
         }
     }
 
@@ -1078,10 +1081,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if ty.is_typed_dict() {
             return true;
         }
-        let dict_type = self
-            .stdlib
-            .dict(self.heap.mk_any_implicit(), self.heap.mk_any_implicit())
-            .to_type();
+        let dict_type = self.heap.mk_class_type(
+            self.stdlib
+                .dict(self.heap.mk_any_implicit(), self.heap.mk_any_implicit()),
+        );
         self.is_subset_eq(ty, &dict_type)
     }
 
@@ -1161,12 +1164,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Some(acc) => self.union(acc, t.clone()),
                     });
                     // Narrow the type for the result of the boolop
-                    let t = if i != last_index && t == self.stdlib.bool().clone().to_type() {
+                    let t = if i != last_index
+                        && t == self.heap.mk_class_type(self.stdlib.bool().clone())
+                    {
                         Lit::Bool(target).to_implicit_type()
-                    } else if i != last_index && t == self.stdlib.int().clone().to_type() && !target
+                    } else if i != last_index
+                        && t == self.heap.mk_class_type(self.stdlib.int().clone())
+                        && !target
                     {
                         LitInt::new(0).to_implicit_type()
-                    } else if i != last_index && t == self.stdlib.str().clone().to_type() && !target
+                    } else if i != last_index
+                        && t == self.heap.mk_class_type(self.stdlib.str().clone())
+                        && !target
                     {
                         Lit::Str(Default::default()).to_implicit_type()
                     } else {
@@ -1736,7 +1745,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let star_hint = LazyCell::new(|| {
             elt_hint.as_ref().map(|hint| {
                 hint.as_ref()
-                    .map_ty(|ty| self.stdlib.iterable(ty.clone()).to_type())
+                    .map_ty(|ty| self.heap.mk_class_type(self.stdlib.iterable(ty.clone())))
             })
         });
         elts.map(|x| match x {
@@ -1891,7 +1900,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::ClassDef(ref cls) if self.get_enum_from_class(cls).is_some() => {
                     if self.is_subset_eq(
                         &self.expr(slice, None, errors),
-                        &self.stdlib.str().clone().to_type(),
+                        &self.heap.mk_class_type(self.stdlib.str().clone()),
                     ) {
                         self.heap.mk_class_type(self.as_class_type_unchecked(cls))
                     } else {
@@ -1948,7 +1957,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if self.is_restricted_to_enum_class_def_type(&quantified) {
                         if self.is_subset_eq(
                             &self.expr(slice, None, errors),
-                            &self.stdlib.str().clone().to_type(),
+                            &self.heap.mk_class_type(self.stdlib.str().clone()),
                         ) {
                             quantified.to_type(self.heap)
                         } else {
@@ -1979,7 +1988,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let enum_value_ty = *inner;
                     if self.is_subset_eq(
                         &self.expr(slice, None, errors),
-                        &self.stdlib.str().clone().to_type(),
+                        &self.heap.mk_class_type(self.stdlib.str().clone()),
                     ) {
                         enum_value_ty
                     } else {
@@ -2014,7 +2023,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
                 Type::LiteralString(_) if xs.len() <= 3 => {
                     // We could have a more precise type here, but this matches Pyright.
-                    self.stdlib.str().clone().to_type()
+                    self.heap.mk_class_type(self.stdlib.str().clone())
                 }
                 Type::Literal(ref lit) if let Lit::Str(ref value) = lit.value && xs.len() <= 3 => {
                     let base_ty = Lit::Str(value.clone()).to_implicit_type();
@@ -2029,7 +2038,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
                 Type::Args(_) => {
-                    let tuple = Tuple::Unbounded(Box::new(self.stdlib.object().clone().to_type()));
+                    let tuple = Tuple::Unbounded(Box::new(
+                        self.heap.mk_class_type(self.stdlib.object().clone()),
+                    ));
                     self.infer_tuple_subscript(
                         tuple,
                         slice,
@@ -2039,13 +2050,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
                 Type::Kwargs(_) => {
-                    let kwargs_ty = self
-                        .stdlib
-                        .dict(
-                            self.stdlib.str().clone().to_type(),
-                            self.stdlib.object().clone().to_type(),
-                        )
-                        .to_type();
+                    let kwargs_ty = self.heap.mk_class_type(self.stdlib.dict(
+                        self.heap.mk_class_type(self.stdlib.str().clone()),
+                        self.heap.mk_class_type(self.stdlib.object().clone()),
+                    ));
                     self.call_method_or_error(
                         &kwargs_ty,
                         &dunder::GETITEM,
@@ -2136,7 +2144,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         }
                         _ => {
-                            if self.is_subset_eq(ty, &self.stdlib.str().clone().to_type())
+                            if self.is_subset_eq(
+                                ty,
+                                &self.heap.mk_class_type(self.stdlib.str().clone()),
+                            )
                                 && !matches!(
                                     self.typed_dict_extra_items(&typed_dict),
                                     ExtraItems::Default

@@ -615,7 +615,7 @@ class Query:
 
 def test(q: Query) -> None:
     cursor = None
-    while not cursor or not cursor.finished():  # E: `Cursor | None` is not assignable to `None` (caused by inconsistent types when breaking cycles)
+    while not cursor or not cursor.finished():  # E: Pyrefly detected conflicting types while breaking a dependency cycle: `Cursor | None` is not assignable to `None`.
         cursor = q.send(cursor)
 "#,
 );
@@ -672,7 +672,7 @@ while condition():
 assert_type(good, list[int])
 
 bad = [1]
-while condition():  # E: `list[int] | list[str]` is not assignable to `list[int]` (caused by inconsistent types when breaking cycles)
+while condition():  # E: Pyrefly detected conflicting types while breaking a dependency cycle: `list[int] | list[str]` is not assignable to `list[int]`.
     if condition():
         bad = [f(bad)]
     else:

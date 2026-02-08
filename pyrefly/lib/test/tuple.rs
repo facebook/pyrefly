@@ -248,6 +248,34 @@ assert_type(x[3:], tuple[()])
 );
 
 testcase!(
+    test_slice_negative,
+    r#"
+from typing import assert_type, Literal
+
+x = (5, 6, 7)
+
+# Negative end index
+assert_type(x[:-1], tuple[Literal[5], Literal[6]])
+assert_type(x[:-2], tuple[Literal[5]])
+assert_type(x[:-3], tuple[()])
+
+# Negative start index
+assert_type(x[-1:], tuple[Literal[7]])
+assert_type(x[-2:], tuple[Literal[6], Literal[7]])
+assert_type(x[-3:], tuple[Literal[5], Literal[6], Literal[7]])
+
+# Both negative
+assert_type(x[-3:-1], tuple[Literal[5], Literal[6]])
+assert_type(x[-2:-1], tuple[Literal[6]])
+
+# Mixed positive and negative
+assert_type(x[0:-1], tuple[Literal[5], Literal[6]])
+assert_type(x[1:-1], tuple[Literal[6]])
+assert_type(x[-2:3], tuple[Literal[6], Literal[7]])
+"#,
+);
+
+testcase!(
     test_unbounded_tuple_hint,
     r#"
 x1: tuple[str, ...] = ("ok",)

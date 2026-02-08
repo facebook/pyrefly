@@ -13,6 +13,7 @@ use crate::class::ClassType;
 use crate::literal::Lit;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
+use crate::typed_dict::TypedDict;
 use crate::types::Type;
 use crate::types::Union;
 
@@ -74,6 +75,7 @@ fn unions_internal(
         let mut res = flatten_and_dedup(xs);
         if let Some(stdlib) = stdlib {
             collapse_literals(&mut res, stdlib, enum_members.unwrap_or(&|_| None));
+            promote_anonymous_typed_dicts(&mut res, stdlib);
         }
         collapse_tuple_unions_with_empty(&mut res);
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
@@ -250,6 +252,17 @@ fn collapse_literals(
             && let Err(new_pos) = types.binary_search(&bool)
         {
             types.insert(new_pos, bool);
+        }
+    }
+}
+
+/// Promote anonymous typed dicts to `dict[str, value_type]`
+fn promote_anonymous_typed_dicts(types: &mut [Type], stdlib: &Stdlib) {
+    for ty in types.iter_mut() {
+        if let Type::TypedDict(TypedDict::Anonymous(inner)) = ty {
+            *ty = stdlib
+                .dict(stdlib.str().clone().to_type(), inner.value_type.clone())
+                .to_type();
         }
     }
 }

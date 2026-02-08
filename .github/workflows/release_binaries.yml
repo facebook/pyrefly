@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Tag name to upload assets to (e.g., v0.51.0)'
+        description: 'Tag name to upload assets to (e.g., 0.51.0)'
         required: true
         type: string
 
@@ -73,10 +73,18 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+          ref: ${{ github.event.release.tag_name || inputs.tag_name }}
 
       - name: Install container dependencies
         if: matrix.container == 'ubuntu:20.04'
-        run: apt-get update && apt-get -y install curl build-essential git
+        run: |
+          apt-get update && apt-get -y install curl build-essential git
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          apt-get update && apt-get -y install gh
+          # Fix git safe.directory for container builds (checkout creates repo with different owner)
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Read rust-toolchain file
         run: echo "toolchain=$(cat pyrefly/rust-toolchain)" && echo "toolchain=$(cat pyrefly/rust-toolchain)" >> ${{ matrix.github_env }}
@@ -132,7 +140,11 @@ jobs:
       - name: Generate checksum (Unix)
         if: runner.os != 'Windows'
         run: |
-          sha256sum ${{ matrix.artifact_name }}.tar.gz > ${{ matrix.artifact_name }}.tar.gz.sha256
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum ${{ matrix.artifact_name }}.tar.gz > ${{ matrix.artifact_name }}.tar.gz.sha256
+          else
+            shasum -a 256 ${{ matrix.artifact_name }}.tar.gz > ${{ matrix.artifact_name }}.tar.gz.sha256
+          fi
 
       - name: Generate checksum (Windows)
         if: runner.os == 'Windows'

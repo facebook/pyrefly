@@ -1009,6 +1009,7 @@ pub mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::heap::TypeHeap;
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
@@ -1331,16 +1332,17 @@ pub mod tests {
 
     #[test]
     fn test_display_typevar() {
+        let heap = TypeHeap::default();
         let t1 = fake_tyvar("foo", "bar", 1);
         let t2 = fake_tyvar("foo", "bar", 2);
         let t3 = fake_tyvar("qux", "bar", 2);
 
         assert_eq!(
-            Type::union(vec![t1.to_type(), t2.to_type()]).to_string(),
+            Type::union(vec![t1.to_type(&heap), t2.to_type(&heap)]).to_string(),
             "TypeVar[bar.foo@1:2] | TypeVar[bar.foo@1:3]"
         );
         assert_eq!(
-            Type::union(vec![t1.to_type(), t3.to_type()]).to_string(),
+            Type::union(vec![t1.to_type(&heap), t3.to_type(&heap)]).to_string(),
             "TypeVar[foo] | TypeVar[qux]"
         );
     }

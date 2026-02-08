@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use lsp_types::FileChangeType;
 use notify::EventKind;
 
+use crate::stdlib::is_python_stdlib_file;
+
 #[derive(Debug, Clone, Default)]
 pub struct CategorizedEvents {
     pub created: Vec<PathBuf>,
@@ -73,5 +75,6 @@ impl CategorizedEvents {
     pub fn should_ignore(path: &Path) -> bool {
         path.components()
             .any(|c| matches!(c, Component::Normal(name) if name == "__pycache__"))
+            || is_python_stdlib_file(path)
     }
 }

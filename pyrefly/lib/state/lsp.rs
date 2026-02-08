@@ -1788,7 +1788,8 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
     ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
         let stdlib = self.get_stdlib(handle);
-        let none_type = stdlib.none_type().clone().to_type();
+        let answers = self.get_answers(handle)?;
+        let none_type = answers.heap().mk_class_type(stdlib.none_type().clone());
         let symbol_def_paths = collect_symbol_def_paths(&none_type);
         if symbol_def_paths.is_empty() {
             None

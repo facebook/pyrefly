@@ -33,6 +33,7 @@ mod notebook_sync;
 mod notebook_tokens;
 mod object_model;
 mod provide_type;
+mod pytorch_benchmark;
 mod references;
 mod rename;
 mod semantic_tokens;

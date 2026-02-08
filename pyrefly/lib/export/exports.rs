@@ -175,57 +175,32 @@ impl Exports {
         self.0.wildcard.calculate(f).unwrap_or_default()
     }
 
-    /// Check if the wildcard set would be different between self and other.
-    /// This compares the raw `__all__` entries without using the lookup,
-    /// so it's safe to call during incremental updates.
-    pub fn wildcard_entries_changed(&self, other: &Self) -> bool {
-        let self_entries = &self.0.definitions.dunder_all.entries;
-        let other_entries = &other.0.definitions.dunder_all.entries;
-
-        if self_entries.len() != other_entries.len() {
-            return true;
-        }
-
-        // Compare entries ignoring ranges
-        for (a, b) in self_entries.iter().zip(other_entries.iter()) {
-            let same = match (a, b) {
-                (DunderAllEntry::Name(_, na), DunderAllEntry::Name(_, nb)) => na == nb,
-                (DunderAllEntry::Module(_, ma), DunderAllEntry::Module(_, mb)) => ma == mb,
-                (DunderAllEntry::Remove(_, ra), DunderAllEntry::Remove(_, rb)) => ra == rb,
-                _ => false,
-            };
-            if !same {
-                return true;
-            }
-        }
-
-        false
-    }
-
     /// Get the names that were added or removed between self and other.
     /// Returns the symmetric difference: names that exist in one but not the other.
-    pub fn changed_definition_names(&self, other: &Self) -> SmallSet<Name> {
-        let self_defs = &self.0.definitions.definitions;
-        let other_defs = &other.0.definitions.definitions;
+    pub fn changed_names(&self, other: &Self) -> SmallSet<Name> {
+        let self_set = self.0.wildcard.get();
+        let other_set = other.0.wildcard.get();
 
-        // Fast path: if key sets are identical, no changes
-        if self_defs.len() == other_defs.len()
-            && self_defs.keys().all(|k| other_defs.contains_key(k))
-        {
-            return SmallSet::new();
+        let (self_set, other_set) = match (self_set, other_set) {
+            (Some(s), Some(o)) => (s, o),
+            (None, None) => return SmallSet::new(),
+            (Some(s), None) => return s.iter().cloned().collect(),
+            (None, Some(o)) => return o.iter().cloned().collect(),
+        };
+
+        // Compute symmetric difference: names in self but not other, plus names in other but not self
+        let mut result = SmallSet::new();
+        for name in self_set.iter() {
+            if !other_set.contains(name) {
+                result.insert(name.clone());
+            }
         }
-
-        // Compute symmetric difference: (self - other) ∪ (other - self)
-        self_defs
-            .keys()
-            .filter(|name| !other_defs.contains_key(*name))
-            .chain(
-                other_defs
-                    .keys()
-                    .filter(|name| !self_defs.contains_key(*name)),
-            )
-            .cloned()
-            .collect()
+        for name in other_set.iter() {
+            if !self_set.contains(name) {
+                result.insert(name.clone());
+            }
+        }
+        result
     }
 
     /// Get the names where metadata changed between self and other.

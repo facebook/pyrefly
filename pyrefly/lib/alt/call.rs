@@ -328,7 +328,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let value_ty = self.get_typed_dict_value_type(&td);
                 let cls = self
                     .stdlib
-                    .dict(self.stdlib.str().clone().to_type(), value_ty);
+                    .dict(self.heap.mk_class_type(self.stdlib.str().clone()), value_ty);
                 CallTargetLookup::Ok(Box::new(CallTarget::Class(
                     cls,
                     ConstructorKind::TypeOfClass,
@@ -383,7 +383,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Literal(box Literal {
                 value: Lit::Enum(enum_),
                 ..
-            }) => self.as_call_target_impl(enum_.class.to_type(), quantified, dunder_call),
+            }) => self.as_call_target_impl(
+                self.heap.mk_class_type(enum_.class.clone()),
+                quantified,
+                dunder_call,
+            ),
             _ => CallTargetLookup::Error(vec![]),
         }
     }
@@ -598,7 +602,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .solver()
                 .freshen_class_targs(cls.targs_mut(), self.uniques);
 
-            self.is_subset_eq(&cls.clone().to_type(), hint.ty());
+            self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint.ty());
             self.solver().generalize_class_targs(cls.targs_mut());
             vs
         } else {
@@ -615,7 +619,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(metaclass) = class_metadata.custom_metaclass()
                 {
                     self.record_external_attribute_definition_index(
-                        &metaclass.clone().to_type(),
+                        &self.heap.mk_class_type(metaclass.clone()),
                         &dunder::CALL,
                         callee_range,
                     );
@@ -634,7 +638,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut dunder_new_ret = None;
         let (overrides_new, dunder_new_has_errors) =
             if let Some(new_method) = self.get_dunder_new(&cls) {
-                let cls_ty = self.heap.mk_type_form(cls.clone().to_type());
+                let cls_ty = self.heap.mk_type_form(self.heap.mk_class_type(cls.clone()));
                 let full_args = iter::once(CallArg::ty(&cls_ty, arguments_range))
                     .chain(args.iter().cloned())
                     .collect::<Vec<_>>();
@@ -659,7 +663,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors.extend(dunder_new_errors);
                 if let Some(callee_range) = callee_range {
                     self.record_external_attribute_definition_index(
-                        &cls.clone().to_type(),
+                        &self.heap.mk_class_type(cls.clone()),
                         &dunder::NEW,
                         callee_range,
                     );
@@ -714,7 +718,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if let Some(callee_range) = callee_range {
                 self.record_external_attribute_definition_index(
-                    &cls.clone().to_type(),
+                    &self.heap.mk_class_type(cls.clone()),
                     &dunder::INIT,
                     callee_range,
                 );
@@ -744,7 +748,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ret.subst_mut(&cls.targs().substitution_map());
             ret
         } else {
-            cls.to_type()
+            self.heap.mk_class_type(cls)
         }
     }
 
@@ -1221,7 +1225,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn constructor_to_callable(&self, cls: &ClassType) -> Type {
-        let class_type = cls.clone().to_type();
+        let class_type = self.heap.mk_class_type(cls.clone());
         if let Some(metaclass_call_attr_ty) = self.get_metaclass_dunder_call(cls) {
             // If the class has a custom metaclass and the return type of the metaclass's __call__
             // is not a subclass of the current class, use that and ignore __new__ and __init__
@@ -1400,7 +1404,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
             // TypeIs and TypeGuard functions return bool at runtime
             match result {
-                Type::TypeIs(_) | Type::TypeGuard(_) => self.stdlib.bool().clone().to_type(),
+                Type::TypeIs(_) | Type::TypeGuard(_) => {
+                    self.heap.mk_class_type(self.stdlib.bool().clone())
+                }
                 other => other,
             }
         }

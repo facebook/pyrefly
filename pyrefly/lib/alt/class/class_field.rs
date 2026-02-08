@@ -1148,7 +1148,7 @@ impl<'a> Instance<'a> {
     fn to_type(&self, heap: &TypeHeap) -> Type {
         match &self.kind {
             InstanceKind::ClassType => {
-                ClassType::new(self.class.dupe(), self.targs.clone()).to_type()
+                heap.mk_class_type(ClassType::new(self.class.dupe(), self.targs.clone()))
             }
             InstanceKind::TypedDict => {
                 heap.mk_typed_dict(TypedDict::new(self.class.dupe(), self.targs.clone()))
@@ -2618,7 +2618,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let self_quantified = if field_name == &dunder::NEW
             && let ClassBase::ClassDef(cls) = cls
         {
-            Some(self.get_self_quantified(cls.class_object().name(), cls.clone().to_type()))
+            Some(self.get_self_quantified(
+                cls.class_object().name(),
+                self.heap.mk_class_type(cls.clone()),
+            ))
         } else {
             None
         };
@@ -3533,12 +3536,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let quantified_with_specific_upper_bound = match quantified.restriction() {
             Restriction::Constraints(_) => {
                 quantified.with_restriction(Restriction::Constraints(vec![
-                    upper_bound.clone().to_type(),
+                    self.heap.mk_class_type(upper_bound.clone()),
                 ]))
             }
-            Restriction::Bound(_) => {
-                quantified.with_restriction(Restriction::Bound(upper_bound.clone().to_type()))
-            }
+            Restriction::Bound(_) => quantified.with_restriction(Restriction::Bound(
+                self.heap.mk_class_type(upper_bound.clone()),
+            )),
             Restriction::Unrestricted => quantified,
         };
         self.get_class_member(upper_bound.class_object(), name)
@@ -3782,8 +3785,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &Instance::of_metaclass(ClassBase::ClassType(cls.clone()), metaclass),
                 )
                 .and_then(|ty| {
-                    make_bound_method(self.heap, self.heap.mk_type_form(cls.clone().to_type()), ty)
-                        .ok()
+                    make_bound_method(
+                        self.heap,
+                        self.heap.mk_type_form(self.heap.mk_class_type(cls.clone())),
+                        ty,
+                    )
+                    .ok()
                 })
         }
     }
@@ -3971,7 +3978,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // Class-level assignment bypasses the descriptor protocol.
                         // __set__ only intercepts instance assignments, so we check
                         // that the value is assignable to the descriptor type.
-                        let attr_ty = x.cls.to_type();
+                        let attr_ty = self.heap.mk_class_type(x.cls.clone());
                         self.check_set_read_write_and_infer_narrow(
                             attr_ty,
                             attr_name,
@@ -4150,8 +4157,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ClassAttribute::Descriptor(Descriptor { cls: got_cls, .. }, ..),
                 ClassAttribute::Descriptor(Descriptor { cls: want_cls, .. }, ..),
             ) => {
-                let got_ty = got_cls.clone().to_type();
-                let want_ty = want_cls.clone().to_type();
+                let got_ty = self.heap.mk_class_type(got_cls.clone());
+                let want_ty = self.heap.mk_class_type(want_cls.clone());
                 is_subset(&got_ty, &want_ty).map_err(|subset_error| AttrSubsetError::Covariant {
                     got: got_ty,
                     want: want_ty,
@@ -4190,7 +4197,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Ok(self.call_descriptor_getter(getter, base, range, errors, context))
                 } else {
                     // Reading descriptor with no getter resolves to the descriptor itself
-                    Ok(x.cls.to_type())
+                    Ok(self.heap.mk_class_type(x.cls.clone()))
                 }
             }
         }

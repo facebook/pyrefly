@@ -63,7 +63,7 @@ impl Command {
             Command::Check(args) => args.run().await,
             Command::Snippet(args) => args.run().await,
             Command::BuckCheck(args) => args.run(),
-            Command::Lsp(args) => args.run(version, telemetry),
+            Command::Lsp(args) => args.run(version, None, telemetry),
             Command::Tsp(args) => args.run(telemetry),
             Command::Init(args) => args.run(),
             Command::Infer(args) => args.run(),

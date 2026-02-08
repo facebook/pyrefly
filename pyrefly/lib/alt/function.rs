@@ -1195,7 +1195,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         });
                         call_attr
                     } else {
-                        cls.to_type()
+                        self.heap.mk_class_type(cls)
                     }
                 }
                 Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => decoratee.clone(),

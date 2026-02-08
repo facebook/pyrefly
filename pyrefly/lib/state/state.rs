@@ -312,8 +312,6 @@ impl ModuleDep {
             ChangedExport::ClassDefIndex(idx) => self.classes.contains(idx),
             ChangedExport::TypeAliasIndex(idx) => self.type_aliases.contains(idx),
             ChangedExport::Metadata(name) => self.names.get(name).is_some_and(|d| d.metadata),
-            // We don't depend on wildcard (checked separately before calling this)
-            ChangedExport::Wildcard => false,
         }
     }
 }
@@ -1109,6 +1107,7 @@ impl<'a> Transaction<'a> {
                     .untyped_def_behavior(module_data.handle.path().as_path()),
                 infer_with_first_use: config
                     .infer_with_first_use(module_data.handle.path().as_path()),
+                tensor_shapes: config.tensor_shapes(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
             };
             let set = todo.compute(&exclusive.steps, &ctx);
@@ -1157,13 +1156,8 @@ impl<'a> Transaction<'a> {
                     match (old_exports.as_ref(), writer.steps.exports.as_ref()) {
                         (Some(old), Some(new)) => {
                             let mut changed_set: SmallSet<ChangedExport> = SmallSet::new();
-                            // Module entries changed, fall back to Wildcard
-                            if old.wildcard_entries_changed(new) {
-                                changed_set.insert(ChangedExport::Wildcard);
-                            }
-
                             // Check for definition name changes (added/removed names)
-                            for name in old.changed_definition_names(new) {
+                            for name in old.changed_names(new) {
                                 changed_set.insert(ChangedExport::NameExistence(name));
                             }
 
@@ -1474,27 +1468,30 @@ impl<'a> Transaction<'a> {
         // Check; demand; check - the second check is guaranteed to work.
         for _ in 0..2 {
             let lock = module_data.state.read();
-            if let Some(solutions) = &lock.steps.solutions
-                && lock.epochs.checked == self.data.now
-                && lock.steps.last_step == Some(Step::Solutions)
-            {
-                return solutions.get_hashed_opt(key).duped();
-            } else if let Some(answers) = &lock.steps.answers {
-                let load = lock.steps.load.dupe().unwrap();
-                let answers = answers.dupe();
-                drop(lock);
-                let stdlib = self.get_stdlib(&module_data.handle);
-                let lookup = self.lookup(module_data);
-                return answers.1.solve_exported_key(
-                    &lookup,
-                    &lookup,
-                    &answers.0,
-                    &load.errors,
-                    &stdlib,
-                    &self.data.state.uniques,
-                    key,
-                    thread_state,
-                );
+            if lock.epochs.checked == self.data.now {
+                // Only use existing solutions or answers if the module data is current.
+                // Otherwise, the module might be dirty and require computation.
+                if let Some(solutions) = &lock.steps.solutions
+                    && lock.steps.last_step == Some(Step::Solutions)
+                {
+                    return solutions.get_hashed_opt(key).duped();
+                } else if let Some(answers) = &lock.steps.answers {
+                    let load = lock.steps.load.dupe().unwrap();
+                    let answers = answers.dupe();
+                    drop(lock);
+                    let stdlib = self.get_stdlib(&module_data.handle);
+                    let lookup = self.lookup(module_data);
+                    return answers.1.solve_exported_key(
+                        &lookup,
+                        &lookup,
+                        &answers.0,
+                        &load.errors,
+                        &stdlib,
+                        &self.data.state.uniques,
+                        key,
+                        thread_state,
+                    );
+                }
             }
             drop(lock);
             self.demand(&module_data, Step::Answers);
@@ -2056,6 +2053,7 @@ impl<'a> Transaction<'a> {
                 lookup: &self.lookup(m.dupe()),
                 untyped_def_behavior: config.untyped_def_behavior(m.handle.path().as_path()),
                 infer_with_first_use: config.infer_with_first_use(m.handle.path().as_path()),
+                tensor_shapes: config.tensor_shapes(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
             };
             let mut step = Step::Load; // Start at AST (Load.next)

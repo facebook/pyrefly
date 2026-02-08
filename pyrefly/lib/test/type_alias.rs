@@ -1049,7 +1049,6 @@ def bad_type_aliases(
 );
 
 testcase!(
-    bug = "conformance: Should error on variance incompatibility in type alias class declarations",
     test_type_alias_variance_conformance,
     r#"
 from typing import Generic, TypeVar, TypeAlias
@@ -1063,15 +1062,15 @@ class ClassA(Generic[T]): ...
 A_Alias_1: TypeAlias = ClassA[T_co]
 A_Alias_2: TypeAlias = A_Alias_1[T_co]
 
-class ClassA_1(ClassA[T_co]): ...  # should error: incompatible variance
-class ClassA_2(A_Alias_1[T_co]): ...  # should error: incompatible variance
-class ClassA_3(A_Alias_2[T_co]): ...  # should error: incompatible variance
+class ClassA_1(ClassA[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+class ClassA_2(A_Alias_1[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+class ClassA_3(A_Alias_2[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
 
 class ClassB(Generic[T, T_co]): ...
 
 B_Alias_1 = ClassB[T_co, T_contra]
 
-class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # should error: incompatible variance
+class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # E: Type variable `T_contra` is Contravariant but is used in invariant position
 "#,
 );
 

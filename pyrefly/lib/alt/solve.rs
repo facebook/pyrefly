@@ -80,6 +80,7 @@ use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingTypeAlias;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::BindingVariance;
+use crate::binding::binding::BindingVarianceCheck;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::BranchInfo;
@@ -400,9 +401,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     annotation: ann,
                 })
             }
-            BindingAnnotation::Type(target, x) => Arc::new(AnnotationWithTarget {
+            BindingAnnotation::SpecialForm(target, sf) => Arc::new(AnnotationWithTarget {
                 target: target.clone(),
-                annotation: Annotation::new_type(x.clone()),
+                annotation: Annotation::new_type(sf.to_type(self.heap)),
             }),
         }
     }
@@ -779,7 +780,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let ty = self
                     .unwrap_iterable(iterable)
                     .or_else(|| {
-                        let int_ty = self.stdlib.int().clone().to_type();
+                        let int_ty = self.heap.mk_class_type(self.stdlib.int().clone());
                         let arg = CallArg::ty(&int_ty, range);
                         self.call_magic_dunder_method(
                             iterable,
@@ -857,7 +858,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let base_exception_class_type = self
             .heap
             .mk_class_def(base_exception_class.class_object().dupe());
-        let base_exception_type = base_exception_class.clone().to_type();
+        let base_exception_type = self.heap.mk_class_type(base_exception_class.clone());
         let mut expected_types = vec![base_exception_type, base_exception_class_type];
         let mut expected = "`BaseException`";
         if allow_none {
@@ -1392,12 +1393,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             },
         };
-        let base_exception_class_type = self
-            .heap
-            .mk_type_form(self.stdlib.base_exception().clone().to_type());
+        let base_exception_class_type = self.heap.mk_type_form(
+            self.heap
+                .mk_class_type(self.stdlib.base_exception().clone()),
+        );
         let arg1 = base_exception_class_type;
-        let arg2 = self.stdlib.base_exception().clone().to_type();
-        let arg3 = self.stdlib.traceback_type().clone().to_type();
+        let arg2 = self
+            .heap
+            .mk_class_type(self.stdlib.base_exception().clone());
+        let arg3 = self
+            .heap
+            .mk_class_type(self.stdlib.traceback_type().clone());
         let exit_with_error_args = [
             CallArg::ty(&arg1, range),
             CallArg::ty(&arg2, range),
@@ -1458,7 +1464,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.context_value_exit(context_manager_type, kind, range, errors, Some(&context));
             self.check_type(
                 &exit_type,
-                &self.heap.mk_optional(self.stdlib.bool().clone().to_type()),
+                &self
+                    .heap
+                    .mk_optional(self.heap.mk_class_type(self.stdlib.bool().clone())),
                 range,
                 errors,
                 &|| TypeCheckContext {
@@ -1847,8 +1855,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } => {
                 let ann_new = self.get_idx(*new);
                 let ann_existing = self.get_idx(*existing);
-                if let Some(t_new) = ann_new.ty(self.stdlib)
-                    && let Some(t_existing) = ann_existing.ty(self.stdlib)
+                if let Some(t_new) = ann_new.ty(self.heap, self.stdlib)
+                    && let Some(t_existing) = ann_existing.ty(self.heap, self.stdlib)
                     && t_new != t_existing
                 {
                     let t_new = self.for_display(t_new.clone());
@@ -2019,7 +2027,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         let value_type = self.expr_infer(&expect.value, errors);
         // Name mangling only occurs on attributes of classes.
-        if self.is_subset_eq(&value_type, &self.stdlib.module_type().clone().to_type()) {
+        if self.is_subset_eq(
+            &value_type,
+            &self.heap.mk_class_type(self.stdlib.module_type().clone()),
+        ) {
             return;
         }
         if let Some(class_idx) = expect.class_idx {
@@ -2250,17 +2261,66 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Arc::new(fields)
     }
 
-    // TODO zeina: After doing the full implementation, look into extracting fields and
-    // base types from existing bindings
-    pub fn solve_variance_binding(&self, variance_info: &BindingVariance) -> Arc<VarianceMap> {
+    pub fn solve_variance_binding(
+        &self,
+        variance_info: &BindingVariance,
+        _errors: &ErrorCollector,
+    ) -> Arc<VarianceMap> {
         let class_idx = variance_info.class_key;
         let class = self.get_idx(class_idx);
 
         if let Some(class) = &class.0 {
-            self.variance_map(class)
+            // Only compute variance map, don't check violations here.
+            // Violations are checked separately in solve_variance_check to avoid
+            // cycles from calling get_class_field_map during variance computation.
+            let result = self.compute_variance(class, false);
+            Arc::new(result.variance_map)
         } else {
             Arc::new(VarianceMap::default())
         }
+    }
+
+    /// Check variance violations for a class.
+    ///
+    /// This is separate from solve_variance_binding to avoid cycles when
+    /// calling get_class_field_map during variance computation.
+    ///
+    /// Checking behavior:
+    /// - Base classes: DEEP checking (recurse into all nested generics)
+    /// - Methods: SHALLOW checking (only direct TypeVar usage, not nested Callables)
+    /// - Fields: NO checking (mutable fields constrain variance during inference only)
+    pub fn solve_variance_check(
+        &self,
+        binding: &BindingVarianceCheck,
+        errors: &ErrorCollector,
+    ) -> Arc<EmptyAnswer> {
+        let class = self.get_idx(binding.class_idx);
+
+        if let Some(class) = &class.0 {
+            // Get type parameters and their declared variances
+            let tparams = self.get_class_tparams(class);
+
+            // Only check violations for type parameters that have declared variance
+            let has_declared_variance = tparams
+                .as_vec()
+                .iter()
+                .any(|p| p.variance() != PreInferenceVariance::Undefined);
+
+            if has_declared_variance {
+                let result = self.compute_variance(class, true);
+
+                for violation in &result.violations {
+                    let message = violation.format_message();
+                    self.error(
+                        errors,
+                        violation.range,
+                        ErrorInfo::Kind(ErrorKind::InvalidVariance),
+                        message,
+                    );
+                }
+            }
+        }
+        Arc::new(EmptyAnswer)
     }
 
     /// Get the class that attribute lookup on `super(cls, obj)` should be done on.
@@ -2672,7 +2732,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         AnnotationStyle::Forwarded => TypeCheckKind::AnnotatedName(name.clone()),
                     })
                 };
-                let annot_ty = annot.ty(self.stdlib);
+                let annot_ty = annot.ty(self.heap, self.stdlib);
                 let hint = annot_ty.as_ref().map(|t| (t, tcc));
                 let expr_ty = self.expr(expr, hint, errors);
                 let ty = if style == &AnnotationStyle::Direct {
@@ -2846,19 +2906,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     });
                     let any_implicit = self.heap.mk_any_implicit();
                     if x.is_async {
-                        self.stdlib
-                            .async_generator(yield_ty, any_implicit)
-                            .to_type()
+                        self.heap
+                            .mk_class_type(self.stdlib.async_generator(yield_ty, any_implicit))
                     } else {
-                        self.stdlib
-                            .generator(yield_ty, any_implicit, return_ty)
-                            .to_type()
+                        self.heap.mk_class_type(self.stdlib.generator(
+                            yield_ty,
+                            any_implicit,
+                            return_ty,
+                        ))
                     }
                 } else if x.is_async {
                     let any_implicit = self.heap.mk_any_implicit();
-                    self.stdlib
-                        .coroutine(any_implicit.clone(), any_implicit, return_ty)
-                        .to_type()
+                    self.heap.mk_class_type(self.stdlib.coroutine(
+                        any_implicit.clone(),
+                        any_implicit,
+                        return_ty,
+                    ))
                 } else {
                     return_ty
                 }
@@ -2871,7 +2934,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     #[inline(never)]
     fn binding_to_type_return_explicit(&self, x: &ReturnExplicit, errors: &ErrorCollector) -> Type {
         let annot = x.annot.map(|k| self.get_idx(k));
-        let hint = annot.as_ref().and_then(|ann| ann.ty(self.stdlib));
+        let hint = annot
+            .as_ref()
+            .and_then(|ann| ann.ty(self.heap, self.stdlib));
         if x.is_unreachable {
             if let Some(box expr) = &x.expr {
                 self.expr_infer(expr, errors);
@@ -2988,7 +3053,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         is_star: bool,
         errors: &ErrorCollector,
     ) -> Type {
-        let base_exception_type = self.stdlib.base_exception().clone().to_type();
+        let base_exception_type = self
+            .heap
+            .mk_class_type(self.stdlib.base_exception().clone());
         let base_exception_group_any_type = if is_star {
             // Only query for `BaseExceptionGroup` if we see an `except*` handler (which
             // was introduced in Python3.11).
@@ -2997,7 +3064,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let res = self
                 .stdlib
                 .base_exception_group(self.heap.mk_any_implicit())
-                .map(|x| x.to_type());
+                .map(|x| self.heap.mk_class_type(x));
             if res.is_none() {
                 self.error(
                     errors,
@@ -3050,7 +3117,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let exceptions = self.unions(exceptions);
         if is_star && let Some(t) = self.stdlib.exception_group(exceptions.clone()) {
-            t.to_type()
+            self.heap.mk_class_type(t)
         } else {
             exceptions
         }
@@ -3080,7 +3147,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             | AnnotationTarget::ClassMember(name) => Some(name.clone()),
                             _ => None,
                         },
-                        t.ty(self.stdlib).clone(),
+                        t.ty(self.heap, self.stdlib).clone(),
                     ),
                 }
             };
@@ -3091,23 +3158,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let iterables = if is_async.is_async() {
             let infer_hint = ann.clone().and_then(|x| {
-                x.ty(self.stdlib)
-                    .map(|ty| self.stdlib.async_iterable(ty.clone()).to_type())
+                x.ty(self.heap, self.stdlib).map(|ty| {
+                    self.heap
+                        .mk_class_type(self.stdlib.async_iterable(ty.clone()))
+                })
             });
             let iterable =
                 self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRef::soft), errors);
             self.async_iterate(&iterable, e.range(), errors)
         } else {
             let infer_hint = ann.clone().and_then(|x| {
-                x.ty(self.stdlib)
-                    .map(|ty| self.stdlib.iterable(ty.clone()).to_type())
+                x.ty(self.heap, self.stdlib)
+                    .map(|ty| self.heap.mk_class_type(self.stdlib.iterable(ty.clone())))
             });
             let iterable =
                 self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRef::soft), errors);
             self.iterate(&iterable, e.range(), errors, None)
         };
         let value = self.get_produced_type(iterables);
-        let check_hint = ann.clone().and_then(|x| x.ty(self.stdlib));
+        let check_hint = ann.clone().and_then(|x| x.ty(self.heap, self.stdlib));
         if let Some(check_hint) = check_hint {
             self.check_and_return_type(value, &check_hint, e.range(), errors, tcc)
         } else {
@@ -3132,16 +3201,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             values.push(match iterable {
                 Iterable::OfType(ty) => match pos {
                     UnpackedPosition::Index(_) | UnpackedPosition::ReverseIndex(_) => ty,
-                    UnpackedPosition::Slice(_, _) => self.stdlib.list(ty).to_type(),
+                    UnpackedPosition::Slice(_, _) => self.heap.mk_class_type(self.stdlib.list(ty)),
                 },
                 Iterable::OfTypeVarTuple(_) => {
                     // Type var tuples can resolve to anything so we fall back to object
-                    let object_type = self.stdlib.object().clone().to_type();
+                    let object_type = self.heap.mk_class_type(self.stdlib.object().clone());
                     match pos {
                         UnpackedPosition::Index(_) | UnpackedPosition::ReverseIndex(_) => {
                             object_type
                         }
-                        UnpackedPosition::Slice(_, _) => self.stdlib.list(object_type).to_type(),
+                        UnpackedPosition::Slice(_, _) => {
+                            self.heap.mk_class_type(self.stdlib.list(object_type))
+                        }
                     }
                 }
                 Iterable::FixedLen(ts) => {
@@ -3169,7 +3240,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 && let Some(items) = ts.get(start..end)
                             {
                                 let elem_ty = self.unions(items.to_vec());
-                                self.stdlib.list(elem_ty).to_type()
+                                self.heap.mk_class_type(self.stdlib.list(elem_ty))
                             } else {
                                 // We'll report this error when solving for Binding::UnpackedLength.
                                 self.heap.mk_any_error()
@@ -3182,7 +3253,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let got = self.unions(values);
         if let Some(ann) = ann.map(|idx| self.get_idx(idx)) {
             self.check_final_reassignment(&ann, range, errors);
-            if let Some(want) = ann.ty(self.stdlib) {
+            if let Some(want) = ann.ty(self.heap, self.stdlib) {
                 self.check_type(&got, &want, range, errors, &|| {
                     TypeCheckContext::of_kind(TypeCheckKind::UnpackedAssign)
                 });
@@ -3211,7 +3282,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(&annot.target))
                 };
                 self.check_final_reassignment(&annot, e.range(), errors);
-                self.expr(e, annot.ty(self.stdlib).as_ref().map(|t| (t, tcc)), errors)
+                self.expr(
+                    e,
+                    annot.ty(self.heap, self.stdlib).as_ref().map(|t| (t, tcc)),
+                    errors,
+                )
             }
             None => {
                 // TODO(stroxler): propagate attribute narrows here
@@ -3235,7 +3310,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ann_idx) = ann {
             let annot = self.get_idx(ann_idx);
             self.check_final_reassignment(&annot, range, errors);
-            if let Some(annot_ty) = annot.ty(self.stdlib)
+            if let Some(annot_ty) = annot.ty(self.heap, self.stdlib)
                 && !self.is_subset_eq(ty, &annot_ty)
             {
                 self.error(
@@ -3341,7 +3416,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ann = ann.map(|k| self.get_idx(k));
         if let Some(ann) = ann {
             self.check_final_reassignment(&ann, range, errors);
-            if let Some(ty) = ann.ty(self.stdlib) {
+            if let Some(ty) = ann.ty(self.heap, self.stdlib) {
                 self.check_and_return_type(context_value, &ty, range, errors, &|| {
                     TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(&ann.target))
                 })
@@ -3359,20 +3434,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn binding_to_type_function_parameter(&self, param: &FunctionParameter) -> Type {
         let finalize = |target: &AnnotationTarget, ty| match target {
             AnnotationTarget::ArgsParam(_) => self.heap.mk_unbounded_tuple(ty),
-            AnnotationTarget::KwargsParam(_) => self
-                .stdlib
-                .dict(self.stdlib.str().clone().to_type(), ty)
-                .to_type(),
+            AnnotationTarget::KwargsParam(_) => self.heap.mk_class_type(
+                self.stdlib
+                    .dict(self.heap.mk_class_type(self.stdlib.str().clone()), ty),
+            ),
             _ => ty,
         };
         match param {
             FunctionParameter::Annotated(key) => {
                 let annotation = self.get_idx(*key);
-                annotation.ty(self.stdlib).clone().unwrap_or_else(|| {
-                    // This annotation isn't valid. It's something like `: Final` that doesn't
-                    // have enough information to create a real type.
-                    finalize(&annotation.target, self.heap.mk_any_implicit())
-                })
+                annotation
+                    .ty(self.heap, self.stdlib)
+                    .clone()
+                    .unwrap_or_else(|| {
+                        // This annotation isn't valid. It's something like `: Final` that doesn't
+                        // have enough information to create a real type.
+                        finalize(&annotation.target, self.heap.mk_any_implicit())
+                    })
             }
             FunctionParameter::Unannotated(var, function_idx, target) => {
                 // It's important that we force the undecorated function binding before reading
@@ -3399,7 +3477,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let ty = self
             .typevartuple_from_call(name.clone(), x, errors)
-            .to_type();
+            .to_type(self.heap);
         if let Some(k) = ann
             && let AnnotationWithTarget {
                 target,
@@ -3921,9 +3999,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     }
                     (Type::TypedDict(typed_dict), key)
-                        if self.is_subset_eq(key, &self.stdlib.str().clone().to_type())
-                            && let Some(field_ty) =
-                                self.get_typed_dict_value_type_as_builtins_dict(typed_dict) =>
+                        if self.is_subset_eq(
+                            key,
+                            &self.heap.mk_class_type(self.stdlib.str().clone()),
+                        ) && let Some(field_ty) =
+                            self.get_typed_dict_value_type_as_builtins_dict(typed_dict) =>
                     {
                         self.check_assign_to_typed_dict_field(
                             typed_dict.name(),
@@ -4136,9 +4216,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         if is_async && !is_generator {
             let any_implicit = self.heap.mk_any_implicit();
-            self.stdlib
-                .coroutine(any_implicit.clone(), any_implicit, annotated_ty)
-                .to_type()
+            self.heap.mk_class_type(self.stdlib.coroutine(
+                any_implicit.clone(),
+                any_implicit,
+                annotated_ty,
+            ))
         } else {
             annotated_ty
         }
@@ -4235,7 +4317,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             ),
             Binding::TypeVar(ann, name, x) => {
-                let ty = self.typevar_from_call(name.clone(), x, errors).to_type();
+                let ty = self
+                    .typevar_from_call(name.clone(), x, errors)
+                    .to_type(self.heap);
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
                         target,
@@ -4254,7 +4338,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Binding::ParamSpec(ann, name, x) => {
-                let ty = self.paramspec_from_call(name.clone(), x, errors).to_type();
+                let ty = self
+                    .paramspec_from_call(name.clone(), x, errors)
+                    .to_type(self.heap);
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
                         target,
@@ -4320,13 +4406,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.heap.mk_class_def(cls.dupe())
                 }
             },
-            Binding::AnnotatedType(ann, val) => match self.get_idx(*ann).ty(self.stdlib) {
+            Binding::AnnotatedType(ann, val) => match self.get_idx(*ann).ty(self.heap, self.stdlib)
+            {
                 Some(ty) => self.wrap_callable_legacy_typevars(ty),
                 None => self.binding_to_type(val, errors),
             },
             Binding::None => self.heap.mk_none(),
             Binding::Any(style) => self.heap.mk_any(*style),
-            Binding::Global(global) => global.as_type(self.stdlib),
+            Binding::Global(global) => global.as_type(self.stdlib, self.heap),
             Binding::TypeParameter(tp) => {
                 self.quantified_from_type_parameter(tp, errors).to_value()
             }
@@ -4409,7 +4496,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let annot = annot.map(|k| self.get_idx(k));
                 let hint = annot
                     .as_ref()
-                    .and_then(|x| x.ty(self.stdlib))
+                    .and_then(|x| x.ty(self.heap, self.stdlib))
                     .and_then(|ty| {
                         if let Some((yield_ty, send_ty, _)) = self.decompose_generator(&ty) {
                             Some((yield_ty, send_ty))
@@ -4491,7 +4578,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let annot = annot.map(|k| self.get_idx(k));
                 let want = annot
                     .as_ref()
-                    .and_then(|x| x.ty(self.stdlib))
+                    .and_then(|x| x.ty(self.heap, self.stdlib))
                     .and_then(|ty| self.decompose_generator(&ty));
 
                 let mut ty = self.expr_infer(&x.value, errors);
@@ -4504,10 +4591,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // with a `None` send type.
                     // TODO: This might cause confusing type errors.
                     let none = self.heap.mk_none();
-                    ty = self
-                        .stdlib
-                        .generator(yield_ty.clone(), none.clone(), none)
-                        .to_type();
+                    ty = self.heap.mk_class_type(self.stdlib.generator(
+                        yield_ty.clone(),
+                        none.clone(),
+                        none,
+                    ));
                     YieldFromResult::from_iterable(self.heap, yield_ty)
                 } else {
                     ty = if is_async.is_async() {
@@ -4528,10 +4616,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 if let Some((want_yield, want_send, _)) = want {
                     // We don't need to be compatible with the expected generator return type.
-                    let want = self
-                        .stdlib
-                        .generator(want_yield, want_send, self.heap.mk_any_implicit())
-                        .to_type();
+                    let want = self.heap.mk_class_type(self.stdlib.generator(
+                        want_yield,
+                        want_send,
+                        self.heap.mk_any_implicit(),
+                    ));
                     self.check_type(&ty, &want, x.range, errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::YieldFrom)
                     });
@@ -4678,7 +4767,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .clone(),
                 ),
             ),
-            _ => self.stdlib.builtins_type().clone().to_type(),
+            _ => self.heap.mk_class_type(self.stdlib.builtins_type().clone()),
         }
     }
 
@@ -4906,10 +4995,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         (Type::TypedDict(typed_dict), key)
-                            if self.is_subset_eq(key, &self.stdlib.str().clone().to_type())
-                                && self
-                                    .get_typed_dict_value_type_as_builtins_dict(typed_dict)
-                                    .is_some() =>
+                            if self.is_subset_eq(
+                                key,
+                                &self.heap.mk_class_type(self.stdlib.str().clone()),
+                            ) && self
+                                .get_typed_dict_value_type_as_builtins_dict(typed_dict)
+                                .is_some() =>
                         {
                             self.check_del_typed_dict_field(
                                 typed_dict.name(),

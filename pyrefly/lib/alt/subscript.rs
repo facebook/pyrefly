@@ -110,21 +110,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         lower_expr: &Option<Box<Expr>>,
         upper_expr: &Option<Box<Expr>>,
     ) -> Option<Type> {
+        let len = elts.len() as i64;
         let lower_literal = self.parse_slice_literal(lower_expr).ok()?.unwrap_or(0);
-        let upper_literal = self
-            .parse_slice_literal(upper_expr)
-            .ok()?
-            .unwrap_or(elts.len() as i64);
-        if lower_literal >= 0 && upper_literal >= 0 && upper_literal <= elts.len() as i64 {
-            if lower_literal >= upper_literal {
-                Some(self.heap.mk_concrete_tuple(Vec::new()))
-            } else {
-                Some(self.heap.mk_concrete_tuple(
-                    elts[lower_literal as usize..upper_literal as usize].to_vec(),
-                ))
-            }
+        let upper_literal = self.parse_slice_literal(upper_expr).ok()?.unwrap_or(len);
+
+        // Normalize negative indices (e.g., -1 becomes len-1)
+        let lower = if lower_literal < 0 {
+            len + lower_literal
         } else {
-            None
+            lower_literal
+        };
+        let upper = if upper_literal < 0 {
+            len + upper_literal
+        } else {
+            upper_literal
+        };
+
+        // Return None for out-of-bounds indices. This includes cases like
+        // x[-5:] or x[:10] on a 3-element tuple. Returning None falls back
+        // to dynamic/Unknown behavior, which is appropriate when we can't
+        // precisely determine the result type.
+        if lower < 0 || lower > len || upper < 0 || upper > len {
+            return None;
+        }
+
+        if lower >= upper {
+            Some(self.heap.mk_concrete_tuple(Vec::new()))
+        } else {
+            Some(
+                self.heap
+                    .mk_concrete_tuple(elts[lower as usize..upper as usize].to_vec()),
+            )
         }
     }
 
@@ -481,7 +497,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 } else {
                     self.call_method_or_error(
-                        &self.stdlib.bytes().clone().to_type(),
+                        &self.heap.mk_class_type(self.stdlib.bytes().clone()),
                         &dunder::GETITEM,
                         range,
                         &[CallArg::expr(index_expr)],
@@ -492,7 +508,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             _ => self.call_method_or_error(
-                &self.stdlib.bytes().clone().to_type(),
+                &self.heap.mk_class_type(self.stdlib.bytes().clone()),
                 &dunder::GETITEM,
                 range,
                 &[CallArg::expr(index_expr)],

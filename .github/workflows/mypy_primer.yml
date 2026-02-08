@@ -38,7 +38,7 @@ jobs:
           pip install git+https://github.com/hauntsaninja/mypy_primer.git
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-10-25
+          toolchain: nightly-2025-12-05
           components: clippy, rustfmt
       - name: Run mypy_primer
         shell: bash

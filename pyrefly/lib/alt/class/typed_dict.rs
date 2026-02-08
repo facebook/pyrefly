@@ -406,7 +406,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             tuple_types.push(get_tuple(None, extra.clone()));
         }
 
-        let iterable_ty = self.stdlib.iterable(self.unions(tuple_types)).to_type();
+        let iterable_ty = self
+            .heap
+            .mk_class_type(self.stdlib.iterable(self.unions(tuple_types)));
 
         let tuple_overload = OverloadType::Function(Function {
             signature: Callable::list(
@@ -497,7 +499,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), GET_METHOD);
         // Synthesizes signatures for each field and a fallback `(self, key: str, default: object = ...) -> object` signature.
         let self_param = self.class_self_param(cls, true);
-        let object_ty = self.stdlib.object().clone().to_type();
+        let object_ty = self.heap.mk_class_type(self.stdlib.object().clone());
         let mut literal_signatures = Vec::new();
         for (name, field) in self.names_to_fields(cls, fields) {
             let key_param = Param::PosOnly(
@@ -549,7 +551,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self_param.clone(),
                         Param::PosOnly(
                             Some(KEY_PARAM.clone()),
-                            self.stdlib.str().clone().to_type(),
+                            self.heap.mk_class_type(self.stdlib.str().clone()),
                             Required::Required,
                         ),
                     ]),
@@ -569,7 +571,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(name) = name {
             name_to_literal_type(name)
         } else {
-            self.stdlib.str().clone().to_type()
+            self.heap.mk_class_type(self.stdlib.str().clone())
         }
     }
 
@@ -706,7 +708,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(metadata) = self.get_metadata_for_class(cls).typed_dict_metadata() {
                     self.get_typed_dict_value_type_from_fields(cls, &metadata.fields)
                 } else {
-                    self.stdlib.object().clone().to_type()
+                    self.heap.mk_class_type(self.stdlib.object().clone())
                 }
             }
             TypedDict::Anonymous(inner) => inner.value_type.clone(),
@@ -739,7 +741,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let extra_items = self.typed_dict_extra_items_for_cls(cls);
         if matches!(extra_items, ExtraItems::Default) {
             // extra_items defaults to `ReadOnly[object]`, and `object | ...` simplifies to `object`.
-            return self.stdlib.object().clone().to_type();
+            return self.heap.mk_class_type(self.stdlib.object().clone());
         }
         let extra = extra_items.extra_item(self.stdlib).ty;
         let mut values = self
@@ -764,14 +766,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
         let dict_items = self.stdlib.dict_items(
-            self.stdlib.str().clone().to_type(),
+            self.heap.mk_class_type(self.stdlib.str().clone()),
             self.get_typed_dict_value_type_from_fields(cls, fields),
         );
         let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), ITEMS_METHOD);
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false)]),
-                dict_items.to_type(),
+                self.heap.mk_class_type(dict_items),
             ),
             metadata,
         }))
@@ -784,14 +786,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
         let dict_values = self.stdlib.dict_values(
-            self.stdlib.str().clone().to_type(),
+            self.heap.mk_class_type(self.stdlib.str().clone()),
             self.get_typed_dict_value_type_from_fields(cls, fields),
         );
         let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), VALUES_METHOD);
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false)]),
-                dict_values.to_type(),
+                self.heap.mk_class_type(dict_values),
             ),
             metadata,
         }))
@@ -839,7 +841,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 signature: Callable::list(
                     ParamList::new(vec![self.class_self_param(cls, true)]),
                     self.heap.mk_concrete_tuple(vec![
-                        self.stdlib.str().clone().to_type(),
+                        self.heap.mk_class_type(self.stdlib.str().clone()),
                         self.get_typed_dict_value_type_from_fields(cls, fields),
                     ]),
                 ),

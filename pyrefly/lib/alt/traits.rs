@@ -361,9 +361,9 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyVariance {
         answers: &AnswersSolver<Ans>,
         binding: &BindingVariance,
         _range: TextRange,
-        _errors: &ErrorCollector,
+        errors: &ErrorCollector,
     ) -> Arc<VarianceMap> {
-        answers.solve_variance_binding(binding)
+        answers.solve_variance_binding(binding, errors)
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
@@ -373,13 +373,12 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyVariance {
 
 impl<Ans: LookupAnswer> Solve<Ans> for KeyVarianceCheck {
     fn solve(
-        _answers: &AnswersSolver<Ans>,
-        _binding: &BindingVarianceCheck,
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingVarianceCheck,
         _range: TextRange,
-        _errors: &ErrorCollector,
+        errors: &ErrorCollector,
     ) -> Arc<EmptyAnswer> {
-        // Variance checking will be implemented in a future diff
-        Arc::new(EmptyAnswer)
+        answers.solve_variance_check(binding, errors)
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {

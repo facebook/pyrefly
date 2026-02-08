@@ -20,6 +20,7 @@ use ruff_python_ast::Identifier;
 
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
+use crate::heap::TypeHeap;
 use crate::types::Type;
 
 /// Used to represent ParamSpec calls. Each ParamSpec is unique, so use the ArcId to separate them.
@@ -65,8 +66,8 @@ impl ParamSpec {
         self.0.default.as_ref()
     }
 
-    pub fn to_type(&self) -> Type {
-        Type::ParamSpec(self.dupe())
+    pub fn to_type(&self, heap: &TypeHeap) -> Type {
+        heap.mk_param_spec(self.dupe())
     }
 
     pub fn type_eq_inner(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {

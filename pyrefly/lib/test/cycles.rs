@@ -37,7 +37,7 @@ The one I've left uncommented is the one where there's no race condition.
 x = None
 def f(_: str | None) -> tuple[str, str]: ...
 def g(_: int | None) -> tuple[int, int]: ...
-while True: # E: `int | None` is not assignable to `str | None` (caused by inconsistent types when breaking cycles)
+while True: # E: Pyrefly detected conflicting types while breaking a dependency cycle: `int | None` is not assignable to `str | None`.
     y, x = f(x)  # E: Argument `int | None` is not assignable to parameter `_` with type `str | None` in function `f`
     z, x = g(x)  # E: Argument `str` is not assignable to parameter `_` with type `int | None` in function `g`
 "#,

@@ -259,7 +259,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some((ty, x.range()))
                 }
                 BaseClass::NamedTuple(..) => Some((
-                    self.stdlib.named_tuple_fallback().clone().to_type(),
+                    self.heap
+                        .mk_class_type(self.stdlib.named_tuple_fallback().clone()),
                     x.range(),
                 )),
                 BaseClass::InvalidExpr(..) | BaseClass::TypedDict(..) | BaseClass::Generic(..) => {

@@ -52,6 +52,7 @@ pub mod recurser;
 pub mod ruff_visitors;
 pub mod small_map1;
 pub mod small_set1;
+pub mod stdlib;
 pub mod suggest;
 pub mod tarjan;
 pub mod task_heap;

@@ -149,12 +149,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fields.insert(dunder::INIT, init_method);
         }
         let dataclass_fields_type = self.stdlib.dict(
-            self.stdlib.str().clone().to_type(),
+            self.heap.mk_class_type(self.stdlib.str().clone()),
             self.heap.mk_any_implicit(),
         );
         fields.insert(
             dunder::DATACLASS_FIELDS,
-            ClassSynthesizedField::new(dataclass_fields_type.to_type()),
+            ClassSynthesizedField::new(self.heap.mk_class_type(dataclass_fields_type)),
         );
 
         if dataclass.kws.order {
@@ -498,7 +498,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let want = self.heap.mk_callable_from(Callable::list(
             ParamList::new(params),
-            self.stdlib.object().clone().to_type(),
+            self.heap.mk_class_type(self.stdlib.object().clone()),
         ));
         self.check_type(&post_init, &want, range, errors, &|| {
             TypeCheckContext::of_kind(TypeCheckKind::PostInit)
@@ -945,15 +945,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
     ) -> SmallMap<Name, ClassSynthesizedField> {
+        let bool_ty = self.heap.mk_class_type(self.stdlib.bool().clone());
         let make_signature = |other_type| {
             let other = Param::Pos(Name::new_static("other"), other_type, Required::Required);
             Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false), other]),
-                self.stdlib.bool().clone().to_type(),
+                bool_ty.clone(),
             )
         };
         let callable = make_signature(self.instantiate(cls));
-        let callable_eq = make_signature(self.stdlib.object().clone().to_type());
+        let callable_eq = make_signature(self.heap.mk_class_type(self.stdlib.object().clone()));
         dunder::RICH_CMPS
             .iter()
             .map(|name| {
@@ -974,7 +975,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn get_dataclass_hash(&self, cls: &Class) -> ClassSynthesizedField {
         let params = vec![self.class_self_param(cls, false)];
-        let ret = self.stdlib.int().clone().to_type();
+        let ret = self.heap.mk_class_type(self.stdlib.int().clone());
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), ret),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::HASH),

@@ -235,7 +235,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If the expression is of the form [X] * Y where Y is a number, pass down the contextual
             // type hint when evaluating [X]
             rhs = self.expr_infer(&x.right, errors);
-            if self.is_subset_eq(&rhs, &self.stdlib.int().clone().to_type()) {
+            if self.is_subset_eq(&rhs, &self.heap.mk_class_type(self.stdlib.int().clone())) {
                 lhs = self.expr_infer_with_hint(&x.left, hint, errors);
             } else {
                 lhs = self.expr_infer(&x.left, errors);
@@ -340,7 +340,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // If we're assigning to something with an annotation, make sure the produced value is assignable to it
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
             self.check_final_reassignment(&ann, x.range(), errors);
-            if let Some(ann_ty) = ann.ty(self.stdlib) {
+            if let Some(ann_ty) = ann.ty(self.heap, self.stdlib) {
                 return self.check_and_return_type(result, &ann_ty, x.range(), errors, tcc);
             }
         }
@@ -378,7 +378,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     match op {
                         CmpOp::Is | CmpOp::IsNot => {
                             // These comparisons never error.
-                            self.stdlib.bool().clone().to_type()
+                            self.heap.mk_class_type(self.stdlib.bool().clone())
                         }
                         CmpOp::In | CmpOp::NotIn => {
                             // See https://docs.python.org/3/reference/expressions.html#membership-test-operations.
@@ -414,7 +414,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     // Iterating `y` failed.
                                     errors.extend(iteration_errors);
                                 }
-                                self.stdlib.bool().clone().to_type()
+                                self.heap.mk_class_type(self.stdlib.bool().clone())
                             }
                         }
                         _ => {
@@ -426,7 +426,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let ret =
                                 self.try_binop_calls(&calls_to_try, x.range, errors, &context);
                             if ret.is_error() {
-                                self.stdlib.bool().clone().to_type()
+                                self.heap.mk_class_type(self.stdlib.bool().clone())
                             } else {
                                 ret
                             }
@@ -454,7 +454,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Type::Literal(lit) if let Lit::Enum(lit_enum) = &lit.value => self
                     .call_method_or_error(
-                        &lit_enum.class.clone().to_type(),
+                        &self.heap.mk_class_type(lit_enum.class.clone()),
                         method,
                         x.range,
                         &[],
@@ -483,7 +483,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             UnaryOp::Not => {
                 self.check_dunder_bool_is_callable(t, x.range, errors);
                 match t.as_bool() {
-                    None => self.stdlib.bool().clone().to_type(),
+                    None => self.heap.mk_class_type(self.stdlib.bool().clone()),
                     Some(b) => Lit::Bool(!b).to_implicit_type(),
                 }
             }

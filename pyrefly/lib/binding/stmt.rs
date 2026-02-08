@@ -429,9 +429,9 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_type(annotation, &mut None);
         let ann_val = if let Some(special) = SpecialForm::new(&name.id, annotation) {
             // Special case `_: SpecialForm` declarations (this mainly affects some names declared in `typing.pyi`)
-            BindingAnnotation::Type(
+            BindingAnnotation::SpecialForm(
                 AnnotationTarget::Assign(name.id.clone(), AnnAssignHasValue::Yes),
-                special.to_type(),
+                special,
             )
         } else {
             BindingAnnotation::AnnotateExpr(

@@ -515,7 +515,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .iter()
                     .map(|t| {
                         self.unwrap_iterable(t)
-                            .unwrap_or(self.stdlib.object().clone().to_type())
+                            .unwrap_or(self.heap.mk_class_type(self.stdlib.object().clone()))
                     })
                     .collect();
                 self.heap.mk_unpacked_tuple(

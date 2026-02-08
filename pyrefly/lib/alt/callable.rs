@@ -159,9 +159,11 @@ impl<'a> CallKeyword<'a> {
                 // See test::overload::test_kwargs_materialization - we need to turn this
                 // into Mapping[str, Any] to correctly materialize the `**kwargs` type.
                 solver
-                    .stdlib
-                    .mapping(solver.stdlib.str().clone().to_type(), ty.clone())
-                    .to_type()
+                    .heap
+                    .mk_class_type(solver.stdlib.mapping(
+                        solver.heap.mk_class_type(solver.stdlib.str().clone()),
+                        ty.clone(),
+                    ))
                     .materialize()
             } else {
                 ty.materialize()
@@ -231,7 +233,10 @@ impl<'a> CallArg<'a> {
                     if ty.is_any() {
                         // See test::overload::test_varargs_materialization - we need to turn this
                         // into Iterable[Any] to correctly materialize the `*args` type.
-                        solver.stdlib.iterable(ty.clone()).to_type().materialize()
+                        solver
+                            .heap
+                            .mk_class_type(solver.stdlib.iterable(ty.clone()))
+                            .materialize()
                     } else {
                         ty.materialize()
                     }
@@ -450,10 +455,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         matches!(&ty, Type::Kwargs(q2) if &**q2 == q)
             || self.is_subset_eq(
                 &ty,
-                &self
-                    .stdlib
-                    .dict(self.stdlib.str().clone().to_type(), self.heap.mk_never())
-                    .to_type(),
+                &self.heap.mk_class_type(self.stdlib.dict(
+                    self.heap.mk_class_type(self.stdlib.str().clone()),
+                    self.heap.mk_never(),
+                )),
             )
     }
 
@@ -795,7 +800,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         match self.unwrap_mapping(&ty) {
                             Some((key, value)) => {
-                                if self.is_subset_eq(&key, &self.stdlib.str().clone().to_type()) {
+                                if self.is_subset_eq(
+                                    &key,
+                                    &self.heap.mk_class_type(self.stdlib.str().clone()),
+                                ) {
                                     if let Some((name, want)) = kwargs.as_ref() {
                                         self.check_type(
                                             &value,

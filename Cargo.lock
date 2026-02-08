@@ -116,9 +116,9 @@ dependencies = [
 
 [[package]]
 name = "anstyle"
-version = "1.0.11"
+version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "862ed96ca487e809f1c8e5a8447f6ee2cf102f846893800b20cebdf541fc6bbd"
+checksum = "5192cca8006f1fd4f7237516f40fa183bb07f8fbdfedaa0036de5ea9b0b45e78"
 
 [[package]]
 name = "anstyle-parse"
@@ -773,9 +773,9 @@ dependencies = [
 
 [[package]]
 name = "dyn-clone"
-version = "1.0.17"
+version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d6ef0072f8a535281e4876be788938b528e9a1d43900b82c2569af7da799125"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "either"
@@ -1798,9 +1798,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
+checksum = "cf97ec579c3c42f953ef76dbf8d55ac91fb219dde70e49aa4a6b7d74e9919050"
 
 [[package]]
 name = "num-integer"
@@ -2104,11 +2104,11 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.9.1"
+version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34f197a544b0c9ab3ae46c359a7ec9cbbb5c7bf97054266fecb7ead794a181d6"
+checksum = "57206b407293d2bcd3af849ce869d52068623f19e1b5ff8e8778e3309439682b"
 dependencies = [
- "bitflags 1.3.2",
+ "bitflags 2.10.0",
  "getopts",
  "memchr",
  "unicase",
@@ -2116,7 +2116,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2174,7 +2174,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_build"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2194,7 +2194,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "anyhow",
  "sha2",
@@ -2205,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2229,7 +2229,7 @@ dependencies = [
  "serde_with",
  "starlark_map",
  "tempfile",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
  "toml",
  "toml_edit",
  "tracing",
@@ -2240,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2249,7 +2249,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_graph"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "dupe",
  "itertools 0.14.0",
@@ -2259,7 +2259,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2280,13 +2280,13 @@ dependencies = [
  "serde_json",
  "starlark_map",
  "static_interner",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
  "toml",
 ]
 
 [[package]]
 name = "pyrefly_types"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "compact_str 0.8.0",
  "dupe",
@@ -2306,7 +2306,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2381,9 +2381,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.42"
+version = "1.0.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a338cc41d27e6cc6dce6cefc13a0729dfbb81c262b1f519331575dd80ef3067f"
+checksum = "21b2ebcf727b7760c461f091f9f0f539b77b8e87f2fd88131e7f1b433b3cece4"
 dependencies = [
  "proc-macro2",
 ]
@@ -2630,7 +2630,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
  "uuid",
 ]
 
@@ -2652,7 +2652,7 @@ dependencies = [
  "ruff_text_size",
  "rustc-hash",
  "serde",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3191,11 +3191,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.17"
+version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f63587ca0f12b72a0600bcba1d40081f830876000bb46dd2337a3051618f4fc8"
+checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
 dependencies = [
- "thiserror-impl 2.0.17",
+ "thiserror-impl 2.0.18",
 ]
 
 [[package]]
@@ -3211,9 +3211,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.17"
+version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ff15c8ecd7de3849db632e14d18d2571fa09dfc5ed93479bc4485c7a517c913"
+checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3251,9 +3251,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.44"
+version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e7d9e3bb61134e77bde20dd4825b97c010155709965fedf0f49bb138e52a9d"
+checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
 dependencies = [
  "deranged",
  "itoa 1.0.17",
@@ -3261,22 +3261,22 @@ dependencies = [
  "num-conv",
  "num_threads",
  "powerfmt",
- "serde",
+ "serde_core",
  "time-core",
  "time-macros",
 ]
 
 [[package]]
 name = "time-core"
-version = "0.1.6"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40868e7c1d2f0b8d73e4a8c7f0ff63af4f6d19be117e90bd73eb1d62cf831c6b"
+checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
 
 [[package]]
 name = "time-macros"
-version = "0.2.24"
+version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30cfb0125f12d9c277f35663a0a33f8c30190f4e4574868a330595412d34ebf3"
+checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
 dependencies = [
  "num-conv",
  "time-core",
@@ -3494,7 +3494,7 @@ dependencies = [
 
 [[package]]
 name = "tsp_types"
-version = "0.51.1"
+version = "0.51.2"
 dependencies = [
  "lsp-server",
  "serde",

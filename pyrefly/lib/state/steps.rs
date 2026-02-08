@@ -44,6 +44,7 @@ pub struct Context<'a, Lookup> {
     pub lookup: &'a Lookup,
     pub untyped_def_behavior: UntypedDefBehavior,
     pub infer_with_first_use: bool,
+    pub tensor_shapes: bool,
     pub recursion_limit_config: Option<RecursionLimitConfig>,
 }
 
@@ -169,7 +170,7 @@ impl Step {
         ast: Arc<ModModule>,
         exports: Exports,
     ) -> Arc<(Bindings, Arc<Answers>)> {
-        let solver = Solver::new(ctx.infer_with_first_use);
+        let solver = Solver::new(ctx.infer_with_first_use, ctx.tensor_shapes);
         let enable_index = ctx.require.keep_index();
         let enable_trace = ctx.require.keep_answers_trace();
         let bindings = Bindings::new(
