@@ -111,11 +111,11 @@ jobs:
         with:
           command: build
           target: ${{ matrix.rust_target }}
-          args: "--release --all-features --artifact-dir lsp/bin --manifest-path pyrefly/Cargo.toml -Z unstable-options"
+          args: "--release --artifact-dir lsp/bin --manifest-path pyrefly/Cargo.toml -Z unstable-options"
           toolchain: ${{ env.toolchain }}
       - name: build pyrefly binary
         if: ${{ matrix.rust_target == '' }}
-        run: cargo build --release --all-features --artifact-dir lsp/bin --manifest-path pyrefly/Cargo.toml -Z unstable-options
+        run: cargo build --release --artifact-dir lsp/bin --manifest-path pyrefly/Cargo.toml -Z unstable-options
       - uses: actions/setup-node@v6
         with:
           node-version: 22
