@@ -7227,3 +7227,24 @@ def foo():
         )]
     }
 );
+
+call_graph_testcase!(
+    test_special_string_symbols,
+    TEST_MODULE_NAME,
+    r#"
+def foo(x: str):
+    "😄" + x
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "3:5-3:15|artificial-call|binary",
+                regular_call_callees(vec![
+                    create_call_target("builtins.str.__add__", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                ]),
+            )],
+        )]
+    }
+);

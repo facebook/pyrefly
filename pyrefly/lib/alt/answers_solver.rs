@@ -240,9 +240,62 @@ enum RevisitingTargetState {
     /// Node is still being computed (on the Rust call stack).
     /// May need new break_at via normal cycle detection after merge.
     InProgress,
-    /// Node is a break point for that SCC.
+    /// Node has recorded a placeholder but hasn't computed the real answer yet.
+    /// No new break_at needed - merge and break here.
+    HasPlaceholder,
+    /// Node is a break point for that SCC (in the break_at set but hasn't
+    /// recorded a placeholder yet).
     /// No new break_at needed - merge and break here.
     BreakAt,
+}
+
+/// Represents the current SCC state prior to attempting a particular calculation.
+enum SccState {
+    /// The current idx is not participating in any currently detected SCC (though it
+    /// remains possible we will detect one here).
+    ///
+    /// Note that this does not necessarily mean there is no active SCC: the
+    /// graph solve will frequently branch out from an SCC into other parts of
+    /// the dependency graph, and in those cases we are not in a currently-known
+    /// SCC.
+    NotInScc,
+    /// The current idx is in an active SCC but is already being processed
+    /// (NodeState::InProgress). This represents a back-edge through an in-progress
+    /// calculation - we've hit this node via a different path while it's still computing.
+    ///
+    /// This will trigger new cycle detection via propose_calculation().
+    RevisitingInProgress,
+    /// The current idx is in an active SCC but its calculation has already completed
+    /// (NodeState::Done). A preliminary answer should be available.
+    RevisitingDone,
+    /// Read back into a PREVIOUS SCC (not the top of the stack).
+    /// This occurs when the current computation reads a node that belongs to
+    /// an SCC lower in the SCC stack. Requires merging all intervening nodes
+    /// and SCCs before proceeding.
+    RevisitingPreviousScc {
+        /// Stable identifier for the target SCC (the detected_at field of that SCC).
+        detected_at_of_scc: CalcId,
+        /// The state of the target node within that SCC.
+        target_state: RevisitingTargetState,
+    },
+    /// This idx is part of the active SCC, and we are either (if this is a pre-calculation
+    /// check) recursing out toward `break_at` or unwinding back toward `break_at`.
+    Participant,
+    /// This idx has already recorded a placeholder but hasn't computed the real
+    /// answer yet. We should return the placeholder value.
+    HasPlaceholder,
+    /// This idx is the `break_at` for the active SCC (in the break_at set but
+    /// hasn't recorded a placeholder yet), which means we have reached the end
+    /// of the recursion and should return a placeholder to our parent frame.
+    BreakAt,
+}
+
+enum SccDetectedResult {
+    /// Break immediately at the idx where we detected the SCC, so that we
+    /// unwind back to the same idx.
+    BreakHere,
+    /// Continue recursing until we hit some other idx that is the minimal `break_at` idx.
+    Continue,
 }
 
 /// Represent an SCC (Strongly Connected Component) we are currently solving.
@@ -343,8 +396,8 @@ impl Scc {
                     SccState::RevisitingInProgress
                 }
                 NodeState::HasPlaceholder => {
-                    // Already has placeholder, treat as break point
-                    SccState::BreakAt
+                    // Already has placeholder, return it
+                    SccState::HasPlaceholder
                 }
                 NodeState::Done => {
                     // Node completed within this SCC - preliminary answer should exist.
@@ -416,52 +469,6 @@ impl Scc {
         }
         result
     }
-}
-
-/// Represents the current SCC state prior to attempting a particular calculation.
-enum SccState {
-    /// The current idx is not participating in any currently detected SCC (though it
-    /// remains possible we will detect one here).
-    ///
-    /// Note that this does not necessarily mean there is no active SCC: the
-    /// graph solve will frequently branch out from an SCC into other parts of
-    /// the dependency graph, and in those cases we are not in a currently-known
-    /// SCC.
-    NotInScc,
-    /// The current idx is in an active SCC but is already being processed
-    /// (NodeState::InProgress). This represents a back-edge through an in-progress
-    /// calculation - we've hit this node via a different path while it's still computing.
-    ///
-    /// This will trigger new cycle detection via propose_calculation().
-    RevisitingInProgress,
-    /// The current idx is in an active SCC but its calculation has already completed
-    /// (NodeState::Done). A preliminary answer should be available.
-    RevisitingDone,
-    /// Read back into a PREVIOUS SCC (not the top of the stack).
-    /// This occurs when the current computation reads a node that belongs to
-    /// an SCC lower in the SCC stack. Requires merging all intervening nodes
-    /// and SCCs before proceeding.
-    RevisitingPreviousScc {
-        /// Stable identifier for the target SCC (the detected_at field of that SCC).
-        detected_at_of_scc: CalcId,
-        /// The state of the target node within that SCC.
-        target_state: RevisitingTargetState,
-    },
-    /// This idx is part of the active SCC, and we are either (if this is a pre-calculation
-    /// check) recursing out toward `break_at` or unwinding back toward `break_at`.
-    Participant,
-    /// This idx is the `break_at` for the active SCC, which means we have
-    /// reached the end of the recursion and should return a placeholder to our
-    /// parent frame.
-    BreakAt,
-}
-
-enum SccDetectedResult {
-    /// Break immediately at the idx where we detected the SCC, so that we
-    /// unwind back to the same idx.
-    BreakHere,
-    /// Continue recursing until we hit some other idx that is the minimal `break_at` idx.
-    Continue,
 }
 
 /// Represent the current thread's SCCs, which form a stack
@@ -611,6 +618,12 @@ impl Sccs {
                     return SccState::RevisitingPreviousScc {
                         detected_at_of_scc: scc.detected_at(),
                         target_state: RevisitingTargetState::Done,
+                    };
+                }
+                SccState::HasPlaceholder => {
+                    return SccState::RevisitingPreviousScc {
+                        detected_at_of_scc: scc.detected_at(),
+                        target_state: RevisitingTargetState::HasPlaceholder,
                     };
                 }
                 SccState::BreakAt => {
@@ -885,6 +898,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.attempt_to_unwind_cycle_from_here(&current, idx, calculation)
                     .unwrap_or_else(|r| Arc::new(K::promote_recursive(self.heap, r)))
             }
+            SccState::HasPlaceholder => {
+                // We already recorded a placeholder for this node; return it.
+                // The Calculation should have a CycleBroken result.
+                match calculation.propose_calculation() {
+                    ProposalResult::CycleBroken(r) => Arc::new(K::promote_recursive(self.heap, r)),
+                    ProposalResult::Calculated(v) => v,
+                    ProposalResult::CycleDetected | ProposalResult::Calculatable => {
+                        unreachable!(
+                            "HasPlaceholder node must have CycleBroken or Calculated result"
+                        )
+                    }
+                }
+            }
             SccState::RevisitingPreviousScc {
                 detected_at_of_scc,
                 target_state,
@@ -897,6 +923,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.sccs().merge_sccs(&detected_at_of_scc, self.stack());
                         self.attempt_to_unwind_cycle_from_here(&current, idx, calculation)
                             .unwrap_or_else(|r| Arc::new(K::promote_recursive(self.heap, r)))
+                    }
+                    // Node already has a placeholder. Merge SCCs and return it.
+                    RevisitingTargetState::HasPlaceholder => {
+                        self.sccs().merge_sccs(&detected_at_of_scc, self.stack());
+                        match calculation.propose_calculation() {
+                            ProposalResult::CycleBroken(r) => {
+                                Arc::new(K::promote_recursive(self.heap, r))
+                            }
+                            ProposalResult::Calculated(v) => v,
+                            ProposalResult::CycleDetected | ProposalResult::Calculatable => {
+                                unreachable!(
+                                    "HasPlaceholder node in previous SCC must have CycleBroken or Calculated result"
+                                )
+                            }
+                        }
                     }
                     // Node already completed within the SCC. Merge SCCs without new break_at, and get preliminary answer.
                     RevisitingTargetState::Done => {

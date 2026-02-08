@@ -214,12 +214,12 @@ impl ExpressionIdentifier {
     }
 
     fn regular(location: TextRange, module: &pyrefly_python::module::Module) -> Self {
-        ExpressionIdentifier::Regular(PysaLocation::new(module.display_range(location)))
+        ExpressionIdentifier::Regular(PysaLocation::from_text_range(location, module))
     }
 
     fn expr_name(expr: &ExprName, module: &pyrefly_python::module::Module) -> Self {
         ExpressionIdentifier::Identifier {
-            location: PysaLocation::new(module.display_range(expr.range())),
+            location: PysaLocation::from_text_range(expr.range(), module),
             identifier: expr.id.clone(),
         }
     }
@@ -1592,7 +1592,7 @@ impl ResolveCallResult {
 
 impl<'a> CallGraphVisitor<'a> {
     fn pysa_location(&self, location: TextRange) -> PysaLocation {
-        PysaLocation::new(self.module_context.module_info.display_range(location))
+        PysaLocation::from_text_range(location, &self.module_context.module_info)
     }
 
     fn add_callees(
@@ -4406,7 +4406,7 @@ pub fn resolve_decorator_callees(
         };
 
         if !callees.is_empty() {
-            let location = PysaLocation::new(context.module_info.display_range(range));
+            let location = PysaLocation::from_text_range(range, &context.module_info);
             assert!(
                 decorator_callees.insert(location, callees).is_none(),
                 "Found multiple decorators at the same location"
