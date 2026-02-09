@@ -11,7 +11,6 @@ use std::sync::Mutex;
 
 use lsp_server::RequestId;
 use lsp_types::InitializeParams;
-use lsp_types::ServerCapabilities;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
@@ -24,6 +23,7 @@ use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::server::ProcessEvent;
+use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::server::dispatch_lsp_events;
@@ -149,7 +149,11 @@ pub fn tsp_loop(
         scope.spawn(|| server.inner.run_recheck_queue(telemetry));
 
         scope.spawn(|| {
-            dispatch_lsp_events(server.inner.connection(), server.inner.lsp_queue());
+            dispatch_lsp_events(
+                server.inner.connection(),
+                server.inner.lsp_queue(),
+                server.inner.uris_pending_close(),
+            );
         });
 
         let mut ide_transaction_manager = TransactionManager::default();
@@ -195,7 +199,7 @@ pub fn tsp_loop(
 pub fn tsp_capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
-) -> ServerCapabilities {
+) -> ServerCapabilitiesWithTypeHierarchy {
     // Use the same capabilities as LSP - TSP server supports the same features
     // but will only respond to TSP protocol requests
     capabilities(indexing_mode, initialization_params)

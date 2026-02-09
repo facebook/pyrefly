@@ -362,4 +362,8 @@ impl Ast {
     pub fn is_mangled_attr(name: &Name) -> bool {
         name.starts_with("__") && !name.ends_with("__")
     }
+
+    pub fn is_list_literal_or_comprehension(expr: &Expr) -> bool {
+        matches!(expr, Expr::List(_) | Expr::ListComp(_))
+    }
 }

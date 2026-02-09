@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::io::Write;
+
 use clap::Parser;
 use clap::ValueEnum;
 use lsp_types::InitializeParams;
@@ -12,6 +14,7 @@ use lsp_types::ServerInfo;
 use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::util::CommandExitStatus;
+use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::server::initialize_finish;
@@ -54,10 +57,15 @@ pub struct LspArgs {
     pub(crate) build_system_blocking: bool,
 }
 
+/// Run LSP server with optional path remapping.
+/// When a path remapper is provided, go-to-definition will use the remapped
+/// paths for URIs, allowing navigation to source files instead of installed
+/// package files.
 pub fn run_lsp(
     connection: Connection,
     args: LspArgs,
     server_info: Option<ServerInfo>,
+    path_remapper: Option<PathRemapper>,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     if let Some(initialize_params) =
@@ -69,6 +77,7 @@ pub fn run_lsp(
             args.indexing_mode,
             args.workspace_indexing_limit,
             args.build_system_blocking,
+            path_remapper,
             telemetry,
         )?;
     }
@@ -91,12 +100,16 @@ fn initialize_connection(
 }
 
 impl LspArgs {
+    /// Run LSP with optional path remapping.
+    /// When a path remapper is provided, go-to-definition will navigate to
+    /// remapped source files instead of installed package files.
     pub fn run(
         self,
         version: &str,
+        path_remapper: Option<PathRemapper>,
         telemetry: &impl Telemetry,
     ) -> anyhow::Result<CommandExitStatus> {
-        // Note that  we must have our logging only write out to stderr.
+        // Note that we must have our logging only write out to stderr.
         eprintln!("starting generic LSP server");
 
         // Create the transport. Includes the stdio (stdin and stdout) versions but this could
@@ -108,10 +121,19 @@ impl LspArgs {
             version: Some(version.to_owned()),
         };
 
-        run_lsp(connection, self, Some(server_info), telemetry)?;
+        run_lsp(
+            connection,
+            self,
+            Some(server_info),
+            path_remapper,
+            telemetry,
+        )?;
         io_threads.join()?;
         // We have shut down gracefully.
-        eprintln!("shutting down server");
+        // Use writeln! instead of eprintln! to avoid panicking if stderr is closed.
+        // This can happen, for example, when stderr is connected to an LSP client which
+        // closes the connection before Pyrefly language server exits.
+        let _ = writeln!(std::io::stderr(), "shutting down server");
         Ok(CommandExitStatus::Success)
     }
 }

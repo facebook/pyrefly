@@ -174,7 +174,8 @@ impl ClassMetadata {
         self.typed_dict_metadata.is_some()
     }
 
-    pub fn is_pydantic_base_model(&self) -> bool {
+    /// Returns true if this class is a pydantic model (BaseModel, RootModel, or BaseSettings).
+    pub fn is_pydantic_model(&self) -> bool {
         self.pydantic_model_kind.is_some()
     }
 
@@ -468,6 +469,10 @@ pub struct DjangoModelMetadata {
     /// The name of the field that has primary_key=True, if any.
     /// If None, the model uses the default auto-generated `id` field.
     pub custom_primary_key_field: Option<Name>,
+    /// Names of ForeignKey fields
+    pub foreign_key_fields: Vec<Name>,
+    /// Names of fields with choices=...
+    pub fields_with_choices: Vec<Name>,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

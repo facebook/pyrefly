@@ -29,7 +29,7 @@ fn utf16_to_byte_index(line: &str, utf16_offset: usize) -> usize {
 }
 
 fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
-    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::indexing());
+    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::Exports);
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");
@@ -883,7 +883,7 @@ line: 1, column: 5, length: 3, text: lib
 token-type: namespace
 
 line: 1, column: 16, length: 4, text: func
-token-type: namespace
+token-type: function
 
 line: 1, column: 24, length: 4, text: func
 token-type: function
@@ -913,7 +913,7 @@ line: 1, column: 5, length: 3, text: foo
 token-type: namespace
 
 line: 1, column: 16, length: 3, text: bar
-token-type: namespace
+token-type: function
 
 line: 1, column: 23, length: 3, text: baz
 token-type: function
@@ -1001,6 +1001,83 @@ token-type: class
 # mymod.submod.py
 line: 1, column: 6, length: 3, text: Foo
 token-type: class
+"#,
+    );
+}
+
+#[test]
+fn try_nested_statements_test() {
+    let code = r#"
+try:
+    class TryClass:
+        def method(self): ...
+except Exception as e:
+    class ExceptClass: ...
+else:
+    def else_func(): ...
+finally:
+    def finally_func(): ...
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 2, column: 10, length: 8, text: TryClass
+token-type: class
+
+line: 3, column: 12, length: 6, text: method
+token-type: method
+
+line: 3, column: 19, length: 4, text: self
+token-type: parameter
+
+line: 4, column: 7, length: 9, text: Exception
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 4, column: 20, length: 1, text: e
+token-type: variable
+
+line: 5, column: 10, length: 11, text: ExceptClass
+token-type: class
+
+line: 7, column: 8, length: 9, text: else_func
+token-type: function
+
+line: 9, column: 8, length: 12, text: finally_func
+token-type: function
+"#,
+    );
+}
+
+#[test]
+fn with_nested_statements_test() {
+    let code = r#"
+with open("foo.txt") as f:
+    class WithClass:
+        x: int
+    def with_func(): ...
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 5, length: 4, text: open
+token-type: function, token-modifiers: [defaultLibrary]
+
+line: 1, column: 24, length: 1, text: f
+token-type: variable
+
+line: 2, column: 10, length: 9, text: WithClass
+token-type: class
+
+line: 3, column: 8, length: 1, text: x
+token-type: variable
+
+line: 3, column: 11, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 4, column: 8, length: 9, text: with_func
+token-type: function
 "#,
     );
 }

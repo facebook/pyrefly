@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -75,18 +76,22 @@ pub trait BundledStub {
     fn load(&self, path: &Path) -> Option<Arc<String>>;
     fn modules(&self) -> impl Iterator<Item = ModuleName>;
     fn config() -> ArcId<ConfigFile>;
-    /// Obtain a materialized path for bundled typeshed, writing it all to disk the first time.
+    /// Obtain a materialized path for bundled stubs, writing it all to disk the first time.
+    /// This function tracks which paths have been written to disk, so it will only write a path that
+    /// has not already been written.
     /// Note: this path is not the source of truth, it simply exists to display typeshed contents
     /// for informative purposes.
     fn materialized_path_on_disk(&self) -> anyhow::Result<PathBuf> {
-        static WRITTEN_TO_DISK: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
+        static WRITTEN_TO_DISK: LazyLock<Mutex<HashSet<String>>> =
+            LazyLock::new(|| Mutex::new(HashSet::new()));
 
-        let temp_dir = env::temp_dir().join(self.get_path_name());
+        let path_name = self.get_path_name();
+        let temp_dir = env::temp_dir().join(&path_name);
 
-        let mut written = WRITTEN_TO_DISK.lock();
-        if !*written {
+        let mut written_paths = WRITTEN_TO_DISK.lock();
+        if !written_paths.contains(&path_name) {
             self.write(&temp_dir)?;
-            *written = true;
+            written_paths.insert(path_name);
         }
         Ok(temp_dir)
     }

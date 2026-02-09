@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "0.48.0"
+version = "0.51.2"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -28,7 +28,7 @@ faster-hex = "0.6.1"
 fuzzy-matcher = "0.3.7"
 indicatif = { version = "0.18.3", features = ["futures", "improved_unicode", "rayon", "tokio"] }
 itertools = "0.14.0"
-lsp-server = "0.7.2"
+lsp-server = "0.7.9"
 lsp-types = { git = "https://github.com/astral-sh/lsp-types", rev = "3512a9f33eadc5402cfab1b8f7340824c8ca1439" }
 num-traits = { version = "0.2.19", default-features = false }
 parse-display = "0.8.2"
@@ -57,7 +57,7 @@ starlark_map = "0.13.0"
 static_assertions = "1.1.0"
 tempfile = "3.22"
 tokio = { version = "1.47.1", features = ["macros", "rt"] }
-toml = { version = "0.9.8", features = ["preserve_order"] }
+toml = { version = "0.9.11", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tsp_types = { path = "../crates/tsp_types" }
 uuid = { version = "1.17", features = ["js", "rng-getrandom", "v4"] }
@@ -69,10 +69,11 @@ yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 pretty_assertions = { version = "1.2", features = ["alloc"], default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+backtrace-on-stack-overflow = "0.3"
 tikv-jemallocator = "0.6.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 mimalloc = "0.1.46"
 
 [lints]
-rust = { unexpected_cfgs = { check-cfg = ["cfg(fbcode_build)"], level = "warn" } }
+rust = { unexpected_cfgs = { check-cfg = ["cfg(fbcode_build)", 'cfg(feature, values("debug-stack-overflow"))'], level = "warn" } }

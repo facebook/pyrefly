@@ -153,3 +153,12 @@ f(C1)
 f(C2[int])
     "#,
 );
+
+testcase!(
+    test_illegal_unpacking,
+    r#"
+def f() -> dict: ...
+class A(**f):  # E: Unpacking is not supported in class header
+    pass
+    "#,
+);

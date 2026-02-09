@@ -153,4 +153,23 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_written_flag_works_per_bundled_implementation() {
+        // First, access typeshed (this sets WRITTEN_TO_DISK = true)
+        let typeshed = crate::module::typeshed::typeshed().unwrap();
+        let typeshed_path = typeshed.materialized_path_on_disk().unwrap();
+        assert!(typeshed_path.exists(), "typeshed path should exist");
+
+        // Now access bundled third party (this should create its own directory)
+        let third_party = get_bundled_third_party().unwrap();
+        let third_party_path = third_party.materialized_path_on_disk().unwrap();
+
+        // The third party path will exist even though typeshed has been written to disk
+        assert!(
+            third_party_path.exists(),
+            "third_party path should exist: {:?}",
+            third_party_path
+        );
+    }
 }

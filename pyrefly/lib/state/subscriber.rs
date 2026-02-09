@@ -18,6 +18,7 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 
 use crate::state::load::Load;
+use crate::state::state::Transaction;
 
 /// Trait to capture which handles are executed by `State`.
 /// Calls to `start_work` and `finish_work` will be paired.
@@ -32,7 +33,15 @@ pub trait Subscriber: Sync {
     /// We have finished work on a `Handle`, having computed its solutions.
     /// While we have computed the solutions, we return the `Load` as that contains
     /// the `ErrorCollector` and `Module` which are useful context for the completion.
-    fn finish_work(&self, handle: &Handle, result: &Arc<Load>);
+    /// The `transaction` reference allows access to the current transaction state.
+    /// `exports_changed` indicates whether any exports changed
+    fn finish_work(
+        &self,
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        result: &Arc<Load>,
+        exports_changed: bool,
+    );
 }
 
 /// A subscriber that validates all start/finish are paired and returns the final load states.
@@ -53,7 +62,7 @@ impl Subscriber for TestSubscriber {
         }
     }
 
-    fn finish_work(&self, handle: &Handle, result: &Arc<Load>) {
+    fn finish_work(&self, _: &Transaction<'_>, handle: &Handle, result: &Arc<Load>, _: bool) {
         let mut value = self.0.lock();
         match value.entry(handle.dupe()) {
             Entry::Vacant(_) => panic!("Handle finished but never started: {handle:?}"),
@@ -137,7 +146,7 @@ impl Subscriber for ProgressBarSubscriber {
         self.event(|x| x.started += 1);
     }
 
-    fn finish_work(&self, _: &Handle, _: &Arc<Load>) {
+    fn finish_work(&self, _: &Transaction<'_>, _: &Handle, _: &Arc<Load>, _: bool) {
         self.event(|x| x.finished += 1);
     }
 }
@@ -166,5 +175,29 @@ impl ProgressBarSubscriber {
         };
         me.event(|_| ());
         me
+    }
+}
+
+pub struct PublishDiagnosticsSubscriber<F>
+where
+    F: Fn(&Transaction<'_>, &Handle, bool) + Send + Sync,
+{
+    pub publish_callback: F,
+}
+
+impl<F> Subscriber for PublishDiagnosticsSubscriber<F>
+where
+    F: Fn(&Transaction<'_>, &Handle, bool) + Send + Sync,
+{
+    fn start_work(&self, _handle: &Handle) {}
+
+    fn finish_work(
+        &self,
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        _: &Arc<Load>,
+        exports_changed: bool,
+    ) {
+        (self.publish_callback)(transaction, handle, exports_changed);
     }
 }

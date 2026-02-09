@@ -31,6 +31,7 @@ use crate::report::pysa::ast_visitor::Scopes;
 use crate::report::pysa::ast_visitor::visit_module_ast;
 use crate::report::pysa::call_graph::FunctionTrait;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::function::FunctionId;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::module::ModuleId;
 use crate::report::pysa::module::ModuleIds;
@@ -38,11 +39,6 @@ use crate::report::pysa::module::ModuleKey;
 use crate::report::pysa::slow_fun_monitor::slow_fun_monitor_scope;
 use crate::report::pysa::step_logger::StepLogger;
 use crate::state::state::Transaction;
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct CapturedVariable {
-    pub name: Name,
-}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CapturedVariableRef<Function: FunctionTrait> {
@@ -68,21 +64,16 @@ impl<Function: FunctionTrait> CapturedVariableRef<Function> {
 
 #[derive(Debug, Clone)]
 pub struct ModuleCapturedVariables<Function: FunctionTrait>(
-    HashMap<Function, HashMap<CapturedVariable, Function>>,
+    HashMap<Function, HashMap<Name, Function>>,
 );
 
 impl<Function: FunctionTrait> ModuleCapturedVariables<Function> {
     #[cfg(test)]
-    pub fn into_iter(
-        self,
-    ) -> impl Iterator<Item = (Function, HashMap<CapturedVariable, Function>)> {
+    pub fn into_iter(self) -> impl Iterator<Item = (Function, HashMap<Name, Function>)> {
         self.0.into_iter()
     }
 
-    pub fn get<'a>(
-        &'a self,
-        function_ref: &Function,
-    ) -> Option<&'a HashMap<CapturedVariable, Function>> {
+    pub fn get<'a>(&'a self, function_ref: &Function) -> Option<&'a HashMap<Name, Function>> {
         self.0.get(function_ref)
     }
 }
@@ -192,7 +183,7 @@ fn build_definition_to_function_map(context: &ModuleContext) -> HashMap<Idx<Key>
 
 struct CapturedVariableVisitor<'a> {
     // Map from a captured variable to the function that defines it, if any.
-    captured_variables: &'a mut HashMap<FunctionRef, HashMap<CapturedVariable, FunctionRef>>,
+    captured_variables: &'a mut HashMap<FunctionRef, HashMap<Name, FunctionRef>>,
     definition_to_function_map: &'a HashMap<Idx<Key>, FunctionRef>,
     module_context: &'a ModuleContext<'a>,
     current_exported_function: Option<FunctionRef>,
@@ -203,11 +194,13 @@ impl<'a> CapturedVariableVisitor<'a> {
         if let Some(definition) = self.get_definition_from_usage(key)
             && let Some(current_function) = &self.current_exported_function
             && definition != *current_function
+            && definition.function_id != FunctionId::ModuleTopLevel
+            && !matches!(definition.function_id, FunctionId::ClassTopLevel { .. })
         {
             self.captured_variables
                 .entry(current_function.clone())
                 .or_default()
-                .insert(CapturedVariable { name: name.clone() }, definition);
+                .insert(name.clone(), definition);
         }
     }
 
@@ -218,7 +211,9 @@ impl<'a> CapturedVariableVisitor<'a> {
             .key_to_idx_hashed_opt(Hashed::new(&key))?;
         let binding = self.module_context.bindings.get(idx);
         match binding {
-            Binding::Forward(definition_idx) => {
+            Binding::Forward(definition_idx)
+            | Binding::CompletedPartialType(definition_idx, _)
+            | Binding::PartialTypeWithUpstreamsCompleted(definition_idx, _) => {
                 self.get_definition_from_idx(
                     *definition_idx,
                     /* seen */ SmallSet::new(),
@@ -264,7 +259,8 @@ impl<'a> CapturedVariableVisitor<'a> {
                 }
                 None
             }
-            Binding::CompletedPartialType(idx, _) => {
+            Binding::CompletedPartialType(idx, _)
+            | Binding::PartialTypeWithUpstreamsCompleted(idx, _) => {
                 self.get_definition_from_idx(*idx, seen, depth)
             }
             _ => None,
@@ -353,7 +349,7 @@ pub fn collect_captured_variables(
                 let module_id = module_ids.get(ModuleKey::from_handle(handle)).unwrap();
                 let context =
                     ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
-                let captureds_for_module = slow_function_monitor.monitor_function(
+                let captures_for_module = slow_function_monitor.monitor_function(
                     move || collect_captured_variables_for_module(&context),
                     format!(
                         "Indexing captured variables for {}",
@@ -361,7 +357,7 @@ pub fn collect_captured_variables(
                     ),
                     /* max_time_in_seconds */ 4,
                 );
-                captured_variables.insert(module_id, captureds_for_module);
+                captured_variables.insert(module_id, captures_for_module);
             });
         })
     });
@@ -373,13 +369,24 @@ pub fn collect_captured_variables(
 pub fn export_captured_variables_for_module(
     captured_variables: &WholeProgramCapturedVariables,
     context: &ModuleContext,
-) -> HashMap<FunctionRef, Vec<CapturedVariable>> {
+) -> HashMap<FunctionRef, Vec<CapturedVariableRef<FunctionRef>>> {
     captured_variables
         .get_for_module(context.module_id)
         .unwrap()
         .clone()
         .0
         .into_iter()
-        .map(|(k, v)| (k, v.keys().cloned().collect::<Vec<_>>()))
+        .map(|(function, captures)| {
+            (
+                function,
+                captures
+                    .into_iter()
+                    .map(|(name, outer_function)| CapturedVariableRef {
+                        outer_function,
+                        name,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
         .collect()
 }

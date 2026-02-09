@@ -51,7 +51,7 @@ impl<K, V> LockedMap<K, V> {
     }
 }
 
-impl<K: Eq + Hash + 'static, V: Dupe + 'static> LockedMap<K, V> {
+impl<K: Eq + Hash + 'static, V: 'static> LockedMap<K, V> {
     fn equals(a: &(WithHash<K>, V), b: &(WithHash<K>, V)) -> bool {
         a.0.key() == b.0.key()
     }

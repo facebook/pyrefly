@@ -62,10 +62,12 @@ use crate::error::legacy::LegacyErrors;
 use crate::error::legacy::severity_to_str;
 use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
+use crate::error::suppress::SerializedError;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
+use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::ProgressBarSubscriber;
@@ -183,7 +185,6 @@ impl SnippetCheckArgs {
                 suppress_errors: false,
                 expectations: false,
                 remove_unused_ignores: false,
-                all: false,
             },
         };
         match check_args.run_once_with_snippet(self.code, config_finder) {
@@ -304,9 +305,6 @@ struct BehaviorArgs {
     /// Remove unused ignores from the input files.
     #[arg(long)]
     remove_unused_ignores: bool,
-    /// If we are removing unused ignores, should we remove all unused ignores or only Pyrefly specific `pyrefly: ignore`s?
-    #[arg(long, requires("remove_unused_ignores"))]
-    all: bool,
 }
 
 impl OutputFormat {
@@ -565,11 +563,6 @@ impl Handles {
     }
 }
 
-struct RequireLevels {
-    specified: Require,
-    default: Require,
-}
-
 async fn get_watcher_events(watcher: &mut Watcher) -> anyhow::Result<CategorizedEvents> {
     loop {
         let events = CategorizedEvents::new_notify(
@@ -650,7 +643,7 @@ impl Timings {
 
 impl CheckArgs {
     pub fn run_once(
-        self,
+        mut self,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
@@ -677,6 +670,18 @@ impl CheckArgs {
             true,
         );
         let (loaded_handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
+
+        // If CLI doesn't provide baseline, get from config
+        if self.output.baseline.is_none()
+            && let Some(handle) = loaded_handles.first()
+        {
+            let config = holder.as_ref().config_finder().python_file(
+                ModuleNameWithKind::guaranteed(handle.module()),
+                handle.path(),
+            );
+            self.output.baseline = config.baseline.clone();
+        }
+
         self.run_inner(
             timings,
             transaction.as_mut(),
@@ -687,7 +692,7 @@ impl CheckArgs {
     }
 
     pub fn run_once_with_snippet(
-        self,
+        mut self,
         code: String,
         config_finder: ConfigFinder,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
@@ -699,12 +704,17 @@ impl CheckArgs {
         let holder = Forgetter::new(State::new(config_finder), true);
 
         // Create a single handle for the virtual module
-        let sys_info = holder
+        let config = holder
             .as_ref()
             .config_finder()
-            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path)
-            .get_sys_info();
+            .python_file(ModuleNameWithKind::guaranteed(module_name), &module_path);
+        let sys_info = config.get_sys_info();
         let handle = Handle::new(module_name, module_path.clone(), sys_info);
+
+        // If CLI doesn't provide baseline, get from config
+        if self.output.baseline.is_none() {
+            self.output.baseline = config.baseline.clone();
+        }
 
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
@@ -730,7 +740,7 @@ impl CheckArgs {
     }
 
     pub async fn run_watch(
-        self,
+        mut self,
         mut watcher: Watcher,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
@@ -741,11 +751,25 @@ impl CheckArgs {
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder);
+
+        // Track if CLI provided baseline - if so, never override it with config values
+        let cli_provided_baseline = self.output.baseline.is_some();
+
         let mut transaction = state.new_committable_transaction(require_levels.default, None);
         loop {
             let timings = Timings::new();
             let (loaded_handles, reloaded_configs, sourcedb_errors) =
                 handles.all(state.config_finder());
+
+            // If CLI didn't provide baseline, get from config on every iteration
+            // to pick up config file changes
+            if !cli_provided_baseline && let Some(handle) = loaded_handles.first() {
+                let config = state.config_finder().python_file(
+                    ModuleNameWithKind::guaranteed(handle.module()),
+                    handle.path(),
+                );
+                self.output.baseline = config.baseline.clone();
+            }
             let mut_transaction = transaction.as_mut();
             mut_transaction.invalidate_find_for_configs(reloaded_configs);
             let res = self.run_inner(
@@ -850,6 +874,23 @@ impl CheckArgs {
                 .collect()
         } else {
             errors.shown
+        };
+
+        // Collect unused ignore errors for display (respects severity configuration)
+        let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display();
+        let shown_errors: Vec<_> = if let Some(only) = &self.output.only {
+            let only = only.iter().collect::<SmallSet<_>>();
+            let filtered: Vec<_> = unused_ignore_errors
+                .shown
+                .into_iter()
+                .filter(|e| only.contains(&e.error_kind()))
+                .collect();
+            shown_errors.into_iter().chain(filtered).collect()
+        } else {
+            shown_errors
+                .into_iter()
+                .chain(unused_ignore_errors.shown)
+                .collect()
         };
 
         // We update the baseline file if requested, after reporting any new errors using the old baseline
@@ -965,10 +1006,19 @@ impl CheckArgs {
             fs_anyhow::write(path, report::trace::trace(transaction))?;
         }
         if self.behavior.suppress_errors {
-            suppress::suppress_errors(shown_errors.clone());
+            // TODO: Move this into separate command
+            let serialized_errors: Vec<SerializedError> = shown_errors
+                .iter()
+                .filter(|e| e.severity() >= Severity::Warn)
+                .filter_map(SerializedError::from_error)
+                .filter(|e| !e.is_unused_ignore())
+                .collect();
+            suppress::suppress_errors(serialized_errors);
         }
         if self.behavior.remove_unused_ignores {
-            suppress::remove_unused_ignores(&loads, self.behavior.all);
+            // TODO: Move this into separate command
+            let unused_errors = loads.collect_unused_ignore_errors();
+            suppress::remove_unused_ignores(unused_errors);
         }
         if self.behavior.expectations {
             loads.check_against_expectations()?;

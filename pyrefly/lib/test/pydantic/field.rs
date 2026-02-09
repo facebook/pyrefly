@@ -117,7 +117,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, Field
 
 class Model(BaseModel):
-    x: int = Field(gt="A", lt="B") # E:  Pydantic `gt` value is of type `Literal['A']` but the field is annotated with `int` # E: Pydantic `lt` value is of type `Literal['B']` but the field is annotated with `int`
+    x: int = Field(gt="A", lt="B") # E:  Pydantic `gt` value has type `Literal['A']`, which is not assignable to field type `int` # E: Pydantic `lt` value has type `Literal['B']`, which is not assignable to field type `int`
 
 Model(x=5)
 "#,
@@ -129,7 +129,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, Field
 
 class Model(BaseModel):
-    x: int = Field(ge="B") # E: Pydantic `ge` value is of type `Literal['B']` but the field is annotated with `int`
+    x: int = Field(ge="B") # E: Pydantic `ge` value has type `Literal['B']`, which is not assignable to field type `int`
 
 Model(x=5)
 "#,

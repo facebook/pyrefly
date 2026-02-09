@@ -11,6 +11,7 @@ use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::literal::LitEnum;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
@@ -40,10 +41,8 @@ use crate::error::context::ErrorContext;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::export::exports::Export;
-use crate::export::exports::ExportLocation;
-use crate::export::exports::Exports;
 use crate::solver::solver::SubsetError;
+use crate::state::loader::FindingOrError;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
@@ -385,14 +384,21 @@ impl NotFoundOn {
 }
 
 impl InternalError {
-    pub fn to_error_msg(self, attr_name: &Name, todo_ctx: &str) -> String {
-        match self {
+    pub fn add_to(
+        self,
+        errors: &ErrorCollector,
+        range: TextRange,
+        attr_name: &Name,
+        todo_ctx: &str,
+    ) {
+        let msg = match self {
             InternalError::AttributeBaseUndefined(ty) => format!(
                 "TODO: {todo_ctx} attribute base undefined for type: {} (trying to access {})",
                 ty.deterministic_printing(),
                 attr_name
             ),
-        }
+        };
+        errors.internal_error(range, vec1![msg]);
     }
 }
 
@@ -496,22 +502,22 @@ impl ClassBase {
         }
     }
 
-    pub fn to_type(self) -> Type {
+    pub fn to_type(self, heap: &TypeHeap) -> Type {
         match self {
-            ClassBase::ClassDef(c) => Type::ClassDef(c.into_class_object()),
-            ClassBase::ClassType(c) => Type::Type(Box::new(c.to_type())),
-            ClassBase::Quantified(q, _) => Type::type_form(q.to_type()),
-            ClassBase::SelfType(c) => Type::type_form(Type::SelfType(c)),
-            ClassBase::Protocol(_, self_type) => Type::type_form(self_type),
+            ClassBase::ClassDef(c) => heap.mk_class_def(c.into_class_object()),
+            ClassBase::ClassType(c) => heap.mk_type(heap.mk_class_type(c)),
+            ClassBase::Quantified(q, _) => heap.mk_type_form(q.to_type(heap)),
+            ClassBase::SelfType(c) => heap.mk_type_form(heap.mk_self_type(c)),
+            ClassBase::Protocol(_, self_type) => heap.mk_type_form(self_type),
         }
     }
 
-    pub fn to_self_type(self) -> Type {
+    pub fn to_self_type(self, heap: &TypeHeap) -> Type {
         match self {
-            ClassBase::ClassDef(c) => c.to_type(),
-            ClassBase::ClassType(c) => c.to_type(),
-            ClassBase::Quantified(q, _) => q.to_type(),
-            ClassBase::SelfType(c) => Type::SelfType(c),
+            ClassBase::ClassDef(c) => heap.mk_class_type(c),
+            ClassBase::ClassType(c) => heap.mk_class_type(c),
+            ClassBase::Quantified(q, _) => q.to_type(heap),
+            ClassBase::SelfType(c) => heap.mk_self_type(c),
             ClassBase::Protocol(_, self_type) => self_type,
         }
     }
@@ -536,31 +542,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         let mut types = Vec::new();
         let mut error_messages = Vec::new();
+        let mut success = true;
         let (found, not_found, error) = lookup_result.decompose();
+        // Check if we have a partial union failure (attribute exists on some union members
+        // but not others) before consuming the vectors. This helps us decide whether to suggest.
+        let is_partial_union_failure = !found.is_empty() && !not_found.is_empty();
         for (attr, _) in found {
             match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
-                Err(err) => error_messages.push(err.to_error_msg(attr_name)),
+                Err(err) => {
+                    error_messages.push(err.to_error_msg(attr_name));
+                    success = false;
+                }
             }
         }
         for err in not_found {
-            error_messages.push(err.to_error_msg(attr_name))
+            error_messages.push(err.to_error_msg(attr_name));
+            success = false;
         }
         for err in error {
-            error_messages.push(err.to_error_msg(attr_name, todo_ctx))
+            err.add_to(errors, range, attr_name, todo_ctx);
+            success = false;
         }
 
         // Both types and error messages can be duplicated if elements in `attr_base` gets duplicated (can happen with
         // if base type contain vars). Make sure that dedup logic applies to both branches.
-        if error_messages.is_empty() {
+        if success {
             self.unions(types)
-        } else {
+        } else if !error_messages.is_empty() {
             error_messages.sort();
             error_messages.dedup();
             let mut msg = vec1![error_messages.join("\n")];
-            if let Some(suggestion) = attr_base
-                .as_ref()
-                .and_then(|attr_base| self.suggest_attribute_name(attr_name, attr_base))
+            // Skip suggestions when we have a partial union failure to avoid suggesting
+            // attributes from the types that have them when the problem is that some types
+            // don't have the attribute at all.
+            if !is_partial_union_failure
+                && let Some(suggestion) = attr_base
+                    .as_ref()
+                    .and_then(|attr_base| self.suggest_attribute_name(attr_name, attr_base))
             {
                 msg.push(format!("Did you mean `{suggestion}`?"));
             }
@@ -569,7 +588,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ErrorInfo::new(ErrorKind::MissingAttribute, context),
                 msg,
             );
-            Type::any_error()
+            self.heap.mk_any_error()
+        } else {
+            self.heap.mk_any_error() // we've encountered internal errors (already logged above)
         }
     }
 
@@ -628,12 +649,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Suggest an attribute name for a missing attribute.
+    /// Only suggests attributes that exist on ALL bases in the AttributeBase,
+    /// so that the suggestion is valid for the entire type (including all union members).
     fn suggest_attribute_name(&self, missing: &Name, attr_base: &AttributeBase) -> Option<Name> {
-        let mut candidates = SmallSet::new();
-        for base in attr_base.0.iter() {
-            self.collect_attribute_candidates_from_base(base, &mut candidates);
+        // Collect candidates from each base separately to find attributes common to all.
+        // This prevents suggesting an attribute that only exists on some union members.
+        let mut base_iter = attr_base.0.iter();
+
+        // Get candidates from the first base
+        let mut common_candidates = SmallSet::new();
+        if let Some(first_base) = base_iter.next() {
+            self.collect_attribute_candidates_from_base(first_base, &mut common_candidates);
         }
-        best_suggestion(missing, candidates.iter().map(|candidate| (candidate, 0)))
+
+        // Intersect with candidates from remaining bases
+        for base in base_iter {
+            let mut this_base_candidates = SmallSet::new();
+            self.collect_attribute_candidates_from_base(base, &mut this_base_candidates);
+            common_candidates.retain(|c| this_base_candidates.contains(c));
+        }
+
+        best_suggestion(
+            missing,
+            common_candidates.iter().map(|candidate| (candidate, 0)),
+        )
     }
 
     /// Can the attribute be successfully looked up in all cases?
@@ -698,12 +738,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             not_found = true;
         }
         for internal_error in lookup_result.internal_error {
-            attr_tys.push(self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                internal_error.to_error_msg(attr_name, todo_ctx),
-            ))
+            internal_error.add_to(errors, range, attr_name, todo_ctx);
+            attr_tys.push(self.heap.mk_any_error());
         }
         if not_found {
             return None;
@@ -729,7 +765,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let got = match got {
             ExprOrBinding::Expr(value) => TypeOrExpr::Expr(value),
             ExprOrBinding::Binding(got) => {
-                ty = self.solve_binding(got, errors);
+                ty = self.solve_binding(got, range, errors);
                 TypeOrExpr::Type(ty.ty(), range)
             }
         };
@@ -855,25 +891,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut should_narrow = true;
         let mut narrowed_types = Vec::new();
         let Some(attr_base) = self.as_attribute_base(base.clone()) else {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                InternalError::AttributeBaseUndefined(base.clone())
-                    .to_error_msg(attr_name, todo_ctx),
-            );
+            InternalError::AttributeBaseUndefined(base.clone())
+                .add_to(errors, range, attr_name, todo_ctx);
             return None;
         };
         let (lookup_found, lookup_not_found, lookup_error) = self
             .lookup_attr_from_base(attr_base.clone(), attr_name)
             .decompose();
         for e in lookup_error {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                e.to_error_msg(attr_name, todo_ctx),
-            );
+            e.add_to(errors, range, attr_name, todo_ctx);
             should_narrow = false;
         }
         for not_found in lookup_not_found {
@@ -994,13 +1020,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         todo_ctx: &str,
     ) {
         let Some(attr_base) = self.as_attribute_base(base.clone()) else {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                InternalError::AttributeBaseUndefined(base.clone())
-                    .to_error_msg(attr_name, todo_ctx),
-            );
+            InternalError::AttributeBaseUndefined(base.clone())
+                .add_to(errors, range, attr_name, todo_ctx);
             return;
         };
         let (lookup_found, lookup_not_found, lookup_error) = self
@@ -1017,12 +1038,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         for error in lookup_error {
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(ErrorKind::InternalError, context),
-                error.to_error_msg(attr_name, todo_ctx),
-            );
+            error.add_to(errors, range, attr_name, todo_ctx);
         }
         for (attr, _) in lookup_found {
             match attr {
@@ -1242,10 +1258,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 acc.found_type(ty, base);
             }
             AttributeBase1::TypeNever => {
-                let ty = self.lookup_attr_from_type_wrapper(attr_name, Type::never);
+                let ty = self.lookup_attr_from_type_wrapper(attr_name, || self.heap.mk_never());
                 acc.found_type(ty, base);
             }
-            AttributeBase1::Never => acc.found_type(Type::never(), base),
+            AttributeBase1::Never => acc.found_type(self.heap.mk_never(), base),
             AttributeBase1::EnumLiteral(e) if matches!(attr_name.as_str(), "name" | "_name_") => {
                 acc.found_type(Lit::Str(e.member.as_str().into()).to_implicit_type(), base)
             }
@@ -1263,7 +1279,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
-                        acc.found_type(Type::Any(AnyStyle::Implicit), base)
+                        acc.found_type(self.heap.mk_any_implicit(), base)
                     }
                     None => {
                         acc.not_found(NotFoundOn::ClassInstance(class.class_object().dupe(), base))
@@ -1277,7 +1293,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
-                        acc.found_type(Type::Any(AnyStyle::Implicit), base)
+                        acc.found_type(self.heap.mk_any_implicit(), base)
                     }
                     None => {
                         acc.not_found(NotFoundOn::ClassInstance(class.class_object().dupe(), base))
@@ -1295,7 +1311,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         acc.found_class_attribute(
                             ClassAttribute::read_only(
-                                Type::Any(AnyStyle::Implicit),
+                                self.heap.mk_any_implicit(),
                                 ReadOnlyReason::Super,
                             ),
                             base,
@@ -1306,7 +1322,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         acc.found_class_attribute(
                             ClassAttribute::read_only(
-                                Type::Any(AnyStyle::Implicit),
+                                self.heap.mk_any_implicit(),
                                 ReadOnlyReason::Super,
                             ),
                             base,
@@ -1320,10 +1336,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase1::QuantifiedValue(quantified) => {
                 match (quantified.kind(), attr_name.as_str()) {
                     (QuantifiedKind::ParamSpec, "args") => {
-                        acc.found_type(Type::ArgsValue(Box::new(quantified.clone())), base)
+                        acc.found_type(self.heap.mk_args_value(quantified.clone()), base)
                     }
                     (QuantifiedKind::ParamSpec, "kwargs") => {
-                        acc.found_type(Type::KwargsValue(Box::new(quantified.clone())), base)
+                        acc.found_type(self.heap.mk_kwargs_value(quantified.clone()), base)
                     }
                     _ => self.lookup_attr_from_attribute_base1(
                         AttributeBase1::ClassInstance(quantified.class_type(self.stdlib).clone()),
@@ -1495,7 +1511,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AttributeBase1::SelfType(cls) => match self.get_self_attribute(cls, attr_name) {
                 Some(attr) => acc.found_class_attribute(attr, base),
-                None => acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base)),
+                None => {
+                    let metadata = self.get_metadata_for_class(cls.class_object());
+                    if metadata.has_base_any() {
+                        acc.found_type(self.heap.mk_any_implicit(), base)
+                    } else {
+                        acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base))
+                    }
+                }
             },
             AttributeBase1::Intersect(bases, fallback) => {
                 // For now, only handle the simplest case: if exactly one base has a successful lookup, use it.
@@ -1656,10 +1679,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn get_module_exports(&self, module_name: ModuleName) -> Option<Exports> {
-        self.exports.get(module_name).finding()
-    }
-
     fn get_module_attr(&self, module: &ModuleType, attr_name: &Name) -> Option<Attribute> {
         // `module_name` could refer to a package, in which case we need to check if
         // `module_name.attr_name`:
@@ -1675,28 +1694,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // toplevel of `module_name` has been executed.
         let submodule = module.push_part(attr_name.clone());
         if submodule.is_submodules_imported_directly() {
-            return Some(Attribute::simple(submodule.to_type()));
+            return Some(Attribute::simple(submodule.to_type(self.heap)));
         }
 
         let module_name = ModuleName::from_parts(module.parts());
-        let module_exports = match self.get_module_exports(module_name) {
-            Some(x) => x,
-            None => return Some(Attribute::simple(Type::any_error())), // This module doesn't exist, we must have already errored
+
+        match self.exports.module_exists(module_name) {
+            FindingOrError::Finding(_) => (),
+            FindingOrError::Error(_) => return Some(Attribute::simple(self.heap.mk_any_error())), // This module doesn't exist, we must have already errored
         };
 
-        if module_exports.exports(self.exports).contains_key(attr_name) {
+        if self.exports.export_exists(module_name, attr_name) {
             Some(Attribute::simple(
                 self.get_from_export(module_name, None, &KeyExport(attr_name.clone()))
                     .arc_clone(),
             ))
-        } else if module_exports.is_submodule_imported_implicitly(attr_name)
+        } else if self
+            .exports
+            .is_submodule_imported_implicitly(module_name, attr_name)
             && self
-                .get_module_exports(module_name.append(attr_name))
+                .exports
+                .module_exists(module_name.append(attr_name))
+                .finding()
                 .is_some()
         {
-            Some(Attribute::simple(submodule.to_type()))
+            Some(Attribute::simple(submodule.to_type(self.heap)))
         } else if self
-            .get_module_exports(module_name.append(attr_name))
+            .exports
+            .module_exists(module_name.append(attr_name))
+            .finding()
             .is_some()
         {
             // The module isn't imported, but does exist on disk, so user must
@@ -1704,7 +1730,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(Attribute::ModuleFallback(
                 NotFoundOn::Module(module.clone()),
                 module_name.append(attr_name),
-                submodule.to_type(),
+                submodule.to_type(self.heap),
             ))
         } else {
             None
@@ -1717,7 +1743,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // non-termination when the var appears inside itself.
             f(self.solver().force_var(var))
         } else {
-            f(Type::any_implicit())
+            f(self.heap.mk_any_implicit())
         }
     }
 
@@ -1744,10 +1770,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypedDict(td @ TypedDict::Anonymous(_))
             | Type::PartialTypedDict(td @ TypedDict::Anonymous(_)) => {
                 let value_ty = self.get_typed_dict_value_type(&td);
-                acc.push(AttributeBase1::ClassInstance(
-                    self.stdlib
-                        .dict(self.stdlib.str().clone().to_type(), value_ty),
-                ))
+                acc.push(AttributeBase1::ClassInstance(self.stdlib.dict(
+                    self.heap.mk_class_type(self.stdlib.str().clone()),
+                    value_ty,
+                )))
             }
             Type::Type(box (Type::TypedDict(_) | Type::PartialTypedDict(_))) => {
                 acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
@@ -1778,12 +1804,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.bool().clone()))
             }
             Type::Any(style) => acc.push(AttributeBase1::Any(style)),
-            Type::TypeAlias(ta) => self.as_attribute_base1(ta.as_value(self.stdlib), acc),
-            Type::Type(box Type::Tuple(tuple)) => self
-                .as_attribute_base1(Type::type_form(self.erase_tuple_type(tuple).to_type()), acc),
-            Type::Type(box Type::ClassType(class)) => acc.push(AttributeBase1::ClassObject(
-                ClassBase::ClassType(class.clone()),
-            )),
+            Type::TypeAlias(ta) => {
+                self.as_attribute_base1(self.get_type_alias(&ta).as_value(self.stdlib), acc)
+            }
+            Type::Type(box Type::Tuple(tuple)) => self.as_attribute_base1(
+                self.heap
+                    .mk_type_form(self.heap.mk_class_type(self.erase_tuple_type(tuple))),
+                acc,
+            ),
+            Type::Type(box Type::ClassType(class)) => {
+                let class_base = AttributeBase1::ClassObject(ClassBase::ClassType(class.clone()));
+                if !class.targs().is_empty() {
+                    // If the class type has type arguments, at runtime it's also a GenericAlias
+
+                    // FIXME:
+                    // If `C` is a generic class, then the type of the expression `C` is `type[C]`.
+                    // We're relying on this behaviour to give `C[int]` the
+                    // runtime generic alias type, but this is technically
+                    // incorrect as `type[C[int]]` should be instances of `type`
+                    // and not `GenericAlias`.
+                    // Therefore, if we ever have a value of `type[C[int]]`
+                    // (e.g. via inheritance), we should not treat it as a
+                    // `GenericAlias`. However, such cases are rare in practice.
+                    let generic_alias_base =
+                        AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
+                    // Since GenericAlias also exposes all class attributes, we need to intersect the two bases
+                    acc.push(AttributeBase1::Intersect(
+                        vec![generic_alias_base.clone(), class_base],
+                        vec![generic_alias_base],
+                    ));
+                } else {
+                    acc.push(class_base)
+                }
+            }
             Type::QuantifiedValue(q) => acc.push(AttributeBase1::QuantifiedValue(*q)),
             Type::Type(box Type::Quantified(quantified)) => match quantified.restriction() {
                 Restriction::Bound(ty) => {
@@ -1848,7 +1901,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 | SpecialForm::Protocol
                 | SpecialForm::Tuple,
             )) => acc.push(AttributeBase1::TypeAny(AnyStyle::Implicit)),
-            Type::Type(box Type::SpecialForm(SpecialForm::Type)) => {
+            Type::Type(box Type::SpecialForm(SpecialForm::Type))
+            | Type::Type(box Type::Type(box Type::Any(_))) => {
                 acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
                     self.stdlib.builtins_type().clone(),
                 )))
@@ -1864,10 +1918,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.stdlib.type_var_tuple().clone(),
             )),
             Type::Args(_) => acc.push(AttributeBase1::ClassInstance(
-                self.stdlib.param_spec_args_as_tuple(),
+                self.stdlib.param_spec_args_as_tuple(self.heap),
             )),
             Type::Kwargs(_) => acc.push(AttributeBase1::ClassInstance(
-                self.stdlib.param_spec_kwargs_as_dict(),
+                self.stdlib.param_spec_kwargs_as_dict(self.heap),
             )),
             Type::ArgsValue(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.param_spec_args().clone(),
@@ -1888,10 +1942,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ClassBase::ClassType(q.class_type(self.stdlib).clone()),
             )),
             Type::Type(box Type::Args(_)) => acc.push(AttributeBase1::ClassObject(
-                ClassBase::ClassType(self.stdlib.param_spec_args_as_tuple()),
+                ClassBase::ClassType(self.stdlib.param_spec_args_as_tuple(self.heap)),
             )),
             Type::Type(box Type::Kwargs(_)) => acc.push(AttributeBase1::ClassObject(
-                ClassBase::ClassType(self.stdlib.param_spec_kwargs_as_dict()),
+                ClassBase::ClassType(self.stdlib.param_spec_kwargs_as_dict(self.heap)),
             )),
             Type::Type(box Type::ArgsValue(_)) => acc.push(AttributeBase1::ClassObject(
                 ClassBase::ClassType(self.stdlib.param_spec_args().clone()),
@@ -1971,7 +2025,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.force_var_for_attribute_base(v, |ty| self.as_attribute_base1(ty, acc))
             }
             Type::Type(box Type::Var(v)) => self.force_var_for_attribute_base(v, |ty| {
-                self.as_attribute_base1(Type::type_form(ty), acc)
+                self.as_attribute_base1(self.heap.mk_type_form(ty), acc)
             }),
             Type::SuperInstance(box (cls, obj)) => {
                 acc.push(AttributeBase1::SuperInstance(cls, obj))
@@ -1983,12 +2037,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Type(box Type::Union(box Union { members, .. })) => {
                 for ty in members {
-                    self.as_attribute_base1(Type::type_form(ty), acc)
+                    self.as_attribute_base1(self.heap.mk_type_form(ty), acc)
                 }
             }
             Type::Type(box Type::Intersect(box (_, fallback))) => {
                 // TODO(rechen): implement attribute access on `type[A & B]`
-                self.as_attribute_base1(Type::type_form(fallback), acc)
+                self.as_attribute_base1(self.heap.mk_type_form(fallback), acc)
             }
             Type::Quantified(quantified) => match quantified.restriction() {
                 Restriction::Bound(ty) => {
@@ -2071,7 +2125,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
-        let fall_back_to_object = || Type::ClassType(self.stdlib.object().clone());
+        let fall_back_to_object = || self.heap.mk_class_type(self.stdlib.object().clone());
         let (found, not_found, internal_errors) = self.lookup_attr(base, attr_name).decompose();
         let mut results = Vec::new();
         for (attr, _) in found {
@@ -2136,7 +2190,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 #[derive(Debug, Clone)]
 pub enum AttrDefinition {
     FullyResolved(TextRangeWithModule),
-    PartiallyResolvedImportedModuleAttribute { module_name: ModuleName },
+    PartiallyResolvedImportedModuleAttribute {
+        module_name: ModuleName,
+    },
+    /// A submodule accessed as an attribute (e.g., `b` in `a.b` when `import a.b.c`).
+    /// The module_name is the full submodule path (e.g., `a.b`).
+    Submodule {
+        module_name: ModuleName,
+    },
 }
 
 #[derive(Debug)]
@@ -2242,70 +2303,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         expected_attribute_name: Option<&Name>,
         res: &mut Vec<AttrInfo>,
     ) {
+        // Check for submodule access first (takes precedence over exports, same as get_module_attr).
+        // This handles cases like `a.b.c` where `import a.b.c` was used - accessing `b` on `a`
+        // should resolve to the submodule `a.b`, not look for an export named `b` in `a`.
+        if let Some(attr_name) = expected_attribute_name {
+            let submodule = module.push_part(attr_name.clone());
+            if submodule.is_submodules_imported_directly() {
+                res.push(AttrInfo {
+                    name: attr_name.clone(),
+                    ty: None,
+                    is_deprecated: false,
+                    definition: Some(AttrDefinition::Submodule {
+                        module_name: ModuleName::from_parts(submodule.parts()),
+                    }),
+                    docstring_range: None,
+                    is_reexport: false,
+                });
+                return;
+            }
+        }
+
         let module_name = ModuleName::from_parts(module.parts());
-        if let Some(exports) = self.get_module_exports(module_name) {
-            match expected_attribute_name {
-                None => {
-                    res.extend(
-                        exports
-                            .exports(self.exports)
-                            .iter()
-                            .map(|(x, export_location)| AttrInfo {
-                                name: x.clone(),
-                                ty: None,
-                                is_deprecated: matches!(
-                                    export_location,
-                                    ExportLocation::ThisModule(Export {
-                                        deprecation: Some(_),
-                                        ..
-                                    })
-                                ),
-                                definition: Some(
-                                    AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                        module_name,
-                                    },
-                                ),
-                                docstring_range: match export_location {
-                                    ExportLocation::ThisModule(Export {
-                                        docstring_range, ..
-                                    }) => *docstring_range,
-                                    _ => None,
-                                },
-                                is_reexport: matches!(
-                                    export_location,
-                                    ExportLocation::OtherModule(..)
-                                ),
-                            }),
-                    );
-                }
-                Some(expected_attribute_name) => {
-                    if let Some(export_location) =
-                        exports.exports(self.exports).get(expected_attribute_name)
-                    {
-                        res.push(AttrInfo {
-                            name: expected_attribute_name.clone(),
-                            ty: None,
-                            is_deprecated: matches!(
-                                export_location,
-                                ExportLocation::ThisModule(Export {
-                                    deprecation: Some(_),
-                                    ..
-                                })
-                            ),
-                            definition: Some(
-                                AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                    module_name,
-                                },
-                            ),
-                            docstring_range: match export_location {
-                                ExportLocation::ThisModule(Export {
-                                    docstring_range, ..
-                                }) => *docstring_range,
-                                _ => None,
+        match expected_attribute_name {
+            Some(name) => {
+                if self.exports.export_exists(module_name, name) {
+                    res.push(AttrInfo {
+                        name: name.clone(),
+                        ty: None,
+                        is_deprecated: self.exports.get_deprecated(module_name, name).is_some(),
+                        definition: Some(
+                            AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                                module_name,
                             },
-                            is_reexport: matches!(export_location, ExportLocation::OtherModule(..)),
-                        });
-                    }
+                        ),
+                        docstring_range: self.exports.docstring_range(module_name, name),
+                        is_reexport: self.exports.is_reexport(module_name, name),
+                    });
+                }
+            }
+            None => {
+                if let Some(exports) = self.exports.get_every_export_untracked(module_name) {
+                    res.extend(exports.iter().map(|name| AttrInfo {
+                        name: name.clone(),
+                        ty: None,
+                        is_deprecated: self.exports.get_deprecated(module_name, name).is_some(),
+                        definition: Some(
+                            AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                                module_name,
+                            },
+                        ),
+                        docstring_range: self.exports.docstring_range(module_name, name),
+                        is_reexport: self.exports.is_reexport(module_name, name),
+                    }));
                 }
             }
         }
@@ -2323,9 +2372,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if include_types {
             for info in res {
-                if let Some(definition) = &info.definition
-                    && matches!(definition, AttrDefinition::FullyResolved(..))
-                {
+                if info.definition.is_some() {
                     let found_attrs = self
                         .lookup_attr_from_attribute_base(base.clone(), &info.name)
                         .found;

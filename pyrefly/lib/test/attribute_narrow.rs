@@ -242,9 +242,10 @@ def f(c: C):
 
 // This test is adapted from a Pytorch example.
 testcase!(
+    bug = "The behavior of this was changed by the fix for https://github.com/facebook/pyrefly/issues/1999",
     test_isinstance_getitem,
     r#"
-from typing import Any, Optional, assert_type
+from typing import Any, Optional, assert_type, Never
 
 Arg = Optional[tuple["Arg", ...]]
 
@@ -258,11 +259,10 @@ class N:
     def args(self) -> tuple[Arg, ...]:
         return self._args
 
-
 def f(n: N):
     assert isinstance(n.args[0], N)
     t1 = n.args[0].type
-    assert_type(t1, DataType | None)
+    assert_type(t1, Never)
 "#,
 );
 
