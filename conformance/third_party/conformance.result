@@ -31,8 +31,8 @@
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
   "callables_annotation.py": [
-    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `BoundMethod[Proto4[Ellipsis], (Proto4[Ellipsis], int, ...) -> None]`, which is not assignable to `BoundMethod[Proto4[Ellipsis], (self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None]`, the type of `Proto3.__call__`']",
-    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`\\n  `Proto7.__call__` has type `BoundMethod[Proto7, (self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None]`, which is not assignable to `BoundMethod[Proto7, (self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None]`, the type of `Proto6.__call__`']"
+    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `(Proto4[Ellipsis], int, ...) -> None`, which is not assignable to `(self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None`, the type of `Proto3.__call__`']",
+    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`\\n  `Proto7.__call__` has type `(self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None`, which is not assignable to `(self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None`, the type of `Proto6.__call__`']"
   ],
   "callables_kwargs.py": [],
   "callables_protocol.py": [],
