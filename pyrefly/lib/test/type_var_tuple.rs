@@ -43,6 +43,14 @@ y: tuple[Unpack[tuple[int, str]]] = (1, "2")  # OK
 );
 
 testcase!(
+    test_double_unpack,
+    r#"
+from typing import Unpack
+x: tuple[Unpack[*tuple[int, ...]]]  # E: `Unpack` cannot be applied to an unpacked argument
+"#,
+);
+
+testcase!(
     bug = "We should disallow star-unpacking in invalid contexts",
     test_invalid_star,
     r#"
