@@ -1047,6 +1047,38 @@ class Outer:
 }
 
 #[test]
+fn extract_function_excludes_vars_defined_in_selection() {
+    // variables defined within the selection should not become parameters, even
+    // when they are later used in augmented assignments (e.g., total += price).
+    let code = r#"
+def calculate_total_price(prices: list[int]) -> float:
+    # EXTRACT-START
+    total = 0
+    for price in prices:
+        total += price
+    with_tax = total * 1.085
+    # EXTRACT-END
+    return with_tax
+"#;
+    let updated = apply_first_extract_action(code).expect("expected extract refactor action");
+    let expected = r#"
+def extracted_function(prices):
+    total = 0
+    for price in prices:
+        total += price
+    with_tax = total * 1.085
+    return with_tax
+
+def calculate_total_price(prices: list[int]) -> float:
+    # EXTRACT-START
+    with_tax = extracted_function(prices)
+    # EXTRACT-END
+    return with_tax
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn extract_variable_basic_refactor() {
     let code = r#"
 def process(data):
