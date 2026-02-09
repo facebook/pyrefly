@@ -165,7 +165,7 @@ impl<'a> ArgsExpander<'a> {
                     .collect()
             }
             Type::Type(box Type::Union(box Union { members: ts, .. })) => {
-                ts.into_map(Type::type_form)
+                ts.into_map(|t| solver.heap.mk_type_form(t))
             }
             Type::Tuple(Tuple::Concrete(elements)) => {
                 let mut count: usize = 1;
@@ -190,7 +190,7 @@ impl<'a> ArgsExpander<'a> {
                     element_expansions
                         .into_iter()
                         .multi_cartesian_product()
-                        .map(Type::concrete_tuple)
+                        .map(|x| solver.heap.mk_concrete_tuple(x))
                         .collect()
                 } else {
                     Vec::new()
@@ -248,7 +248,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Err(_) => (
                 CalledOverload {
                     func: arity_closest_overload.unwrap().0.clone(),
-                    res: Type::any_error(),
+                    res: self.heap.mk_any_error(),
                     ctor_targs: None,
                     call_errors: self.error_collector(),
                 },
@@ -392,7 +392,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 let signature = self
                     .solver()
-                    .for_display(Type::Callable(Box::new(signature)));
+                    .for_display(self.heap.mk_callable_from(signature));
                 msg.push(format!("{signature}{suffix}"));
             }
             // We intentionally discard closest_overload.call_errors. When no overload matches,
@@ -403,7 +403,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ErrorInfo::new(ErrorKind::NoMatchingOverload, context),
                 msg,
             );
-            (Type::any_error(), closest_overload.func.1.signature)
+            (self.heap.mk_any_error(), closest_overload.func.1.signature)
         }
     }
 
@@ -570,7 +570,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if matched_overloads.any(|o| !self.is_equal(&first_overload.res, &o.res)) {
                 return (
                     CalledOverload {
-                        res: Type::any_implicit(),
+                        res: self.heap.mk_any_implicit(),
                         ..first_overload
                     },
                     true,

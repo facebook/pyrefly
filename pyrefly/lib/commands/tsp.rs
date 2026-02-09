@@ -41,6 +41,7 @@ pub fn run_tsp(
     if let Some(initialize_params) = initialize_tsp_connection(&connection, args.indexing_mode)? {
         // Create an LSP server instance for the TSP server to use.
         let lsp_queue = LspQueue::new();
+        let surface = telemetry.surface();
         let lsp_server = crate::lsp::non_wasm::server::Server::new(
             connection,
             lsp_queue,
@@ -48,6 +49,8 @@ pub fn run_tsp(
             args.indexing_mode,
             args.workspace_indexing_limit,
             false,
+            surface,
+            None, // No path remapping for TSP
         );
 
         // Reuse the existing lsp_loop but with TSP initialization

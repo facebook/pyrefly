@@ -73,7 +73,6 @@ use lsp_types::HoverParams;
 use lsp_types::HoverProviderCapability;
 use lsp_types::ImplementationProviderCapability;
 use lsp_types::InitializeParams;
-use lsp_types::InitializeResult;
 use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
 use lsp_types::InlayHintLabelPart;
@@ -111,6 +110,7 @@ use lsp_types::SignatureHelp;
 use lsp_types::SignatureHelpOptions;
 use lsp_types::SignatureHelpParams;
 use lsp_types::SymbolInformation;
+use lsp_types::SymbolKind;
 use lsp_types::TextDocumentContentChangeEvent;
 use lsp_types::TextDocumentIdentifier;
 use lsp_types::TextDocumentPositionParams;
@@ -118,6 +118,7 @@ use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::TextEdit;
 use lsp_types::TypeDefinitionProviderCapability;
+use lsp_types::TypeHierarchyItem;
 use lsp_types::Unregistration;
 use lsp_types::UnregistrationParams;
 use lsp_types::Url;
@@ -170,6 +171,9 @@ use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::SemanticTokensRefresh;
 use lsp_types::request::Shutdown;
 use lsp_types::request::SignatureHelpRequest;
+use lsp_types::request::TypeHierarchyPrepare;
+use lsp_types::request::TypeHierarchySubtypes;
+use lsp_types::request::TypeHierarchySupertypes;
 use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
@@ -182,11 +186,13 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::includes::Includes as _;
+use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
@@ -194,6 +200,7 @@ use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::telemetry::SubTaskTelemetry;
 use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::telemetry::TelemetryDidChangeWatchedFilesStats;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use pyrefly_util::telemetry::TelemetryFileStats;
@@ -207,6 +214,7 @@ use ruff_text_size::TextSize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
@@ -214,6 +222,10 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::ModuleInfo;
+use crate::alt::types::class_metadata::ClassMro;
+use crate::binding::binding::BindingClass;
+use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassMro;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
 use crate::error::error::Error;
@@ -230,6 +242,7 @@ use crate::lsp::non_wasm::lsp::as_request;
 use crate::lsp::non_wasm::lsp::as_request_response_pair;
 use crate::lsp::non_wasm::lsp::new_notification;
 use crate::lsp::non_wasm::lsp::new_response;
+use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::make_open_handle;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
@@ -245,11 +258,16 @@ use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
 use crate::lsp::non_wasm::stdlib::should_show_error_for_display_mode;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::type_hierarchy::collect_class_defs;
+use crate::lsp::non_wasm::type_hierarchy::find_class_at_position_in_ast;
+use crate::lsp::non_wasm::type_hierarchy::prepare_type_hierarchy_item;
 use crate::lsp::non_wasm::unsaved_file_tracker::UnsavedFileTracker;
 use crate::lsp::non_wasm::will_rename_files::will_rename_files;
 use crate::lsp::non_wasm::workspace::LspAnalysisConfig;
 use crate::lsp::non_wasm::workspace::Workspace;
 use crate::lsp::non_wasm::workspace::Workspaces;
+use crate::lsp::wasm::completion::CompletionOptions as CompletionRequestOptions;
+use crate::lsp::wasm::completion::supports_snippet_completions;
 use crate::lsp::wasm::hover::get_hover;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocument;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
@@ -274,6 +292,7 @@ use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
+use crate::types::class::ClassDefIndex;
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -300,17 +319,17 @@ pub enum TypeErrorDisplayStatus {
     EnabledInIdeConfig,
     DisabledInConfigFile,
     EnabledInConfigFile,
-    DisabledDueToMissingConfigFile,
+    NoConfigFile,
 }
 
 impl TypeErrorDisplayStatus {
     fn is_enabled(self) -> bool {
         match self {
             TypeErrorDisplayStatus::DisabledInIdeConfig
-            | TypeErrorDisplayStatus::DisabledInConfigFile
-            | TypeErrorDisplayStatus::DisabledDueToMissingConfigFile => false,
+            | TypeErrorDisplayStatus::DisabledInConfigFile => false,
             TypeErrorDisplayStatus::EnabledInIdeConfig
-            | TypeErrorDisplayStatus::EnabledInConfigFile => true,
+            | TypeErrorDisplayStatus::EnabledInConfigFile
+            | TypeErrorDisplayStatus::NoConfigFile => true,
         }
     }
 }
@@ -511,8 +530,11 @@ pub struct Server {
     outgoing_request_id: AtomicI32,
     outgoing_requests: Mutex<HashMap<RequestId, Request>>,
     filewatcher_registered: AtomicBool,
+    watched_patterns: Mutex<SmallSet<WatchPattern>>,
     version_info: Mutex<HashMap<PathBuf, i32>>,
     id: Uuid,
+    /// The surface/entrypoint for the language server (`--from` CLI arg)
+    surface: Option<String>,
     /// Whether to include comment section folding ranges (FoldingRangeKind::Region).
     /// Defaults to false.
     comment_folding_ranges: bool,
@@ -540,6 +562,12 @@ pub struct Server {
     /// Testing-only flag to prevent the next recheck from committing.
     /// When set, the recheck queue task will loop without committing the transaction.
     do_not_commit_recheck: AtomicBool,
+    /// Flag indicating we're waiting for the initial workspace/configuration response.
+    /// When true, background indexing (populate_project/workspace_files) is deferred
+    /// until we receive the config response, avoiding double-indexing at startup.
+    awaiting_initial_workspace_config: AtomicBool,
+    /// Optional callback for remapping paths before converting to URIs.
+    path_remapper: Option<PathRemapper>,
 }
 
 pub fn shutdown_finish(connection: &Connection, id: RequestId) {
@@ -626,10 +654,27 @@ pub fn initialize_start(
 
 // Sends the initialize response and waits for the initialized notification.
 // If the connection is closed, or we receive an exit notification, returns false.
-pub fn initialize_finish(
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerCapabilitiesWithTypeHierarchy {
+    #[serde(flatten)]
+    base: ServerCapabilities,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    type_hierarchy_provider: Option<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeResult<C> {
+    capabilities: C,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server_info: Option<ServerInfo>,
+}
+
+pub fn initialize_finish<C: Serialize>(
     connection: &Connection,
     id: RequestId,
-    capabilities: ServerCapabilities,
+    capabilities: C,
     server_info: Option<ServerInfo>,
 ) -> anyhow::Result<bool> {
     let result = InitializeResult {
@@ -772,7 +817,7 @@ pub fn dispatch_lsp_events(
 pub fn capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
-) -> ServerCapabilities {
+) -> ServerCapabilitiesWithTypeHierarchy {
     let augments_syntax_tokens = initialization_params
         .capabilities
         .text_document
@@ -790,7 +835,12 @@ pub fn capabilities(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    ServerCapabilities {
+    let type_hierarchy_provider = match indexing_mode {
+        IndexingMode::None => None,
+        IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => Some(true),
+    };
+
+    let base = ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
@@ -897,6 +947,11 @@ pub fn capabilities(
             None
         },
         ..Default::default()
+    };
+
+    ServerCapabilitiesWithTypeHierarchy {
+        base,
+        type_hierarchy_provider,
     }
 }
 
@@ -907,16 +962,25 @@ pub enum ProcessEvent {
 
 const PYTHON_SECTION: &str = "python";
 
+struct TypeHierarchyTarget {
+    def_index: ClassDefIndex,
+    module_path: ModulePath,
+    name_range: TextRange,
+    is_object: bool,
+}
+
 pub fn lsp_loop(
     connection: Connection,
     initialization_params: InitializeParams,
     indexing_mode: IndexingMode,
     workspace_indexing_limit: usize,
     build_system_blocking: bool,
+    path_remapper: Option<PathRemapper>,
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
     let lsp_queue = LspQueue::new();
+    let from = telemetry.surface();
     let server = Server::new(
         connection,
         lsp_queue,
@@ -924,6 +988,8 @@ pub fn lsp_loop(
         indexing_mode,
         workspace_indexing_limit,
         build_system_blocking,
+        from,
+        path_remapper,
     );
     std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -1197,7 +1263,7 @@ impl Server {
                     if let Some((request, response)) =
                         as_request_response_pair::<WorkspaceConfiguration>(&request, &x)
                     {
-                        self.workspace_configuration_response(&request, &response);
+                        self.workspace_configuration_response(&request, &response, telemetry_event);
                     }
                 } else {
                     info!("Response for unknown request: {x:?}");
@@ -1648,6 +1714,43 @@ impl Server {
                         self.set_file_stats(params.item.uri.clone(), telemetry_event);
                         self.async_call_hierarchy_outgoing_calls(x.id, &transaction, params);
                     }
+                } else if let Some(params) = as_request::<TypeHierarchyPrepare>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<TypeHierarchyPrepare>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.prepare_type_hierarchy(&transaction, params)),
+                        ));
+                    }
+                } else if let Some(params) = as_request::<TypeHierarchySupertypes>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<TypeHierarchySupertypes>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(params.item.uri.clone(), telemetry_event);
+                        self.async_type_hierarchy_supertypes(x.id, &transaction, params);
+                    }
+                } else if let Some(params) = as_request::<TypeHierarchySubtypes>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<TypeHierarchySubtypes>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(params.item.uri.clone(), telemetry_event);
+                        self.async_type_hierarchy_subtypes(x.id, &transaction, params);
+                    }
                 } else if &x.method == "pyrefly/textDocument/docstringRanges" {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
                     self.set_file_stats(text_document.uri.clone(), telemetry_event);
@@ -1672,7 +1775,7 @@ impl Server {
                         // TODO(yangdanny): handle notebooks
                         self.send_response(new_response(
                             x.id,
-                            Ok(TypeErrorDisplayStatus::DisabledDueToMissingConfigFile),
+                            Ok(TypeErrorDisplayStatus::NoConfigFile),
                         ));
                     }
                 } else if &x.method == "testing/doNotCommitNextRecheck" {
@@ -1704,6 +1807,8 @@ impl Server {
         indexing_mode: IndexingMode,
         workspace_indexing_limit: usize,
         build_system_blocking: bool,
+        surface: Option<String>,
+        path_remapper: Option<PathRemapper>,
     ) -> Self {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
@@ -1738,6 +1843,12 @@ impl Server {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let should_request_workspace_settings = initialize_params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.configuration)
+            == Some(true);
         let s = Self {
             connection: ServerConnection(connection),
             lsp_queue,
@@ -1761,12 +1872,17 @@ impl Server {
             outgoing_request_id: AtomicI32::new(1),
             outgoing_requests: Mutex::new(HashMap::new()),
             filewatcher_registered: AtomicBool::new(false),
+            watched_patterns: Mutex::new(SmallSet::new()),
             version_info: Mutex::new(HashMap::new()),
             id: Uuid::new_v4(),
+            surface,
             comment_folding_ranges,
             currently_streaming_diagnostics_for_handles: RwLock::new(None),
             stream_diagnostics,
             do_not_commit_recheck: AtomicBool::new(false),
+            // Will be set to true if we send a workspace/configuration request
+            awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
+            path_remapper,
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -1793,6 +1909,7 @@ impl Server {
         TelemetryServerState {
             has_sourcedb: self.workspaces.sourcedb_available(),
             id: self.id,
+            surface: self.surface.clone(),
         }
     }
 
@@ -1887,9 +2004,10 @@ impl Server {
             // Check if we should filter based on error kind for ErrorMissingImports mode
             let display_type_errors_mode = self
                 .workspaces
-                .get_with(path.to_path_buf(), |(_, w)| w.display_type_errors);
+                .get_with(path.to_path_buf(), |(_, w)| w.display_type_errors)
+                .unwrap_or_default();
 
-            if !should_show_error_for_display_mode(e, display_type_errors_mode) {
+            if !should_show_error_for_display_mode(e, display_type_errors_mode, type_error_status) {
                 return None;
             }
 
@@ -1948,11 +2066,11 @@ impl Server {
             Some(DisplayTypeErrors::ForceOff) => TypeErrorDisplayStatus::DisabledInIdeConfig,
             Some(DisplayTypeErrors::Default) | None => match &config.source {
                 // In this case, we don't have a config file.
-                ConfigSource::Synthetic => TypeErrorDisplayStatus::DisabledDueToMissingConfigFile,
+                ConfigSource::Synthetic => TypeErrorDisplayStatus::NoConfigFile,
                 // In this case, we have a config file like mypy.ini, but we don't parse it.
                 // We only use it as a sensible project root, and create a default config anyways.
                 // Therefore, we should treat it as if we don't have any config.
-                ConfigSource::Marker(_) => TypeErrorDisplayStatus::DisabledDueToMissingConfigFile,
+                ConfigSource::Marker(_) => TypeErrorDisplayStatus::NoConfigFile,
                 // We actually have a pyrefly.toml, so we can decide based on the config.
                 ConfigSource::File(_) => {
                     if config.disable_type_errors_in_ide(path) {
@@ -2180,6 +2298,27 @@ impl Server {
         }
     }
 
+    /// Populate project files for multiple configs
+    ///
+    /// Deduplication is handled by `indexed_configs`
+    /// Unlike `populate_project_files_if_necessary`, this performs the work directly
+    /// instead of creating a new task on the recheck queue, so it should only be
+    /// called from the recheck queue.
+    fn populate_project_files_for_configs(
+        &self,
+        configs: Vec<ArcId<ConfigFile>>,
+        telemetry: &mut TelemetryEvent,
+    ) {
+        for config in configs {
+            if config.skip_lsp_config_indexing {
+                continue;
+            }
+            if self.indexed_configs.lock().insert(config.dupe()) {
+                self.populate_all_project_files_in_config(config, telemetry);
+            }
+        }
+    }
+
     fn populate_workspace_files_if_necessary(&self, telemetry: &mut TelemetryEvent) {
         let mut indexed_workspaces = self.indexed_workspaces.lock();
         let roots_to_populate_files = self
@@ -2247,7 +2386,7 @@ impl Server {
                 let subscriber = PublishDiagnosticsSubscriber { publish_callback };
                 let mut transaction = server
                     .state
-                    .new_committable_transaction(Require::indexing(), Some(Box::new(subscriber)));
+                    .new_committable_transaction(Require::Exports, Some(Box::new(subscriber)));
                 let invalidate_start = Instant::now();
                 // Mark files as dirty
                 f(transaction.as_mut());
@@ -2296,9 +2435,6 @@ impl Server {
         let unknown = ModuleName::unknown();
 
         info!("Populating all files in the config ({:?}).", config.source);
-        let mut transaction = self
-            .state
-            .new_committable_transaction(Require::indexing(), None);
 
         let project_path_blobs = config.get_filtered_globs(None);
         let paths = project_path_blobs.files().unwrap_or_default();
@@ -2316,7 +2452,10 @@ impl Server {
         }
 
         info!("Prepare to check {} files.", handles.len());
-        transaction.as_mut().run(&handles, Require::indexing());
+        let mut transaction = self
+            .state
+            .new_committable_transaction(Require::Exports, None);
+        transaction.as_mut().run(&handles, Require::Indexing);
         self.state.commit_transaction(transaction, Some(telemetry));
         // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
         // the main event loop of the server. As a result, the server can do a revalidation of
@@ -2335,9 +2474,6 @@ impl Server {
                 "Populating up to {} files in the workspace ({workspace_root:?}).",
                 self.workspace_indexing_limit
             );
-            let mut transaction = self
-                .state
-                .new_committable_transaction(Require::indexing(), None);
 
             let includes =
                 ConfigFile::default_project_includes().from_root(workspace_root.as_path());
@@ -2354,7 +2490,10 @@ impl Server {
             }
 
             info!("Prepare to check {} files.", handles.len());
-            transaction.as_mut().run(&handles, Require::indexing());
+            let mut transaction = self
+                .state
+                .new_committable_transaction(Require::Exports, None);
+            transaction.as_mut().run(&handles, Require::Indexing);
             self.state.commit_transaction(transaction, Some(telemetry));
             // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
             // the main event loop of the server. As a result, the server can do a revalidation of
@@ -2473,8 +2612,15 @@ impl Server {
             );
             self.validate_in_memory_without_committing(ide_transaction_manager, telemetry_event);
         }
-        self.populate_project_files_if_necessary(config_to_populate_files, telemetry_event);
-        self.populate_workspace_files_if_necessary(telemetry_event);
+        // Skip background indexing if we're still waiting for the initial workspace config.
+        // The indexing will be triggered when we receive the config response.
+        if !self
+            .awaiting_initial_workspace_config
+            .load(Ordering::Relaxed)
+        {
+            self.populate_project_files_if_necessary(config_to_populate_files, telemetry_event);
+            self.populate_workspace_files_if_necessary(telemetry_event);
+        }
         // rewatch files in case we loaded or dropped any configs
         self.setup_file_watcher_if_necessary(Some(telemetry_event));
         Ok(())
@@ -2698,6 +2844,41 @@ impl Server {
         if events.is_empty() {
             return;
         }
+
+        // Log the files that changed
+        let total = events.created.len()
+            + events.modified.len()
+            + events.removed.len()
+            + events.unknown.len();
+        info!(
+            "[Pyrefly] DidChangeWatchedFiles: {} file(s) changed ({} created, {} modified, {} removed, {} unknown)",
+            total,
+            events.created.len(),
+            events.modified.len(),
+            events.removed.len(),
+            events.unknown.len()
+        );
+        for path in &events.created {
+            info!("[Pyrefly]   created: {}", path.display());
+        }
+        for path in &events.modified {
+            info!("[Pyrefly]   modified: {}", path.display());
+        }
+        for path in &events.removed {
+            info!("[Pyrefly]   removed: {}", path.display());
+        }
+        for path in &events.unknown {
+            info!("[Pyrefly]   unknown: {}", path.display());
+        }
+
+        // Record the files that changed for telemetry
+        telemetry_event.set_did_change_watched_files_stats(TelemetryDidChangeWatchedFilesStats {
+            created: events.created.clone(),
+            modified: events.modified.clone(),
+            removed: events.removed.clone(),
+            unknown: events.unknown.clone(),
+        });
+
         let should_requery_build_system = should_requery_build_system(&events);
 
         // Rewatch files if necessary (config changed, files added/removed, etc.)
@@ -2784,7 +2965,7 @@ impl Server {
                 // Having the extra file hanging around doesn't harm anything, but does use extra memory.
                 let mut transaction = server
                     .state
-                    .new_committable_transaction(Require::indexing(), None);
+                    .new_committable_transaction(Require::Exports, None);
                 transaction.as_mut().set_memory(vec![(path, None)]);
                 let _ = server
                     .validate_in_memory_for_transaction(transaction.as_mut(), telemetry_event);
@@ -2828,7 +3009,13 @@ impl Server {
         &'a self,
         request: &ConfigurationParams,
         response: &[Value],
+        telemetry_event: &mut TelemetryEvent,
     ) {
+        // Check if this is the initial workspace config response we've been waiting for
+        let was_awaiting_initial_config = self
+            .awaiting_initial_workspace_config
+            .swap(false, Ordering::Relaxed);
+
         let mut modified = false;
         for (i, id) in request.items.iter().enumerate() {
             if let Some(value) = response.get(i) {
@@ -2843,8 +3030,27 @@ impl Server {
                 );
             }
         }
+
         if modified {
             self.invalidate_config_and_validate_in_memory();
+        }
+        if was_awaiting_initial_config && self.indexing_mode != IndexingMode::None {
+            // We need to resolve configs after invalidation completes, so enqueue that
+            // calculation in the recheck queue to ensure ordering.
+            self.recheck_queue.queue_task(
+                TelemetryEventKind::PopulateProjectFiles,
+                Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
+                    let configs: Vec<_> = server
+                        .open_files
+                        .read()
+                        .keys()
+                        .filter_map(|path| path.parent())
+                        .filter_map(|dir| server.state.config_finder().directory(dir))
+                        .collect();
+                    server.populate_project_files_for_configs(configs, telemetry_event);
+                }),
+            );
+            self.populate_workspace_files_if_necessary(telemetry_event);
         }
     }
 
@@ -2998,6 +3204,7 @@ impl Server {
                 Ok(None),
             ));
         };
+        let path_remapper = self.path_remapper.clone();
         self.async_find_from_definition_helper(
             request_id,
             transaction,
@@ -3040,7 +3247,7 @@ impl Server {
             move |results: Vec<(ModuleInfo, Vec<TextRange>)>| {
                 let mut lsp_targets = Vec::new();
                 for (info, ranges) in results {
-                    if let Some(uri) = module_info_to_uri(&info) {
+                    if let Some(uri) = module_info_to_uri(&info, path_remapper.as_ref()) {
                         for range in ranges {
                             lsp_targets.push(Location {
                                 uri: uri.clone(),
@@ -3068,7 +3275,7 @@ impl Server {
         params: CompletionParams,
     ) -> anyhow::Result<CompletionResponse> {
         let uri = &params.text_document_position.text_document.uri;
-        let (handle, import_format) = match self
+        let (handle, lsp_config) = match self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(Completion::METHOD))
         {
             None => {
@@ -3077,7 +3284,18 @@ impl Server {
                     items: Vec::new(),
                 }));
             }
-            Some((x, config)) => (x, config.and_then(|c| c.import_format).unwrap_or_default()),
+            Some((x, config)) => (x, config),
+        };
+        let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
+        let complete_function_parens = lsp_config
+            .and_then(|c| c.complete_function_parens)
+            .unwrap_or(false);
+        let completion_options = CompletionRequestOptions {
+            supports_completion_item_details: self.supports_completion_item_details(),
+            complete_function_parens,
+            supports_snippet_completions: supports_snippet_completions(
+                &self.initialize_params.capabilities,
+            ),
         };
         let (items, is_incomplete) = transaction
             .get_module_info(&handle)
@@ -3086,7 +3304,7 @@ impl Server {
                     &handle,
                     self.from_lsp_position(uri, &info, params.text_document_position.position),
                     import_format,
-                    self.supports_completion_item_details(),
+                    completion_options,
                 )
             })
             .unwrap_or_default();
@@ -3213,6 +3431,9 @@ impl Server {
         if let Some(refactors) = transaction.introduce_parameter_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
+        if let Some(refactors) = transaction.convert_star_import_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
         if let Some(action) =
             convert_module_package_code_actions(&self.initialize_params.capabilities, uri)
         {
@@ -3327,6 +3548,7 @@ impl Server {
         position: Position,
         map_result: impl FnOnce(Vec<(Url, Vec<Range>)>) -> V + Send + Sync + 'static,
     ) {
+        let path_remapper = self.path_remapper.clone();
         self.async_find_from_definition_helper(
             request_id,
             transaction,
@@ -3355,7 +3577,7 @@ impl Server {
                 // Transform ModuleInfo -> Url and TextRange -> Range
                 let mut locations = Vec::new();
                 for (info, ranges) in results {
-                    if let Some(uri) = module_info_to_uri(&info) {
+                    if let Some(uri) = module_info_to_uri(&info, path_remapper.as_ref()) {
                         locations.push((uri, ranges.into_map(|range| info.to_lsp_range(range))));
                     };
                 }
@@ -3493,7 +3715,9 @@ impl Server {
         )?;
         let res = t
             .into_iter()
-            .filter_map(|(text_size, label_parts)| {
+            .filter_map(|hint_data| {
+                let text_size = hint_data.position;
+                let label_parts = hint_data.label_parts;
                 // If the url is a notebook cell, filter out inlay hints for other cells
                 if info.to_cell_for_lsp(text_size) != maybe_cell_idx {
                     return None;
@@ -3519,14 +3743,20 @@ impl Server {
                             .collect(),
                     );
 
+                    let text_edits = if hint_data.insertable {
+                        Some(vec![TextEdit {
+                            range: Range::new(position, position),
+                            new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
+                        }])
+                    } else {
+                        None
+                    };
+
                     Some(InlayHint {
                         position,
                         label,
                         kind: None,
-                        text_edits: Some(vec![TextEdit {
-                            range: Range::new(position, position),
-                            new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
-                        }]),
+                        text_edits,
                         tooltip: None,
                         padding_left: None,
                         padding_right: None,
@@ -3849,22 +4079,11 @@ impl Server {
 
     /// Converts a [`WatchPattern`] into a [`GlobPattern`] that can be used and watched
     /// by VSCode, provided its `relative_pattern_support`.
-    fn get_pattern_to_watch(
-        pattern: WatchPattern<'_>,
-        relative_pattern_support: bool,
-    ) -> GlobPattern {
+    fn get_pattern_to_watch(pattern: WatchPattern, relative_pattern_support: bool) -> GlobPattern {
         match pattern {
             WatchPattern::File(root) => GlobPattern::String(root.to_string_lossy().into_owned()),
             WatchPattern::Root(root, pattern)
-                if relative_pattern_support && let Ok(url) = Url::from_directory_path(root) =>
-            {
-                GlobPattern::Relative(RelativePattern {
-                    base_uri: OneOf::Right(url),
-                    pattern,
-                })
-            }
-            WatchPattern::OwnedRoot(root, pattern)
-                if relative_pattern_support && let Ok(url) = Url::from_directory_path(&root) =>
+                if relative_pattern_support && let Ok(url) = Url::from_directory_path(&**root) =>
             {
                 GlobPattern::Relative(RelativePattern {
                     base_uri: OneOf::Right(url),
@@ -3872,9 +4091,6 @@ impl Server {
                 })
             }
             WatchPattern::Root(root, pattern) => {
-                GlobPattern::String(root.join(pattern).to_string_lossy().into_owned())
-            }
-            WatchPattern::OwnedRoot(root, pattern) => {
                 GlobPattern::String(root.join(pattern).to_string_lossy().into_owned())
             }
         }
@@ -3895,7 +4111,49 @@ impl Server {
                 ..
             }) => {
                 let relative_pattern_support = relative_pattern_support.is_some_and(|b| b);
-                if self.filewatcher_registered.load(Ordering::Relaxed) {
+                let configs = self.workspaces.loaded_configs.clean_and_get_configs();
+                let mut glob_patterns = SmallSet::new();
+                for root in &roots {
+                    let root = InternedPath::from_path(root);
+                    PYTHON_EXTENSIONS.iter().for_each(|suffix| {
+                        glob_patterns
+                            .insert(WatchPattern::root(root.dupe(), format!("**/*.{suffix}")));
+                    });
+                    ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
+                        glob_patterns.insert(WatchPattern::root(root, format!("**/{config}")));
+                    });
+                }
+                glob_patterns.extend(ConfigFile::get_paths_to_watch(&configs));
+                let mut watched_patterns = self.watched_patterns.lock();
+
+                let should_rewatch = watched_patterns.difference(&glob_patterns).next().is_some();
+                // Serialization is the most expensive part of this function, so avoid rewatching
+                // when we can.
+                let (new_patterns, should_rewatch) = if should_rewatch {
+                    *watched_patterns = glob_patterns.clone();
+                    // we should clear out all of our watchers and rewatch everything
+                    (glob_patterns, true)
+                } else {
+                    // we only want to watch new patterns
+                    let new_patterns = glob_patterns
+                        .difference(&watched_patterns)
+                        .cloned()
+                        .collect();
+                    watched_patterns.extend(glob_patterns);
+                    (new_patterns, false)
+                };
+
+                let watchers = new_patterns
+                    .into_iter()
+                    .map(|p| Self::get_pattern_to_watch(p.to_owned(), relative_pattern_support))
+                    .map(|glob_pattern| FileSystemWatcher {
+                        glob_pattern,
+                        kind: Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete),
+                    })
+                    .collect::<Vec<_>>();
+
+                pattern_count = watchers.len();
+                if self.filewatcher_registered.load(Ordering::Relaxed) && should_rewatch {
                     self.send_request::<UnregisterCapability>(UnregistrationParams {
                         unregisterations: Vec::from([Unregistration {
                             id: Self::FILEWATCHER_ID.to_owned(),
@@ -3903,39 +4161,6 @@ impl Server {
                         }]),
                     });
                 }
-                // TODO(connernilsen): we need to dedup filewatcher patterns
-                // preferably by figuring out if they're under another wildcard pattern with the same suffix
-                let mut glob_patterns = Vec::new();
-                for root in &roots {
-                    PYTHON_EXTENSIONS.iter().for_each(|suffix| {
-                        glob_patterns.push(Self::get_pattern_to_watch(
-                            WatchPattern::root(root, format!("**/*.{suffix}")),
-                            relative_pattern_support,
-                        ));
-                    });
-                    ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
-                        glob_patterns.push(Self::get_pattern_to_watch(
-                            WatchPattern::root(root, format!("**/{config}")),
-                            relative_pattern_support,
-                        ))
-                    });
-                }
-                for config in self.workspaces.loaded_configs.clean_and_get_configs() {
-                    config.get_paths_to_watch().into_iter().for_each(|pattern| {
-                        glob_patterns.push(Self::get_pattern_to_watch(
-                            pattern,
-                            relative_pattern_support,
-                        ));
-                    });
-                }
-                let watchers = glob_patterns
-                    .into_iter()
-                    .map(|glob_pattern| FileSystemWatcher {
-                        glob_pattern,
-                        kind: Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete),
-                    })
-                    .collect::<Vec<_>>();
-                pattern_count = watchers.len();
                 self.send_request::<RegisterCapability>(RegistrationParams {
                     registrations: Vec::from([Registration {
                         id: Self::FILEWATCHER_ID.to_owned(),
@@ -4014,7 +4239,7 @@ impl Server {
                 let subscriber = PublishDiagnosticsSubscriber { publish_callback };
                 let mut transaction = server
                     .state
-                    .new_committable_transaction(Require::indexing(), Some(Box::new(subscriber)));
+                    .new_committable_transaction(Require::Exports, Some(Box::new(subscriber)));
                 let invalidate_start = Instant::now();
                 transaction.as_mut().invalidate_config();
                 telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
@@ -4059,6 +4284,7 @@ impl Server {
             &self.open_files,
             params,
             supports_document_changes,
+            self.path_remapper.as_ref(),
         )
     }
 
@@ -4067,7 +4293,7 @@ impl Server {
             module: definition_module_info,
             range,
         } = location;
-        let mut uri = module_info_to_uri(definition_module_info)?;
+        let mut uri = module_info_to_uri(definition_module_info, self.path_remapper.as_ref())?;
         if let Some(cell_idx) = definition_module_info.to_cell_for_lsp(range.start()) {
             // We only have this information for open notebooks, without being provided the URI from the client
             // we don't know what URI refers to which cell.
@@ -4132,6 +4358,7 @@ impl Server {
             >(request_id, Ok(None)));
         };
 
+        let path_remapper = self.path_remapper.clone();
         // The CallHierarchyItem we receive is already at the definition position
         // (thanks to prepare_call_hierarchy doing the go-to-definition step).
         self.async_find_from_definition_helper(
@@ -4151,7 +4378,7 @@ impl Server {
                     &target_def,
                 )
             },
-            transform_incoming_calls,
+            move |callers| transform_incoming_calls(callers, path_remapper.as_ref()),
         );
     }
 
@@ -4227,7 +4454,7 @@ impl Server {
 
         for def in definitions {
             // Get the URI for the definition's module
-            let Some(def_uri) = module_info_to_uri(&def.module) else {
+            let Some(def_uri) = module_info_to_uri(&def.module, self.path_remapper.as_ref()) else {
                 continue;
             };
 
@@ -4249,6 +4476,282 @@ impl Server {
             }
         }
         None
+    }
+
+    fn type_hierarchy_target_from_definition(
+        transaction: &mut CancellableTransaction,
+        handle: &Handle,
+        definition: &FindDefinitionItemWithDocstring,
+    ) -> Option<TypeHierarchyTarget> {
+        let ast = transaction.as_ref().get_ast(handle)?;
+        let class_def = find_class_at_position_in_ast(&ast, definition.definition_range.start())?;
+        let bindings = transaction.as_ref().get_bindings(handle)?;
+        let key = KeyClass(ShortIdentifier::new(&class_def.name));
+        let class_idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+        let def_index = match bindings.get(class_idx) {
+            BindingClass::ClassDef(class_binding) => class_binding.def_index,
+            BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
+        };
+        Some(TypeHierarchyTarget {
+            def_index,
+            module_path: definition.module.path().dupe(),
+            name_range: class_def.name.range,
+            is_object: class_def.name.id == "object"
+                && definition.module.name().as_str() == "builtins",
+        })
+    }
+
+    fn type_hierarchy_candidate_handles(
+        transaction: &mut CancellableTransaction,
+        handle: &Handle,
+        definition: &FindDefinitionItemWithDocstring,
+        target: &TypeHierarchyTarget,
+    ) -> Result<Vec<Handle>, Cancelled> {
+        let definition_location =
+            TextRangeWithModule::new(definition.module.dupe(), target.name_range);
+        let candidate_handles = transaction.process_rdeps_with_definition(
+            handle.sys_info(),
+            &definition_location,
+            |_, handle, _| Some(handle.dupe()),
+        )?;
+        let mut handles = Vec::new();
+        let mut handle_paths = HashSet::new();
+        for candidate in candidate_handles {
+            if handle_paths.insert(candidate.path().dupe()) {
+                handles.push(candidate);
+            }
+        }
+        Ok(handles)
+    }
+
+    fn type_hierarchy_subtype_items(
+        transaction: &CancellableTransaction,
+        target: &TypeHierarchyTarget,
+        handles: Vec<Handle>,
+        path_remapper: Option<&PathRemapper>,
+    ) -> Vec<TypeHierarchyItem> {
+        let mut items = Vec::new();
+        let mut seen: HashSet<(ModulePath, TextRange)> = HashSet::new();
+        for candidate in handles {
+            let Some(ast) = transaction.as_ref().get_ast(&candidate) else {
+                continue;
+            };
+            let Some(solutions) = transaction.as_ref().get_solutions(&candidate) else {
+                continue;
+            };
+            let Some(bindings) = transaction.as_ref().get_bindings(&candidate) else {
+                continue;
+            };
+            let Some(module_info) = transaction.as_ref().get_module_info(&candidate) else {
+                continue;
+            };
+            let Some(candidate_uri) = module_info_to_uri(&module_info, path_remapper) else {
+                continue;
+            };
+
+            let mut class_defs = Vec::new();
+            collect_class_defs(ast.body.as_slice(), &mut class_defs);
+            for class_def in class_defs {
+                let key = KeyClass(ShortIdentifier::new(&class_def.name));
+                let Some(class_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+                    continue;
+                };
+                let class_def_index = match bindings.get(class_idx) {
+                    BindingClass::ClassDef(class_binding) => class_binding.def_index,
+                    BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
+                };
+                if class_def_index == target.def_index && module_info.path() == &target.module_path
+                {
+                    continue;
+                }
+                let is_subtype = if target.is_object {
+                    true
+                } else {
+                    let mro = solutions.get(&KeyClassMro(class_def_index));
+                    matches!(
+                        mro.as_ref(),
+                        ClassMro::Resolved(ancestors)
+                            if ancestors
+                                .iter()
+                                .any(|ancestor| {
+                                    let ancestor_class = ancestor.class_object();
+                                    ancestor_class.index() == target.def_index
+                                        && ancestor_class.module_path() == &target.module_path
+                                })
+                    )
+                };
+                if !is_subtype {
+                    continue;
+                }
+                if !seen.insert((module_info.path().dupe(), class_def.range())) {
+                    continue;
+                }
+                items.push(prepare_type_hierarchy_item(
+                    class_def,
+                    &module_info,
+                    candidate_uri.clone(),
+                ));
+            }
+        }
+        items
+    }
+
+    /// Prepares type hierarchy by validating that the symbol at the cursor is a class.
+    fn prepare_type_hierarchy(
+        &self,
+        transaction: &Transaction<'_>,
+        params: lsp_types::TypeHierarchyPrepareParams,
+    ) -> Option<Vec<TypeHierarchyItem>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, None)?;
+        let module_info = transaction.get_module_info(&handle)?;
+        let position = self.from_lsp_position(
+            uri,
+            &module_info,
+            params.text_document_position_params.position,
+        );
+
+        let definitions = transaction.find_definition(&handle, position, FindPreference::default());
+
+        for def in definitions {
+            let Some(def_uri) = module_info_to_uri(&def.module, self.path_remapper.as_ref()) else {
+                continue;
+            };
+            let Some(def_handle) = self.make_handle_if_enabled(&def_uri, None) else {
+                continue;
+            };
+            let Some(ast) = transaction.get_ast(&def_handle) else {
+                continue;
+            };
+            if let Some(class_def) =
+                find_class_at_position_in_ast(&ast, def.definition_range.start())
+            {
+                let item = prepare_type_hierarchy_item(class_def, &def.module, def_uri);
+                return Some(vec![item]);
+            }
+        }
+        None
+    }
+
+    fn async_type_hierarchy_supertypes<'a>(
+        &'a self,
+        request_id: RequestId,
+        transaction: &Transaction<'a>,
+        params: lsp_types::TypeHierarchySupertypesParams,
+    ) {
+        let uri = params.item.uri.clone();
+        let Some(handle) = self.make_handle_if_enabled(&uri, Some(TypeHierarchySupertypes::METHOD))
+        else {
+            return self.send_response(new_response::<Option<Vec<TypeHierarchyItem>>>(
+                request_id,
+                Ok(None),
+            ));
+        };
+
+        let path_remapper = self.path_remapper.clone();
+        let type_hierarchy_item_from_class_type =
+            move |class_type: &crate::types::class::ClassType| -> Option<TypeHierarchyItem> {
+                let class = class_type.class_object();
+                let module = class.module();
+                let uri = module_info_to_uri(module, path_remapper.as_ref())?;
+                let range = module.to_lsp_range(class.range());
+                Some(TypeHierarchyItem {
+                    name: class.name().to_string(),
+                    kind: SymbolKind::CLASS,
+                    tags: None,
+                    detail: Some(format!("{}.{}", module.name(), class.name())),
+                    uri,
+                    range,
+                    selection_range: range,
+                    data: None,
+                })
+            };
+
+        self.async_find_from_definition_helper(
+            request_id,
+            transaction,
+            handle,
+            &uri,
+            params.item.selection_range.start,
+            FindPreference::default(),
+            move |transaction, handle, definition| {
+                transaction.run(&[handle.dupe()], Require::Everything)?;
+                let Some(target) =
+                    Self::type_hierarchy_target_from_definition(transaction, handle, &definition)
+                else {
+                    return Ok(Vec::new());
+                };
+                let Some(solutions) = transaction.as_ref().get_solutions(handle) else {
+                    return Ok(Vec::new());
+                };
+
+                let mro = solutions.get(&KeyClassMro(target.def_index));
+                let stdlib = transaction.as_ref().get_stdlib(handle);
+                let mut items = Vec::new();
+                if let ClassMro::Resolved(ancestors) = mro.as_ref() {
+                    for ancestor in ancestors {
+                        if let Some(item) = type_hierarchy_item_from_class_type(ancestor) {
+                            items.push(item);
+                        }
+                    }
+                    if !target.is_object
+                        && let Some(item) = type_hierarchy_item_from_class_type(stdlib.object())
+                    {
+                        items.push(item);
+                    }
+                }
+                Ok(items)
+            },
+            |items| items,
+        );
+    }
+
+    fn async_type_hierarchy_subtypes<'a>(
+        &'a self,
+        request_id: RequestId,
+        transaction: &Transaction<'a>,
+        params: lsp_types::TypeHierarchySubtypesParams,
+    ) {
+        let uri = params.item.uri.clone();
+        let Some(handle) = self.make_handle_if_enabled(&uri, Some(TypeHierarchySubtypes::METHOD))
+        else {
+            return self.send_response(new_response::<Option<Vec<TypeHierarchyItem>>>(
+                request_id,
+                Ok(None),
+            ));
+        };
+
+        let path_remapper = self.path_remapper.clone();
+        self.async_find_from_definition_helper(
+            request_id,
+            transaction,
+            handle,
+            &uri,
+            params.item.selection_range.start,
+            FindPreference::default(),
+            move |transaction, handle, definition| {
+                transaction.run(&[handle.dupe()], Require::Everything)?;
+                let Some(target) =
+                    Self::type_hierarchy_target_from_definition(transaction, handle, &definition)
+                else {
+                    return Ok(Vec::new());
+                };
+                let handles = Self::type_hierarchy_candidate_handles(
+                    transaction,
+                    handle,
+                    &definition,
+                    &target,
+                )?;
+                transaction.run(&handles, Require::Everything)?;
+                Ok(Self::type_hierarchy_subtype_items(
+                    transaction,
+                    &target,
+                    handles,
+                    path_remapper.as_ref(),
+                ))
+            },
+            |items| items,
+        );
     }
 }
 

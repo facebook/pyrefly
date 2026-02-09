@@ -42,6 +42,7 @@ use pyrefly_util::thread_pool::ThreadPool;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use serde::Serialize;
 
 use crate::error::error::Error as TypeError;
@@ -107,6 +108,9 @@ struct PysaProjectFile {
     modules: HashMap<ModuleId, PysaProjectModule>,
     builtin_module_id: ModuleId,
     object_class_id: ClassId,
+    dict_class_id: ClassId,
+    typing_module_id: ModuleId,
+    typing_mapping_class_id: ClassId,
 }
 
 /// Format of the file `definitions/my.module:id.json` containing all definitions
@@ -520,7 +524,7 @@ fn write_errors_file(
                     module_id: module_ids
                         .get(ModuleKey::from_module(error.module()))
                         .unwrap(),
-                    location: PysaLocation::new(error.display_range().clone()),
+                    location: PysaLocation::from_text_range(error.range(), error.module()),
                     kind: error.error_kind(),
                     message: error.msg(),
                 })
@@ -608,12 +612,20 @@ pub fn write_results(
         .filter(|handle| handle.module().as_str() == "builtins")
         .exactly_one()
         .expect("expected exactly one builtins module");
+    let typing_module = handles
+        .iter()
+        .filter(|handle| handle.module().as_str() == "typing")
+        .exactly_one()
+        .expect("expected exactly one typing module");
     let object_class_id = ClassId::from_class(
         transaction
             .get_stdlib(builtin_module)
             .object()
             .class_object(),
     );
+    let dict_class_id = ClassId::from_class(transaction.get_stdlib(builtin_module).dict_object());
+    let typing_mapping_class_id =
+        ClassId::from_class(transaction.get_stdlib(typing_module).mapping_object());
 
     let writer = BufWriter::new(File::create(results_directory.join("pyrefly.pysa.json"))?);
     serde_json::to_writer(
@@ -625,6 +637,11 @@ pub fn write_results(
                 .get(ModuleKey::from_handle(builtin_module))
                 .unwrap(),
             object_class_id,
+            dict_class_id,
+            typing_module_id: module_ids
+                .get(ModuleKey::from_handle(typing_module))
+                .unwrap(),
+            typing_mapping_class_id,
         },
     )?;
 

@@ -628,3 +628,27 @@ fn test_goto_def_deep_submodule_chain_reexport() {
         ],
     );
 }
+
+#[test]
+fn test_goto_def_dunder_all_submodule() {
+    // Test go-to-definition on a submodule name in __all__.
+    // When __all__ = ["sub"] in pkg/__init__.py, clicking on "sub" should
+    // navigate to pkg/sub.py.
+    let root = get_test_files_root();
+    let root_path = root.path().join("dunder_all_submodule");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.client.did_open("pkg/__init__.py");
+    // Click on "sub" in __all__ = ["sub"] (line 5, char 12 is inside "sub")
+    interaction
+        .client
+        .definition("pkg/__init__.py", 5, 12)
+        .expect_definition_response_from_root("pkg/sub.py", 0, 0, 0, 0)
+        .unwrap();
+    interaction.shutdown().unwrap();
+}

@@ -10,40 +10,20 @@
   ],
   "aliases_newtype.py": [],
   "aliases_recursive.py": [
-    "Line 19: Expected 1 errors",
-    "Line 20: Expected 1 errors",
-    "Line 38: Expected 1 errors",
-    "Line 39: Expected 1 errors",
-    "Line 50: Expected 1 errors",
-    "Line 51: Expected 1 errors",
-    "Line 52: Expected 1 errors",
     "Line 63: Expected 1 errors",
-    "Line 69: Expected 1 errors",
-    "Line 72: Expected 1 errors",
-    "Line 75: Expected 1 errors"
+    "Line 69: Expected 1 errors"
   ],
   "aliases_type_statement.py": [
-    "Line 82: Expected 1 errors",
-    "Line 84: Expected 1 errors",
-    "Lines 51, 52: Expected error (tag 'TA14')",
-    "Lines 88, 89: Expected error (tag 'RTA6+')"
+    "Line 84: Expected 1 errors"
   ],
   "aliases_typealiastype.py": [
-    "Line 46: Expected 1 errors",
     "Line 47: Expected 1 errors",
     "Line 48: Expected 1 errors",
     "Line 66: Expected 1 errors"
   ],
-  "aliases_variance.py": [
-    "Line 24: Expected 1 errors",
-    "Line 28: Expected 1 errors",
-    "Line 32: Expected 1 errors",
-    "Line 44: Expected 1 errors"
-  ],
+  "aliases_variance.py": [],
   "annotations_coroutines.py": [],
   "annotations_forward_refs.py": [
-    "Line 24: Expected 1 errors",
-    "Line 25: Expected 1 errors",
     "Line 87: Unexpected errors ['Expected a type form, got instance of `(self: Self@ClassD) -> None`']",
     "Line 96: Unexpected errors ['assert_type(Any, int) failed']"
   ],
@@ -59,9 +39,7 @@
   "callables_subtyping.py": [],
   "classes_classvar.py": [],
   "classes_override.py": [],
-  "constructors_call_init.py": [
-    "Line 107: Expected 1 errors"
-  ],
+  "constructors_call_init.py": [],
   "constructors_call_metaclass.py": [],
   "constructors_call_new.py": [],
   "constructors_call_type.py": [
@@ -195,20 +173,7 @@
   ],
   "generics_typevartuple_unpack.py": [],
   "generics_upper_bound.py": [],
-  "generics_variance.py": [
-    "Line 77: Expected 1 errors",
-    "Line 81: Expected 1 errors",
-    "Line 93: Expected 1 errors",
-    "Line 105: Expected 1 errors",
-    "Line 113: Expected 1 errors",
-    "Line 163: Expected 1 errors",
-    "Line 167: Expected 1 errors",
-    "Line 191: Expected 1 errors",
-    "Lines 125, 126: Expected error (tag 'CoContra_Child2')",
-    "Lines 131, 132: Expected error (tag 'CoContra_Child3')",
-    "Lines 141, 142: Expected error (tag 'CoContra_Child5')",
-    "Lines 195, 196: Expected error (tag 'ContraToContraToContra_WithTA')"
-  ],
+  "generics_variance.py": [],
   "generics_variance_inference.py": [],
   "historical_positional.py": [],
   "literals_interactions.py": [],

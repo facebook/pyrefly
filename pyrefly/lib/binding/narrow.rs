@@ -103,6 +103,9 @@ pub enum AtomicNarrowOp {
     IsSequence,
     /// Negation of IsSequence - confirms the subject is NOT a sequence type
     IsNotSequence,
+    /// Used to narrow to mapping types (types that extend typing.Mapping)
+    IsMapping,
+    IsNotMapping,
     /// (func, args) for a function call that may narrow the type of its first argument.
     Call(Box<Expr>, Arguments),
     NotCall(Box<Expr>, Arguments),
@@ -198,6 +201,8 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
             AtomicNarrowOp::LenLte(expr) => write!(f, "LenLte({})", expr.display_with(ctx)),
             AtomicNarrowOp::IsSequence => write!(f, "IsSequence"),
             AtomicNarrowOp::IsNotSequence => write!(f, "IsNotSequence"),
+            AtomicNarrowOp::IsMapping => write!(f, "IsMapping"),
+            AtomicNarrowOp::IsNotMapping => write!(f, "IsNotMapping"),
             AtomicNarrowOp::Call(expr, arguments) => write!(
                 f,
                 "Call({}, {})",
@@ -269,6 +274,8 @@ impl AtomicNarrowOp {
             Self::LenNotEq(v) => Self::LenEq(v.clone()),
             Self::IsSequence => Self::IsNotSequence,
             Self::IsNotSequence => Self::IsSequence,
+            Self::IsMapping => Self::IsNotMapping,
+            Self::IsNotMapping => Self::IsMapping,
             Self::TypeGuard(ty, args) => Self::NotTypeGuard(ty.clone(), args.clone()),
             Self::NotTypeGuard(ty, args) => Self::TypeGuard(ty.clone(), args.clone()),
             Self::TypeIs(ty, args) => Self::NotTypeIs(ty.clone(), args.clone()),

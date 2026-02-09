@@ -1694,3 +1694,63 @@ assert_type(c.x, int)
 assert_type(c.y, int)
     "#,
 );
+
+testcase!(
+    bug = "conformance: Dataclass with generic non-data descriptor should work correctly",
+    test_dataclass_generic_descriptor_conformance,
+    r#"
+from dataclasses import dataclass
+from typing import Any, Generic, TypeVar, assert_type, overload
+
+T = TypeVar("T")
+
+class Desc2(Generic[T]):
+    @overload
+    def __get__(self, instance: None, owner: Any) -> list[T]: ...
+    @overload
+    def __get__(self, instance: object, owner: Any) -> T: ...
+    def __get__(self, instance: object | None, owner: Any) -> list[T] | T: ...
+
+@dataclass
+class DC2:
+    x: Desc2[int]
+    y: Desc2[str]
+    z: Desc2[str] = Desc2()  # E: Cannot set field `z` to non-data descriptor `Desc2`
+
+# pyrefly incorrectly returns Desc2[T] instead of list[T] for class attribute access
+assert_type(DC2.x, list[int])  # E: assert_type(Desc2[int], list[int]) failed
+assert_type(DC2.y, list[str])  # E: assert_type(Desc2[str], list[str]) failed
+
+dc2 = DC2(Desc2(), Desc2(), Desc2())
+# pyrefly incorrectly returns Desc2[T] instead of T for instance attribute access
+assert_type(dc2.x, int)  # E: assert_type(Desc2[int], int) failed
+assert_type(dc2.y, str)  # E: assert_type(Desc2[str], str) failed
+"#,
+);
+
+testcase!(
+    bug = "conformance: Dataclass with slots=True should error when setting undeclared attributes",
+    test_dataclass_slots_undeclared_attr_conformance,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class DC2:
+    x: int
+
+    def __init__(self):
+        self.x = 3
+        # should error: y is not in slots
+        self.y = 3
+
+@dataclass(slots=False)
+class DC3:
+    x: int
+    __slots__ = ("x",)
+
+    def __init__(self):
+        self.x = 3
+        # should error: y is not in slots
+        self.y = 3
+"#,
+);

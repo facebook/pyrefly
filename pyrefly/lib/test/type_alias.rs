@@ -530,7 +530,6 @@ Z = Optional["Y"]
 );
 
 testcase!(
-    bug = "The recursive instance of X is resolved to Unknown",
     test_type_alias_recursive,
     r#"
 type X = int | list["X"]
@@ -538,7 +537,7 @@ x1: X = 1
 x2: X = [1]
 x3: X = [[1, 2]]
 x4: X = [1, [2, 3]]
-x5: X = ["foo"]  # Not OK
+x5: X = ["foo"]  # E: not assignable
 "#,
 );
 
@@ -1026,4 +1025,102 @@ class Line:
 def type_alias_subscript() -> Iterator["TResult[Line]"]:
     yield Ok(Line())
     "#,
+);
+
+testcase!(
+    bug = "conformance: Should error when using non-type expressions as implicit type aliases",
+    test_bad_implicit_type_alias_conformance,
+    r#"
+BadTypeAlias1 = eval("".join(map(chr, [105, 110, 116])))
+BadTypeAlias6 = (lambda: int)()
+BadTypeAlias7 = [int][0]
+BadTypeAlias8 = int if 1 < 3 else str
+BadTypeAlias12 = list or set
+
+def bad_type_aliases(
+    p1: BadTypeAlias1,  # should error: eval result is not a valid type
+    p6: BadTypeAlias6,  # should error: lambda call is not a valid type
+    p7: BadTypeAlias7,  # should error: list subscript is not a valid type
+    p8: BadTypeAlias8,  # should error: conditional expr is not a valid type
+    p12: BadTypeAlias12,  # should error: 'or' expr is not a valid type
+):
+    pass
+"#,
+);
+
+testcase!(
+    test_type_alias_variance_conformance,
+    r#"
+from typing import Generic, TypeVar, TypeAlias
+
+T = TypeVar("T")
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class ClassA(Generic[T]): ...
+
+A_Alias_1: TypeAlias = ClassA[T_co]
+A_Alias_2: TypeAlias = A_Alias_1[T_co]
+
+class ClassA_1(ClassA[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+class ClassA_2(A_Alias_1[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+class ClassA_3(A_Alias_2[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+
+class ClassB(Generic[T, T_co]): ...
+
+B_Alias_1 = ClassB[T_co, T_contra]
+
+class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # E: Type variable `T_contra` is Contravariant but is used in invariant position
+"#,
+);
+
+testcase!(
+    bug = "conformance: Should detect circular dependencies in TypeAliasType definitions",
+    test_typealiastype_circular_conformance,
+    r#"
+from typing import TypeAliasType, TypeVar
+
+T = TypeVar("T")
+
+# Direct self-reference
+BadAlias4 = TypeAliasType("BadAlias4", "BadAlias4")  # E: cyclic self-reference in `BadAlias4`
+
+# Self-reference in union with type param
+BadAlias5 = TypeAliasType("BadAlias5", T | "BadAlias5[str]", type_params=(T,))  # should error: circular dependency
+
+# Mutual circular reference
+BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")
+BadAlias7 = TypeAliasType("BadAlias7", BadAlias6)  # E: cyclic self-reference in `BadAlias7`
+
+# Self-reference via list
+BadAlias21 = TypeAliasType("BadAlias21", list[BadAlias21])  # should error: circular dependency
+"#,
+);
+
+testcase!(
+    bug = "conformance: Should detect circular definitions and redeclarations in type statements",
+    test_type_statement_circular_conformance,
+    r#"
+from typing import Callable
+
+# Direct self-reference (not through generic param)
+type RecursiveTypeAlias3 = RecursiveTypeAlias3  # E: cyclic self-reference in `RecursiveTypeAlias3`
+
+type RecursiveTypeAlias4[T] = T | RecursiveTypeAlias4[str]  # should error: circular definition
+
+type RecursiveTypeAlias6 = RecursiveTypeAlias7
+type RecursiveTypeAlias7 = RecursiveTypeAlias6  # E: cyclic self-reference in `RecursiveTypeAlias7`
+"#,
+);
+
+testcase!(
+    test_type_statement_redeclaration_conformance,
+    r#"
+type BadTypeAlias14 = int
+type BadTypeAlias14 = int # E: Cannot redefine existing name `BadTypeAlias14` as a type alias
+
+class C:
+    type T = int
+    type T = int # E: Cannot redefine existing name `T` as a type alias
+"#,
 );

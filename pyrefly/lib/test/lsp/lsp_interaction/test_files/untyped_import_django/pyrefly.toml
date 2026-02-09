@@ -1,0 +1,5 @@
+search-path = ["."]
+site-package-path = ["site_packages"]
+
+[errors]
+untyped-import = "error"

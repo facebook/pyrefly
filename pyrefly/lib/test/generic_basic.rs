@@ -11,17 +11,16 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug =
-        "We should use the bounds/constraints of the type var to determine the callable input type",
+    bug = "conformance: Should use bounds/constraints of type var to determine callable input type for type[T] constructors",
     test_tyvar_constructor,
     r#"
 def test[T](cls: type[T]) -> T:
-    cls(1)  # Not OK, we should assume object constructor here
+    cls(1)  # should error: no args for object constructor
     return cls()
 class A:
     def __init__(self, x: int) -> None: pass
 def test2[T: A](cls: type[T]) -> T:
-    a1: A = cls()  # Not OK
+    a1: A = cls()  # should error: missing required arg x
     a2: A = cls(1)
     return cls()
 "#,
@@ -588,5 +587,24 @@ T2 = TypeVar("T2")
 class Grandparent(Generic[T1, T2]): ...
 class Parent(Grandparent[T1, T2]): ...
 class BadChild(Parent[T1, T2], Grandparent[T2, T1]): ...  # should be an error
+"#,
+);
+
+testcase!(
+    test_generic_alias_fields,
+    r#"
+from typing import assert_type
+
+list.__add__ # This is a method on `list`
+
+# No error for accessing properties on `GenericAlias`
+assert(list[int].__args__, tuple)
+assert(list[int].__parameters__, tuple)
+
+# No error for accessing methods on `list`
+list[int].__add__
+
+# No error for comparing two `GenericAlias`
+list[int] == list[str]
 "#,
 );

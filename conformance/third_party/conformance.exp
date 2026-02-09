@@ -600,7 +600,107 @@
       "stop_line": 65
     }
   ],
-  "aliases_recursive.py": [],
+  "aliases_recursive.py": [
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "`dict[str, complex | Json]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
+      "description": "`dict[str, complex | Json]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
+      "line": 19,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 29,
+      "stop_line": 19
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "`list[complex | Json]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
+      "description": "`list[complex | Json]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
+      "line": 20,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 20
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "`tuple[Literal[1], tuple[Literal['1'], Literal[1]], tuple[Literal[1], tuple[Literal[1], list[int]]]]` is not assignable to `int | str | tuple[RecursiveTuple, ...]`",
+      "description": "`tuple[Literal[1], tuple[Literal['1'], Literal[1]], tuple[Literal[1], tuple[Literal[1], list[int]]]]` is not assignable to `int | str | tuple[RecursiveTuple, ...]`",
+      "line": 38,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 50,
+      "stop_line": 38
+    },
+    {
+      "code": -2,
+      "column": 22,
+      "concise_description": "`tuple[Literal[1], list[int]]` is not assignable to `int | str | tuple[RecursiveTuple, ...]`",
+      "description": "`tuple[Literal[1], list[int]]` is not assignable to `int | str | tuple[RecursiveTuple, ...]`",
+      "line": 39,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 30,
+      "stop_line": 39
+    },
+    {
+      "code": -2,
+      "column": 24,
+      "concise_description": "`dict[str, list[int]]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "description": "`dict[str, list[int]]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "line": 50,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 34,
+      "stop_line": 50
+    },
+    {
+      "code": -2,
+      "column": 24,
+      "concise_description": "`dict[str, list[int] | RecursiveMapping]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "description": "`dict[str, list[int] | RecursiveMapping]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "line": 51,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 55,
+      "stop_line": 51
+    },
+    {
+      "code": -2,
+      "column": 24,
+      "concise_description": "`dict[str, dict[str, list[int] | RecursiveMapping] | RecursiveMapping]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "description": "`dict[str, dict[str, list[int] | RecursiveMapping] | RecursiveMapping]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "line": 52,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 83,
+      "stop_line": 52
+    },
+    {
+      "code": -2,
+      "column": 29,
+      "concise_description": "Found cyclic self-reference in `RecursiveUnion`",
+      "description": "Found cyclic self-reference in `RecursiveUnion`",
+      "line": 72,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 57,
+      "stop_line": 72
+    },
+    {
+      "code": -2,
+      "column": 31,
+      "concise_description": "Found cyclic self-reference in `MutualReference1`",
+      "description": "Found cyclic self-reference in `MutualReference1`",
+      "line": 75,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 61,
+      "stop_line": 75
+    }
+  ],
   "aliases_type_statement.py": [
     {
       "code": -2,
@@ -824,6 +924,17 @@
     },
     {
       "code": -2,
+      "column": 6,
+      "concise_description": "Cannot redefine existing name `BadTypeAlias14` as a type alias",
+      "description": "Cannot redefine existing name `BadTypeAlias14` as a type alias",
+      "line": 52,
+      "name": "redefinition",
+      "severity": "error",
+      "stop_column": 20,
+      "stop_line": 52
+    },
+    {
+      "code": -2,
       "column": 5,
       "concise_description": "`type` statement is not allowed in this context",
       "description": "`type` statement is not allowed in this context",
@@ -876,6 +987,28 @@
       "severity": "error",
       "stop_column": 41,
       "stop_line": 79
+    },
+    {
+      "code": -2,
+      "column": 28,
+      "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias3`",
+      "description": "Found cyclic self-reference in `RecursiveTypeAlias3`",
+      "line": 82,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 47,
+      "stop_line": 82
+    },
+    {
+      "code": -2,
+      "column": 28,
+      "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias7`",
+      "description": "Found cyclic self-reference in `RecursiveTypeAlias7`",
+      "line": 89,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 47,
+      "stop_line": 89
     }
   ],
   "aliases_typealiastype.py": [
@@ -903,24 +1036,24 @@
     },
     {
       "code": -2,
-      "column": 40,
+      "column": 13,
       "concise_description": "Type variable `S` is out of scope for this `TypeAliasType`",
       "description": "Type variable `S` is out of scope for this `TypeAliasType`\n  Type parameters must be passed as a tuple literal to the `type_params` argument",
       "line": 43,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 47,
+      "stop_column": 66,
       "stop_line": 43
     },
     {
       "code": -2,
-      "column": 40,
+      "column": 13,
       "concise_description": "Type variable `S` is out of scope for this `TypeAliasType`",
       "description": "Type variable `S` is out of scope for this `TypeAliasType`\n  Type parameters must be passed as a tuple literal to the `type_params` argument",
       "line": 44,
       "name": "invalid-type-alias",
       "severity": "error",
-      "stop_column": 47,
+      "stop_column": 48,
       "stop_line": 44
     },
     {
@@ -933,6 +1066,28 @@
       "severity": "error",
       "stop_column": 65,
       "stop_line": 45
+    },
+    {
+      "code": -2,
+      "column": 41,
+      "concise_description": "Found cyclic self-reference in `BadAlias4`",
+      "description": "Found cyclic self-reference in `BadAlias4`",
+      "line": 46,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 50,
+      "stop_line": 46
+    },
+    {
+      "code": -2,
+      "column": 40,
+      "concise_description": "Found cyclic self-reference in `BadAlias7`",
+      "description": "Found cyclic self-reference in `BadAlias7`",
+      "line": 49,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 49,
+      "stop_line": 49
     },
     {
       "code": -2,
@@ -1100,9 +1255,76 @@
       "stop_line": 64
     }
   ],
-  "aliases_variance.py": [],
+  "aliases_variance.py": [
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "line": 24,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 28,
+      "stop_line": 24
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "line": 28,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 31,
+      "stop_line": 28
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "line": 32,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 31,
+      "stop_line": 32
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Type variable `T_contra` is Contravariant but is used in invariant position",
+      "description": "Type variable `T_contra` is Contravariant but is used in invariant position",
+      "line": 44,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 41,
+      "stop_line": 44
+    }
+  ],
   "annotations_coroutines.py": [],
   "annotations_forward_refs.py": [
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "`|` union syntax does not work with string literals",
+      "description": "`|` union syntax does not work with string literals\n  Hint: put the quotes around the entire union type",
+      "line": 24,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 24
+    },
+    {
+      "code": -2,
+      "column": 7,
+      "concise_description": "`|` union syntax does not work with string literals",
+      "description": "`|` union syntax does not work with string literals\n  Hint: put the quotes around the entire union type",
+      "line": 25,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 21,
+      "stop_line": 25
+    },
     {
       "code": -2,
       "column": 10,
@@ -2893,6 +3115,17 @@
       "severity": "error",
       "stop_column": 14,
       "stop_line": 56
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`__init__` method self type cannot reference class type parameters `T2`, `T1`",
+      "description": "`__init__` method self type cannot reference class type parameters `T2`, `T1`",
+      "line": 107,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 17,
+      "stop_line": 107
     },
     {
       "code": -2,
@@ -6968,6 +7201,138 @@
       "severity": "error",
       "stop_column": 54,
       "stop_line": 14
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "line": 77,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 77
+    },
+    {
+      "code": -2,
+      "column": 14,
+      "concise_description": "Type variable `T_contra` is Contravariant but is used in invariant position",
+      "description": "Type variable `T_contra` is Contravariant but is used in invariant position",
+      "line": 81,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 27,
+      "stop_line": 81
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "line": 93,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 29,
+      "stop_line": 93
+    },
+    {
+      "code": -2,
+      "column": 21,
+      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "line": 105,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 33,
+      "stop_line": 105
+    },
+    {
+      "code": -2,
+      "column": 21,
+      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "line": 113,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 37,
+      "stop_line": 113
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "line": 126,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 25,
+      "stop_line": 126
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "line": 132,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 33,
+      "stop_line": 132
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "line": 142,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 33,
+      "stop_line": 142
+    },
+    {
+      "code": -2,
+      "column": 26,
+      "concise_description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "line": 163,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 54,
+      "stop_line": 163
+    },
+    {
+      "code": -2,
+      "column": 30,
+      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "line": 167,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 58,
+      "stop_line": 167
+    },
+    {
+      "code": -2,
+      "column": 33,
+      "concise_description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "line": 191,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 70,
+      "stop_line": 191
+    },
+    {
+      "code": -2,
+      "column": 5,
+      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "line": 196,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 42,
+      "stop_line": 196
     }
   ],
   "generics_variance_inference.py": [
@@ -9154,7 +9519,30 @@
       "stop_line": 103
     }
   ],
-  "protocols_variance.py": [],
+  "protocols_variance.py": [
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Type variable `T1_co` is Covariant but is used in contravariant position",
+      "description": "Type variable `T1_co` is Covariant but is used in contravariant position",
+      "line": 62,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 62
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Type variable `T1_contra` is Contravariant but is used in covariant position",
+      "description": "Type variable `T1_contra` is Contravariant but is used in covariant position",
+      "line": 72,
+      "name": "invalid-variance",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 72
+    }
+  ],
   "qualifiers_annotated.py": [
     {
       "code": -2,
@@ -9414,8 +9802,8 @@
     {
       "code": -2,
       "column": 8,
-      "concise_description": "`RATE` is marked final",
-      "description": "`RATE` is marked final",
+      "concise_description": "Cannot assign to variable `RATE` because it is marked final",
+      "description": "Cannot assign to variable `RATE` because it is marked final",
       "line": 71,
       "name": "bad-assignment",
       "severity": "error",
@@ -9568,8 +9956,8 @@
     {
       "code": -2,
       "column": 11,
-      "concise_description": "`ID1` is marked final",
-      "description": "`ID1` is marked final",
+      "concise_description": "Cannot assign to variable `ID1` because it is marked final",
+      "description": "Cannot assign to variable `ID1` because it is marked final",
       "line": 141,
       "name": "bad-assignment",
       "severity": "error",
@@ -9898,10 +10286,10 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA1, type[type[Any]]] (trying to access unknown)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA1, type[type[Any]]] (trying to access unknown)\n  Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself\n  Please report the bug at https://fb.workplace.com/groups/pyreqa",
+      "concise_description": "Class `type` has no class attribute `unknown`",
+      "description": "Class `type` has no class attribute `unknown`",
       "line": 143,
-      "name": "internal-error",
+      "name": "missing-attribute",
       "severity": "error",
       "stop_column": 12,
       "stop_line": 143
@@ -9909,10 +10297,10 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA2, type[type[Any]]] (trying to access unknown)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA2, type[type[Any]]] (trying to access unknown)\n  Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself\n  Please report the bug at https://fb.workplace.com/groups/pyreqa",
+      "concise_description": "Class `type` has no class attribute `unknown`",
+      "description": "Class `type` has no class attribute `unknown`",
       "line": 144,
-      "name": "internal-error",
+      "name": "missing-attribute",
       "severity": "error",
       "stop_column": 12,
       "stop_line": 144
@@ -9920,10 +10308,10 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA3, type[type[Any]]] (trying to access unknown)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA3, type[type[Any]]] (trying to access unknown)\n  Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself\n  Please report the bug at https://fb.workplace.com/groups/pyreqa",
+      "concise_description": "Class `type` has no class attribute `unknown`",
+      "description": "Class `type` has no class attribute `unknown`",
       "line": 145,
-      "name": "internal-error",
+      "name": "missing-attribute",
       "severity": "error",
       "stop_column": 12,
       "stop_line": 145
@@ -9931,10 +10319,10 @@
     {
       "code": -2,
       "column": 1,
-      "concise_description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA4, type[type[Any]]] (trying to access unknown)",
-      "description": "TODO: Expr::attr_infer_for_type attribute base undefined for type: TypeAlias[TA4, type[type[Any]]] (trying to access unknown)\n  Sorry, Pyrefly encountered an internal error, this is always a bug in Pyrefly itself\n  Please report the bug at https://fb.workplace.com/groups/pyreqa",
+      "concise_description": "Class `type` has no class attribute `unknown`",
+      "description": "Class `type` has no class attribute `unknown`",
       "line": 146,
-      "name": "internal-error",
+      "name": "missing-attribute",
       "severity": "error",
       "stop_column": 12,
       "stop_line": 146

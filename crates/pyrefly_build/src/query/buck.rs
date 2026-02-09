@@ -9,12 +9,36 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+#[cfg(fbcode_build)]
+use std::sync::LazyLock;
 
 use anyhow::Context as _;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::query::SourceDbQuerier;
+
+/// Check if systemd-run can create user scopes for running buck in a separate cgroup.
+/// This helps isolate buck's resource usage from pyrefly's for better observability.
+/// We test with a trivial command to ensure scopes actually work (not just that the
+/// binary exists). Result is cached after the first check.
+fn use_systemd() -> bool {
+    #[cfg(fbcode_build)]
+    {
+        static AVAILABLE: LazyLock<bool> = LazyLock::new(|| {
+            Command::new("systemd-run")
+                .arg("--user")
+                .arg("--scope")
+                .arg("--")
+                .arg("true")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        });
+        *AVAILABLE
+    }
+    #[cfg(not(fbcode_build))]
+    false
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default, Hash)]
 #[serde(rename_all = "kebab-case")]
@@ -64,7 +88,24 @@ impl BxlQuerier {
 
 impl SourceDbQuerier for BxlQuerier {
     fn construct_command(&self, build_id_path: Option<&Path>) -> Command {
-        let mut cmd = Command::new("buck2");
+        // In fbcode builds, run buck in a separate cgroup via systemd-run for
+        // resource isolation. This helps understand buck's resource usage separately
+        // from pyrefly's.
+        let mut cmd = if use_systemd() {
+            let mut cmd = Command::new("systemd-run");
+            cmd.arg("--user") // Run as current user, not system
+                .arg("--scope") // Run in a transient scope unit
+                .arg(format!(
+                    "--slice=buck2_{}",
+                    self.0.isolation_dir.as_deref().unwrap_or("default")
+                ))
+                .arg("--") // End of systemd-run args
+                .arg("buck2");
+            cmd
+        } else {
+            Command::new("buck2")
+        };
+
         if let Some(isolation_dir) = &self.0.isolation_dir {
             cmd.arg("--isolation-dir");
             cmd.arg(isolation_dir);

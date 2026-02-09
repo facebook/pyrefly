@@ -12,6 +12,7 @@ use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_util::display::count;
+use pyrefly_util::display::pluralize;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -158,9 +159,11 @@ impl<'a> CallKeyword<'a> {
                 // See test::overload::test_kwargs_materialization - we need to turn this
                 // into Mapping[str, Any] to correctly materialize the `**kwargs` type.
                 solver
-                    .stdlib
-                    .mapping(solver.stdlib.str().clone().to_type(), ty.clone())
-                    .to_type()
+                    .heap
+                    .mk_class_type(solver.stdlib.mapping(
+                        solver.heap.mk_class_type(solver.stdlib.str().clone()),
+                        ty.clone(),
+                    ))
                     .materialize()
             } else {
                 ty.materialize()
@@ -230,7 +233,10 @@ impl<'a> CallArg<'a> {
                     if ty.is_any() {
                         // See test::overload::test_varargs_materialization - we need to turn this
                         // into Iterable[Any] to correctly materialize the `*args` type.
-                        solver.stdlib.iterable(ty.clone()).to_type().materialize()
+                        solver
+                            .heap
+                            .mk_class_type(solver.stdlib.iterable(ty.clone()))
+                            .materialize()
                     } else {
                         ty.materialize()
                     }
@@ -431,7 +437,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.expand_vars_mut(&mut ty);
                 // This can either be `P.args` or `tuple[Any, ...]`
                 matches!(&ty, Type::Args(q2) if &**q2 == q)
-                    || self.is_subset_eq(&ty, &Type::unbounded_tuple(Type::never()))
+                    || self.is_subset_eq(&ty, &self.heap.mk_unbounded_tuple(self.heap.mk_never()))
             }
             _ => false,
         }
@@ -449,10 +455,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         matches!(&ty, Type::Kwargs(q2) if &**q2 == q)
             || self.is_subset_eq(
                 &ty,
-                &self
-                    .stdlib
-                    .dict(self.stdlib.str().clone().to_type(), Type::never())
-                    .to_type(),
+                &self.heap.mk_class_type(self.stdlib.dict(
+                    self.heap.mk_class_type(self.stdlib.str().clone()),
+                    self.heap.mk_never(),
+                )),
             )
     }
 
@@ -640,10 +646,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             let unpacked_args_ty = match middle.len() {
-                0 => Type::concrete_tuple(prefix),
-                1 => Type::unpacked_tuple(
+                0 => self.heap.mk_concrete_tuple(prefix),
+                1 => self.heap.mk_unpacked_tuple(
                     prefix,
-                    Type::unbounded_tuple(middle.pop().unwrap()),
+                    self.heap.mk_unbounded_tuple(middle.pop().unwrap()),
                     suffix,
                 ),
                 _ => {
@@ -659,7 +665,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             "Expected at most one unpacked variadic argument".to_owned(),
                         );
                     }
-                    Type::unpacked_tuple(prefix, Type::unbounded_tuple(self.unions(middle)), suffix)
+                    self.heap.mk_unpacked_tuple(
+                        prefix,
+                        self.heap.mk_unbounded_tuple(self.unions(middle)),
+                        suffix,
+                    )
                 }
             };
             self.check_type(
@@ -710,7 +720,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Param::VarArg(_, Type::Unpack(box unpacked)) => {
                     // If we have a TypeVarTuple *args with no matched arguments, resolve it to empty tuple
-                    self.is_subset_eq(unpacked, &Type::concrete_tuple(Vec::new()));
+                    self.is_subset_eq(unpacked, &self.heap.mk_concrete_tuple(Vec::new()));
                 }
                 Param::VarArg(..) => {}
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {
@@ -790,7 +800,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         match self.unwrap_mapping(&ty) {
                             Some((key, value)) => {
-                                if self.is_subset_eq(&key, &self.stdlib.str().clone().to_type()) {
+                                if self.is_subset_eq(
+                                    &key,
+                                    &self.heap.mk_class_type(self.stdlib.str().clone()),
+                                ) {
                                     if let Some((name, want)) = kwargs.as_ref() {
                                         self.check_type(
                                             &value,
@@ -888,12 +901,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let range = keywords.first().map_or(arguments_range, |kw| kw.range);
             let msg = if missing_unnamed_posonly == 0 {
                 format!(
-                    "Missing positional argument{} {}",
-                    if missing_named_posonly.len() == 1 {
-                        ""
-                    } else {
-                        "s"
-                    },
+                    "Missing {} {}",
+                    pluralize(missing_named_posonly.len(), "positional argument"),
                     missing_named_posonly
                         .iter()
                         .map(|name| format!("`{name}`"))

@@ -92,11 +92,12 @@ pub fn get_function_ref(
         .as_function_ref(&context)
 }
 
-pub fn get_method_ref(
+fn get_method_ref_with_predicate(
     module_name: &str,
     class_name: &str,
     function_name: &str,
     context: &ModuleContext,
+    predicate: impl Fn(&FunctionNode) -> bool,
 ) -> FunctionRef {
     let handle = get_handle_for_module_name(module_name, context.transaction);
     let context = ModuleContext::create(handle, context.transaction, context.module_ids).unwrap();
@@ -104,6 +105,7 @@ pub fn get_method_ref(
     // This is slow, but we don't care in tests.
     get_all_functions(&context)
         .filter(|function| function.should_export(&context))
+        .filter(|function| predicate(function))
         .find(|function| match function {
             FunctionNode::DecoratedFunction(decorated_function) => {
                 function.name().as_str() == function_name
@@ -119,6 +121,30 @@ pub fn get_method_ref(
             panic!("expected valid method name, got `{module_name}.{class_name}.{function_name}`")
         })
         .as_function_ref(&context)
+}
+
+pub fn get_method_ref(
+    module_name: &str,
+    class_name: &str,
+    function_name: &str,
+    context: &ModuleContext,
+) -> FunctionRef {
+    get_method_ref_with_predicate(module_name, class_name, function_name, context, |_| true)
+}
+
+pub fn get_property_setter_ref(
+    module_name: &str,
+    class_name: &str,
+    function_name: &str,
+    context: &ModuleContext,
+) -> FunctionRef {
+    get_method_ref_with_predicate(
+        module_name,
+        class_name,
+        function_name,
+        context,
+        |function| function.is_property_setter(),
+    )
 }
 
 pub fn get_global_ref(

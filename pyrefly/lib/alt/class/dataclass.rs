@@ -57,7 +57,6 @@ use crate::types::keywords::ConverterMap;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
-use crate::types::types::AnyStyle;
 use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -150,12 +149,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fields.insert(dunder::INIT, init_method);
         }
         let dataclass_fields_type = self.stdlib.dict(
-            self.stdlib.str().clone().to_type(),
-            Type::Any(AnyStyle::Implicit),
+            self.heap.mk_class_type(self.stdlib.str().clone()),
+            self.heap.mk_any_implicit(),
         );
         fields.insert(
             dunder::DATACLASS_FIELDS,
-            ClassSynthesizedField::new(dataclass_fields_type.to_type()),
+            ClassSynthesizedField::new(self.heap.mk_class_type(dataclass_fields_type)),
         );
 
         if dataclass.kws.order {
@@ -189,7 +188,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if dataclass.kws.unsafe_hash || (dataclass.kws.eq && dataclass.kws.frozen) {
             fields.insert(dunder::HASH, self.get_dataclass_hash(cls));
         } else if dataclass.kws.eq {
-            fields.insert(dunder::HASH, ClassSynthesizedField::new(Type::None));
+            fields.insert(
+                dunder::HASH,
+                ClassSynthesizedField::new(self.heap.mk_none()),
+            );
         }
         fields.insert(
             dunder::REPLACE,
@@ -416,13 +418,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         if dataclass_metadata.kws.extra {
-            params.push(Param::Kwargs(None, Type::Any(AnyStyle::Implicit)));
+            params.push(Param::Kwargs(None, self.heap.mk_any_implicit()));
         }
 
-        let ty = Type::Function(Box::new(Function {
+        let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::REPLACE),
-        }));
+        });
         ClassSynthesizedField::new(ty)
     }
 
@@ -494,10 +496,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ));
             }
         }
-        let want = Type::Callable(Box::new(Callable::list(
+        let want = self.heap.mk_callable_from(Callable::list(
             ParamList::new(params),
-            self.stdlib.object().clone().to_type(),
-        )));
+            self.heap.mk_class_type(self.stdlib.object().clone()),
+        ));
         self.check_type(&post_init, &want, range, errors, &|| {
             TypeCheckContext::of_kind(TypeCheckKind::PostInit)
         });
@@ -703,7 +705,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let constructor_callable = self.constructor_to_callable_distributed(converter);
         let converter = constructor_callable.as_ref().unwrap_or(converter);
         self.distribute_over_union(converter, |ty| {
-            ty.callable_first_param().unwrap_or_else(Type::any_implicit)
+            ty.callable_first_param()
+                .unwrap_or_else(|| self.heap.mk_any_implicit())
         })
     }
 
@@ -721,7 +724,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .as_ref()
                 .unwrap_or(factory)
                 .callable_return_type()
-                .unwrap_or_else(Type::any_implicit),
+                .unwrap_or_else(|| self.heap.mk_any_implicit()),
         )
     }
 
@@ -886,13 +889,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         if dataclass.kws.extra {
-            params.push(Param::Kwargs(None, Type::Any(AnyStyle::Implicit)));
+            params.push(Param::Kwargs(None, self.heap.mk_any_implicit()));
         }
 
-        let ty = Type::Function(Box::new(Function {
-            signature: Callable::list(ParamList::new(params), Type::None),
+        let ty = self.heap.mk_function(Function {
+            signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
-        }));
+        });
         ClassSynthesizedField::new(ty)
     }
 
@@ -919,7 +922,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
                 .collect()
         };
-        let ty = Type::concrete_tuple(ts);
+        let ty = self.heap.mk_concrete_tuple(ts);
         ClassSynthesizedField::new(ty)
     }
 
@@ -934,7 +937,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .map(|(name, _, _)| Lit::Str(name.as_str().into()).to_implicit_type())
             .collect();
-        let ty = Type::concrete_tuple(ts);
+        let ty = self.heap.mk_concrete_tuple(ts);
         ClassSynthesizedField::new(ty)
     }
 
@@ -942,28 +945,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
     ) -> SmallMap<Name, ClassSynthesizedField> {
+        let bool_ty = self.heap.mk_class_type(self.stdlib.bool().clone());
         let make_signature = |other_type| {
             let other = Param::Pos(Name::new_static("other"), other_type, Required::Required);
             Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false), other]),
-                self.stdlib.bool().clone().to_type(),
+                bool_ty.clone(),
             )
         };
         let callable = make_signature(self.instantiate(cls));
-        let callable_eq = make_signature(self.stdlib.object().clone().to_type());
+        let callable_eq = make_signature(self.heap.mk_class_type(self.stdlib.object().clone()));
         dunder::RICH_CMPS
             .iter()
             .map(|name| {
                 (
                     name.clone(),
-                    ClassSynthesizedField::new(Type::Function(Box::new(Function {
+                    ClassSynthesizedField::new(self.heap.mk_function(Function {
                         signature: if *name == dunder::EQ || *name == dunder::NE {
                             callable_eq.clone()
                         } else {
                             callable.clone()
                         },
                         metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), name.clone()),
-                    }))),
+                    })),
                 )
             })
             .collect()
@@ -971,10 +975,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn get_dataclass_hash(&self, cls: &Class) -> ClassSynthesizedField {
         let params = vec![self.class_self_param(cls, false)];
-        let ret = self.stdlib.int().clone().to_type();
-        ClassSynthesizedField::new(Type::Function(Box::new(Function {
+        let ret = self.heap.mk_class_type(self.stdlib.int().clone());
+        ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), ret),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::HASH),
-        })))
+        }))
     }
 }

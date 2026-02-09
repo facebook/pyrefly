@@ -324,3 +324,52 @@ def func2(arg1: tuple[*Ts], arg2: tuple[*Ts]) -> tuple[*Ts]: ...
 func2((0,), (0.0,))  # E: Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]`
 "#,
 );
+
+testcase!(
+    bug = "conformance: TypeVarTuple specialized with empty tuple should simplify correctly",
+    test_typevartuple_specialization_empty,
+    r#"
+from typing import TypeVarTuple, assert_type
+
+Ts = TypeVarTuple("Ts")
+
+IntTuple = tuple[int, *Ts]
+
+def func4(a: IntTuple[()]):
+    assert_type(a, tuple[int])  # E: assert_type(tuple[int, *tuple[Any, ...]], tuple[int]) failed
+"#,
+);
+
+testcase!(
+    bug = "conformance: TypeVarTuple generic alias with single type arg should simplify correctly",
+    test_typevartuple_specialization_single_arg,
+    r#"
+from typing import TypeVar, TypeVarTuple, assert_type
+
+T = TypeVar("T")
+Ts = TypeVarTuple("Ts")
+
+VariadicTuple = tuple[T, *Ts]
+
+def func6(b: VariadicTuple[float]):
+    assert_type(b, tuple[float])  # E: assert_type(tuple[float, *tuple[Any, ...]], tuple[float]) failed
+"#,
+);
+
+testcase!(
+    bug = "conformance: TypeVarTuple with unbounded tuple should work with type aliases",
+    test_typevartuple_specialization_unbounded,
+    r#"
+from typing import TypeVar, TypeVarTuple, assert_type
+
+T1 = TypeVar("T1")
+Ts = TypeVarTuple("Ts")
+
+TA9 = tuple[*Ts, T1]
+TA10 = TA9[*tuple[int, ...]]  # E: Unpacked argument cannot be used for type parameter T1
+
+def func11(a: TA10, b: TA9[*tuple[int, ...], str]):
+    assert_type(a, tuple[*tuple[int, ...], int])  # E: assert_type(tuple[Any], tuple[*tuple[int, ...], int]) failed
+    assert_type(b, tuple[*tuple[int, ...], str])
+"#,
+);

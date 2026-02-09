@@ -104,14 +104,23 @@ where
             entries: entries_clone,
         };
 
+        // Guard to signal the monitoring thread on drop (whether normal return or panic)
+        struct DoneGuard<'a> {
+            done: &'a Arc<(Mutex<bool>, Condvar)>,
+        }
+        impl Drop for DoneGuard<'_> {
+            fn drop(&mut self) {
+                let (done_mutex, done_cvar) = &**self.done;
+                let mut done_lock = done_mutex.lock();
+                *done_lock = true;
+                done_cvar.notify_one();
+            }
+        }
+        let _guard = DoneGuard { done: &done_clone };
+
         let result = f(&monitor);
 
-        {
-            let (done_mutex, done_cvar) = &*done_clone;
-            let mut done_lock = done_mutex.lock();
-            *done_lock = true;
-            done_cvar.notify_one(); // Wake up the monitoring thread.
-        }
+        drop(_guard);
         monitoring_thread.join().unwrap();
 
         result
