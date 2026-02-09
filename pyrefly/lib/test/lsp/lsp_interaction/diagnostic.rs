@@ -26,32 +26,7 @@ use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::object_model::LspMessageError;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
-#[test]
-fn test_show_syntax_errors_without_config() {
-    let test_files_root = get_test_files_root();
-    let mut interaction = LspInteraction::new();
-    interaction.set_root(test_files_root.path().to_path_buf());
-    interaction
-        .initialize(InitializeSettings {
-            configuration: Some(None),
-            ..Default::default()
-        })
-        .expect("Failed to initialize");
-
-    interaction.client.did_open("syntax_errors.py");
-
-    interaction
-        .client
-        .diagnostic("syntax_errors.py")
-        .expect_response(json!({"items": [{"code":"parse-error","codeDescription":{"href":"https://pyrefly.org/en/docs/error-kinds/#parse-error"},"message":"Parse error: Expected an indented block after `if` statement","range":{"end":{"character":1,"line":9},"start":{"character":0,"line":9}},"severity":1,"source":"Pyrefly"}], "kind": "full"}))
-        .expect("Failed to receive expected response");
-}
-
-#[test]
-fn test_diagnostics_markdown_messages() {
-    let test_files_root = get_test_files_root();
-    let mut interaction = LspInteraction::new();
-    interaction.set_root(test_files_root.path().to_path_buf());
+fn require_markdown_initialize(interaction: &LspInteraction) {
     let settings = InitializeSettings {
         configuration: Some(None),
         ..Default::default()
@@ -79,6 +54,35 @@ fn test_diagnostics_markdown_messages() {
             settings.unwrap_or(json!([])),
         );
     }
+}
+
+#[test]
+fn test_show_syntax_errors_without_config() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("syntax_errors.py");
+
+    interaction
+        .client
+        .diagnostic("syntax_errors.py")
+        .expect_response(json!({"items": [{"code":"parse-error","codeDescription":{"href":"https://pyrefly.org/en/docs/error-kinds/#parse-error"},"message":"Parse error: Expected an indented block after `if` statement","range":{"end":{"character":1,"line":9},"start":{"character":0,"line":9}},"severity":1,"source":"Pyrefly"}], "kind": "full"}))
+        .expect("Failed to receive expected response");
+}
+
+#[test]
+fn test_diagnostics_markdown_messages() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    require_markdown_initialize(&interaction);
 
     interaction.client.did_open("syntax_errors.py");
 
@@ -158,7 +162,6 @@ fn test_diagnostics_markdown_messages() {
 
     interaction.shutdown().unwrap();
 }
-
 #[test]
 fn test_stream_diagnostics_after_save() {
     let root = get_test_files_root();

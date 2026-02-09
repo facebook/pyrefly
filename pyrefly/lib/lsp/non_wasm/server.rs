@@ -588,6 +588,18 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::format_diagnostic_message_for_markdown;
+
+    #[test]
+    fn test_format_diagnostic_message_for_markdown() {
+        let input = "__init__ *args **kwargs list[int] `list[int]`";
+        let expected = "\\_\\_init\\_\\_ \\*args \\*\\*kwargs list\\[int\\] `list[int]`";
+        assert_eq!(format_diagnostic_message_for_markdown(input), expected);
+    }
+}
+
 pub struct Server {
     connection: ServerConnection,
     lsp_queue: LspQueue,
