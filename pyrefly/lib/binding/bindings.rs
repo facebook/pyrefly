@@ -724,6 +724,12 @@ impl<'a> BindingsBuilder<'a> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         self.table.get_mut::<K>().1.get_mut(idx)
+    pub fn key_to_idx_hashed_opt<K>(&self, k: Hashed<&K>) -> Option<Idx<K>>
+    where
+        K: Keyed,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        self.table.get::<K>().0.key_to_idx_hashed(k)
     }
 
     /// Declare a `Key` as a usage, which can be used for name lookups. Like `idx_for_promise`,

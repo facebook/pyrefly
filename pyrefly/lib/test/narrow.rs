@@ -181,6 +181,42 @@ def f(x: Sentinel | int):
 );
 
 testcase!(
+    test_ellipsis_is,
+    r#"
+from typing import reveal_type
+from types import EllipsisType
+
+def f(x: int | EllipsisType):
+    if x is ...:
+        reveal_type(x)  # E: Ellipsis
+    else:
+        reveal_type(x)  # E: int
+    if x is not ...:
+        reveal_type(x)  # E: int
+    else:
+        reveal_type(x)  # E: Ellipsis
+    "#,
+);
+
+testcase!(
+    test_ellipsis_eq,
+    r#"
+from typing import reveal_type
+from types import EllipsisType
+
+def f(x: int | EllipsisType):
+    if x == ...:
+        reveal_type(x)  # E: Ellipsis
+    else:
+        reveal_type(x)  # E: int
+    if x != ...:
+        reveal_type(x)  # E: int
+    else:
+        reveal_type(x)  # E: Ellipsis
+    "#,
+);
+
+testcase!(
     test_tri_enum,
     r#"
 from typing import assert_type, Literal

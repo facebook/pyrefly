@@ -40,6 +40,7 @@ use vec1::Vec1;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyAnnotation;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::expr::Usage;
 use crate::binding::scope::NameReadInfo;
@@ -66,6 +67,8 @@ pub enum NarrowSource {
 pub enum AtomicNarrowOp {
     Is(Expr),
     IsNot(Expr),
+    IsSentinel(Idx<Key>, Idx<KeyAnnotation>),
+    IsNotSentinel(Idx<Key>, Idx<KeyAnnotation>),
     Eq(Expr),
     NotEq(Expr),
     /// The source indicates whether this came from an isinstance() call (already validated)
@@ -132,6 +135,12 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
         match self {
             AtomicNarrowOp::Is(expr) => write!(f, "Is({})", expr.display_with(ctx)),
             AtomicNarrowOp::IsNot(expr) => write!(f, "IsNot({})", expr.display_with(ctx)),
+            AtomicNarrowOp::IsSentinel(binding_idx, annot_idx) => {
+                write!(f, "IsSentinel({binding_idx:?}, {annot_idx:?})")
+            }
+            AtomicNarrowOp::IsNotSentinel(binding_idx, annot_idx) => {
+                write!(f, "IsNotSentinel({binding_idx:?}, {annot_idx:?})")
+            }
             AtomicNarrowOp::Eq(expr) => write!(f, "Eq({})", expr.display_with(ctx)),
             AtomicNarrowOp::NotEq(expr) => write!(f, "NotEq({})", expr.display_with(ctx)),
             AtomicNarrowOp::IsInstance(expr, source) => {
@@ -252,6 +261,12 @@ impl AtomicNarrowOp {
         match self {
             Self::Is(v) => Self::IsNot(v.clone()),
             Self::IsNot(v) => Self::Is(v.clone()),
+            Self::IsSentinel(binding_idx, annot_idx) => {
+                Self::IsNotSentinel(*binding_idx, *annot_idx)
+            }
+            Self::IsNotSentinel(binding_idx, annot_idx) => {
+                Self::IsSentinel(*binding_idx, *annot_idx)
+            }
             Self::IsInstance(v, source) => Self::IsNotInstance(v.clone(), *source),
             Self::IsNotInstance(v, source) => Self::IsInstance(v.clone(), *source),
             Self::IsSubclass(v) => Self::IsNotSubclass(v.clone()),
@@ -639,8 +654,14 @@ impl NarrowOps {
                             (_, Some(SpecialExport::GetAttr)) => {
                                 return None;
                             }
-                            (CmpOp::Is, None) => AtomicNarrowOp::Is(right.clone()),
-                            (CmpOp::IsNot, None) => AtomicNarrowOp::IsNot(right.clone()),
+                            (CmpOp::Is, None) => {
+                                Self::sentinel_narrow_op_for_expr(builder, right, false)
+                                    .unwrap_or_else(|| AtomicNarrowOp::Is(right.clone()))
+                            }
+                            (CmpOp::IsNot, None) => {
+                                Self::sentinel_narrow_op_for_expr(builder, right, true)
+                                    .unwrap_or_else(|| AtomicNarrowOp::IsNot(right.clone()))
+                            }
                             (CmpOp::Eq, Some(SpecialExport::Len)) => {
                                 AtomicNarrowOp::LenEq(right.clone())
                             }
@@ -886,8 +907,38 @@ impl NarrowOps {
             .look_up_name_for_read(Hashed::new(name), &Usage::Narrowing(None));
         match name_read_info {
             NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
+            NameReadInfo::Anywhere { key, .. } => {
+                let idx = builder.key_to_idx_hashed_opt(Hashed::new(&key))?;
+                builder.get_original_binding(idx)
+            }
             _ => None,
         }
+    }
+
+    fn sentinel_narrow_op_for_expr(
+        builder: &BindingsBuilder,
+        expr: &Expr,
+        is_not: bool,
+    ) -> Option<AtomicNarrowOp> {
+        let Expr::Name(name) = expr else {
+            return None;
+        };
+        if Ast::is_synthesized_empty_name(name) {
+            return None;
+        }
+        let (binding_idx, binding) = Self::get_original_binding(builder, &name.id)?;
+        let Binding::NameAssign {
+            annotation: Some((_, annot_idx)),
+            ..
+        } = binding?
+        else {
+            return None;
+        };
+        Some(if is_not {
+            AtomicNarrowOp::IsNotSentinel(binding_idx, *annot_idx)
+        } else {
+            AtomicNarrowOp::IsSentinel(binding_idx, *annot_idx)
+        })
     }
 
     fn op_is_still_valid(
@@ -907,6 +958,8 @@ impl NarrowOps {
             NarrowOp::Atomic(None, op) => match op {
                 AtomicNarrowOp::Is(..)
                 | AtomicNarrowOp::IsNot(..)
+                | AtomicNarrowOp::IsSentinel(..)
+                | AtomicNarrowOp::IsNotSentinel(..)
                 | AtomicNarrowOp::Eq(..)
                 | AtomicNarrowOp::NotEq(..)
                 // Technically the `__class__` attribute can be mutated, but code that does that
