@@ -134,10 +134,7 @@ impl ParamTemplate {
     }
 }
 
-fn expand_type_for_overload<Ans: LookupAnswer>(
-    ty: Type,
-    type_order: TypeOrder<Ans>,
-) -> Vec<Type> {
+fn expand_type_for_overload<Ans: LookupAnswer>(ty: Type, type_order: TypeOrder<Ans>) -> Vec<Type> {
     match ty {
         Type::Union(box Union { members: ts, .. }) => ts,
         Type::ClassType(cls) if cls.is_builtin("bool") => vec![
@@ -1264,7 +1261,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 Ok(())
             }
             (Type::Overload(overload), u) => {
-                let direct = any(overload.signatures.iter(), |l| self.is_subset_eq(&l.as_type(), u));
+                let direct = any(overload.signatures.iter(), |l| {
+                    self.is_subset_eq(&l.as_type(), u)
+                });
                 if direct.is_ok() {
                     return direct;
                 }
@@ -1308,8 +1307,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     overload_returns.push(func.signature.ret.clone());
                 }
 
-                let Some(expanded_params) =
-                    expand_param_list_for_overload(params, self.type_order)
+                let Some(expanded_params) = expand_param_list_for_overload(params, self.type_order)
                 else {
                     return direct;
                 };
@@ -1329,11 +1327,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     })
                 });
 
-                if all_expansions_match {
-                    Ok(())
-                } else {
-                    direct
-                }
+                if all_expansions_match { Ok(()) } else { direct }
             }
             (Type::BoundMethod(method), Type::Callable(_) | Type::Function(_))
                 if let Some(l_no_self) =
