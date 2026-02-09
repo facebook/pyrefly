@@ -522,15 +522,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // The first parameter of a non-static method is the implicit self/cls
         // parameter and does not require an annotation, regardless of its name.
         // __new__ is an implicit staticmethod but still takes cls as its first parameter.
+        // If the first parameter is variadic (e.g. *args), self is passed inside it,
+        // so there is no separate implicit parameter to skip.
         let is_dunder_new = def.defining_cls.is_some() && stmt.name.id == dunder::NEW;
-        let has_implicit_self_param =
+        let has_implicit_self_or_cls_param =
             def.defining_cls.is_some() && (!def.metadata.flags.is_staticmethod || is_dunder_new);
-        let mut skip_self_param = has_implicit_self_param;
+        let mut skip_first_param = has_implicit_self_or_cls_param;
         for p in stmt.parameters.iter() {
-            // The implicit self/cls param is always the first non-variadic parameter.
-            if skip_self_param && !p.is_variadic() {
-                skip_self_param = false;
-                continue;
+            if skip_first_param {
+                skip_first_param = false;
+                if !p.is_variadic() {
+                    continue;
+                }
             }
             if p.annotation().is_none() {
                 let name = p.name().as_str();
