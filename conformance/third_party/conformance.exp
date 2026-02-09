@@ -5058,8 +5058,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "assert_type(nonmember[int], Any) failed",
-      "description": "assert_type(nonmember[int], Any) failed",
+      "concise_description": "assert_type(int, Any) failed",
+      "description": "assert_type(int, Any) failed",
       "line": 116,
       "name": "assert-type",
       "severity": "error",
