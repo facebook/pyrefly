@@ -3412,7 +3412,7 @@ impl Server {
             }
             if !changes.is_empty() {
                 actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: "Fix all redundant casts".to_owned(),
+                    title: "Remove all redundant casts".to_owned(),
                     kind: Some(CodeActionKind::SOURCE_FIX_ALL),
                     edit: Some(WorkspaceEdit {
                         changes: Some(changes),

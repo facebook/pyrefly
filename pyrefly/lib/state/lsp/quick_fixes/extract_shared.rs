@@ -122,6 +122,35 @@ pub(super) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
     }
 }
 
+pub(super) fn expr_needs_parens(expr: &Expr) -> bool {
+    !matches!(
+        expr,
+        Expr::Name(_)
+            | Expr::NumberLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+            | Expr::Subscript(_)
+            | Expr::Attribute(_)
+            | Expr::Call(_)
+            | Expr::List(_)
+            | Expr::Dict(_)
+            | Expr::Set(_)
+            | Expr::Tuple(_)
+            | Expr::FString(_)
+    )
+}
+
+pub(super) fn wrap_if_needed(expr: &Expr, text: &str) -> String {
+    if expr_needs_parens(expr) {
+        format!("({text})")
+    } else {
+        text.to_owned()
+    }
+}
+
 /// Extracts the name from a statement that defines a named symbol.
 /// Returns `None` for statements that don't define a single named symbol.
 pub(super) fn member_name_from_stmt(stmt: &Stmt) -> Option<String> {

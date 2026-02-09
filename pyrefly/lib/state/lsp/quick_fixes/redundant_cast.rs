@@ -6,61 +6,26 @@
  */
 
 use dupe::Dupe;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
-use pyrefly_util::visit::Visit;
-use ruff_python_ast::Expr;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ModModule;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
 use crate::ModuleInfo;
-
-fn expr_needs_parens(expr: &Expr) -> bool {
-    !matches!(
-        expr,
-        Expr::Name(_)
-            | Expr::NumberLiteral(_)
-            | Expr::StringLiteral(_)
-            | Expr::BytesLiteral(_)
-            | Expr::BooleanLiteral(_)
-            | Expr::NoneLiteral(_)
-            | Expr::EllipsisLiteral(_)
-            | Expr::Subscript(_)
-            | Expr::Attribute(_)
-            | Expr::Call(_)
-            | Expr::List(_)
-            | Expr::Dict(_)
-            | Expr::Set(_)
-            | Expr::Tuple(_)
-            | Expr::FString(_)
-    )
-}
-
-fn wrap_if_needed(expr: &Expr, text: &str) -> String {
-    if expr_needs_parens(expr) {
-        format!("({text})")
-    } else {
-        text.to_owned()
-    }
-}
+use crate::state::lsp::quick_fixes::extract_shared::wrap_if_needed;
 
 fn find_enclosing_call(ast: &ModModule, selection: TextRange) -> Option<ExprCall> {
-    let mut found: Option<ExprCall> = None;
-    ast.visit(&mut |expr| {
-        if let Expr::Call(call) = expr
+    for node in Ast::locate_node(ast, selection.start()) {
+        if let AnyNodeRef::ExprCall(call) = node
             && call.range().contains_range(selection)
         {
-            if let Some(existing) = &found {
-                if existing.range().contains_range(call.range()) {
-                    found = Some(call.clone());
-                }
-            } else {
-                found = Some(call.clone());
-            }
+            return Some(call.clone());
         }
-    });
-    found
+    }
+    None
 }
 
 fn redundant_cast_replacement(module_info: &ModuleInfo, call: &ExprCall) -> Option<String> {
