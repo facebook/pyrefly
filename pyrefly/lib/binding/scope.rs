@@ -2644,26 +2644,6 @@ impl Scopes {
                 }
             })
             .collect();
-        let method_assignments_for = |field_name: &Name| {
-            method_attrs
-                .iter()
-                .filter_map(
-                    |(name, method, InstanceAttribute(value, annotation, range, _))| {
-                        if name.key() == field_name {
-                            Some(MethodDefinedAttribute {
-                                method: method.clone(),
-                                value: value.clone(),
-                                annotation: *annotation,
-                                range: *range,
-                            })
-                        } else {
-                            None
-                        }
-                    },
-                )
-                .collect::<Vec<_>>()
-        };
-
         class_body.stat.0.iter_hashed().for_each(
             |(name, static_info)| {
             if matches!(static_info.style, StaticStyle::MutableCapture(..)) {
@@ -2725,37 +2705,54 @@ impl Scopes {
                         definition: value.idx,
                     },
                 };
-                let method_assignments = method_assignments_for(name.key());
-                field_definitions.insert_hashed(
-                    name.owned(),
-                    (definition, static_info.range, method_assignments),
-                );
+                field_definitions
+                    .insert_hashed(name.owned(), (definition, static_info.range, Vec::new()));
             }
         });
+        let mut method_defined_fields: SmallMap<Name, Vec<MethodDefinedAttribute>> =
+            SmallMap::new();
         method_attrs.into_iter().for_each(
             |(name, method, InstanceAttribute(value, annotation, range, _))| {
-                if !field_definitions.contains_key_hashed(name.as_ref()) {
-                    let method_assignment = MethodDefinedAttribute {
-                        method: method.clone(),
-                        value: value.clone(),
+                method_defined_fields.entry_hashed(name).or_default().push(
+                    MethodDefinedAttribute {
+                        method,
+                        value,
                         annotation,
                         range,
-                    };
-                    field_definitions.insert_hashed(
-                        name,
-                        (
-                            ClassFieldDefinition::DefinedInMethod {
-                                value: Box::new(value),
-                                annotation,
-                                method,
-                            },
-                            range,
-                            vec![method_assignment],
-                        ),
-                    );
-                }
+                    },
+                );
             },
         );
+        method_defined_fields
+            .into_iter_hashed()
+            .for_each(
+                |(name, assignments)| match field_definitions.entry_hashed(name) {
+                    Entry::Occupied(mut occupied) => {
+                        occupied.get_mut().2.extend(assignments);
+                    }
+                    Entry::Vacant(vacant) => {
+                        let mut iter = assignments.into_iter();
+                        if let Some(MethodDefinedAttribute {
+                            method,
+                            value,
+                            annotation,
+                            range,
+                        }) = iter.next()
+                        {
+                            let rest: Vec<MethodDefinedAttribute> = iter.collect();
+                            vacant.insert((
+                                ClassFieldDefinition::DefinedInMethod {
+                                    value: Box::new(value),
+                                    annotation,
+                                    method,
+                                },
+                                range,
+                                rest,
+                            ));
+                        }
+                    }
+                },
+            );
         field_definitions
     }
 
