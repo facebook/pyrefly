@@ -82,6 +82,7 @@ def f(a: A):
 );
 
 testcase!(
+    bug = "https://github.com/facebook/pyrefly/issues/1159",
     test_infers_attribute_union_from_class_and_method_assignments,
     r#"
 from typing import assert_type
@@ -2304,7 +2305,7 @@ testcase!(
 from typing import assert_type
 class A:
     a = 1
-    def set_a(self, value: str):
+    def __init__(self, value: str):
         self.a = value
 def f(a: A):
     assert_type(a.a, int | str)

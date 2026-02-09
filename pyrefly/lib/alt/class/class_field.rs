@@ -1720,35 +1720,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
 
-        let mut merged_method_assignments = false;
-        if !method_assignments.is_empty()
-            && annotation
-                .as_ref()
-                .and_then(|ann| ann.ty.as_ref())
-                .is_none()
-        {
-            let ignore_errors = self.error_swallower();
-            let mut types = Vec::with_capacity(method_assignments.len() + 1);
-            types.push(value_ty);
-            for assignment in method_assignments {
-                let direct_annotation = assignment
-                    .annotation
-                    .map(|annot| self.get_idx(annot).annotation.clone());
-                let (ty, _, _) = self.analyze_class_field_value(
-                    &assignment.value,
-                    class,
-                    name,
-                    direct_annotation.as_ref(),
-                    true,
-                    assignment.range,
-                    &ignore_errors,
-                );
-                types.push(ty);
-            }
-            value_ty = self.unions(types);
-            merged_method_assignments = true;
-        }
-
         if let Some(annotation) = direct_annotation.as_ref() {
             self.validate_direct_annotation(
                 annotation,
@@ -1765,10 +1736,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Determine the final type, promoting literals when appropriate.
         let mut has_implicit_literal = value_ty.is_implicit_literal();
-        if !has_implicit_literal
-            && (matches!(initialization, ClassFieldInitialization::Method)
-                || merged_method_assignments)
-        {
+        if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method) {
             value_ty.universe(&mut |current_type_node| {
                 has_implicit_literal |= current_type_node.is_implicit_literal();
             });
@@ -1834,11 +1802,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|assignment| {
                 assignment.method.method_name == dunder::INIT
-                    && matches!(assignment.method.instance_or_class, MethodSelfKind::Instance)
+                    && matches!(
+                        assignment.method.instance_or_class,
+                        MethodSelfKind::Instance
+                    )
             })
             .collect();
-        if matches!(field_definition, ClassFieldDefinition::AssignedInBody { .. })
-            && !init_assignments.is_empty()
+        if matches!(
+            field_definition,
+            ClassFieldDefinition::AssignedInBody { .. }
+        ) && !init_assignments.is_empty()
             && annotation
                 .as_ref()
                 .and_then(|ann| ann.ty.as_ref())
