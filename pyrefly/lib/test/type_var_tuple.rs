@@ -104,6 +104,16 @@ def test(a1: A[int], a2: A[int, str], b: B[int, str, int]):
 );
 
 testcase!(
+    test_type_var_tuple_unpack_concrete_tuple,
+    r#"
+from typing import Unpack
+class Cls[T, *Ts]: ...
+v1: Cls[*tuple[int, str, int, str]]
+v2: Cls[Unpack[tuple[int, str, int, str]]]
+"#,
+);
+
+testcase!(
     test_type_var_tuple_solve,
     r#"
 from typing import assert_type
