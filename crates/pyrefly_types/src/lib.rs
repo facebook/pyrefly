@@ -29,6 +29,7 @@ pub mod display;
 pub mod equality;
 pub mod facet;
 pub mod globals;
+pub mod heap;
 pub mod keywords;
 pub mod lit_int;
 pub mod literal;

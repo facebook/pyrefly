@@ -291,9 +291,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.as_call_target_impl(fallback, quantified, dunder_call)
             }
             Type::Any(style) => CallTargetLookup::Ok(Box::new(CallTarget::Any(style))),
-            Type::TypeAlias(ta) => {
-                self.as_call_target_impl(ta.as_value(self.stdlib), quantified, dunder_call)
-            }
+            Type::TypeAlias(ta) => self.as_call_target_impl(
+                self.get_type_alias(&ta).as_value(self.stdlib),
+                quantified,
+                dunder_call,
+            ),
             Type::ClassType(cls) => {
                 if let Some(quantified) = quantified {
                     self.quantified_instance_as_dunder_call(quantified.clone(), &cls)
@@ -326,7 +328,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let value_ty = self.get_typed_dict_value_type(&td);
                 let cls = self
                     .stdlib
-                    .dict(self.stdlib.str().clone().to_type(), value_ty);
+                    .dict(self.heap.mk_class_type(self.stdlib.str().clone()), value_ty);
                 CallTargetLookup::Ok(Box::new(CallTarget::Class(
                     cls,
                     ConstructorKind::TypeOfClass,
@@ -334,7 +336,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Type(box Type::Intersect(box (_, fallback))) => {
                 // TODO(rechen): implement calling `type[A & B]`
-                self.as_call_target_impl(Type::type_form(fallback), quantified, dunder_call)
+                self.as_call_target_impl(self.heap.mk_type_form(fallback), quantified, dunder_call)
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
@@ -381,7 +383,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Literal(box Literal {
                 value: Lit::Enum(enum_),
                 ..
-            }) => self.as_call_target_impl(enum_.class.to_type(), quantified, dunder_call),
+            }) => self.as_call_target_impl(
+                self.heap.mk_class_type(enum_.class.clone()),
+                quantified,
+                dunder_call,
+            ),
             _ => CallTargetLookup::Error(vec![]),
         }
     }
@@ -596,7 +602,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .solver()
                 .freshen_class_targs(cls.targs_mut(), self.uniques);
 
-            self.is_subset_eq(&cls.clone().to_type(), hint.ty());
+            self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint.ty());
             self.solver().generalize_class_targs(cls.targs_mut());
             vs
         } else {
@@ -613,7 +619,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(metaclass) = class_metadata.custom_metaclass()
                 {
                     self.record_external_attribute_definition_index(
-                        &metaclass.clone().to_type(),
+                        &self.heap.mk_class_type(metaclass.clone()),
                         &dunder::CALL,
                         callee_range,
                     );
@@ -632,7 +638,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut dunder_new_ret = None;
         let (overrides_new, dunder_new_has_errors) =
             if let Some(new_method) = self.get_dunder_new(&cls) {
-                let cls_ty = Type::type_form(cls.clone().to_type());
+                let cls_ty = self.heap.mk_type_form(self.heap.mk_class_type(cls.clone()));
                 let full_args = iter::once(CallArg::ty(&cls_ty, arguments_range))
                     .chain(args.iter().cloned())
                     .collect::<Vec<_>>();
@@ -657,7 +663,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors.extend(dunder_new_errors);
                 if let Some(callee_range) = callee_range {
                     self.record_external_attribute_definition_index(
-                        &cls.clone().to_type(),
+                        &self.heap.mk_class_type(cls.clone()),
                         &dunder::NEW,
                         callee_range,
                     );
@@ -712,7 +718,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if let Some(callee_range) = callee_range {
                 self.record_external_attribute_definition_index(
-                    &cls.clone().to_type(),
+                    &self.heap.mk_class_type(cls.clone()),
                     &dunder::INIT,
                     callee_range,
                 );
@@ -742,7 +748,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ret.subst_mut(&cls.targs().substitution_map());
             ret
         } else {
-            cls.to_type()
+            self.heap.mk_class_type(cls)
         }
     }
 
@@ -760,7 +766,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let vs = self
                 .solver()
                 .freshen_class_targs(typed_dict.targs_mut(), self.uniques);
-            self.is_subset_eq(&typed_dict.clone().to_type(), hint.ty());
+            self.is_subset_eq(&typed_dict.clone().to_type(self.heap), hint.ty());
             self.solver().generalize_class_targs(typed_dict.targs_mut());
             vs
         } else {
@@ -1045,11 +1051,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     kws.0.insert(name.id.clone(), kw.value.infer(self, errors));
                 }
             }
-            Type::KwCall(Box::new(KwCall {
+            self.heap.mk_kw_call(KwCall {
                 func_metadata,
                 keywords: kws,
                 return_ty: res,
-            }))
+            })
         } else {
             res
         }
@@ -1130,10 +1136,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // and the class object as `objtype`.
         let (objtype, obj) = match base {
             DescriptorBase::Instance(classtype) => (
-                Type::ClassDef(classtype.class_object().dupe()),
-                Type::ClassType(classtype),
+                self.heap.mk_class_def(classtype.class_object().dupe()),
+                self.heap.mk_class_type(classtype),
             ),
-            DescriptorBase::ClassDef(class) => (Type::ClassDef(class), Type::None),
+            DescriptorBase::ClassDef(class) => (self.heap.mk_class_def(class), self.heap.mk_none()),
         };
         let args = [CallArg::ty(&obj, range), CallArg::ty(&objtype, range)];
         let call_target = self.as_call_target_or_error(
@@ -1159,7 +1165,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // When a descriptor is set on an instance, it gets the instance `class_type` and the value `got` as arguments.
         // Descriptor setters cannot be called on a class (an attempt to assign will overwrite the
         // descriptor itself rather than call the setter).
-        let instance = Type::ClassType(class_type);
+        let instance = self.heap.mk_class_type(class_type);
         let args = [CallArg::ty(&instance, range), got];
         let call_target = self.as_call_target_or_error(
             setter_method,
@@ -1219,7 +1225,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn constructor_to_callable(&self, cls: &ClassType) -> Type {
-        let class_type = cls.clone().to_type();
+        let class_type = self.heap.mk_class_type(cls.clone());
         if let Some(metaclass_call_attr_ty) = self.get_metaclass_dunder_call(cls) {
             // If the class has a custom metaclass and the return type of the metaclass's __call__
             // is not a subclass of the current class, use that and ignore __new__ and __init__
@@ -1231,11 +1237,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         // Default constructor that takes no args and returns Self.
+        let heap = self.heap;
         let default_constructor = || {
-            Type::Callable(Box::new(Callable::list(
+            heap.mk_callable_from(Callable::list(
                 ParamList::new(Vec::new()),
                 class_type.clone(),
-            )))
+            ))
         };
         // Check the __new__ method and whether it comes from object or has been overridden
         let (new_attr_ty, overrides_new) = if let Some(t) = self
@@ -1285,7 +1292,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // we can't handle things like local aliases to super. If we hit a case where the binding
             // wasn't constructed, fall back to `Any`.
             self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range)))
-                .map_or_else(Type::any_implicit, |type_info| type_info.arc_clone_ty())
+                .map_or_else(
+                    || self.heap.mk_any_implicit(),
+                    |type_info| type_info.arc_clone_ty(),
+                )
         } else {
             self.expand_vars_mut(&mut callee_ty);
 
@@ -1394,7 +1404,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
             // TypeIs and TypeGuard functions return bool at runtime
             match result {
-                Type::TypeIs(_) | Type::TypeGuard(_) => self.stdlib.bool().clone().to_type(),
+                Type::TypeIs(_) | Type::TypeGuard(_) => {
+                    self.heap.mk_class_type(self.stdlib.bool().clone())
+                }
                 other => other,
             }
         }

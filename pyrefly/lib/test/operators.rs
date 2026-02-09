@@ -480,6 +480,21 @@ a += B()  # E: `B` is not assignable to parameter `other` with type `Never` in f
 );
 
 testcase!(
+    test_iadd_ignores_getattr,
+    r#"
+from typing import assert_type
+class A:
+    def __add__(self, other: str) -> "A":
+        return self
+    def __getattr__(self, name: str) -> str:
+        return "x"
+a = A()
+a += "hi"
+assert_type(a, A)
+    "#,
+);
+
+testcase!(
     test_custom_eq,
     r#"
 from typing import assert_type

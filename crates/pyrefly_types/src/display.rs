@@ -28,6 +28,7 @@ use crate::class::Class;
 use crate::literal::Lit;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
+use crate::type_alias::TypeAliasData;
 use crate::type_output::DisplayOutput;
 use crate::type_output::OutputWithLocations;
 use crate::type_output::TypeOutput;
@@ -771,14 +772,14 @@ impl<'a> TypeDisplayContext<'a> {
                 tparams,
                 body: Forallable::TypeAlias(ta),
             }) => {
-                if is_toplevel {
+                if is_toplevel && let TypeAliasData::Value(ta) = ta {
                     ta.fmt_with_type(
                         output,
                         &|t, o| self.fmt_helper_generic(t, false, o),
                         Some(tparams),
                     )
                 } else {
-                    output.write_str(ta.name.as_str())
+                    output.write_str(ta.name().as_str())
                 }
             }
             Type::Type(box Type::Any(_)) => output.write_str("type[Any]"),
@@ -855,10 +856,10 @@ impl<'a> TypeDisplayContext<'a> {
                 AnyStyle::Implicit | AnyStyle::Error => output.write_str("Unknown"),
             },
             Type::TypeAlias(ta) => {
-                if is_toplevel {
+                if is_toplevel && let TypeAliasData::Value(ta) = &**ta {
                     ta.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o), None)
                 } else {
-                    output.write_str(ta.name.as_str())
+                    output.write_str(ta.name().as_str())
                 }
             }
             Type::SuperInstance(box (cls, obj)) => {
@@ -1008,6 +1009,7 @@ pub mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::heap::TypeHeap;
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
@@ -1015,6 +1017,7 @@ pub mod tests {
     use crate::quantified::QuantifiedKind;
     use crate::tuple::Tuple;
     use crate::type_alias::TypeAlias;
+    use crate::type_alias::TypeAliasData;
     use crate::type_alias::TypeAliasStyle;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
@@ -1054,8 +1057,8 @@ pub mod tests {
                 kind,
                 None,
                 Restriction::Unrestricted,
+                PreInferenceVariance::Invariant,
             ),
-            variance: PreInferenceVariance::Invariant,
         }
     }
 
@@ -1329,16 +1332,17 @@ pub mod tests {
 
     #[test]
     fn test_display_typevar() {
+        let heap = TypeHeap::new();
         let t1 = fake_tyvar("foo", "bar", 1);
         let t2 = fake_tyvar("foo", "bar", 2);
         let t3 = fake_tyvar("qux", "bar", 2);
 
         assert_eq!(
-            Type::union(vec![t1.to_type(), t2.to_type()]).to_string(),
+            Type::union(vec![t1.to_type(&heap), t2.to_type(&heap)]).to_string(),
             "TypeVar[bar.foo@1:2] | TypeVar[bar.foo@1:3]"
         );
         assert_eq!(
-            Type::union(vec![t1.to_type(), t3.to_type()]).to_string(),
+            Type::union(vec![t1.to_type(&heap), t3.to_type(&heap)]).to_string(),
             "TypeVar[foo] | TypeVar[qux]"
         );
     }
@@ -1512,12 +1516,12 @@ pub mod tests {
 
     #[test]
     fn test_display_type_alias() {
-        let alias = Type::TypeAlias(Box::new(TypeAlias::new(
+        let alias = Type::TypeAlias(Box::new(TypeAliasData::Value(TypeAlias::new(
             Name::new_static("MyAlias"),
             Type::None,
             TypeAliasStyle::LegacyImplicit,
             Vec::new(),
-        )));
+        ))));
         let wrapped = Type::concrete_tuple(vec![alias.clone()]);
         let type_of = Type::type_form(alias.clone());
         let mut ctx = TypeDisplayContext::new(&[]);

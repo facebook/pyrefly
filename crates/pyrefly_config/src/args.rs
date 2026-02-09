@@ -176,6 +176,16 @@ pub struct ConfigOverrideArgs {
     /// How to handle when recursion depth limit is exceeded.
     #[arg(long)]
     recursion_overflow_handler: Option<RecursionOverflowHandler>,
+    /// Whether to enable tensor shape type inference.
+    /// When enabled, integer literals can be used as type arguments (e.g., Tensor[2, 3]),
+    /// and type variables can participate in dimension arithmetic.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    tensor_shapes: Option<bool>,
 }
 
 impl ConfigOverrideArgs {
@@ -354,6 +364,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.recursion_overflow_handler {
             config.root.recursion_overflow_handler = Some(*x);
+        }
+        if let Some(x) = &self.tensor_shapes {
+            config.root.tensor_shapes = Some(*x);
         }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             for error_kind in &self.error {

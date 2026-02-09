@@ -23,6 +23,7 @@ use ruff_python_ast::Identifier;
 
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
+use crate::heap::TypeHeap;
 use crate::simplify::unions;
 use crate::stdlib::Stdlib;
 use crate::types::Type;
@@ -185,8 +186,8 @@ impl TypeVar {
         self.0.variance
     }
 
-    pub fn to_type(&self) -> Type {
-        Type::TypeVar(self.dupe())
+    pub fn to_type(&self, heap: &TypeHeap) -> Type {
+        heap.mk_type_var(self.dupe())
     }
 
     pub fn type_eq_inner(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {

@@ -1532,11 +1532,9 @@ fn test_dunder_all_missing_name_error_clears() {
 /// A file using `y` after `from foo import *` will error until `__all__` is updated.
 /// This tests export information affecting errors in another file.
 ///
-/// BUG: Currently, when only `__all__` changes (without adding/removing definitions),
-/// star importers are not invalidated. This causes the error to persist even after
-/// `y` is added to `__all__`.
+/// Test that errors are properly cleared when __all__ changes.
+/// When a name is added to __all__, star importers should see the change.
 #[test]
-#[ignore] // TODO: fix incremental invalidation when __all__ changes
 fn test_dunder_all_star_import_error_clears() {
     let mut i = Incremental::new();
 
@@ -1582,6 +1580,269 @@ fn test_dunder_all_star_import_error_clears() {
     assert!(
         errors_after.shown.is_empty(),
         "Expected no errors after adding y to __all__, but got: {:?}",
+        errors_after.shown
+    );
+}
+
+/// Test that adding a new definition invalidates importers of that name.
+/// When a new name is added to a module, modules that try to import it
+/// (and previously got an error) should be recomputed.
+#[test]
+fn test_name_existence_change_invalidates_importer() {
+    let mut i = Incremental::new();
+
+    // foo only has x
+    i.set("foo", "x = 1");
+    // main tries to import y which doesn't exist - should error
+    i.set(
+        "main",
+        "from foo import y # E: Could not import `y` from `foo`",
+    );
+    i.check(&["main", "foo"], &["main", "foo"]);
+
+    let main_handle = i.handle("main");
+
+    // Verify there's an error
+    let errors = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        !errors.shown.is_empty(),
+        "Expected error when importing non-existent name"
+    );
+
+    // Add y to foo - error should disappear
+    i.set("foo", "x = 1\ny = 2");
+    // main should be recomputed because y now exists
+    i.check_ignoring_expectations(&["foo"], &["foo", "main"]);
+
+    let errors_after = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        errors_after.shown.is_empty(),
+        "Expected no errors after adding y to foo, but got: {:?}",
+        errors_after.shown
+    );
+}
+
+/// Test that adding a name NOT in __all__ still invalidates importers of that name.
+/// __all__ controls what `from M import *` gets, but explicit imports like
+/// `from M import name` can access any name in the module. When that name is
+/// added or removed, importers should be invalidated.
+#[test]
+fn test_name_not_in_dunder_all_invalidates_importer() {
+    let mut i = Incremental::new();
+
+    // foo has __all__ = ["x"] but only x exists
+    i.set("foo", "__all__ = ['x']\nx = 1");
+    // main tries to import y which doesn't exist - should error
+    i.set(
+        "main",
+        "from foo import y # E: Could not import `y` from `foo`",
+    );
+    i.check(&["main", "foo"], &["main", "foo"]);
+
+    let main_handle = i.handle("main");
+
+    // Verify there's an error
+    let errors = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        !errors.shown.is_empty(),
+        "Expected error when importing non-existent name"
+    );
+
+    // Add y to foo, but NOT to __all__. The import should still work.
+    i.set("foo", "__all__ = ['x']\nx = 1\ny = 2");
+    // main should be recomputed because y now exists
+    i.check_ignoring_expectations(&["foo"], &["foo", "main"]);
+
+    let errors_after = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        errors_after.shown.is_empty(),
+        "Expected no errors after adding y to foo (even though y is not in __all__), but got: {:?}",
+        errors_after.shown
+    );
+}
+
+/// Test that wildcard re-exports properly propagate invalidation.
+///
+/// When module A re-exports module B's __all__ (e.g., via `from B import *`),
+/// and B's __all__ changes, star importers of A should be invalidated.
+#[test]
+fn test_wildcard_reexport_invalidation() {
+    let mut i = Incremental::new();
+
+    // foo exports x via __all__
+    i.set("foo", "x = 1\n__all__ = [\"x\"]");
+    // bar re-exports foo's __all__ via from foo import *
+    i.set("bar", "from foo import *");
+    // main uses star import from bar
+    i.set("main", "from bar import *\nz = x");
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Add y to foo's __all__ - main should be invalidated because
+    // bar's effective wildcard set changed (even though bar's __all__ entries didn't)
+    i.set("foo", "x = 1\ny = 2\n__all__ = [\"x\", \"y\"]");
+    // bar is invalidated because it depends on foo with wildcard = true
+    // main is invalidated because bar's effective wildcard set changed
+    i.check_ignoring_expectations(&["main"], &["foo", "bar", "main"]);
+}
+
+/// Test that type changes propagate through transitive star import chains.
+///
+/// When module A re-exports module B's exports (via `from B import *`),
+/// and a type in B changes, consumers of A that use that type should be invalidated.
+#[test]
+fn test_wildcard_reexport_type_change_invalidation() {
+    let mut i = Incremental::new();
+
+    // foo exports x via __all__
+    i.set("foo", "x: int = 1\n__all__ = [\"x\"]");
+    // bar re-exports foo's __all__ via from foo import * (pure pass-through)
+    i.set("bar", "from foo import *");
+    // main uses star import from bar and uses x
+    i.set("main", "from bar import *\nz: int = x");
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Change x's type from int to str - main should be invalidated because
+    // it uses x and the type changed, even though bar is just a pass-through.
+    i.set("foo", "x: str = 'hello'\n__all__ = [\"x\"]");
+    // foo is invalidated because its source changed
+    // bar is invalidated because it depends on foo with wildcard = true
+    // main is invalidated because x's type changed and main uses x
+    i.check_ignoring_expectations(&["main"], &["foo", "bar", "main"]);
+}
+
+/// Test that star imports invalidate on type changes to unused variable names.
+#[test]
+fn test_star_import_unused_variable_type_change() {
+    let mut i = Incremental::new();
+
+    // foo exports x and y
+    i.set("foo", "x: int = 1\ny: int = 2\n__all__ = ['x', 'y']");
+    // bar does star import but only uses x
+    i.set("bar", "from foo import *\nz = x + 1");
+    i.check(&["bar"], &["bar", "foo"]);
+
+    // Change y's type - bar IS invalidated even though it doesn't use y
+    i.set(
+        "foo",
+        "x: int = 1\ny: str = 'changed'\n__all__ = ['x', 'y']",
+    );
+    i.check_ignoring_expectations(&["bar"], &["foo", "bar"]);
+
+    // If we change x's type, bar SHOULD be invalidated
+    i.set(
+        "foo",
+        "x: str = 'now a string'\ny: str = 'changed'\n__all__ = ['x', 'y']",
+    );
+    i.check_ignoring_expectations(&["bar"], &["foo", "bar"]);
+}
+
+/// Test that star import errors clear when a missing name is added to the module.
+///
+/// When `__all__` lists a name that doesn't exist, star importers get an error.
+/// Adding the missing definition should clear the error.
+#[test]
+fn test_dunder_all_star_import_missing_definition_error_clears() {
+    let mut i = Incremental::new();
+
+    // foo has __all__ = ["x", "y"] but only defines x - y is missing
+    i.set(
+        "foo",
+        "x = 1\n__all__ = [\"x\", \"y\"] # E: Name `y` is listed in `__all__` but is not defined",
+    );
+    // main does star import and tries to use y - should error
+    i.set(
+        "main",
+        "from foo import * # E: Could not import `y` from `foo`\nz = y",
+    );
+    i.check(&["main", "foo"], &["main", "foo"]);
+
+    let main_handle = i.handle("main");
+
+    // Verify there's an error
+    let errors = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        !errors.shown.is_empty(),
+        "Expected error when using name listed in __all__ but not defined"
+    );
+
+    // Add the missing definition - error should disappear
+    i.set("foo", "x = 1\ny = 2\n__all__ = [\"x\", \"y\"]");
+    i.check_ignoring_expectations(&["main"], &["foo", "main"]);
+
+    let errors_after = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        errors_after.shown.is_empty(),
+        "Expected no errors after adding y definition, but got: {:?}",
+        errors_after.shown
+    );
+}
+
+/// Test that transitive star import errors clear when a missing name is added.
+///
+/// Similar to test_dunder_all_star_import_missing_definition_error_clears but:
+/// - No __all__ is used (relies on default public exports)
+/// - Uses transitive star imports (foo -> bar -> main)
+#[test]
+fn test_transitive_star_import_missing_name_error_clears() {
+    let mut i = Incremental::new();
+
+    // foo initially empty
+    i.set("foo", "");
+    // bar re-exports from foo via star import
+    i.set("bar", "from foo import *");
+    // main does star import from bar and tries to use x - should fail
+    i.set("main", "from bar import *\nz = x");
+    i.check_ignoring_expectations(&["main", "foo", "bar"], &["main", "foo", "bar"]);
+
+    let main_handle = i.handle("main");
+
+    // Verify there's an error
+    let errors = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        !errors.shown.is_empty(),
+        "Expected error when using undefined name via transitive star import"
+    );
+
+    // Add x to foo - error should disappear in main
+    i.set("foo", "x = 1");
+    i.check_ignoring_expectations(&["main"], &["foo", "bar", "main"]);
+
+    let errors_after = i
+        .state
+        .transaction()
+        .get_errors([&main_handle])
+        .collect_errors();
+    assert!(
+        errors_after.shown.is_empty(),
+        "Expected no errors after adding x to foo, but got: {:?}",
         errors_after.shown
     );
 }
@@ -1666,10 +1927,6 @@ fn test_class_deprecation_metadata_change_invalidates() {
 /// This tests the `is_reexport` metadata dependency. When an export changes from being
 /// defined in this module to being re-exported from another module, dependents should
 /// be recomputed.
-///
-/// BUG: Currently, when an export changes from direct definition to re-export (with the
-/// same type), dependents are not invalidated. This means hover info and go-to-definition
-/// may show stale information.
 #[test]
 fn test_reexport_status_change_invalidates() {
     let mut i = Incremental::new();
@@ -1687,10 +1944,7 @@ fn test_reexport_status_change_invalidates() {
     let res = i.unchecked(&["foo", "main"]);
     assert!(res.changed.contains(&"foo".to_owned()));
     assert!(res.changed.contains(&"bar".to_owned()));
-    // BUG: main should be recomputed but currently is not, because is_reexport
-    // metadata is not being tracked as a fine-grained dependency.
-    // Once the bug is fixed, uncomment the assertion below and remove the #[ignore]:
-    // assert!(res.changed.contains(&"main".to_owned()));
+    assert!(res.changed.contains(&"main".to_owned()));
 }
 
 /// Test that when a re-export's source changes, dependents are invalidated.
@@ -1785,4 +2039,40 @@ fn test_class_docstring_change_invalidates() {
         "class C:\n    \"\"\"Updated class docstring.\"\"\"\n    x: int = 1",
     );
     i.check(&["foo", "main"], &["foo"]);
+}
+
+/// Test that when __all__ contains Module entries (like `__all__.extend(other.__all__)`),
+/// changing those entries triggers wildcard fallback and invalidates star importers.
+///
+/// This tests the `wildcard_fallback` behavior in `changed_name_existence`.
+/// When __all__ contains Module entries that change, we can't compute the exact
+/// set of names that changed without a lookup, so we emit a coarse Wildcard signal.
+#[test]
+fn test_dunder_all_module_entry_change_invalidates() {
+    let mut i = Incremental::new();
+
+    // bar exports x
+    i.set("bar", "x = 1\n__all__ = ['x']");
+    // baz exports y
+    i.set("baz", "y = 2\n__all__ = ['y']");
+    // foo imports bar and re-exports bar's __all__
+    i.set(
+        "foo",
+        "import bar\nfrom bar import *\n__all__ = []\n__all__.extend(bar.__all__)",
+    );
+    // main does star import from foo and uses x
+    i.set("main", "from foo import *\nz = x");
+    i.check(
+        &["main", "foo", "bar", "baz"],
+        &["main", "foo", "bar", "baz"],
+    );
+
+    // Now change foo to re-export baz's __all__ instead of bar's
+    // This changes a Module entry in __all__, triggering wildcard fallback
+    i.set(
+        "foo",
+        "import baz\nfrom baz import *\n__all__ = []\n__all__.extend(baz.__all__)",
+    );
+    // main should be recomputed because the wildcard set changed
+    i.check_ignoring_expectations(&["foo"], &["foo", "main"]);
 }

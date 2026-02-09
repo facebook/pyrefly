@@ -48,6 +48,7 @@ use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingVariance;
+use crate::binding::binding::BindingVarianceCheck;
 use crate::binding::binding::ClassBinding;
 use crate::binding::binding::ClassDefData;
 use crate::binding::binding::ClassFieldDefinition;
@@ -65,6 +66,7 @@ use crate::binding::binding::KeyConsistentOverrideCheck;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
+use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -78,7 +80,7 @@ use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
-use crate::types::types::Type;
+use crate::types::types::AnyStyle;
 
 enum IllegalIdentifierHandling {
     Error,
@@ -111,6 +113,7 @@ impl<'a> BindingsBuilder<'a> {
             mro_idx: self.idx_for_promise(KeyClassMro(def_index)),
             synthesized_fields_idx: self.idx_for_promise(KeyClassSynthesizedFields(def_index)),
             variance_idx: self.idx_for_promise(KeyVariance(def_index)),
+            variance_check_idx: self.idx_for_promise(KeyVarianceCheck(def_index)),
             consistent_override_check_idx: self
                 .idx_for_promise(KeyConsistentOverrideCheck(def_index)),
             abstract_class_check_idx: self.idx_for_promise(KeyAbstractClassCheck(def_index)),
@@ -368,6 +371,12 @@ impl<'a> BindingsBuilder<'a> {
             class_indices.variance_idx,
             BindingVariance {
                 class_key: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.variance_check_idx,
+            BindingVarianceCheck {
+                class_idx: class_indices.class_idx,
             },
         );
         self.insert_binding_idx(
@@ -651,7 +660,7 @@ impl<'a> BindingsBuilder<'a> {
                     alias_of: None,
                 },
                 (None, true) => ClassFieldDefinition::AssignedInBody {
-                    value: ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
+                    value: ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
                     annotation,
                     alias_of: None,
                 },
@@ -690,6 +699,12 @@ impl<'a> BindingsBuilder<'a> {
             class_indices.variance_idx,
             BindingVariance {
                 class_key: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.variance_check_idx,
+            BindingVarianceCheck {
+                class_idx: class_indices.class_idx,
             },
         );
         self.insert_binding_idx(

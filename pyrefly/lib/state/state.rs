@@ -32,6 +32,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::fs_anyhow;
@@ -109,12 +110,14 @@ use crate::state::memory::MemoryFiles;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::memory::MemoryFilesOverlay;
 use crate::state::require::Require;
+use crate::state::require::RequireLevels;
 use crate::state::steps::Context;
 use crate::state::steps::Step;
 use crate::state::steps::Steps;
 use crate::state::subscriber::Subscriber;
 use crate::types::callable::Deprecation;
 use crate::types::class::Class;
+use crate::types::class::ClassDefIndex;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -130,73 +133,204 @@ enum ChangedExports {
     InvalidateAll,
 }
 
-/// What names from a module this module depends on.
-#[derive(Debug, Clone)]
-pub enum DependsOn {
-    /// Depends on all exports (star import or `import x`).
-    All,
-    /// Depends on specific keys (`from x import a, b`).
-    Keys(SmallSet<AnyExportedKey>),
-    /// Depends on nothing
-    None,
+/// Tracks fine-grained dependency on a single exported name.
+///
+/// Presence in a `ModuleDep::names` map implies we depend on the name's existence;
+/// if the name is added or removed, we should be invalidated regardless of the
+/// `metadata` and `type_` flags. The flags below control additional dependencies.
+#[derive(Debug, Clone, Default)]
+pub struct NameDep {
+    /// Depend on metadata (deprecation, docstring)?
+    pub metadata: bool,
+    /// Depend on the type of the export?
+    pub type_: bool,
 }
 
-impl DependsOn {
-    /// Merge another `DependsOn` into this one, returning the combined dependency.
-    fn merge(&self, other: &DependsOn) -> DependsOn {
-        match (self, other) {
-            (DependsOn::All, _) | (_, DependsOn::All) => DependsOn::All,
-            (DependsOn::None, other) => other.clone(),
-            (this, DependsOn::None) => this.clone(),
-            (DependsOn::Keys(a), DependsOn::Keys(b)) => {
-                let mut merged = a.clone();
-                merged.extend(b.iter().cloned());
-                DependsOn::Keys(merged)
+/// Per-module dependency tracking for fine-grained incremental invalidation.
+#[derive(Debug, Clone, Default)]
+pub struct ModuleDep {
+    /// Per-name dependencies. Presence implies existence dependency.
+    pub names: SmallMap<Name, NameDep>,
+    /// Do we depend on the wildcard export set?
+    pub wildcard: bool,
+    /// Which classes do we depend on?
+    pub classes: SmallSet<ClassDefIndex>,
+    /// Which type aliases do we depend on?
+    pub type_aliases: SmallSet<TypeAliasIndex>,
+}
+
+impl ModuleDep {
+    /// Create a dependency on a name's type.
+    pub fn name_type(name: Name) -> Self {
+        let mut names = SmallMap::new();
+        names.insert(
+            name,
+            NameDep {
+                metadata: false,
+                type_: true,
+            },
+        );
+        Self {
+            names,
+            wildcard: false,
+            classes: SmallSet::new(),
+            type_aliases: SmallSet::new(),
+        }
+    }
+
+    /// Create a dependency on a name's metadata.
+    pub fn name_metadata(name: Name) -> Self {
+        let mut names = SmallMap::new();
+        names.insert(
+            name,
+            NameDep {
+                metadata: true,
+                type_: false,
+            },
+        );
+        Self {
+            names,
+            wildcard: false,
+            classes: SmallSet::new(),
+            type_aliases: SmallSet::new(),
+        }
+    }
+
+    /// Create a dependency on the wildcard export set.
+    pub fn wildcard_dep() -> Self {
+        Self {
+            names: SmallMap::new(),
+            wildcard: true,
+            classes: SmallSet::new(),
+            type_aliases: SmallSet::new(),
+        }
+    }
+
+    /// Create a dependency on a specific class.
+    pub fn class_dep(class: ClassDefIndex) -> Self {
+        let mut classes = SmallSet::new();
+        classes.insert(class);
+        Self {
+            names: SmallMap::new(),
+            wildcard: false,
+            classes,
+            type_aliases: SmallSet::new(),
+        }
+    }
+
+    /// Create a dependency on a specific type alias
+    pub fn type_alias_dep(type_alias: TypeAliasIndex) -> Self {
+        let mut type_aliases = SmallSet::new();
+        type_aliases.insert(type_alias);
+        Self {
+            names: SmallMap::new(),
+            wildcard: false,
+            classes: SmallSet::new(),
+            type_aliases,
+        }
+    }
+
+    /// Create a dependency with no dependencies (just module existence).
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Merge another `ModuleDep` into this one, mutating in place.
+    pub fn merge_in_place(&mut self, mut other: ModuleDep) {
+        // SmallMap doesn't support drain; take ownership by replacing with an empty map
+        let mut other_names = SmallMap::new();
+        std::mem::swap(&mut other_names, &mut other.names);
+
+        for (name, dep) in other_names {
+            if let Some(existing) = self.names.get_mut(&name) {
+                existing.metadata |= dep.metadata;
+                existing.type_ |= dep.type_;
+            } else {
+                self.names.insert(name, dep);
             }
         }
+
+        self.classes.extend(other.classes);
+        self.type_aliases.extend(other.type_aliases);
+
+        self.wildcard |= other.wildcard;
     }
 
     /// Check if this dependency should be invalidated given a set of changed exports.
     /// Returns true if any of the changed exports overlap with what this dependency imports.
+    ///
+    /// In this version, wildcard = true invalidates on ANY change for compatibility.
     fn should_invalidate(&self, changed_exports: &ChangedExports) -> bool {
         match changed_exports {
             ChangedExports::NoChange => false,
             ChangedExports::InvalidateAll => true,
-            ChangedExports::Changed(changed) => match self {
-                DependsOn::None => false,
-                DependsOn::All => true, // Depends on everything
-                DependsOn::Keys(keys) => keys
-                    .iter()
-                    .any(|key| changed.contains(&key.to_changed_export())),
-            },
+            ChangedExports::Changed(changed) => {
+                // If wildcard is set, invalidate on any change (same as old DependsOn::All)
+                if self.wildcard {
+                    return true;
+                }
+                changed.iter().any(|change| self.matches_change(change))
+            }
         }
     }
 
     /// Compute which exports to propagate to this dependent based on what changed.
+    ///
+    /// This uses the same matching logic as `should_invalidate` but filters the set
+    /// rather than short-circuiting. We keep them separate because `should_invalidate`
+    /// can return early (better for the common case), while this must compute the
+    /// full filtered set for transitive propagation.
     fn propagate_exports(&self, changed_exports: &ChangedExports) -> ChangedExports {
         match changed_exports {
             ChangedExports::NoChange => ChangedExports::NoChange,
             ChangedExports::InvalidateAll => ChangedExports::InvalidateAll,
-            ChangedExports::Changed(changed) => match self {
-                DependsOn::None => ChangedExports::NoChange, // Nothing to propagate
-                DependsOn::All => ChangedExports::Changed(changed.clone()), // Propagate all changes
-                DependsOn::Keys(keys) => {
-                    // Collect all changed exports from the dependency keys
-                    let imported_exports: SmallSet<ChangedExport> =
-                        keys.iter().map(|key| key.to_changed_export()).collect();
-                    // Only propagate exports that are imported
-                    let propagated: SmallSet<ChangedExport> = changed
-                        .iter()
-                        .filter(|e| imported_exports.contains(*e))
-                        .cloned()
-                        .collect();
-                    if propagated.is_empty() {
-                        ChangedExports::NoChange
-                    } else {
-                        ChangedExports::Changed(propagated)
-                    }
+            ChangedExports::Changed(changed) => {
+                // If wildcard is set, propagate all changes (same as old DependsOn::All)
+                if self.wildcard {
+                    return ChangedExports::Changed(changed.clone());
                 }
-            },
+                let propagated: SmallSet<ChangedExport> = changed
+                    .iter()
+                    .filter(|change| self.matches_change(change))
+                    .cloned()
+                    .collect();
+                if propagated.is_empty() {
+                    ChangedExports::NoChange
+                } else {
+                    ChangedExports::Changed(propagated)
+                }
+            }
+        }
+    }
+
+    /// Check if a single changed export matches this dependency.
+    /// Used by both `should_invalidate` and `propagate_exports`.
+    fn matches_change(&self, change: &ChangedExport) -> bool {
+        match change {
+            ChangedExport::Name(name) => self.names.get(name).is_some_and(|d| d.type_),
+            ChangedExport::NameExistence(name) => self.names.contains_key(name),
+            ChangedExport::ClassDefIndex(idx) => self.classes.contains(idx),
+            ChangedExport::TypeAliasIndex(idx) => self.type_aliases.contains(idx),
+            ChangedExport::Metadata(name) => self.names.get(name).is_some_and(|d| d.metadata),
+        }
+    }
+}
+
+impl AnyExportedKey {
+    /// Convert this exported key to a `ModuleDep`.
+    /// `KeyExport` maps to a name type dependency, all class-related keys map to class dependencies.
+    pub fn to_module_dep(&self) -> ModuleDep {
+        match self {
+            AnyExportedKey::KeyExport(k) => ModuleDep::name_type(k.0.clone()),
+            AnyExportedKey::KeyTParams(k) => ModuleDep::class_dep(k.0),
+            AnyExportedKey::KeyClassBaseType(k) => ModuleDep::class_dep(k.0),
+            AnyExportedKey::KeyClassField(k) => ModuleDep::class_dep(k.0),
+            AnyExportedKey::KeyClassSynthesizedFields(k) => ModuleDep::class_dep(k.0),
+            AnyExportedKey::KeyVariance(k) => ModuleDep::class_dep(k.0),
+            AnyExportedKey::KeyClassMetadata(k) => ModuleDep::class_dep(k.0),
+            AnyExportedKey::KeyClassMro(k) => ModuleDep::class_dep(k.0),
+            AnyExportedKey::KeyAbstractClassCheck(k) => ModuleDep::class_dep(k.0),
+            AnyExportedKey::KeyTypeAlias(k) => ModuleDep::type_alias_dep(k.0),
         }
     }
 }
@@ -206,8 +340,8 @@ impl DependsOn {
 enum ImportResolution {
     /// Successfully resolved import - maps module name to handle(s) with optional dependency tracking.
     /// `None` means the import was resolved for caching only (used during Exports phase).
-    /// `Some(DependsOn)` means the import is tracked for fine-grained invalidation (used during Solutions phase).
-    Resolved(SmallMap1<Handle, DependsOn>),
+    /// `Some(ModuleDep)` means the import is tracked for fine-grained invalidation (used during Solutions phase).
+    Resolved(SmallMap1<Handle, ModuleDep>),
     /// Failed import - stores the error for incremental invalidation.
     Failed(FindError),
 }
@@ -319,12 +453,12 @@ impl ModuleDataMut {
     }
 
     /// Look up how this module depends on a specific source handle.
-    /// Returns the `DependsOn` if this module imports from `source_handle`, or `None` if not found.
+    /// Returns the `ModuleDep` if this module imports from `source_handle`, or `None` if not found.
     fn get_depends_on(
         &self,
         source_module: ModuleName,
         source_handle: &Handle,
-    ) -> Option<DependsOn> {
+    ) -> Option<ModuleDep> {
         let deps_guard = self.deps.read();
         deps_guard
             .get(&source_module)
@@ -739,9 +873,8 @@ impl<'a> Transaction<'a> {
             if clear_ast {
                 w.steps.ast = None;
             }
-            w.steps.exports = None;
+            // Do not clear solutions or exports, since we use them for equality.
             w.steps.answers = None;
-            // Do not clear solutions, since we can use that for equality
             w.epochs.computed = self.data.now;
             if let Some(subscriber) = &self.data.subscriber {
                 subscriber.start_work(&module_data.handle);
@@ -974,6 +1107,7 @@ impl<'a> Transaction<'a> {
                     .untyped_def_behavior(module_data.handle.path().as_path()),
                 infer_with_first_use: config
                     .infer_with_first_use(module_data.handle.path().as_path()),
+                tensor_shapes: config.tensor_shapes(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
             };
             let set = todo.compute(&exclusive.steps, &ctx);
@@ -987,8 +1121,15 @@ impl<'a> Transaction<'a> {
                 } else {
                     None
                 };
+                let old_exports = if todo == Step::Exports {
+                    writer.steps.exports.take()
+                } else {
+                    None
+                };
                 set.0(&mut writer.steps);
                 // Compute which exports changed for fine-grained invalidation.
+                // Check at both the Exports step (for wildcard set changes) and
+                // the Solutions step (for type changes).
                 let changed_exports: ChangedExports = if todo == Step::Solutions {
                     match (old_solutions.as_ref(), writer.steps.solutions.as_ref()) {
                         (Some(old), Some(new)) => {
@@ -1007,8 +1148,40 @@ impl<'a> Transaction<'a> {
                         (Some(_old), None) => ChangedExports::InvalidateAll, // Had solutions, now don't
                         (None, _) => ChangedExports::NoChange, // No old solutions = no change to propagate
                     }
+                } else if todo == Step::Exports {
+                    // Check if exports changed at the Exports step.
+                    // This detects both wildcard set changes and definition name changes.
+                    // Wildcard changes affect `from M import *`.
+                    // Name existence changes affect `from M import name`.
+                    match (old_exports.as_ref(), writer.steps.exports.as_ref()) {
+                        (Some(old), Some(new)) => {
+                            let mut changed_set: SmallSet<ChangedExport> = SmallSet::new();
+                            // Check for definition name changes (added/removed names)
+                            for name in old.changed_names(new) {
+                                changed_set.insert(ChangedExport::NameExistence(name));
+                            }
+
+                            // Check for metadata changes (is_reexport, implicitly_imported_submodule, deprecation, special_export)
+                            for name in old.changed_metadata_names(new) {
+                                changed_set.insert(ChangedExport::Metadata(name));
+                            }
+
+                            if changed_set.is_empty() {
+                                ChangedExports::NoChange
+                            } else {
+                                debug!(
+                                    "Exports changed for `{}`: {:?}",
+                                    module_data.handle.module(),
+                                    changed_set
+                                );
+                                ChangedExports::Changed(changed_set)
+                            }
+                        }
+                        (Some(_), None) => ChangedExports::InvalidateAll,
+                        (None, _) => ChangedExports::NoChange,
+                    }
                 } else {
-                    ChangedExports::NoChange // Not Solutions step = no export changes
+                    ChangedExports::NoChange
                 };
                 if todo == Step::Answers && !require.keep_ast() {
                     // We have captured the Ast, and must have already built Exports (we do it serially),
@@ -1295,27 +1468,30 @@ impl<'a> Transaction<'a> {
         // Check; demand; check - the second check is guaranteed to work.
         for _ in 0..2 {
             let lock = module_data.state.read();
-            if let Some(solutions) = &lock.steps.solutions
-                && lock.epochs.checked == self.data.now
-                && lock.steps.last_step == Some(Step::Solutions)
-            {
-                return solutions.get_hashed_opt(key).duped();
-            } else if let Some(answers) = &lock.steps.answers {
-                let load = lock.steps.load.dupe().unwrap();
-                let answers = answers.dupe();
-                drop(lock);
-                let stdlib = self.get_stdlib(&module_data.handle);
-                let lookup = self.lookup(module_data);
-                return answers.1.solve_exported_key(
-                    &lookup,
-                    &lookup,
-                    &answers.0,
-                    &load.errors,
-                    &stdlib,
-                    &self.data.state.uniques,
-                    key,
-                    thread_state,
-                );
+            if lock.epochs.checked == self.data.now {
+                // Only use existing solutions or answers if the module data is current.
+                // Otherwise, the module might be dirty and require computation.
+                if let Some(solutions) = &lock.steps.solutions
+                    && lock.steps.last_step == Some(Step::Solutions)
+                {
+                    return solutions.get_hashed_opt(key).duped();
+                } else if let Some(answers) = &lock.steps.answers {
+                    let load = lock.steps.load.dupe().unwrap();
+                    let answers = answers.dupe();
+                    drop(lock);
+                    let stdlib = self.get_stdlib(&module_data.handle);
+                    let lookup = self.lookup(module_data);
+                    return answers.1.solve_exported_key(
+                        &lookup,
+                        &lookup,
+                        &answers.0,
+                        &load.errors,
+                        &stdlib,
+                        &self.data.state.uniques,
+                        key,
+                        thread_state,
+                    );
+                }
             }
             drop(lock);
             self.demand(&module_data, Step::Answers);
@@ -1657,6 +1833,7 @@ impl<'a> Transaction<'a> {
             &recurser,
             &stdlib,
             &thread_state,
+            answers.heap(),
         );
         let result = solve(solver);
         Some(result)
@@ -1876,6 +2053,7 @@ impl<'a> Transaction<'a> {
                 lookup: &self.lookup(m.dupe()),
                 untyped_def_behavior: config.untyped_def_behavior(m.handle.path().as_path()),
                 infer_with_first_use: config.infer_with_first_use(m.handle.path().as_path()),
+                tensor_shapes: config.tensor_shapes(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
             };
             let mut step = Step::Load; // Start at AST (Load.next)
@@ -1927,6 +2105,11 @@ impl<'a> Transaction<'a> {
             .exports(&self.lookup(module_data))
     }
 
+    pub(crate) fn get_exports_data(&self, handle: &Handle) -> Exports {
+        let module_data = self.get_module(handle);
+        self.lookup_export(&module_data)
+    }
+
     pub fn get_module_docstring_range(&self, handle: &Handle) -> Option<TextRange> {
         let module_data = self.get_module(handle);
         self.lookup_export(&module_data).docstring_range()
@@ -1943,8 +2126,14 @@ impl<'a> TransactionHandle<'a> {
         &self,
         module: ModuleName,
         path: Option<&ModulePath>,
-        depends_on: DependsOn,
+        dep: ModuleDep,
     ) -> FindingOrError<ArcId<ModuleDataMut>> {
+        if module == self.module_data.handle.module()
+            && path.is_none_or(|path| path == self.module_data.handle.path())
+        {
+            return FindingOrError::new_finding(self.module_data.dupe());
+        }
+
         let cached = {
             let deps_read = self.module_data.deps.read();
             if let Some(ImportResolution::Resolved(handles)) = deps_read.get(&module)
@@ -1957,12 +2146,30 @@ impl<'a> TransactionHandle<'a> {
         };
 
         if let Some(handle) = cached {
-            {
+            // Only acquire write lock if we actually have new dependencies to add.
+            // This avoids lock contention on the hot path when the same import is
+            // looked up repeatedly with no new dependency information.
+            // First check with read lock if merge is needed
+            let needs_merge = {
+                let deps_read = self.module_data.deps.read();
+                if let Some(ImportResolution::Resolved(handles)) = deps_read.get(&module)
+                    && let Some(_existing) = handles.get(&handle)
+                {
+                    // Check if dep has any dependencies that aren't already tracked
+                    !dep.names.is_empty()
+                        || dep.wildcard
+                        || !dep.classes.is_empty()
+                        || !dep.type_aliases.is_empty()
+                } else {
+                    true
+                }
+            };
+            if needs_merge {
                 let mut write = self.module_data.deps.write();
                 if let Some(ImportResolution::Resolved(handles)) = write.get_mut(&module)
                     && let Some(existing) = handles.get_mut(&handle)
                 {
-                    *existing = existing.merge(&depends_on);
+                    existing.merge_in_place(dep);
                 }
             }
             return FindingOrError::new_finding(self.transaction.get_imported_module(&handle));
@@ -1983,7 +2190,7 @@ impl<'a> TransactionHandle<'a> {
                     Entry::Vacant(e) => {
                         e.insert(ImportResolution::Resolved(SmallMap1::new(
                             handle,
-                            depends_on.clone(),
+                            dep.clone(),
                         )));
                         true
                     }
@@ -1991,10 +2198,10 @@ impl<'a> TransactionHandle<'a> {
                         match e.get_mut() {
                             ImportResolution::Resolved(handles) => {
                                 if let Some(existing) = handles.get_mut(&handle) {
-                                    *existing = existing.merge(&depends_on);
+                                    existing.merge_in_place(dep);
                                     false
                                 } else {
-                                    handles.insert(handle, depends_on.clone());
+                                    handles.insert(handle, dep.clone());
                                     true
                                 }
                             }
@@ -2005,7 +2212,7 @@ impl<'a> TransactionHandle<'a> {
                                 // explicit path (e.g., from bundled typeshed). Upgrade to Resolved.
                                 e.insert(ImportResolution::Resolved(SmallMap1::new(
                                     handle,
-                                    depends_on.clone(),
+                                    dep.clone(),
                                 )));
                                 true
                             }
@@ -2039,9 +2246,9 @@ impl<'a> TransactionHandle<'a> {
         &self,
         module: ModuleName,
         f: impl FnOnce(&Exports, &Self) -> T,
-        depends_on: DependsOn,
+        dep: ModuleDep,
     ) -> Option<T> {
-        let module_data = self.get_module(module, None, depends_on).finding()?;
+        let module_data = self.get_module(module, None, dep).finding()?;
         let exports = self.transaction.lookup_export(&module_data);
         let lookup = TransactionHandle {
             transaction: self.transaction,
@@ -2056,9 +2263,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         self.with_exports(
             module,
             |exports, lookup| exports.exports(lookup).contains_key(name),
-            DependsOn::Keys(SmallSet::from_iter([AnyExportedKey::KeyExport(KeyExport(
-                name.clone(),
-            ))])),
+            ModuleDep::name_type(name.clone()),
         )
         .unwrap_or(false)
     }
@@ -2067,12 +2272,12 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         self.with_exports(
             module,
             |exports, lookup| exports.wildcard(lookup),
-            DependsOn::All,
+            ModuleDep::wildcard_dep(),
         )
     }
 
     fn module_exists(&self, module: ModuleName) -> FindingOrError<()> {
-        self.get_module(module, None, DependsOn::None)
+        self.get_module(module, None, ModuleDep::none())
             .map(|module_data| {
                 self.transaction.lookup_export(&module_data);
             })
@@ -2082,14 +2287,12 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         self.with_exports(
             module,
             |exports, _lookup| exports.is_submodule_imported_implicitly(name),
-            DependsOn::Keys(SmallSet::from_iter([AnyExportedKey::KeyExport(KeyExport(
-                name.clone(),
-            ))])),
+            ModuleDep::name_metadata(name.clone()),
         )
         .unwrap_or(false)
     }
 
-    fn get_every_export(&self, module: ModuleName) -> Option<SmallSet<Name>> {
+    fn get_every_export_untracked(&self, module: ModuleName) -> Option<SmallSet<Name>> {
         self.with_exports(
             module,
             |exports, lookup| {
@@ -2099,7 +2302,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                     .cloned()
                     .collect::<SmallSet<Name>>()
             },
-            DependsOn::All,
+            ModuleDep::none(),
         )
     }
 
@@ -2113,9 +2316,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 }) => Some(d.clone()),
                 _ => None,
             },
-            DependsOn::Keys(SmallSet::from_iter([AnyExportedKey::KeyExport(KeyExport(
-                name.clone(),
-            ))])),
+            ModuleDep::name_metadata(name.clone()),
         )?
     }
 
@@ -2128,9 +2329,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                     Some(ExportLocation::OtherModule(..))
                 )
             },
-            DependsOn::Keys(SmallSet::from_iter([AnyExportedKey::KeyExport(KeyExport(
-                name.clone(),
-            ))])),
+            ModuleDep::name_metadata(name.clone()),
         )
         .unwrap_or(false)
     }
@@ -2158,9 +2357,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                         Some(Ok((*other_module, original_name.clone())))
                     }
                 },
-                DependsOn::Keys(SmallSet::from_iter([AnyExportedKey::KeyExport(KeyExport(
-                    name.clone(),
-                ))])),
+                ModuleDep::name_type(name.clone()),
             )??;
 
             match next {
@@ -2184,9 +2381,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 }) => *docstring_range,
                 _ => None,
             },
-            DependsOn::Keys(SmallSet::from_iter([AnyExportedKey::KeyExport(KeyExport(
-                name.clone(),
-            ))])),
+            ModuleDep::name_metadata(name.clone()),
         )?
     }
 }
@@ -2207,11 +2402,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         // The unwrap is safe because we must have said there were no exports,
         // so no one can be trying to get at them
         let module_data = self
-            .get_module(
-                module,
-                path,
-                DependsOn::Keys(SmallSet::from_iter([k.to_anykey()])),
-            )
+            .get_module(module, path, k.to_anykey().to_module_dep())
             .finding()
             .unwrap();
         let res = self.transaction.lookup_answer(module_data, k, thread_state);
@@ -2462,13 +2653,12 @@ impl State {
     pub fn run(
         &self,
         handles: &[Handle],
-        require: Require,
-        default_require: Require,
+        require: RequireLevels,
         subscriber: Option<Box<dyn Subscriber>>,
         telemetry: Option<&mut TelemetryEvent>,
     ) {
-        let mut transaction = self.new_committable_transaction(default_require, subscriber);
-        transaction.transaction.run(handles, require);
+        let mut transaction = self.new_committable_transaction(require.default, subscriber);
+        transaction.transaction.run(handles, require.specified);
         self.commit_transaction(transaction, telemetry);
     }
 

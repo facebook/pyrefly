@@ -26,6 +26,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
@@ -92,11 +93,12 @@ pub fn find_containing_function_for_call(
 /// and transforms it into the LSP response format.
 pub fn transform_incoming_calls(
     callers: Vec<(Module, Vec<(TextRange, String, TextRange)>)>,
+    path_remapper: Option<&PathRemapper>,
 ) -> Vec<CallHierarchyIncomingCall> {
     let mut incoming_calls = Vec::new();
     for (caller_module, call_sites) in callers {
         for (call_range, caller_name, caller_def_range) in call_sites {
-            let Some(caller_uri) = module_info_to_uri(&caller_module) else {
+            let Some(caller_uri) = module_info_to_uri(&caller_module, path_remapper) else {
                 continue;
             };
 

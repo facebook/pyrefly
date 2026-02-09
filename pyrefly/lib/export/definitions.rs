@@ -78,6 +78,19 @@ pub enum DefinitionStyle {
     Delete,
 }
 
+impl DefinitionStyle {
+    /// Returns true if this definition style represents an import from another module.
+    pub fn is_import(&self) -> bool {
+        matches!(
+            self,
+            DefinitionStyle::ImportAs(..)
+                | DefinitionStyle::ImportAsEq(..)
+                | DefinitionStyle::Import(..)
+                | DefinitionStyle::ImportModule(..)
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Definition {
     /// If the definition occurs multiple times, the lowest `DefinitionStyle` is used (e.g. prefer `Local`).

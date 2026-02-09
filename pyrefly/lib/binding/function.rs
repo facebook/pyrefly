@@ -40,6 +40,7 @@ use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
+use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
@@ -67,7 +68,7 @@ use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::UntypedDefBehavior;
 use crate::export::special::SpecialExport;
-use crate::types::types::Type;
+use crate::types::types::AnyStyle;
 
 struct Decorators {
     has_no_type_check: bool,
@@ -169,7 +170,7 @@ impl<'a> SelfAttrNames<'a> {
                 (
                     n,
                     InstanceAttribute(
-                        super::binding::ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
+                        super::binding::ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
                         None,
                         r,
                         MethodSelfKind::Instance,
@@ -485,7 +486,7 @@ impl<'a> BindingsBuilder<'a> {
             Key::ReturnType(ShortIdentifier::new(func_name)),
             // TODO(grievejia): traverse the function body and calculate the `is_generator` flag, then
             // use ReturnTypeKind::ShouldReturnAny to get more precision here.
-            Binding::Type(Type::any_implicit()),
+            Binding::Any(AnyStyle::Implicit),
         );
     }
 
@@ -851,8 +852,14 @@ fn function_last_expressions<'a>(
                     f(sys_info, body, res)?;
                 }
                 if last_test.is_some() {
-                    // The final `if` can fall through, so the `if` itself might be the last statement.
-                    return None;
+                    // The if/elif chain has no else clause, so it's not syntactically exhaustive.
+                    // But it might be type-exhaustive. Add a LastStmt::Exhaustive entry so we can check
+                    // at solve time. We use the test expression as a placeholder; the actual
+                    // exhaustiveness check uses the if range to find the Exhaustive binding.
+                    res.push((
+                        LastStmt::Exhaustive(ExhaustivenessKind::IfElif, x.range),
+                        &x.test,
+                    ));
                 }
             }
             Stmt::Try(x) => {
@@ -889,10 +896,13 @@ fn function_last_expressions<'a>(
                 }
                 if !syntactically_exhaustive {
                     // The match is not syntactically exhaustive, but might be type-exhaustive.
-                    // Add a LastStmt::Match entry so we can check at solve time.
+                    // Add a LastStmt::Exhaustive entry so we can check at solve time.
                     // We use the subject expression as a placeholder; the actual exhaustiveness
-                    // check uses the match range to find the MatchExhaustive binding.
-                    res.push((LastStmt::Match(x.range), x.subject.as_ref()));
+                    // check uses the match range to find the Exhaustive binding.
+                    res.push((
+                        LastStmt::Exhaustive(ExhaustivenessKind::Match, x.range),
+                        x.subject.as_ref(),
+                    ));
                 }
             }
             _ => return None,

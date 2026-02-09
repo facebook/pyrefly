@@ -20,6 +20,7 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
+use crate::test::util::mk_multi_file_state;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn apply_patch(info: &ModuleInfo, range: TextRange, patch: String) -> (String, String) {
@@ -183,6 +184,19 @@ fn apply_first_inline_variable_action(code: &str) -> Option<String> {
 fn apply_first_inline_method_action(code: &str) -> Option<String> {
     let (handles, state) =
         mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .inline_method_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
+fn apply_first_inline_method_action_allow_errors(code: &str) -> Option<String> {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Everything, false);
     let handle = handles.get("main").unwrap();
     let transaction = state.transaction();
     let module_info = transaction.get_module_info(handle).unwrap();
@@ -370,6 +384,29 @@ fn compute_make_top_level_actions(
     let module_info = transaction.get_module_info(handle).unwrap();
     let actions = transaction
         .make_local_function_top_level_code_actions(handle, selection, ImportFormat::Absolute)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn compute_convert_star_import_actions(
+    code_by_module: &[(&'static str, &str)],
+    module_name: &'static str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(code_by_module, Require::Everything);
+    let handle = handles.get(module_name).unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .convert_star_import_code_actions(handle, selection)
         .unwrap_or_default();
     let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
         actions.iter().map(|action| action.edits.clone()).collect();
@@ -1448,6 +1485,190 @@ class C:
 }
 
 #[test]
+fn convert_star_import_basic() {
+    let code_main = r#"
+# CONVERT-START
+from foo import *  # noqa: F401
+# CONVERT-END
+a = A
+b = B
+"#;
+    let code_foo = r#"
+A = 1
+B = 2
+C = 3
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo)],
+        "main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+# CONVERT-START
+from foo import A, B # noqa: F401
+# CONVERT-END
+a = A
+b = B
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_relative() {
+    let code_main = r#"
+# CONVERT-START
+from .foo import *
+# CONVERT-END
+x = A
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("pkg.main", code_main), ("pkg.foo", code_foo)],
+        "pkg.main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `pkg.foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+# CONVERT-START
+from .foo import A
+# CONVERT-END
+x = A
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_selects_correct_import() {
+    let code_main = r#"
+# CONVERT-START
+from foo import *
+# CONVERT-END
+from bar import *
+a = A
+b = B
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let code_bar = r#"
+B = 2
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo), ("bar", code_bar)],
+        "main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+# CONVERT-START
+from foo import A
+# CONVERT-END
+from bar import *
+a = A
+b = B
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_no_action_when_unused() {
+    let code_main = r#"
+# CONVERT-START
+from foo import *
+# CONVERT-END
+x = 1
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (_module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo)],
+        "main",
+        selection,
+    );
+    assert!(actions.is_empty());
+    assert!(titles.is_empty());
+}
+
+#[test]
+fn convert_star_import_multiline() {
+    // Multi-line star imports with parentheses should be handled correctly.
+    let code_main = r#"
+# MULTILINE-START
+from foo import (
+    *,
+)
+# MULTILINE-END
+x = A
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let selection = find_marked_range_with(code_main, "# MULTILINE-START", "# MULTILINE-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo)],
+        "main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    // The replacement should produce a valid single-line import.
+    let expected = r#"
+# MULTILINE-START
+from foo import A
+# MULTILINE-END
+x = A
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_shadowed_name() {
+    // When a name from the star import is shadowed by a local assignment,
+    // it should not appear in the explicit import list.
+    let code_main = r#"
+# CONVERT-START
+from foo import *
+# CONVERT-END
+A = 42
+print(A)
+print(B)
+"#;
+    let code_foo = r#"
+A = 1
+B = 2
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo)],
+        "main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    // Only B should be imported since A is shadowed by a local assignment.
+    let expected = r#"
+# CONVERT-START
+from foo import B
+# CONVERT-END
+A = 42
+print(A)
+print(B)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn extract_variable_name_increments_when_taken() {
     let code = r#"
 def compute():
@@ -2368,6 +2589,115 @@ def compute():
     result = ((1 + 2) * 3)
 #            ^
     return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_method_for_class() {
+    let code = r#"
+class A:
+    def foo(self):
+        return 1
+
+    def bar(self):
+        self.foo()
+#        ^
+"#;
+    let updated = apply_first_inline_method_action(code).expect("expected inline method action");
+    let expected = r#"
+class A:
+    def foo(self):
+        return 1
+
+    def bar(self):
+        1
+#        ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_method_for_class_no_action_staticmethod() {
+    // @staticmethod methods cannot use self.foo() pattern
+    let code = r#"
+class A:
+    @staticmethod
+    def foo():
+        return 1
+
+    def bar(self):
+        self.foo()
+#        ^
+"#;
+    assert!(apply_first_inline_method_action(code).is_none());
+}
+
+#[test]
+fn inline_method_for_class_no_action_classmethod() {
+    // @classmethod methods cannot use self.foo() pattern
+    let code = r#"
+class A:
+    @classmethod
+    def foo(cls):
+        return 1
+
+    def bar(self):
+        self.foo()
+#        ^
+"#;
+    assert!(apply_first_inline_method_action(code).is_none());
+}
+
+#[test]
+fn inline_method_for_class_no_action_method_not_found() {
+    // Cannot inline a method that doesn't exist in the class
+    let code = r#"
+class A:
+    def bar(self):
+        self.foo()
+#        ^
+"#;
+    assert!(apply_first_inline_method_action_allow_errors(code).is_none());
+}
+
+#[test]
+fn inline_method_for_class_no_action_different_receiver() {
+    // Cannot inline when receiver name doesn't match the self parameter
+    let code = r#"
+class A:
+    def foo(self):
+        return 1
+
+    def bar(self):
+        this.foo()
+#        ^
+"#;
+    assert!(apply_first_inline_method_action_allow_errors(code).is_none());
+}
+
+#[test]
+fn inline_method_for_nested_class() {
+    let code = r#"
+class Outer:
+    class Inner:
+        def foo(self):
+            return 1
+
+        def bar(self):
+            self.foo()
+#            ^
+"#;
+    let updated = apply_first_inline_method_action(code).expect("expected inline method action");
+    let expected = r#"
+class Outer:
+    class Inner:
+        def foo(self):
+            return 1
+
+        def bar(self):
+            1
+#            ^
 "#;
     assert_eq!(expected, updated);
 }

@@ -58,6 +58,7 @@ use crate::table_try_for_each;
 use crate::types::callable::Callable;
 use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
+use crate::types::heap::TypeHeap;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -481,6 +482,10 @@ impl Answers {
         &self.table
     }
 
+    pub fn heap(&self) -> &TypeHeap {
+        &self.solver.heap
+    }
+
     #[expect(dead_code)]
     fn len(&self) -> usize {
         let mut res = 0;
@@ -539,6 +544,7 @@ impl Answers {
             recurser,
             stdlib,
             thread_state,
+            self.heap(),
         );
         table_mut_for_each!(&mut res, |items| pre_solve(
             items,
@@ -630,6 +636,7 @@ impl Answers {
             recurser,
             stdlib,
             thread_state,
+            self.heap(),
         );
         let v = solver.get_hashed_opt(key)?;
         let mut vv = (*v).clone();
@@ -670,14 +677,14 @@ impl Answers {
         let lock = self.trace.as_ref()?.lock();
         match lock.overloaded_callees.get(&range)? {
             OverloadedCallee::Resolved { callable } => {
-                Some(self.deep_force(Type::Callable(Box::new(callable.clone()))))
+                Some(self.deep_force(self.heap().mk_callable_from(callable.clone())))
             }
             OverloadedCallee::Candidates {
                 closest,
                 is_closest_chosen,
                 ..
             } if *is_closest_chosen => {
-                Some(self.deep_force(Type::Callable(Box::new(closest.clone()))))
+                Some(self.deep_force(self.heap().mk_callable_from(closest.clone())))
             }
             _ => None,
         }

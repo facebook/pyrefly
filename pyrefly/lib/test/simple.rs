@@ -70,6 +70,19 @@ assert_type(y, int)
 );
 
 testcase!(
+    test_tstring,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from string.templatelib import Template
+from typing import assert_type
+
+v = 99
+template = t"hello{42}world{v}goodbye"
+assert isinstance(template, Template)
+"#,
+);
+
+testcase!(
     test_mypy_demo,
     r#"
 from typing import Any

@@ -12,6 +12,7 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemTag;
+use lsp_types::InsertTextFormat;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -23,6 +24,7 @@ use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::ExprContext;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -43,6 +45,32 @@ use crate::state::lsp::MIN_CHARACTERS_TYPED_AUTOIMPORT;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::types::Type;
+
+/// Sort text prefix for autoimport completions from public modules.
+const SORT_AUTOIMPORT_PUBLIC: &str = "4a";
+/// Sort text prefix for autoimport completions from private modules (deprioritized).
+const SORT_AUTOIMPORT_PRIVATE: &str = "4b";
+/// Default sort text for autoimport completions (used when no explicit sort text is set).
+const SORT_AUTOIMPORT_DEFAULT: &str = "4";
+
+/// Options that influence completion item formatting and behavior.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CompletionOptions {
+    pub supports_completion_item_details: bool,
+    pub complete_function_parens: bool,
+    pub supports_snippet_completions: bool,
+}
+
+/// Returns true if the client supports snippet completions in completion items.
+pub(crate) fn supports_snippet_completions(capabilities: &lsp_types::ClientCapabilities) -> bool {
+    capabilities
+        .text_document
+        .as_ref()
+        .and_then(|t| t.completion.as_ref())
+        .and_then(|c| c.completion_item.as_ref())
+        .and_then(|ci| ci.snippet_support)
+        .unwrap_or(false)
+}
 
 impl Transaction<'_> {
     /// Adds completion items for literal types (e.g., `Literal["foo", "bar"]`).
@@ -112,6 +140,31 @@ impl Transaction<'_> {
                     ..Default::default()
                 })
             });
+    }
+
+    /// Adds function/method completion inserts with parentheses, using snippets when supported.
+    pub(crate) fn add_function_call_parens(
+        completions: &mut [CompletionItem],
+        supports_snippets: bool,
+    ) {
+        for item in completions {
+            if item.insert_text.is_some() || item.text_edit.is_some() {
+                continue;
+            }
+            if !matches!(
+                item.kind,
+                Some(CompletionItemKind::FUNCTION | CompletionItemKind::METHOD)
+            ) {
+                continue;
+            }
+
+            if supports_snippets {
+                item.insert_text = Some(format!("{}($0)", item.label));
+                item.insert_text_format = Some(InsertTextFormat::SNIPPET);
+            } else {
+                item.insert_text = Some(format!("{}()", item.label));
+            }
+        }
     }
 
     /// Retrieves documentation for an export to display in completion items.
@@ -348,6 +401,13 @@ impl Transaction<'_> {
             && let Some(ast) = self.get_ast(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
+            let autoimport_sort_text = |module_name: &str| {
+                if module_name.split('.').any(|part| part.starts_with('_')) {
+                    SORT_AUTOIMPORT_PRIVATE
+                } else {
+                    SORT_AUTOIMPORT_PUBLIC
+                }
+            };
             for (handle_to_import_from, name, export) in
                 self.search_exports_fuzzy(identifier.as_str())
             {
@@ -357,7 +417,6 @@ impl Transaction<'_> {
                 {
                     continue;
                 }
-                let depth = handle_to_import_from.module().components().len();
                 let module_description = handle_to_import_from.module().as_str().to_owned();
                 let (insert_text, additional_text_edits, imported_module) = {
                     let (position, insert_text, module_name) = insert_import_edit(
@@ -396,7 +455,7 @@ impl Transaction<'_> {
                     } else {
                         None
                     },
-                    sort_text: Some(format!("4{}", depth)),
+                    sort_text: Some(autoimport_sort_text(&imported_module).to_owned()),
                     ..Default::default()
                 });
             }
@@ -406,6 +465,7 @@ impl Transaction<'_> {
                     continue;
                 }
                 let module_name_str = module_name.as_str().to_owned();
+                let module_sort_text = autoimport_sort_text(&module_name_str).to_owned();
                 if let Some(module_handle) = self.import_handle(handle, module_name, None).finding()
                 {
                     let (insert_text, additional_text_edits) = {
@@ -428,9 +488,10 @@ impl Transaction<'_> {
                         label_details: supports_completion_item_details.then_some(
                             CompletionItemLabelDetails {
                                 detail: Some(auto_import_label_detail),
-                                description: Some(module_name_str),
+                                description: Some(module_name_str.clone()),
                             },
                         ),
+                        sort_text: Some(module_sort_text),
                         ..Default::default()
                     });
                 }
@@ -444,10 +505,16 @@ impl Transaction<'_> {
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
-        supports_completion_item_details: bool,
+        options: CompletionOptions,
     ) -> (Vec<CompletionItem>, bool) {
+        let CompletionOptions {
+            supports_completion_item_details,
+            complete_function_parens,
+            supports_snippet_completions,
+        } = options;
         let mut result = Vec::new();
         let mut is_incomplete = false;
+        let mut allow_function_call_parens = false;
         // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
         // If the user might be typing the `import` keyword, add that as an autocomplete option.
         match self.identifier_at(handle, position) {
@@ -506,6 +573,7 @@ impl Transaction<'_> {
                 identifier: _,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
+                allow_function_call_parens = true;
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
                 {
@@ -552,6 +620,12 @@ impl Transaction<'_> {
                 identifier,
                 context,
             }) => {
+                if matches!(
+                    context,
+                    IdentifierContext::Expr(ExprContext::Load | ExprContext::Invalid)
+                ) {
+                    allow_function_call_parens = true;
+                }
                 if matches!(context, IdentifierContext::MethodDef { .. }) {
                     Self::add_magic_method_completions(&identifier, &mut result);
                 }
@@ -622,6 +696,9 @@ impl Transaction<'_> {
                 }
             }
         }
+        if complete_function_parens && allow_function_call_parens {
+            Self::add_function_call_parens(&mut result, supports_snippet_completions);
+        }
         for item in &mut result {
             let sort_text = if item
                 .tags
@@ -629,15 +706,15 @@ impl Transaction<'_> {
                 .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED))
             {
                 "9"
+            } else if let Some(sort_text) = &item.sort_text {
+                // 1 is reserved for re-exports
+                sort_text.as_str()
             } else if item.additional_text_edits.is_some() {
-                "4"
+                SORT_AUTOIMPORT_DEFAULT
             } else if item.label.starts_with("__") {
                 "3"
             } else if item.label.as_str().starts_with("_") {
                 "2"
-            } else if let Some(sort_text) = &item.sort_text {
-                // 1 is reserved for re-exports
-                sort_text.as_str()
             } else {
                 "0"
             }

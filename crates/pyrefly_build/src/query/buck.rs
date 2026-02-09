@@ -34,7 +34,7 @@ fn use_systemd() -> bool {
                 .output()
                 .is_ok_and(|o| o.status.success())
         });
-        return *AVAILABLE;
+        *AVAILABLE
     }
     #[cfg(not(fbcode_build))]
     false

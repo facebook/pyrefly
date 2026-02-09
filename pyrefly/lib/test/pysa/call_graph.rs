@@ -6468,10 +6468,8 @@ def caller(foo: Foo) -> Foo:  # Test return callees
                 "23:3-23:13",
                 return_shim_callees(
                     vec![
-                        create_call_target("test.Foo.callee_1", TargetType::Function)
-                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
-                        create_call_target("test.Foo.callee_2", TargetType::Function)
-                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                        create_call_target("test.Foo.callee_1", TargetType::Function),
+                        create_call_target("test.Foo.callee_2", TargetType::Function),
                     ],
                     /* arguments */ vec![ReturnShimArgumentMapping::ReturnExpression],
                 ),
@@ -6503,10 +6501,7 @@ def caller(foo: Foo) -> List[Foo]:  # Test stripping
             vec![(
                 "13:3-13:15",
                 return_shim_callees(
-                    vec![
-                        create_call_target("test.Foo.callee", TargetType::Function)
-                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
-                    ],
+                    vec![create_call_target("test.Foo.callee", TargetType::Function)],
                     vec![ReturnShimArgumentMapping::ReturnExpressionElement],
                 ),
             )],
@@ -6537,10 +6532,7 @@ def caller(foo: Foo) -> Sequence[Foo]:  # Test stripping
             vec![(
                 "13:3-13:15",
                 return_shim_callees(
-                    vec![
-                        create_call_target("test.Foo.callee", TargetType::Function)
-                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
-                    ],
+                    vec![create_call_target("test.Foo.callee", TargetType::Function)],
                     vec![ReturnShimArgumentMapping::ReturnExpressionElement],
                 ),
             )],
@@ -6571,10 +6563,7 @@ def caller(foo: Foo) -> Set[Foo]:  # Test stripping
             vec![(
                 "13:3-13:15",
                 return_shim_callees(
-                    vec![
-                        create_call_target("test.Foo.callee", TargetType::Function)
-                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
-                    ],
+                    vec![create_call_target("test.Foo.callee", TargetType::Function)],
                     vec![ReturnShimArgumentMapping::ReturnExpressionElement],
                 ),
             )],
@@ -6605,10 +6594,7 @@ def caller(foo: Optional[Foo]) -> Optional[Foo]:  # Test stripping
             vec![(
                 "13:3-13:13",
                 return_shim_callees(
-                    vec![
-                        create_call_target("test.Foo.callee", TargetType::Function)
-                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
-                    ],
+                    vec![create_call_target("test.Foo.callee", TargetType::Function)],
                     vec![ReturnShimArgumentMapping::ReturnExpression],
                 ),
             )],
@@ -6654,10 +6640,7 @@ def caller() -> Foo:
                 (
                     "13:3-13:15",
                     return_shim_callees(
-                        vec![
-                            create_call_target("test.Foo.callee", TargetType::Function)
-                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
-                        ],
+                        vec![create_call_target("test.Foo.callee", TargetType::Function)],
                         vec![ReturnShimArgumentMapping::ReturnExpression],
                     ),
                 ),
@@ -7193,6 +7176,74 @@ class B(A):
             vec![(
                 "6:12-6:17",
                 constructor_call_callees(init_targets, new_targets),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    iter_iter_next_dict_literal,
+    TEST_MODULE_NAME,
+    r#"
+def foo():
+    d = {"a": 0}
+    return next(iter(d))
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "4:17-4:24",
+                    regular_call_callees(vec![create_call_target(
+                        "builtins.iter",
+                        TargetType::Function,
+                    )]),
+                ),
+                (
+                    "4:12-4:25",
+                    regular_call_callees(vec![create_call_target(
+                        "builtins.next",
+                        TargetType::Function,
+                    )]),
+                ),
+                (
+                    "4:17-4:24|artificial-call|iter-call",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.dict.__iter__", TargetType::Function)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.dict", context),
+                    ]),
+                ),
+                (
+                    "4:12-4:25|artificial-call|next-call",
+                    regular_call_callees(vec![
+                        create_call_target("typing.Iterator.__next__", TargetType::AllOverrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("typing.Iterator", context),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_special_string_symbols,
+    TEST_MODULE_NAME,
+    r#"
+def foo(x: str):
+    "😄" + x
+"#,
+    &|_context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "3:5-3:15|artificial-call|binary",
+                regular_call_callees(vec![
+                    create_call_target("builtins.str.__add__", TargetType::Function)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver),
+                ]),
             )],
         )]
     }

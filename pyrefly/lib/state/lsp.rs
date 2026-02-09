@@ -28,6 +28,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -65,6 +66,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::wasm::completion::CompletionOptions;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -930,7 +932,9 @@ impl<'a> Transaction<'a> {
             Type::ClassType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
             Type::SelfType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
             Type::Union(box Union { members, .. }) => Self::callable_from_types(solver, members),
-            Type::TypeAlias(alias) => Self::callable_from_type(solver, alias.as_type()),
+            Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+                Self::callable_from_type(solver, alias.as_type())
+            }
             Type::Type(box inner) => Self::callable_from_type(solver, inner),
             Type::Quantified(box quantified) => match quantified.restriction {
                 Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
@@ -1475,6 +1479,41 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    fn find_definition_for_dunder_all_entry(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        preference: FindPreference,
+    ) -> Option<FindDefinitionItemWithDocstring> {
+        let module_info = self.get_module_info(handle)?;
+        let exports = self.get_exports_data(handle);
+        let (_entry_range, name) = exports.dunder_all_name_at(position)?;
+
+        if let Some((definition_handle, export)) =
+            self.resolve_named_import(handle, module_info.name(), name.clone(), preference)
+        {
+            let definition_module = self.get_module_info(&definition_handle)?;
+            return Some(FindDefinitionItemWithDocstring {
+                metadata: DefinitionMetadata::VariableOrAttribute(export.symbol_kind),
+                definition_range: export.location,
+                module: definition_module,
+                docstring_range: export.docstring_range,
+                display_name: Some(name.to_string()),
+            });
+        }
+
+        if module_info.path().is_init() {
+            let submodule = module_info.name().append(&name);
+            if let Some(definition) =
+                self.find_definition_for_imported_module(handle, submodule, preference)
+            {
+                return Some(definition);
+            }
+        }
+
+        None
+    }
+
     fn find_definition_for_keyword_argument(
         &self,
         handle: &Handle,
@@ -1560,6 +1599,15 @@ impl<'a> Transaction<'a> {
             return vec![];
         };
         let covering_nodes = Ast::locate_node(&mod_module, position);
+
+        if covering_nodes
+            .iter()
+            .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+            && let Some(definition) =
+                self.find_definition_for_dunder_all_entry(handle, position, preference)
+        {
+            return vec![definition];
+        }
 
         match Self::identifier_from_covering_nodes(&covering_nodes) {
             Some(IdentifierWithContext {
@@ -1741,7 +1789,8 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
     ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
         let stdlib = self.get_stdlib(handle);
-        let none_type = stdlib.none_type().clone().to_type();
+        let answers = self.get_answers(handle)?;
+        let none_type = answers.heap().mk_class_type(stdlib.none_type().clone());
         let symbol_def_paths = collect_symbol_def_paths(&none_type);
         if symbol_def_paths.is_empty() {
             None
@@ -2076,6 +2125,13 @@ impl<'a> Transaction<'a> {
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
         quick_fixes::introduce_parameter::introduce_parameter_code_actions(self, handle, selection)
+    }
+    pub fn convert_star_import_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::convert_star_import::convert_star_import_code_actions(self, handle, selection)
     }
 
     pub fn use_function_code_actions(
@@ -2634,8 +2690,8 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    // Kept for backwards compatibility - used by external callers (lsp/server.rs, playground.rs)
-    // who don't need the is_incomplete flag
+    // Kept for backwards compatibility - used by external callers who don't need the
+    // is_incomplete flag.
     pub fn completion(
         &self,
         handle: &Handle,
@@ -2647,7 +2703,10 @@ impl<'a> Transaction<'a> {
             handle,
             position,
             import_format,
-            supports_completion_item_details,
+            CompletionOptions {
+                supports_completion_item_details,
+                ..Default::default()
+            },
         )
         .0
     }
@@ -2658,7 +2717,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
-        supports_completion_item_details: bool,
+        options: CompletionOptions,
     ) -> (Vec<CompletionItem>, bool) {
         // Check if position is in a disabled range (comments)
         if let Some(module) = self.get_module_info(handle) {
@@ -2668,12 +2727,8 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
-            handle,
-            position,
-            import_format,
-            supports_completion_item_details,
-        );
+        let (mut results, is_incomplete) =
+            self.completion_sorted_opt_with_incomplete(handle, position, import_format, options);
         results.sort_by(|item1, item2| {
             item1
                 .sort_text
@@ -2723,12 +2778,14 @@ impl<'a> Transaction<'a> {
     /// - Handles stdlib patterns where a public module (`io`) re-exports from a
     ///   private implementation module (`_io`).
     fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
-        let canonical_components = canonical.module().components();
+        let canonical_module = canonical.module();
+        let original_module = original.module();
+        let canonical_components = canonical_module.components();
         let canonical_component = canonical_components
             .last()
             .map(|name| name.as_str())
             .unwrap_or("");
-        let original_components = original.module().components();
+        let original_components = original_module.components();
         let original_component = original_components
             .last()
             .map(|name| name.as_str())
@@ -2740,15 +2797,23 @@ impl<'a> Transaction<'a> {
             return true;
         }
 
-        // Include re-export if original is a parent package of canonical
-        if canonical_components.len() > original_components.len() {
-            canonical_components
+        // Include re-export if original is a parent package of canonical.
+        if canonical_components.len() > original_components.len()
+            && canonical_components
                 .iter()
                 .zip(original_components.iter())
                 .all(|(c, o)| c == o)
-        } else {
-            false
+        {
+            return true;
         }
+        // Some stdlib shims encode dotted modules with underscores (e.g. _collections_abc).
+        if canonical_module.as_str().starts_with('_') && original_module.as_str().contains('.') {
+            let canonical_trim = canonical_module.as_str().trim_start_matches('_');
+            if canonical_trim == original_module.as_str().replace('.', "_") {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn search_exports_exact(&self, name: &str) -> Vec<(Handle, Export)> {
@@ -3099,16 +3164,16 @@ impl<'a> CancellableTransaction<'a> {
 mod tests {
     use std::fs;
 
+    use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
 
     use super::Transaction;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
-    use crate::types::types::AnyStyle;
     use crate::types::types::Type;
 
     fn any_type() -> Type {
-        Type::Any(AnyStyle::Explicit)
+        TypeHeap::new().mk_any_explicit()
     }
 
     #[test]

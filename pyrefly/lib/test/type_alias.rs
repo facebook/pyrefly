@@ -530,7 +530,6 @@ Z = Optional["Y"]
 );
 
 testcase!(
-    bug = "The recursive instance of X is resolved to Unknown",
     test_type_alias_recursive,
     r#"
 type X = int | list["X"]
@@ -538,7 +537,7 @@ x1: X = 1
 x2: X = [1]
 x3: X = [[1, 2]]
 x4: X = [1, [2, 3]]
-x5: X = ["foo"]  # Not OK
+x5: X = ["foo"]  # E: not assignable
 "#,
 );
 
@@ -1050,7 +1049,6 @@ def bad_type_aliases(
 );
 
 testcase!(
-    bug = "conformance: Should error on variance incompatibility in type alias class declarations",
     test_type_alias_variance_conformance,
     r#"
 from typing import Generic, TypeVar, TypeAlias
@@ -1064,15 +1062,15 @@ class ClassA(Generic[T]): ...
 A_Alias_1: TypeAlias = ClassA[T_co]
 A_Alias_2: TypeAlias = A_Alias_1[T_co]
 
-class ClassA_1(ClassA[T_co]): ...  # should error: incompatible variance
-class ClassA_2(A_Alias_1[T_co]): ...  # should error: incompatible variance
-class ClassA_3(A_Alias_2[T_co]): ...  # should error: incompatible variance
+class ClassA_1(ClassA[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+class ClassA_2(A_Alias_1[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
+class ClassA_3(A_Alias_2[T_co]): ...  # E: Type variable `T_co` is Covariant but is used in invariant position
 
 class ClassB(Generic[T, T_co]): ...
 
 B_Alias_1 = ClassB[T_co, T_contra]
 
-class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # should error: incompatible variance
+class ClassB_1(B_Alias_1[T_contra, T_co]): ...  # E: Type variable `T_contra` is Contravariant but is used in invariant position
 "#,
 );
 
@@ -1085,14 +1083,14 @@ from typing import TypeAliasType, TypeVar
 T = TypeVar("T")
 
 # Direct self-reference
-BadAlias4 = TypeAliasType("BadAlias4", "BadAlias4")  # should error: circular dependency
+BadAlias4 = TypeAliasType("BadAlias4", "BadAlias4")  # E: cyclic self-reference in `BadAlias4`
 
 # Self-reference in union with type param
 BadAlias5 = TypeAliasType("BadAlias5", T | "BadAlias5[str]", type_params=(T,))  # should error: circular dependency
 
 # Mutual circular reference
-BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")  # should error: circular dependency
-BadAlias7 = TypeAliasType("BadAlias7", BadAlias6)
+BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")
+BadAlias7 = TypeAliasType("BadAlias7", BadAlias6)  # E: cyclic self-reference in `BadAlias7`
 
 # Self-reference via list
 BadAlias21 = TypeAliasType("BadAlias21", list[BadAlias21])  # should error: circular dependency
@@ -1106,20 +1104,23 @@ testcase!(
 from typing import Callable
 
 # Direct self-reference (not through generic param)
-type RecursiveTypeAlias3 = RecursiveTypeAlias3  # should error: circular definition
+type RecursiveTypeAlias3 = RecursiveTypeAlias3  # E: cyclic self-reference in `RecursiveTypeAlias3`
 
 type RecursiveTypeAlias4[T] = T | RecursiveTypeAlias4[str]  # should error: circular definition
 
-type RecursiveTypeAlias6 = RecursiveTypeAlias7  # should error: circular definition
-type RecursiveTypeAlias7 = RecursiveTypeAlias6
+type RecursiveTypeAlias6 = RecursiveTypeAlias7
+type RecursiveTypeAlias7 = RecursiveTypeAlias6  # E: cyclic self-reference in `RecursiveTypeAlias7`
 "#,
 );
 
 testcase!(
-    bug = "conformance: Should error on redeclared type aliases",
     test_type_statement_redeclaration_conformance,
     r#"
-type BadTypeAlias14 = int  # should error: redeclared
 type BadTypeAlias14 = int
+type BadTypeAlias14 = int # E: Cannot redefine existing name `BadTypeAlias14` as a type alias
+
+class C:
+    type T = int
+    type T = int # E: Cannot redefine existing name `T` as a type alias
 "#,
 );

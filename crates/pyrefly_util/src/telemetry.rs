@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -16,11 +17,15 @@ use uuid::Uuid;
 
 pub trait Telemetry: Send + Sync {
     fn record_event(&self, event: TelemetryEvent, process: Duration, error: Option<&Error>);
+    fn surface(&self) -> Option<String>;
 }
 pub struct NoTelemetry;
 
 impl Telemetry for NoTelemetry {
     fn record_event(&self, _event: TelemetryEvent, _process: Duration, _error: Option<&Error>) {}
+    fn surface(&self) -> Option<String> {
+        None
+    }
 }
 
 pub enum TelemetryEventKind {
@@ -52,6 +57,7 @@ pub struct TelemetryEvent {
     pub sourcedb_rebuild_stats: Option<TelemetrySourceDbRebuildStats>,
     pub sourcedb_rebuild_instance_stats: Option<TelemetrySourceDbRebuildInstanceStats>,
     pub file_watcher_stats: Option<TelemetryFileWatcherStats>,
+    pub did_change_watched_files_stats: Option<TelemetryDidChangeWatchedFilesStats>,
     pub activity_key: Option<ActivityKey>,
     pub canceled: bool,
 }
@@ -65,6 +71,8 @@ pub struct TelemetryFileStats {
 pub struct TelemetryServerState {
     pub has_sourcedb: bool,
     pub id: Uuid,
+    /// The surface/entrypoint for the language server
+    pub surface: Option<String>,
 }
 
 #[derive(Default)]
@@ -120,6 +128,14 @@ pub struct TelemetryFileWatcherStats {
     pub count: usize,
 }
 
+#[derive(Default)]
+pub struct TelemetryDidChangeWatchedFilesStats {
+    pub created: Vec<PathBuf>,
+    pub modified: Vec<PathBuf>,
+    pub removed: Vec<PathBuf>,
+    pub unknown: Vec<PathBuf>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActivityKey {
     pub id: String,
@@ -149,6 +165,7 @@ impl TelemetryEvent {
                 sourcedb_rebuild_stats: None,
                 sourcedb_rebuild_instance_stats: None,
                 file_watcher_stats: None,
+                did_change_watched_files_stats: None,
                 activity_key: None,
                 canceled: false,
             },
@@ -176,6 +193,7 @@ impl TelemetryEvent {
             sourcedb_rebuild_stats: None,
             sourcedb_rebuild_instance_stats: None,
             file_watcher_stats: None,
+            did_change_watched_files_stats: None,
             activity_key: None,
             canceled: false,
         }
@@ -218,6 +236,13 @@ impl TelemetryEvent {
 
     pub fn set_file_watcher_stats(&mut self, stats: TelemetryFileWatcherStats) {
         self.file_watcher_stats = Some(stats);
+    }
+
+    pub fn set_did_change_watched_files_stats(
+        &mut self,
+        stats: TelemetryDidChangeWatchedFilesStats,
+    ) {
+        self.did_change_watched_files_stats = Some(stats);
     }
 
     pub fn finish_and_record(self, telemetry: &dyn Telemetry, error: Option<&Error>) -> Duration {

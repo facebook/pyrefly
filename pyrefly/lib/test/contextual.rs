@@ -8,6 +8,24 @@
 use crate::testcase;
 
 testcase!(
+    test_context_subscript_assign_delete,
+    r#"
+class Foo:
+    def __getitem__(self, key: list[str | None]):
+        pass
+    def __setitem__(self, key: list[str | None], value: list[int | None]):
+        pass
+    def __delitem__(self, key: list[str | None]):
+        pass
+
+foo = Foo()
+x = foo[["bar"]]
+foo[["bar"]] = [1]
+del foo[["bar"]]
+"#,
+);
+
+testcase!(
     test_context_annassign,
     r#"
 class A: ...

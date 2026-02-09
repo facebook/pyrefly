@@ -32,6 +32,7 @@ use crate::error::error::print_errors;
 use crate::module::finder::find_import;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
+use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
 
@@ -154,8 +155,10 @@ fn test_change_require() {
     assert!(state.transaction().get_bindings(&handle).is_none());
     state.run(
         &[handle.dupe()],
-        Require::Errors,
-        Require::Exports,
+        RequireLevels {
+            specified: Require::Errors,
+            default: Require::Exports,
+        },
         None,
         None,
     );
@@ -171,8 +174,10 @@ fn test_change_require() {
     assert!(state.transaction().get_bindings(&handle).is_none());
     state.run(
         &[handle.dupe()],
-        Require::Everything,
-        Require::Exports,
+        RequireLevels {
+            specified: Require::Everything,
+            default: Require::Exports,
+        },
         None,
         None,
     );

@@ -1811,15 +1811,85 @@ T = Literal
 2 | T = Literal
             ^
 Completion Results:
-- (Variable) AnyOrLiteralStr: from _typeshed import AnyOrLiteralStr
-
 - (Variable) Literal: from typing import Literal
 
 - (Variable) Literal: from typing_extensions import Literal
 
 - (Variable) LiteralString: from typing import LiteralString
 
+- (Variable) AnyOrLiteralStr: from _typeshed import AnyOrLiteralStr
+
 - (Variable) StrOrLiteralStr: from _typeshed import StrOrLiteralStr
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_prefers_public_reexport_for_dotted_private_module() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("_foo_bar", "Thing = 1\n"),
+            ("foo.bar", "from _foo_bar import Thing\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from foo.bar import Thing
+
+- (Variable) Thing: from _foo_bar import Thing
+
+
+
+# _foo_bar.py
+
+# foo.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_prefers_shorter_module() {
+    let code = r#"
+T = Thing
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", code),
+            ("a.b", "Thing = 1\n"),
+            ("a.b.c", "Thing = 2\n"),
+        ],
+        get_test_report(Default::default(), ImportFormat::Absolute),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | T = Thing
+            ^
+Completion Results:
+- (Variable) Thing: from a.b import Thing
+
+- (Variable) Thing: from a.b.c import Thing
+
+
+
+# a.b.py
+
+# a.b.c.py
 "#
         .trim(),
         report.trim(),
