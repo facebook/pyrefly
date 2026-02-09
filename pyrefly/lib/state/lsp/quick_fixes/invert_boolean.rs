@@ -25,12 +25,14 @@ use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 
+/// A text replacement for a single load of the target name.
 #[derive(Clone, Debug)]
 struct LoadEdit {
     range: TextRange,
     replacement: String,
 }
 
+/// Summary of a single assignment to the target name, used to build replacements.
 #[derive(Clone, Debug)]
 struct AssignmentPlan {
     target_range: TextRange,
@@ -75,32 +77,33 @@ pub(crate) fn invert_boolean_code_actions(
     )?;
     let reference_set: HashSet<TextRange> = references.into_iter().collect();
 
-    let assignment_plans = collect_assignment_plans(ast.as_ref(), &target_name, &reference_set);
-    if assignment_plans.is_empty() {
+    let collected = collect_invert_boolean_info(ast.as_ref(), &target_name, &reference_set);
+    if collected.assignment_plans.is_empty() {
         return None;
     }
-    let allowed_store_ranges: HashSet<TextRange> = assignment_plans
+    let allowed_store_ranges: HashSet<TextRange> = collected
+        .assignment_plans
         .iter()
         .map(|plan| plan.target_range)
         .collect();
-    let store_info = collect_store_ranges(ast.as_ref(), &target_name, &reference_set);
-    if store_info.has_del
-        || store_info
-            .stores
+    if collected.has_del
+        || collected
+            .write_targets
             .iter()
             .any(|range| !allowed_store_ranges.contains(range))
     {
         return None;
     }
 
-    let load_edits = collect_load_edits(ast.as_ref(), &target_name, &reference_set);
-    let assignment_value_ranges: Vec<TextRange> = assignment_plans
+    let load_edits = collected.load_edits;
+    let assignment_value_ranges: Vec<TextRange> = collected
+        .assignment_plans
         .iter()
         .map(|plan| plan.value_range)
         .collect();
     let source = module_info.contents();
     let mut edits = Vec::new();
-    for plan in &assignment_plans {
+    for plan in &collected.assignment_plans {
         let replacement = build_assignment_replacement(source, plan, &load_edits);
         edits.push((module_info.dupe(), plan.value_range, replacement));
     }
@@ -123,64 +126,30 @@ pub(crate) fn invert_boolean_code_actions(
     }])
 }
 
-struct StoreInfo {
-    stores: Vec<TextRange>,
+#[derive(Debug)]
+struct InvertBooleanInfo {
+    assignment_plans: Vec<AssignmentPlan>,
+    load_edits: Vec<LoadEdit>,
+    write_targets: Vec<TextRange>,
     has_del: bool,
 }
 
-fn collect_store_ranges(
+/// Collects assignment plans, load edits, and write/delete information in one AST pass.
+fn collect_invert_boolean_info(
     ast: &ModModule,
     target_name: &str,
     references: &HashSet<TextRange>,
-) -> StoreInfo {
-    struct StoreCollector<'a> {
+) -> InvertBooleanInfo {
+    struct InvertBooleanCollector<'a> {
         target_name: &'a str,
         references: &'a HashSet<TextRange>,
-        stores: Vec<TextRange>,
+        assignment_plans: Vec<AssignmentPlan>,
+        load_edits: Vec<LoadEdit>,
+        write_targets: Vec<TextRange>,
         has_del: bool,
     }
 
-    impl<'a> Visitor<'a> for StoreCollector<'a> {
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            if let Expr::Name(name) = expr
-                && name.id == self.target_name
-                && self.references.contains(&name.range())
-            {
-                match name.ctx {
-                    ExprContext::Store => self.stores.push(name.range()),
-                    ExprContext::Del => self.has_del = true,
-                    ExprContext::Load | ExprContext::Invalid => {}
-                }
-            }
-            ruff_python_ast::visitor::walk_expr(self, expr);
-        }
-    }
-
-    let mut collector = StoreCollector {
-        target_name,
-        references,
-        stores: Vec::new(),
-        has_del: false,
-    };
-    collector.visit_body(&ast.body);
-    StoreInfo {
-        stores: collector.stores,
-        has_del: collector.has_del,
-    }
-}
-
-fn collect_assignment_plans(
-    ast: &ModModule,
-    target_name: &str,
-    references: &HashSet<TextRange>,
-) -> Vec<AssignmentPlan> {
-    struct AssignmentCollector<'a> {
-        target_name: &'a str,
-        references: &'a HashSet<TextRange>,
-        plans: Vec<AssignmentPlan>,
-    }
-
-    impl<'a> Visitor<'a> for AssignmentCollector<'a> {
+    impl<'a> Visitor<'a> for InvertBooleanCollector<'a> {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
             match stmt {
                 Stmt::Assign(assign) => {
@@ -189,8 +158,8 @@ fn collect_assignment_plans(
                         && name.id == self.target_name
                         && self.references.contains(&name.range())
                     {
-                        let value_kind = assignment_value_kind(&assign.value);
-                        self.plans.push(AssignmentPlan {
+                        let value_kind = assignment_value_kind_from_expr(&assign.value);
+                        self.assignment_plans.push(AssignmentPlan {
                             target_range: name.range(),
                             value_range: assign.value.range(),
                             value_kind,
@@ -203,8 +172,8 @@ fn collect_assignment_plans(
                         && self.references.contains(&name.range())
                         && let Some(value) = assign.value.as_ref()
                     {
-                        let value_kind = assignment_value_kind(value);
-                        self.plans.push(AssignmentPlan {
+                        let value_kind = assignment_value_kind_from_expr(value);
+                        self.assignment_plans.push(AssignmentPlan {
                             target_range: name.range(),
                             value_range: value.range(),
                             value_kind,
@@ -215,41 +184,7 @@ fn collect_assignment_plans(
             }
             ruff_python_ast::visitor::walk_stmt(self, stmt);
         }
-    }
 
-    let mut collector = AssignmentCollector {
-        target_name,
-        references,
-        plans: Vec::new(),
-    };
-    collector.visit_body(&ast.body);
-    collector.plans
-}
-
-fn assignment_value_kind(value: &Expr) -> AssignmentValueKind {
-    match value {
-        Expr::UnaryOp(unary) if unary.op == UnaryOp::Not => AssignmentValueKind::UnaryNot {
-            operand_range: unary.operand.range(),
-        },
-        Expr::BooleanLiteral(boolean_literal) => AssignmentValueKind::BooleanLiteral {
-            value: boolean_literal.value,
-        },
-        _ => AssignmentValueKind::Other,
-    }
-}
-
-fn collect_load_edits(
-    ast: &ModModule,
-    target_name: &str,
-    references: &HashSet<TextRange>,
-) -> Vec<LoadEdit> {
-    struct LoadCollector<'a> {
-        target_name: &'a str,
-        references: &'a HashSet<TextRange>,
-        edits: Vec<LoadEdit>,
-    }
-
-    impl<'a> Visitor<'a> for LoadCollector<'a> {
         fn visit_expr(&mut self, expr: &'a Expr) {
             if let Expr::UnaryOp(unary) = expr
                 && unary.op == UnaryOp::Not
@@ -258,7 +193,7 @@ fn collect_load_edits(
                 && name.ctx == ExprContext::Load
                 && self.references.contains(&name.range())
             {
-                self.edits.push(LoadEdit {
+                self.load_edits.push(LoadEdit {
                     range: unary.range(),
                     replacement: name.id.to_string(),
                 });
@@ -271,24 +206,56 @@ fn collect_load_edits(
                 && name.ctx == ExprContext::Load
                 && self.references.contains(&name.range())
             {
-                self.edits.push(LoadEdit {
+                self.load_edits.push(LoadEdit {
                     range: name.range(),
                     replacement: format!("(not {})", name.id),
                 });
+            }
+            if let Expr::Name(name) = expr
+                && name.id == self.target_name
+                && self.references.contains(&name.range())
+            {
+                match name.ctx {
+                    ExprContext::Store => self.write_targets.push(name.range()),
+                    ExprContext::Del => self.has_del = true,
+                    ExprContext::Load | ExprContext::Invalid => {}
+                }
             }
             ruff_python_ast::visitor::walk_expr(self, expr);
         }
     }
 
-    let mut collector = LoadCollector {
+    let mut collector = InvertBooleanCollector {
         target_name,
         references,
-        edits: Vec::new(),
+        assignment_plans: Vec::new(),
+        load_edits: Vec::new(),
+        write_targets: Vec::new(),
+        has_del: false,
     };
     collector.visit_body(&ast.body);
-    collector.edits
+    InvertBooleanInfo {
+        assignment_plans: collector.assignment_plans,
+        load_edits: collector.load_edits,
+        write_targets: collector.write_targets,
+        has_del: collector.has_del,
+    }
 }
 
+/// Classifies the right-hand side of an assignment for inversion.
+fn assignment_value_kind_from_expr(value: &Expr) -> AssignmentValueKind {
+    match value {
+        Expr::UnaryOp(unary) if unary.op == UnaryOp::Not => AssignmentValueKind::UnaryNot {
+            operand_range: unary.operand.range(),
+        },
+        Expr::BooleanLiteral(boolean_literal) => AssignmentValueKind::BooleanLiteral {
+            value: boolean_literal.value,
+        },
+        _ => AssignmentValueKind::Other,
+    }
+}
+
+/// Builds the replacement text for a specific assignment value.
 fn build_assignment_replacement(
     source: &str,
     plan: &AssignmentPlan,
@@ -312,6 +279,7 @@ fn build_assignment_replacement(
     }
 }
 
+/// Applies load edits within `base_range` and returns the rewritten slice.
 fn apply_edits_to_slice(source: &str, base_range: TextRange, edits: &[LoadEdit]) -> String {
     let start = base_range.start().to_usize();
     let end = base_range.end().to_usize();

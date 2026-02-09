@@ -101,6 +101,10 @@ fn find_marked_range_with(source: &str, start_marker: &str, end_marker: &str) ->
     )
 }
 
+/// Finds the text range for the Nth occurrence of `needle` in `source`.
+///
+/// This is used by tests that need to select a specific repeated token without
+/// adding extra inline markers.
 fn find_nth_range(source: &str, needle: &str, occurrence: usize) -> TextRange {
     assert!(occurrence > 0, "occurrence is 1-based");
     let mut start = 0;
