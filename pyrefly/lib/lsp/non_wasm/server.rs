@@ -535,7 +535,7 @@ fn apply_diagnostic_markup(value: &mut Value) {
     fn wrap_messages(diagnostics: &mut [Value]) {
         for diagnostic in diagnostics {
             let message = match diagnostic.get("message").and_then(|value| value.as_str()) {
-                Some(message) => message.to_owned(),
+                Some(message) => format_diagnostic_message_for_markdown(message),
                 None => continue,
             };
             if let Some(obj) = diagnostic.as_object_mut() {
@@ -562,6 +562,30 @@ fn apply_diagnostic_markup(value: &mut Value) {
             apply_diagnostic_markup(report);
         }
     }
+}
+
+fn format_diagnostic_message_for_markdown(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut in_code_span = false;
+    for ch in message.chars() {
+        if ch == '`' {
+            in_code_span = !in_code_span;
+            out.push(ch);
+            continue;
+        }
+        if in_code_span {
+            out.push(ch);
+            continue;
+        }
+        match ch {
+            '\\' | '*' | '_' | '[' | ']' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 pub struct Server {

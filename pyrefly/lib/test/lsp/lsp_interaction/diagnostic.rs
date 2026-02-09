@@ -13,7 +13,6 @@ use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Initialize;
 use lsp_types::request::Request as _;
 use lsp_types::request::WorkspaceConfiguration;
-use pyrefly_config::environment::environment::PythonEnvironment;
 use pyrefly_util::stdlib::register_stdlib_paths;
 use serde_json::Value;
 use serde_json::json;
