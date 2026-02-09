@@ -9,21 +9,24 @@
       "type": "object",
       "properties": {
         "errors": {
-          "description": "Configure the severity for each kind of error that Pyrefly emits. Set error code to true to enable, false to disable. Any valid Pyrefly error code can be used, not just the ones listed here.",
+          "description": "Configure the severity for each kind of error that Pyrefly emits. Set error code to true to enable (default severity), false to disable, or use a severity string ('ignore', 'info', 'warn', 'error'). Any valid Pyrefly error code can be used, not just the ones listed here.",
           "type": "object",
           "additionalProperties": {
-            "type": "boolean"
+            "oneOf": [
+              { "type": "boolean" },
+              { "type": "string", "enum": ["ignore", "info", "warn", "error"] }
+            ]
           },
           "properties": {
-            "bad-assignment": {"type": "boolean"},
-            "bad-return": {"type": "boolean"},
-            "missing-import": {"type": "boolean"},
-            "invalid-argument": {"type": "boolean"},
-            "assert-type": {"type": "boolean"},
-            "bad-override": {"type": "boolean"},
-            "incompatible-type": {"type": "boolean"},
-            "unused-import": {"type": "boolean"},
-            "undefined-variable": {"type": "boolean"}
+            "bad-assignment": {},
+            "bad-return": {},
+            "missing-import": {},
+            "invalid-argument": {},
+            "assert-type": {},
+            "bad-override": {},
+            "incompatible-type": {},
+            "unused-import": {},
+            "undefined-variable": {}
           },
           "default": {}
         },
@@ -74,9 +77,24 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["type", "pyrefly", "mypy", "pyright", "pyre"]
+            "enum": ["type", "pyrefly", "mypy", "pyright", "pyre", "ty"]
           },
           "default": ["type", "pyrefly"]
+        },
+        "tensor-shapes": {
+          "description": "Whether to enable tensor shape checking.",
+          "type": "boolean"
+        },
+        "recursion-depth-limit": {
+          "description": "Maximum recursion depth for type evaluation. Set to 0 to disable the limit.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "recursion-overflow-handler": {
+          "description": "How should Pyrefly handle recursion overflow during type evaluation?",
+          "type": "string",
+          "enum": ["break-with-placeholder", "panic-with-debug-info"],
+          "default": "break-with-placeholder"
         }
       }
     }
@@ -94,7 +112,7 @@
           "items": {
             "type": "string"
           },
-          "default": ["**/*.py*"]
+          "default": ["**/*.py*", "**/*.ipynb"]
         },
         "project-excludes": {
           "description": "The glob patterns used to describe which files to avoid type checking as a way to filter files that match project-includes.",
@@ -173,6 +191,10 @@
           "type": "boolean",
           "default": false
         },
+        "baseline": {
+          "description": "Path to a baseline file for suppressing existing errors.",
+          "type": "string"
+        },
         "build-system": {
           "description": "Pyrefly supports integrating into build systems to discover targets to type check and their dependencies. Currently supports Buck2 and custom queries.",
           "type": "object",
@@ -182,9 +204,18 @@
               "type": "string",
               "enum": ["buck", "custom"]
             },
-            "repo_root": {
-              "description": "Path to the root of the repository.",
-              "type": "string"
+            "ignore-if-build-system-missing": {
+              "description": "Whether to silently ignore the build system configuration if the build system is not found.",
+              "type": "boolean",
+              "default": false
+            },
+            "search-path-prefix": {
+              "description": "Prefix paths to prepend to search paths discovered by the build system.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
             },
             "isolation-dir": {
               "description": "The isolation dir for Buck2 to use.",

@@ -9,7 +9,7 @@
       "type": "object",
       "properties": {
         "pyrefly": {
-          "$ref": "https://pyrefly.org/schemas/pyrefly.json"
+          "$ref": "pyrefly.json"
         }
       }
     }
