@@ -71,10 +71,7 @@ pub(crate) fn use_function_code_actions(
     }
     let params = collect_supported_params(&function_def)?;
     let return_expr = extract_return_expr(&function_def)?;
-    let mut param_set = HashSet::new();
-    for param in &params {
-        param_set.insert(param.clone());
-    }
+    let param_set = params.iter().cloned().collect::<HashSet<_>>();
     let mut param_counts = HashMap::new();
     if !validate_return_expr(return_expr, &param_set, &mut param_counts) {
         return None;
@@ -99,24 +96,22 @@ pub(crate) fn use_function_code_actions(
     let mut matched_any = false;
 
     for target_handle in transaction.handles() {
-        let target_info = match transaction.get_module_info(&target_handle) {
-            Some(info) => info,
-            None => continue,
+        let Some(target_info) = transaction.get_module_info(&target_handle) else {
+            continue;
         };
         if transaction.is_third_party_module(&target_info, &target_handle)
             && !transaction.is_source_file(&target_info, &target_handle)
         {
             continue;
         }
-        let target_ast = match transaction.get_ast(&target_handle) {
-            Some(ast) => ast,
-            None => continue,
+        let Some(target_ast) = transaction.get_ast(&target_handle) else {
+            continue;
         };
-        let call_target =
-            match call_target_for_module(&target_handle, target_ast.as_ref(), &pattern, handle) {
-                Some(target) => target,
-                None => continue,
-            };
+        let Some(call_target) =
+            call_target_for_module(&target_handle, target_ast.as_ref(), &pattern, handle)
+        else {
+            continue;
+        };
         let same_module = target_handle.module() == pattern.module_name;
         let min_start = if same_module {
             Some(pattern.def_range.end())

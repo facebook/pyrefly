@@ -856,7 +856,6 @@ pub fn capabilities(
                 CodeActionKind::REFACTOR_REWRITE,
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
-                CodeActionKind::REFACTOR_REWRITE,
             ]),
             ..Default::default()
         })),
