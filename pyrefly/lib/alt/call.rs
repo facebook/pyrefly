@@ -84,7 +84,10 @@ pub enum CallTarget {
     /// Method of a class. The `Type` is the self/cls argument.
     BoundMethod(Type, TargetWithTParams<Function>),
     /// A class object.
-    Class(ClassType, ConstructorKind),
+    /// The optional Quantified argument is for the case where this call target
+    /// occurs in a bounded type var, where the current class is being used as
+    /// the upper bound.
+    Class(ClassType, ConstructorKind, Option<Quantified>),
     /// A TypedDict.
     TypedDict(TypedDictInner),
     /// An overloaded function.
@@ -220,6 +223,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::ClassType(cls) => CallTargetLookup::Ok(Box::new(CallTarget::Class(
                     cls,
                     ConstructorKind::BareClassName,
+                    None,
                 ))),
                 Type::TypedDict(TypedDict::TypedDict(typed_dict)) => {
                     CallTargetLookup::Ok(Box::new(CallTarget::TypedDict(typed_dict)))
@@ -230,11 +234,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 CallTargetLookup::Ok(Box::new(CallTarget::Class(
                     cls,
                     ConstructorKind::TypeOfClass,
+                    None,
                 )))
             }
-            Type::Type(box Type::Tuple(tuple)) => CallTargetLookup::Ok(Box::new(
-                CallTarget::Class(self.erase_tuple_type(tuple), ConstructorKind::TypeOfClass),
-            )),
+            Type::Type(box Type::Tuple(tuple)) => {
+                CallTargetLookup::Ok(Box::new(CallTarget::Class(
+                    self.erase_tuple_type(tuple),
+                    ConstructorKind::TypeOfClass,
+                    None,
+                )))
+            }
             Type::Type(box Type::Quantified(quantified)) => {
                 let call_target = match quantified.restriction() {
                     Restriction::Unrestricted => {
@@ -247,6 +256,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             },
                         ))
                     }
+                    Restriction::Bound(Type::ClassType(cls)) => {
+                        // Use the bound to determine call target, but keep
+                        // the original quantified for the return type to allow
+                        // type variables in the return type to be resolved.
+                        CallTarget::Class(
+                            cls.clone(),
+                            ConstructorKind::TypeOfClass,
+                            Some(*quantified),
+                        )
+                    }
+                    // For unhandled cases, we accept any arguments and return
+                    // the quantified type itself.
+                    // We can't handle constraints because we need to take
+                    // intersection of constructor types of all constraints,
+                    // which is currently not possible.
                     _ => CallTarget::Callable(TargetWithTParams(
                         None,
                         Callable {
@@ -345,6 +369,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 CallTargetLookup::Ok(Box::new(CallTarget::Class(
                     cls,
                     ConstructorKind::TypeOfClass,
+                    None,
                 )))
             }
             Type::Type(box Type::Intersect(box (_, fallback))) => {
@@ -865,7 +890,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         let res = match call_target {
-            CallTarget::Class(cls, constructor_kind) => {
+            CallTarget::Class(cls, constructor_kind, as_quantified_bound) => {
                 if cls.has_qname("typing", "Any") {
                     return self.error(
                         errors,
@@ -916,7 +941,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 };
-                self.construct_class(
+                let constructed_type = self.construct_class(
                     cls,
                     args,
                     keywords,
@@ -925,7 +950,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors,
                     context,
                     hint,
-                )
+                );
+                // Override the constructed type with the quantified bound if
+                // this class is being called via a quantified type with a class
+                // bound, to allow calls on TypeVars with class bounds to work
+                // as expected.
+                if let Some(quantified) = as_quantified_bound {
+                    Type::Quantified(Box::new(quantified))
+                } else {
+                    constructed_type
+                }
             }
             CallTarget::TypedDict(td) => self.construct_typed_dict(
                 td,

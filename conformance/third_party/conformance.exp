@@ -3319,6 +3319,50 @@
       "severity": "error",
       "stop_column": 10,
       "stop_line": 64
+    },
+    {
+      "code": -2,
+      "column": 8,
+      "concise_description": "Missing argument `x` in function `Meta1.__call__`",
+      "description": "Missing argument `x` in function `Meta1.__call__`",
+      "line": 72,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 10,
+      "stop_line": 72
+    },
+    {
+      "code": -2,
+      "column": 8,
+      "concise_description": "Missing argument `y` in function `Meta1.__call__`",
+      "description": "Missing argument `y` in function `Meta1.__call__`",
+      "line": 72,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 10,
+      "stop_line": 72
+    },
+    {
+      "code": -2,
+      "column": 8,
+      "concise_description": "Missing argument `y` in function `Class2.__new__`",
+      "description": "Missing argument `y` in function `Class2.__new__`",
+      "line": 81,
+      "name": "missing-argument",
+      "severity": "error",
+      "stop_column": 11,
+      "stop_line": 81
+    },
+    {
+      "code": -2,
+      "column": 12,
+      "concise_description": "Argument `Literal[2]` is not assignable to parameter `y` with type `str` in function `Class2.__new__`",
+      "description": "Argument `Literal[2]` is not assignable to parameter `y` with type `str` in function `Class2.__new__`",
+      "line": 82,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 13,
+      "stop_line": 82
     }
   ],
   "constructors_callable.py": [

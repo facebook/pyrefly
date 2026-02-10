@@ -20,9 +20,9 @@ def test[T](cls: type[T]) -> T:
 class A:
     def __init__(self, x: int) -> None: pass
 def test2[T: A](cls: type[T]) -> T:
-    a1: A = cls()  # should error: missing required arg x
+    a1: A = cls()  # E: Missing argument `x` in function `A.__init__`
     a2: A = cls(1)
-    return cls()
+    return cls(1)
 "#,
 );
 

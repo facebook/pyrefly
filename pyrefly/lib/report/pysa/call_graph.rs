@@ -2288,7 +2288,11 @@ impl<'a> CallGraphVisitor<'a> {
                     })
                     .unwrap()
             }
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(class_type, _))) => {
+            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(
+                class_type,
+                _,
+                _,
+            ))) => {
                 // Constructing a class instance.
                 let (init_method, new_method) = self
                     .module_context
