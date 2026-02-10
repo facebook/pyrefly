@@ -37,7 +37,7 @@ pub struct CustomQueryArgs {
 
     /// The root of the repository. Repo roots here will be shared between configs.
     #[serde(default)]
-    repo_root: Option<PathBuf>,
+    pub repo_root: Option<PathBuf>,
 }
 
 impl CustomQueryArgs {
