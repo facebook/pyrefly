@@ -245,10 +245,6 @@ fn find_method_def_for_self_call(
     None
 }
 
-/// Returns true if the expression needs parentheses when inlined.
-/// Simple expressions (literals, names, subscripts, attributes, calls) don't need
-/// parentheses because they have high precedence. Complex expressions (binary ops,
-/// unary ops, comparisons, etc.) need parentheses to preserve semantics.
 fn build_param_map(
     function_def: &StmtFunctionDef,
     call: &ExprCall,

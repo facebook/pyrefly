@@ -3361,9 +3361,18 @@ impl Server {
         let import_format = lsp_config.and_then(|c| c.import_format).unwrap_or_default();
         let module_info = transaction.get_module_info(&handle)?;
         let range = self.from_lsp_range(uri, &module_info, params.range);
+        let only_kinds = params.context.only.as_ref();
+        let allow_quickfix = only_kinds
+            .is_none_or(|kinds| kinds.iter().any(|kind| kind == &CodeActionKind::QUICKFIX));
+        let allow_fix_all = only_kinds.is_none_or(|kinds| {
+            kinds
+                .iter()
+                .any(|kind| kind == &CodeActionKind::SOURCE_FIX_ALL)
+        });
         let mut actions = Vec::new();
-        if let Some(quickfixes) =
-            transaction.local_quickfix_code_actions_sorted(&handle, range, import_format)
+        if allow_quickfix
+            && let Some(quickfixes) =
+                transaction.local_quickfix_code_actions_sorted(&handle, range, import_format)
         {
             actions.extend(quickfixes.into_iter().filter_map(
                 |(title, info, range, insert_text)| {
@@ -3389,14 +3398,7 @@ impl Server {
                 },
             ));
         }
-        // Optimization: do not calculate refactors for automated codeactions since they're expensive
-        // If we had lazy code actions, we could keep them.
-        if let Some(trigger_kind) = params.context.trigger_kind
-            && trigger_kind == CodeActionTriggerKind::AUTOMATIC
-        {
-            return (!actions.is_empty()).then_some(actions);
-        }
-        if let Some(edits) = transaction.redundant_cast_fix_all_edits(&handle) {
+        if allow_fix_all && let Some(edits) = transaction.redundant_cast_fix_all_edits(&handle) {
             let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
             for (module, edit_range, new_text) in edits {
                 let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
@@ -3421,6 +3423,13 @@ impl Server {
                     ..Default::default()
                 }));
             }
+        }
+        // Optimization: do not calculate refactors for automated codeactions since they're expensive
+        // If we had lazy code actions, we could keep them.
+        if let Some(trigger_kind) = params.context.trigger_kind
+            && trigger_kind == CodeActionTriggerKind::AUTOMATIC
+        {
+            return (!actions.is_empty()).then_some(actions);
         }
         let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
             for action in refactors {
