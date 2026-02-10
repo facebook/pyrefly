@@ -2009,7 +2009,7 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        // Sort code actions: non-private first, then non-deprecated, then alphabetically
+        // Sort import code actions: non-private first, then non-deprecated, then alphabetically
         import_actions.sort_by(
             |(title1, _, _, _, is_deprecated1, is_private1),
              (title2, _, _, _, is_deprecated2, is_private2)| {
