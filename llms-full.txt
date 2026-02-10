@@ -3741,7 +3741,7 @@ async def bar():
 
 ## unused-ignore
 
-This error is raised when a `# pyre-ignore` comment is not used to suppress an error, and can be safely removed.
+This error is raised when a `# pyrefly: ignore` comment is not used to suppress an error, and can be safely removed.
 
 The default severity of this diagnostic is `ignore`.
 
