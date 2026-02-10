@@ -576,7 +576,6 @@ def g(t: type):
 );
 
 testcase!(
-    bug = "conformance: Should error on inconsistent type variable ordering in base classes",
     test_inconsistent_type_var_ordering_in_bases,
     r#"
 from typing import Generic, TypeVar
@@ -586,7 +585,7 @@ T2 = TypeVar("T2")
 
 class Grandparent(Generic[T1, T2]): ...
 class Parent(Grandparent[T1, T2]): ...
-class BadChild(Parent[T1, T2], Grandparent[T2, T1]): ...  # should be an error
+class BadChild(Parent[T1, T2], Grandparent[T2, T1]): ...  # E: Class `BadChild` has inconsistent type arguments for base class `Grandparent`: `Grandparent[T1, T2]` and `Grandparent[T2, T1]`
 "#,
 );
 
