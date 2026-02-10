@@ -39,6 +39,7 @@ fn test_initialize_basic() {
                 "codeActionKinds": ["quickfix", "refactor.extract", "refactor.rewrite", "refactor.move", "refactor.inline", "source.fixAll"]
             },
             "completionProvider": {
+                "completionProvider": true,
                 "triggerCharacters": [".", "'", "\""]
             },
             "declarationProvider": true,

@@ -590,7 +590,7 @@ fn test_module_completion() {
                 "label": "bar",
                 "detail": "bar",
                 "kind": 9,
-                "sortText": "0"
+                "sortText": "0.9999.bar"
             }],
         }))
         .unwrap();
