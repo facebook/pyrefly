@@ -27,6 +27,23 @@ def test2[T: A](cls: type[T]) -> T:
 );
 
 testcase!(
+    bug = "When determining callable for type[T] where T is a constrained TypeVar, we should take intersection of constructor of all constraints",
+    test_constrained_typevar_constructor,
+    r#"
+from typing import TypeVar
+class A:
+    def __init__(self, x: int) -> None: pass
+class B:
+    def __init__(self, x: int, y: str = "default") -> None: pass
+T = TypeVar("T", A, B)
+def test(cls: type[T]) -> None:
+    cls(1)
+    cls("hello")  # should error: incorrect type of x
+    cls(1, "hello")  # should error: too many arguments
+"#,
+);
+
+testcase!(
     test_tyvar_mix,
     r#"
 from typing import TypeVar, assert_type
