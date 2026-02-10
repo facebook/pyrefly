@@ -283,6 +283,51 @@ impl Transaction<'_> {
         }
     }
 
+    fn expected_call_argument_type(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        let (callables, chosen_overload_index, active_argument, _) =
+            self.get_callables_from_call(handle, position)?;
+        let callable = callables.get(chosen_overload_index)?.clone();
+        let params = Self::normalize_singleton_function_type_into_params(callable)?;
+        let arg_index = Self::active_parameter_index(&params, &active_argument)?;
+        let param = params.get(arg_index)?;
+        Some(param.as_type().clone())
+    }
+
+    fn base_sort_text_for_label(label: &str, is_reexport: bool) -> &'static str {
+        if is_reexport {
+            "1"
+        } else if label.starts_with("__") {
+            "3"
+        } else if label.starts_with("_") {
+            "2"
+        } else {
+            "0"
+        }
+    }
+
+    fn incompatible_sort_text(label: &str, is_reexport: bool) -> String {
+        format!("{}z", Self::base_sort_text_for_label(label, is_reexport))
+    }
+
+    fn is_incompatible_with_expected_type(
+        &self,
+        handle: &Handle,
+        expected_type: Option<&Type>,
+        actual_type: Option<&Type>,
+    ) -> bool {
+        let Some(expected_type) = expected_type else {
+            return false;
+        };
+        let Some(actual_type) = actual_type else {
+            return false;
+        };
+        self.ad_hoc_solve(handle, |solver| {
+            solver.is_subset_eq(actual_type, expected_type)
+        })
+        .map(|compatible| !compatible)
+        .unwrap_or(false)
+    }
+
     /// Adds completions for local variables and returns true if any were added.
     /// If an identifier is present, filters matches using fuzzy matching.
     pub(crate) fn add_local_variable_completions(
@@ -290,6 +335,7 @@ impl Transaction<'_> {
         handle: &Handle,
         identifier: Option<&Identifier>,
         position: TextSize,
+        expected_type: Option<&Type>,
         completions: &mut Vec<CompletionItem>,
     ) -> bool {
         let mut has_added_any = false;
@@ -338,8 +384,11 @@ impl Transaction<'_> {
                         t.function_deprecation().is_some()
                     }
                 });
-                let detail = ty.map(|t| t.to_string());
+                let detail = ty.as_ref().map(|t| t.to_string());
                 let documentation = self.get_documentation_from_export(export_info);
+                let sort_text = self
+                    .is_incompatible_with_expected_type(handle, expected_type, ty.as_ref())
+                    .then(|| Self::incompatible_sort_text(label, false));
 
                 has_added_any = true;
                 completions.push(CompletionItem {
@@ -347,6 +396,7 @@ impl Transaction<'_> {
                     detail,
                     kind: Some(kind),
                     documentation,
+                    sort_text,
                     tags: if is_deprecated {
                         Some(vec![CompletionItemTag::DEPRECATED])
                     } else {
@@ -572,6 +622,7 @@ impl Transaction<'_> {
                 identifier: _,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
+                let expected_type = self.expected_call_argument_type(handle, position);
                 allow_function_call_parens = true;
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
@@ -594,16 +645,26 @@ impl Transaction<'_> {
                                 let detail =
                                     ty.clone().map(|t| t.as_lsp_string(LspDisplayMode::Hover));
                                 let documentation = self.get_docstring_for_attribute(handle, x);
+                                let sort_text = if self.is_incompatible_with_expected_type(
+                                    handle,
+                                    expected_type.as_ref(),
+                                    ty.as_ref(),
+                                ) {
+                                    Some(Self::incompatible_sort_text(
+                                        x.name.as_str(),
+                                        x.is_reexport,
+                                    ))
+                                } else if x.is_reexport {
+                                    Some("1".to_owned())
+                                } else {
+                                    None
+                                };
                                 result.push(CompletionItem {
                                     label: x.name.as_str().to_owned(),
                                     detail,
                                     kind,
                                     documentation,
-                                    sort_text: if x.is_reexport {
-                                        Some("1".to_owned())
-                                    } else {
-                                        None
-                                    },
+                                    sort_text,
                                     tags: if x.is_deprecated {
                                         Some(vec![CompletionItemTag::DEPRECATED])
                                     } else {
@@ -619,6 +680,14 @@ impl Transaction<'_> {
                 identifier,
                 context,
             }) => {
+                let expected_type = if matches!(
+                    context,
+                    IdentifierContext::Expr(ExprContext::Load | ExprContext::Invalid)
+                ) {
+                    self.expected_call_argument_type(handle, position)
+                } else {
+                    None
+                };
                 if matches!(
                     context,
                     IdentifierContext::Expr(ExprContext::Load | ExprContext::Invalid)
@@ -634,6 +703,7 @@ impl Transaction<'_> {
                     handle,
                     Some(&identifier),
                     position,
+                    expected_type.as_ref(),
                     &mut result,
                 );
                 if !has_local_completions {
@@ -663,10 +733,17 @@ impl Transaction<'_> {
             None => {
                 // todo(kylei): optimization, avoid duplicate ast walkss
                 if let Some(mod_module) = self.get_ast(handle) {
+                    let expected_type = self.expected_call_argument_type(handle, position);
                     let nodes = Ast::locate_node(&mod_module, position);
                     if nodes.is_empty() {
                         Self::add_keyword_completions(handle, &mut result);
-                        self.add_local_variable_completions(handle, None, position, &mut result);
+                        self.add_local_variable_completions(
+                            handle,
+                            None,
+                            position,
+                            expected_type.as_ref(),
+                            &mut result,
+                        );
                         self.add_builtins_autoimport_completions(handle, None, &mut result);
                     }
                     let in_string_literal = nodes
