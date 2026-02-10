@@ -25,6 +25,7 @@
 #![feature(const_type_name)]
 #![feature(if_let_guard)]
 
+use std::fmt::Display;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,6 +43,7 @@ pub mod source_db;
 pub use source_db::SourceDatabase;
 use starlark_map::small_map::SmallMap;
 mod query;
+use tracing::info;
 #[cfg(not(target_arch = "wasm32"))]
 use which::which;
 
@@ -88,6 +90,15 @@ impl BuildSystemArgs {
         match self {
             Self::Buck(args) => args.get_repo_root(cwd),
             Self::Custom(args) => args.get_repo_root(cwd),
+        }
+    }
+}
+
+impl Display for BuildSystemArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Buck(args) => write!(f, "Buck({})", args),
+            Self::Custom(args) => write!(f, "Custom({})", args),
         }
     }
 }
@@ -146,6 +157,12 @@ impl BuildSystem {
         {
             return Some(Ok(result.dupe()));
         }
+
+        info!(
+            "Loading new build system at {}: {}",
+            config_root.display(),
+            &self.args
+        );
 
         for path in &mut self.search_path_prefix {
             *path = config_root.join(&path);
