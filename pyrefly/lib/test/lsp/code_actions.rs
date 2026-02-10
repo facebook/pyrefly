@@ -635,6 +635,19 @@ fn compute_implement_abstract_actions_allow_errors(
     (module_info, edit_sets, titles)
 }
 
+fn compute_extract_superclass_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let selection = find_marked_range_with(code, "# SUPER-START", "# SUPER-END");
+    compute_move_actions(code, selection, |transaction, handle, selection| {
+        transaction.extract_superclass_code_actions(handle, selection)
+    })
+}
+
 #[test]
 fn basic_test() {
     let report = get_batched_lsp_operations_report_allow_error(
