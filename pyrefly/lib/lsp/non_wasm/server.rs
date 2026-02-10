@@ -522,11 +522,27 @@ impl ServerConnection {
 }
 
 fn diagnostic_markdown_support(params: &Value) -> bool {
-    params
+    let text_document = match params
         .get("capabilities")
         .and_then(|caps| caps.get("textDocument"))
-        .and_then(|text_document| text_document.get("diagnostic"))
+    {
+        Some(text_document) => text_document,
+        None => return false,
+    };
+
+    // First, honor the `textDocument.diagnostic.markupMessageSupport` setting if present.
+    if let Some(supported) = text_document
+        .get("diagnostic")
         .and_then(|diagnostic| diagnostic.get("markupMessageSupport"))
+        .and_then(Value::as_bool)
+    {
+        return supported;
+    }
+
+    // Fall back to `textDocument.publishDiagnostics.markupMessageSupport`.
+    text_document
+        .get("publishDiagnostics")
+        .and_then(|publish_diagnostics| publish_diagnostics.get("markupMessageSupport"))
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }
