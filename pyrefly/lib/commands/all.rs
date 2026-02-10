@@ -16,6 +16,7 @@ use crate::commands::infer::InferArgs;
 use crate::commands::init::InitArgs;
 use crate::commands::lsp::LspArgs;
 use crate::commands::report::ReportArgs;
+use crate::commands::suppress::SuppressArgs;
 use crate::commands::tsp::TspArgs;
 use crate::commands::util::CommandExitStatus;
 
@@ -48,6 +49,8 @@ pub enum Command {
     Infer(InferArgs),
     /// Generate reports from pyrefly type checking results.
     Report(ReportArgs),
+    /// Suppress type errors by adding ignore comments, or remove unused ignores.
+    Suppress(SuppressArgs),
 }
 
 impl Command {
@@ -60,12 +63,13 @@ impl Command {
             Command::Check(args) => args.run().await,
             Command::Snippet(args) => args.run().await,
             Command::BuckCheck(args) => args.run(),
-            Command::Lsp(args) => args.run(version, telemetry),
+            Command::Lsp(args) => args.run(version, None, telemetry),
             Command::Tsp(args) => args.run(telemetry),
             Command::Init(args) => args.run(),
             Command::Infer(args) => args.run(),
             Command::DumpConfig(args) => args.run(),
             Command::Report(args) => args.run(),
+            Command::Suppress(args) => args.run(),
         }
     }
 }

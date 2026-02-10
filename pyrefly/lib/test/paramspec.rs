@@ -284,7 +284,7 @@ reveal_type(transform(bar)) # Should return (a: str, /, *args: bool) -> bool # E
 );
 
 testcase!(
-    bug = "P.args and P.kwargs should only work when P is in scope",
+    bug = "conformance: P.args and P.kwargs should only work when P is in scope",
     test_paramspec_component_usage,
     r#"
 from typing import Callable, ParamSpec
@@ -562,5 +562,21 @@ def caller(
             _ = action(val, *args, **kwargs)
 
 caller([], T.c1)
+"#,
+);
+
+testcase!(
+    test_paramspec_any,
+    r#"
+from typing import Callable, Any, ParamSpec, Generic
+
+P = ParamSpec('P')
+
+class Task(Generic[P]):
+    __call__: Callable[P, None]
+
+# Any should be accepted as a valid ParamSpec argument
+def foo(task: Task[Any]) -> None:
+    pass
 "#,
 );

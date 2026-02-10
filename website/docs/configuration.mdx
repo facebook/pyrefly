@@ -31,6 +31,10 @@ name with the `--config`/`-c` flag, but they will not be automatically found by
 
 Both absolute and config-relative paths are supported.
 
+:::info
+Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+:::
+
 ## Simple Configuration Example
 
 Here's an example of a simple config. To see more complex examples,
@@ -428,6 +432,10 @@ types (like `object`, `str`, ...) and types/type signatures from stdlib modules.
 
 Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
 
+:::info
+Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+:::
+
 - Type: Table of [error code](./error-kinds.mdx) to boolean representing enabled status
 - Default: `errors = {}`/`[errors]`
 - Flag equivalent: `--error`, `--warn`, `--ignore`
@@ -769,6 +777,37 @@ and values that can be overridden here.
 - Default: `[]`
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
+
+### `recursion-depth-limit`
+
+:::warning
+This is a debugging option for investigating stack overflow issues. You should only use
+this if Pyrefly is crashing with a stack overflow. If you encounter such a crash, please
+[open an issue](https://github.com/facebook/pyrefly/issues).
+:::
+
+Maximum recursion depth before triggering overflow protection. When set to a non-zero value,
+Pyrefly will detect when type checking recursion exceeds this limit and handle it according
+to [`recursion-overflow-handler`](#recursion-overflow-handler).
+
+- Type: integer
+- Default: `0` (disabled)
+- Flag equivalent: `--recursion-depth-limit`
+
+### `recursion-overflow-handler`
+
+:::warning
+This is a debugging option. See [`recursion-depth-limit`](#recursion-depth-limit) above.
+:::
+
+How to handle when the recursion depth limit is exceeded:
+
+- `"break-with-placeholder"`: Return a placeholder type and emit an internal error. Safe for IDE use.
+- `"panic-with-debug-info"`: Dump debug information to stderr and panic. For debugging stack overflow issues.
+
+- Type: one of `"break-with-placeholder"`, `"panic-with-debug-info"`
+- Default: `"break-with-placeholder"`
+- Flag equivalent: `--recursion-overflow-handler`
 
 ## Configuration Details
 

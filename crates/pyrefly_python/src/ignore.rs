@@ -78,6 +78,8 @@ pub enum Tool {
     Ty,
     /// Enables `# pyre: ignore`, `# pyre-ignore`, `# pyre-fixme`, and `# pyre-ignore-all-errors`
     Pyre,
+    /// Enables `# zuban: ignore`
+    Zuban,
 }
 
 impl Tool {
@@ -92,6 +94,7 @@ impl Tool {
             "pyright" => Some(Tool::Pyright),
             "mypy" => Some(Tool::Mypy),
             "ty" => Some(Tool::Ty),
+            "zuban" => Some(Tool::Zuban),
             _ => None,
         }
     }
@@ -167,6 +170,28 @@ pub struct Suppression {
     tool: Tool,
     /// The permissible error kinds, use empty Vec to mean any are allowed
     kind: Vec<String>,
+    /// The line number where the suppression comment is located.
+    /// This may differ from the line the suppression applies to
+    /// (e.g., when the comment is on the line above).
+    comment_line: LineNumber,
+}
+
+impl Suppression {
+    /// Returns the line number where the suppression comment is located.
+    pub fn comment_line(&self) -> LineNumber {
+        self.comment_line
+    }
+
+    /// Returns the error codes that this suppression applies to.
+    /// An empty slice means the suppression applies to all error codes.
+    pub fn error_codes(&self) -> &[String] {
+        &self.kind
+    }
+
+    /// Returns the tool that this suppression is for.
+    pub fn tool(&self) -> Tool {
+        self.tool
+    }
 }
 
 /// Record the position of lines affected by `# type: ignore[valid-type]` suppressions.
@@ -239,7 +264,7 @@ impl Ignore {
                 ignores.entry(line).or_default().append(&mut pending);
             }
             for x in xs {
-                if let Some(supp) = Self::parse_ignore_comment(x) {
+                if let Some(supp) = Self::parse_ignore_comment(x, line) {
                     if first.trim_start().is_empty() {
                         pending.push(supp);
                     } else {
@@ -258,7 +283,8 @@ impl Ignore {
     }
 
     /// Given the content of a comment, parse it as a suppression.
-    fn parse_ignore_comment(l: &str) -> Option<Suppression> {
+    /// The comment_line parameter indicates which line the comment is on.
+    fn parse_ignore_comment(l: &str, comment_line: LineNumber) -> Option<Suppression> {
         let mut lex = Lexer(l);
         lex.trim_start();
 
@@ -281,11 +307,13 @@ impl Ignore {
             return Some(Suppression {
                 tool,
                 kind: inside.split(',').map(|x| x.trim().to_owned()).collect(),
+                comment_line,
             });
         } else if gap || lex.word_boundary() {
             return Some(Suppression {
                 tool,
                 kind: Vec::new(),
+                comment_line,
             });
         }
         None
@@ -376,6 +404,11 @@ impl Ignore {
     pub fn get(&self, line: &LineNumber) -> Option<&Vec<Suppression>> {
         self.ignores.get(line)
     }
+
+    /// Returns true if there are no suppressions.
+    pub fn is_empty(&self) -> bool {
+        self.ignores.is_empty() && self.ignore_all.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -414,11 +447,13 @@ mod tests {
     #[test]
     fn test_parse_ignore_comment() {
         fn f(x: &str, tool: Option<Tool>, kind: &[&str]) {
+            let dummy_line = LineNumber::default();
             assert_eq!(
-                Ignore::parse_ignore_comment(x),
+                Ignore::parse_ignore_comment(x, dummy_line),
                 tool.map(|tool| Suppression {
                     tool,
                     kind: kind.map(|x| (*x).to_owned()),
+                    comment_line: dummy_line,
                 }),
                 "{x:?}"
             );
@@ -462,6 +497,13 @@ mod tests {
             &["61"],
         );
         f("pyre-fixme: core type error", Some(Tool::Pyre), &[]);
+
+        f("zuban: ignore", Some(Tool::Zuban), &[]);
+        f(
+            "zuban: ignore[something]",
+            Some(Tool::Zuban),
+            &["something"],
+        );
 
         // For a malformed comment, at least do something with it (works well incrementally)
         f("type: ignore[hello", Some(Tool::Type), &["hello"]);

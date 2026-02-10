@@ -7,8 +7,11 @@
 
 use dupe::Dupe;
 
-/// The maximum number of times we'll follow imports when indexing
-const INDEXING_DEPTH: usize = 5;
+#[derive(Debug, Clone, Dupe, Copy)]
+pub struct RequireLevels {
+    pub specified: Require,
+    pub default: Require,
+}
 
 /// How much information do we require about a module?
 #[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -19,9 +22,8 @@ pub enum Require {
     /// We want to know what errors this module produces.
     Errors,
     /// We want to retain enough information about a file (e.g. references),
-    /// so that IDE features that require an index can work. The `usize` is the remaining indexing
-    /// depth - i.e., how many more times we'll follow imports.
-    Indexing(usize),
+    /// so that IDE features that require an index can work.
+    Indexing,
     /// We want to retain all information about this module in memory,
     /// including the AST and bindings/answers.
     Everything,
@@ -33,7 +35,7 @@ impl Require {
     }
 
     pub fn keep_index(self) -> bool {
-        self >= Require::Indexing(0)
+        self >= Require::Indexing
     }
 
     pub fn keep_answers_trace(self) -> bool {
@@ -50,9 +52,5 @@ impl Require {
 
     pub fn keep_answers(self) -> bool {
         self >= Require::Everything
-    }
-
-    pub fn indexing() -> Self {
-        Self::Indexing(INDEXING_DEPTH)
     }
 }

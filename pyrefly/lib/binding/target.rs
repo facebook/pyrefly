@@ -22,13 +22,16 @@ use starlark_map::Hashed;
 use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
+use crate::binding::binding::BindingTypeAlias;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
+use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::SizeExpectation;
+use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -121,7 +124,7 @@ impl<'a> BindingsBuilder<'a> {
             SizeExpectation::Eq(elts.len())
         };
         self.insert_binding(
-            KeyExpect(range),
+            KeyExpect::UnpackedLength(range),
             BindingExpect::UnpackedLength(unpack_idx, range, expect),
         );
     }
@@ -133,7 +136,8 @@ impl<'a> BindingsBuilder<'a> {
     fn narrow_if_name_is_defined(&mut self, identifier: Identifier, narrowed_idx: Idx<Key>) {
         let name = Hashed::new(&identifier.id);
         let name_is_defined = !matches!(
-            self.scopes.look_up_name_for_read(name),
+            self.scopes
+                .look_up_name_for_read(name, &Usage::Narrowing(None)),
             NameReadInfo::NotFound,
         );
         if name_is_defined {
@@ -465,14 +469,19 @@ impl<'a> BindingsBuilder<'a> {
         }
         let identifier = ShortIdentifier::new(name);
         let mut current = self.declare_current_idx(Key::Definition(identifier));
-        let pinned_idx = self.idx_for_promise(Key::CompletedPartialType(identifier));
-        let is_definitely_type_alias = if let Some((e, _)) = direct_ann
-            && self.as_special_export(e) == Some(SpecialExport::TypeAlias)
-        {
-            true
+        let has_type_alias_qualifier = direct_ann
+            .is_some_and(|(e, _)| self.as_special_export(e) == Some(SpecialExport::TypeAlias));
+        let is_definitely_type_alias =
+            has_type_alias_qualifier || self.is_definitely_type_alias_rhs(value.as_ref());
+        // Only create partial type bindings when infer_with_first_use is enabled.
+        // When disabled, we bind directly to the definition idx and skip the
+        // CompletedPartialType/PartialTypeWithUpstreamsCompleted indirection.
+        let pinned_idx = if !is_definitely_type_alias && self.infer_with_first_use() {
+            Some(self.idx_for_promise(Key::CompletedPartialType(identifier)))
         } else {
-            self.is_definitely_type_alias_rhs(value.as_ref())
+            None
         };
+        let scope_idx = pinned_idx.unwrap_or_else(|| current.idx());
         let mut tparams = None;
         if is_definitely_type_alias {
             let mut legacy = Some(LegacyTParamCollector::new(false));
@@ -491,38 +500,53 @@ impl<'a> BindingsBuilder<'a> {
             self.scopes.register_variable(name);
             FlowStyle::Other
         };
-        let canonical_ann = self.bind_name(&name.id, pinned_idx, style);
+        let canonical_ann = self.bind_name(&name.id, scope_idx, style);
         let ann = match direct_ann {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
             None => canonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
         };
-        let binding = Binding::NameAssign {
-            name: name.id.clone(),
-            annotation: ann,
-            expr: value,
-            legacy_tparams: tparams,
-            is_in_function_scope: self.scopes.in_function_scope(),
+        let binding = if is_definitely_type_alias {
+            let range = value.range();
+            let key_type_alias = KeyTypeAlias(self.type_alias_index());
+            let binding_type_alias = BindingTypeAlias::Legacy {
+                name: name.id.clone(),
+                annotation: ann,
+                expr: value,
+                is_explicit: has_type_alias_qualifier,
+            };
+            let idx_type_alias = self.insert_binding(key_type_alias, binding_type_alias);
+            Binding::TypeAlias {
+                name: name.id.clone(),
+                tparams: TypeAliasParams::Legacy(tparams),
+                key_type_alias: idx_type_alias,
+                range,
+            }
+        } else {
+            Binding::NameAssign {
+                name: name.id.clone(),
+                annotation: ann,
+                expr: value,
+                legacy_tparams: tparams,
+                is_in_function_scope: self.scopes.in_function_scope(),
+            }
         };
         // Record the raw assignment
-        let (def_idx, first_use_of) = current.decompose();
+        let def_idx = current.into_idx();
         let def_idx = self.insert_binding_idx(def_idx, binding);
-        // If this is a first use, add a binding that will eliminate any placeholder types coming from upstream.
-        let unpinned_idx = if first_use_of.is_empty() {
-            def_idx
-        } else {
-            self.insert_binding(
+        // Create partial type bindings (when infer_with_first_use is enabled)
+        if let Some(pinned_idx) = pinned_idx {
+            // Create PartialTypeWithUpstreamsCompleted with an empty first_uses list.
+            // Deferred binding processing will populate the first_uses list after AST traversal.
+            let unpinned_idx = self.insert_binding(
                 Key::PartialTypeWithUpstreamsCompleted(identifier),
-                Binding::PartialTypeWithUpstreamsCompleted(
-                    def_idx,
-                    first_use_of.into_iter().collect(),
-                ),
-            )
-        };
-        // Insert the Pin binding that will pin any types, potentially after evaluating the first downstream use.
-        self.insert_binding_idx(
-            pinned_idx,
-            Binding::CompletedPartialType(unpinned_idx, FirstUse::Undetermined),
-        );
+                Binding::PartialTypeWithUpstreamsCompleted(def_idx, Box::new([])),
+            );
+            // Insert the Pin binding that will pin any types, potentially after evaluating the first downstream use.
+            self.insert_binding_idx(
+                pinned_idx,
+                Binding::CompletedPartialType(unpinned_idx, FirstUse::Undetermined),
+            );
+        }
         canonical_ann
     }
 

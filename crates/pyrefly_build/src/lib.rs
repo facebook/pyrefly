@@ -155,10 +155,9 @@ impl BuildSystem {
             BuildSystemArgs::Buck(args) => Arc::new(BxlQuerier::new(args.clone())),
             BuildSystemArgs::Custom(args) => Arc::new(CustomQuerier::new(args.clone())),
         };
-        let source_db = ArcId::new(Box::new(QuerySourceDatabase::new(
-            repo_root.to_path_buf(),
-            querier,
-        )) as Box<dyn SourceDatabase>);
+        let source_db = ArcId::new(
+            Box::new(QuerySourceDatabase::new(repo_root, querier)) as Box<dyn SourceDatabase>
+        );
         cache.insert(key, source_db.downgrade());
         Some(Ok(source_db))
     }

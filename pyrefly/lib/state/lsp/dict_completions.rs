@@ -302,7 +302,7 @@ impl<'a> super::Transaction<'a> {
         })
     }
 
-    pub(super) fn add_dict_key_completions(
+    pub(crate) fn add_dict_key_completions(
         &self,
         handle: &Handle,
         module: &ModModule,

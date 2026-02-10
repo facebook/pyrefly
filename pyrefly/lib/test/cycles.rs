@@ -37,7 +37,7 @@ The one I've left uncommented is the one where there's no race condition.
 x = None
 def f(_: str | None) -> tuple[str, str]: ...
 def g(_: int | None) -> tuple[int, int]: ...
-while True: # E: `int | None` is not assignable to `str | None` (caused by inconsistent types when breaking cycles)
+while True: # E: Pyrefly detected conflicting types while breaking a dependency cycle: `int | None` is not assignable to `str | None`.
     y, x = f(x)  # E: Argument `int | None` is not assignable to parameter `_` with type `str | None` in function `f`
     z, x = g(x)  # E: Argument `str` is not assignable to parameter `_` with type `int | None` in function `g`
 "#,
@@ -390,5 +390,198 @@ testcase!(
 def f(  # E: Expected `)`, found newline
     if n:  # E: Type narrowing encountered a cycle in Type::Var # E: Expected an indented block after `if` statement
 )n = min(n, size)  # E: Expected a statement # E: `n` is uninitialized # E: Could not find name `size`
+"#,
+);
+
+// Regression test for issue #2175, which was infinite recursion in is_subset_eq
+// when checking recursive type patterns. The cycle detection in is_subset_eq
+// should prevent stack overflow.
+testcase!(
+    recursive_type_subset_check_no_overflow,
+    r#"
+from typing import Protocol, TypeVar, Generic
+
+T = TypeVar("T", covariant=True)
+
+# A recursive protocol that references itself
+class Readable(Protocol[T]):
+    def read(self) -> T: ...
+
+# A class that implements the recursive protocol
+class Stream(Generic[T]):
+    def read(self) -> T: ...
+
+def consume(x: Readable[int]) -> int:
+    return x.read()
+
+s: Stream[int] = Stream()
+consume(s)  # Should not cause stack overflow
+"#,
+);
+
+// Test that mutually recursive classes don't cause infinite recursion
+testcase!(
+    mutually_recursive_classes_subset,
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class A(Generic[T]):
+    def get_b(self) -> "B[T]": ...
+
+class B(Generic[T]):
+    def get_a(self) -> "A[T]": ...
+
+def f(x: A[int]) -> B[int]:
+    return x.get_b()
+
+def g(x: B[int]) -> A[int]:
+    return x.get_a()
+"#,
+);
+
+// Regression test for forward references in class bodies causing stack overflow.
+// When a class has many fields where field[i] references field[i+1] (forward reference),
+// binding_to_type_class_body_unknown_name calls get_class_field_map just to check if
+// the name is a class field. This triggers computing ALL field types, and when a field's
+// type computation involves resolving another forward reference, it re-enters
+// get_class_field_map quadratically.
+
+const NUM_FORWARD_REF_FIELDS: usize = 600;
+
+fn env_forward_reference_class_fields() -> TestEnv {
+    let mut code = String::from(
+        r#"
+class Wrapper:
+    def __init__(self, value: "Wrapper | None") -> None:
+        self.value = value
+
+class Container:
+"#,
+    );
+
+    // Generate 600 fields where each references the next (forward reference)
+    for i in 0..NUM_FORWARD_REF_FIELDS {
+        if i < NUM_FORWARD_REF_FIELDS - 1 {
+            // Forward reference to the next field - currently produces unknown-name error
+            code.push_str(&format!(
+                "    FIELD_{} = Wrapper(FIELD_{})  # E: Could not find name `FIELD_{}`\n",
+                i,
+                i + 1,
+                i + 1
+            ));
+        } else {
+            // Last field has no forward reference
+            code.push_str(&format!("    FIELD_{} = Wrapper(None)\n", i));
+        }
+    }
+
+    TestEnv::one("forward_refs", &code)
+}
+
+testcase!(
+    bug = "Forward references in class bodies cause O(n^2) recursion depth, stack overflow at ~570 fields",
+    forward_reference_class_fields,
+    env_forward_reference_class_fields(),
+    r#"
+from forward_refs import Container
+"#,
+);
+
+// A small reproduction from parso/python/tokenize.py of a stack overflow
+// that we hit when making changes to SCC resolution; useful to have in the
+// unit tests to ensure we don't repeat the same bug. We spent several hours
+// minimizing the repro to ~85 lines, it may be possible to further minimize
+// but this seems good, the goal is just to have the unit test suite ensure
+// we don't crash.
+//
+// The actual errors are not of any particular interest, we care about the
+// binding graph traversal here.
+testcase!(
+    tokenize_minimal_scc_stack_overflow,
+    r#"
+from typing import NamedTuple, Tuple, Iterator, Iterable, List, Dict, Pattern, Set
+
+class Token(NamedTuple):
+    type: int
+    string: str
+    start_pos: Tuple[int, int]
+    prefix: str
+
+class PythonToken(Token):
+    pass
+
+class FStringNode:
+    quote: str
+    def is_in_expr(self) -> bool: ...
+
+def tokenize_lines(
+    lines: Iterable[str],
+    *,
+    pseudo_token: Pattern,
+    triple_quoted: Set[str],
+    endpats: Dict[str, Pattern],
+) -> Iterator[PythonToken]:
+    contstr = ''
+    contstr_start: Tuple[int, int]
+    endprog: Pattern
+    prefix = ''
+    additional_prefix = ''
+    lnum = 0
+    fstring_stack: List[FStringNode] = []
+
+    for line in lines:
+        lnum += 1
+        pos = 0
+        max_ = len(line)
+
+        if contstr:
+            endmatch = endprog.match(line)  # E:
+            if endmatch:
+                pos = endmatch.end(0)
+                yield PythonToken(0, contstr + line[:pos], contstr_start, prefix)  # E:
+                contstr = ''
+            else:
+                contstr = contstr + line
+                continue
+
+        while pos < max_:
+            if fstring_stack:
+                tos = fstring_stack[-1]
+                if not tos.is_in_expr():
+                    if pos == max_:
+                        break
+
+            if fstring_stack:
+                string_line = line
+                for fstring_stack_node in fstring_stack:
+                    quote = fstring_stack_node.quote
+                    end_match = endpats[quote].match(line, pos)
+                    if end_match is not None:
+                        end_match_string = end_match.group(0)
+                        string_line = line[:pos] + end_match_string
+                pseudomatch = pseudo_token.match(string_line, pos)
+            else:
+                pseudomatch = pseudo_token.match(line, pos)
+
+            if pseudomatch:
+                prefix = additional_prefix + pseudomatch.group(1)
+                additional_prefix = ''
+                start, pos = pseudomatch.span(2)
+                spos = (lnum, start)
+                token = pseudomatch.group(2)
+            else:
+                break
+
+            if token in triple_quoted:
+                endprog = endpats[token]
+                endmatch = endprog.match(line, pos)
+                if endmatch:
+                    pos = endmatch.end(0)
+                    yield PythonToken(0, token, spos, prefix)
+                else:
+                    contstr_start = spos
+                    contstr = line[start:]
 "#,
 );

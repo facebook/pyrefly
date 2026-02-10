@@ -8,6 +8,24 @@
 use crate::testcase;
 
 testcase!(
+    test_context_subscript_assign_delete,
+    r#"
+class Foo:
+    def __getitem__(self, key: list[str | None]):
+        pass
+    def __setitem__(self, key: list[str | None], value: list[int | None]):
+        pass
+    def __delitem__(self, key: list[str | None]):
+        pass
+
+foo = Foo()
+x = foo[["bar"]]
+foo[["bar"]] = [1]
+del foo[["bar"]]
+"#,
+);
+
+testcase!(
     test_context_annassign,
     r#"
 class A: ...
@@ -658,5 +676,31 @@ x1: tuple[TD1] | tuple[TD2, ...] = ({"x": 0},)
 x2: tuple[TD1] | tuple[TD2, ...] = ({"y": "a"}, {"y": "b"})
 x3: tuple[TD1] | tuple[TD2] = ({"y": "a"},)
 x4: tuple[TD1] | tuple[TD2, ...] = ({"x": 0}, {"y": "a"})  # E: `tuple[TD1, TD2]` is not assignable to `tuple[TD1] | tuple[TD2, ...]`
+    "#,
+);
+
+testcase!(
+    bug = "`Sequence[TD]` hint should be used when typing `({'x': 0},)`",
+    test_sequence_hint_in_typevar_bound,
+    r#"
+from typing import Sequence, TypedDict
+class TD(TypedDict):
+    x: int
+def f[T: Sequence[TD]](x: T) -> T:
+    return x
+f(({"x": 0},))  # E: `tuple[dict[str, int]]` is not assignable to upper bound `Sequence[TD]`
+    "#,
+);
+
+testcase!(
+    bug = "`TD` should be used as a hint when typing `{'x': 0}`",
+    test_typed_dict_hint_in_typevar_bound,
+    r#"
+from typing import TypedDict
+class TD(TypedDict):
+    x: int
+def f[T: TD](x: tuple[T, ...]) -> T:
+    return x[0]
+f(({"x": 0},))  # E: `dict[str, int]` is not assignable to upper bound `TD`
     "#,
 );

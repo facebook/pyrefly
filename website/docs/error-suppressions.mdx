@@ -86,14 +86,31 @@ To generate (or re-generate) the baseline file:
 pyrefly check --baseline="<path to baseline file>" --update-baseline
 ```
 
-To check your project using a baseline file and report only newly-introduced errors:
+To check your project using a baseline file and report only newly-introduced errors, you can either use the CLI flag:
 
 ```
 pyrefly check --baseline="<path to baseline file>"
 ```
 
+Or specify the baseline in your configuration file (`pyrefly.toml` or `pyproject.toml`):
+
+```toml
+# pyrefly.toml
+baseline = "baseline.json"
+```
+
+```toml
+# pyproject.toml
+[tool.pyrefly]
+baseline = "baseline.json"
+```
+
+When the baseline is specified in the configuration file, you don't need to pass the `--baseline` flag on every invocation. The CLI flag takes precedence if both are specified.
+
+Note that `baseline` is a **project-level setting** and cannot be overridden in [`sub-config`](./configuration.mdx#sub-configs) sections. If you need different baseline files for different parts of your codebase, consider using separate Pyrefly configuration files.
+
 Errors are matched with the baseline by looking at file, error code, and column number.
-Right now, errors suppressed by the baseline file are still shown in the IDE and the baseline file can only be passed as a command line argument, but both are expected to change in the future.
+Note that errors suppressed by the baseline file are still shown in the IDE.
 This feature is experimental, so please submit any feedback or requests you have on our Github repo.
 
 ## Upgrading Pyrefly (And other changes that introduce new type errors)

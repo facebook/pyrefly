@@ -124,6 +124,33 @@ d: list[Any] = ["test"]
 );
 
 testcase!(
+    test_assign_list_concat_with_contextual_hint,
+    r#"
+from typing import assert_type, reveal_type
+
+class Base: ...
+class A(Base): ...
+class B(Base): ...
+
+# List literal with mixed subclasses works with contextual hint
+l1: list[Base] = [A(), B()]
+
+# List concatenation with contextual hint should also work
+l2: list[Base] = [A()] + [B()]
+
+# List concatenation with list comprehension operands
+l3: list[Base] = [A() for _ in range(1)] + [B()]
+
+# Without contextual hint, reveal_type should show the inferred union type
+reveal_type([A()] + [B()])  # E: revealed type: list[A | B]
+
+# Non-fresh operands (variables) should NOT be coerced
+xs: list[A] = [A()]
+l4: list[Base] = xs + [B()]  # E: `list[A | B]` is not assignable to `list[Base]`
+"#,
+);
+
+testcase!(
     test_assign_at_types,
     r#"
 a: int = 3

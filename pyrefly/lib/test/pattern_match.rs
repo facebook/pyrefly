@@ -213,6 +213,38 @@ def describe_ok(color: Literal["red", "blue"]):
 );
 
 testcase!(
+    test_enum_member_as_class_pattern,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+
+def describe(color: Color) -> None:
+    match color:  # E: Match on `Color` is not exhaustive
+        case Color.RED():  # E: Expected class object, got `Literal[Color.RED]`
+            pass
+"#,
+);
+
+testcase!(
+    test_protocol_class_pattern,
+    r#"
+from typing import Protocol
+
+class Drawable(Protocol):
+    def draw(self) -> None: ...
+
+def describe(x: object) -> None:
+    match x:
+        case Drawable():  # E: Protocol `Drawable` is not decorated with @runtime_checkable and cannot be used with isinstance()
+            pass
+        case _:
+            pass
+"#,
+);
+
+testcase!(
     test_non_exhaustive_enum_match_facet_subject,
     r#"
 from enum import Enum
@@ -397,5 +429,249 @@ def test_seq_pat_with_union(x: int | Sequence[int]) -> None:
         case _:
             # This should be unreachable since we've covered int and Sequence[int]
             assert_never(x)
+"#,
+);
+
+testcase!(
+    test_exhaustive_bool_match_warning,
+    r#"
+def describe(flag: bool):
+    match flag:
+        case True:
+            return "yes"
+        case False:
+            return "no"
+    # This should NOT warn about missing return (Phase 2 will fix this)
+    # For now, we're just ensuring the NonExhaustiveMatch error doesn't fire
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_bool_match_warning,
+    r#"
+def describe(flag: bool):
+    match flag: # E: Match on `bool` is not exhaustive
+        case True:
+            pass
+    # Missing False case
+"#,
+);
+
+testcase!(
+    test_exhaustive_union_with_none,
+    r#"
+def process(x: int | None):
+    match x:
+        case int():
+            pass
+        case None:
+            pass
+    # Should not warn - union is exhausted
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_union_with_none,
+    r#"
+from typing import final
+
+@final
+class A:
+    pass
+
+@final
+class B:
+    pass
+
+def process(x: A | B | None):
+    match x: # E: Match on `A | B | None` is not exhaustive
+        case A():
+            pass
+        case B():
+            pass
+    # Missing None case
+"#,
+);
+
+testcase!(
+    test_exhaustive_enum_no_missing_return,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+    BLUE = "blue"
+
+def describe(color: Color) -> str:
+    match color:
+        case Color.RED:
+            return "It's red"
+        case Color.BLUE:
+            return "It's blue"
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_enum_missing_return,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+    BLUE = "blue"
+    GREEN = "green"
+
+def describe(color: Color) -> str: # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    match color: # E: Match on `Color` is not exhaustive
+        case Color.RED:
+            return "It's red"
+        case Color.BLUE:
+            return "It's blue"
+    #   (Missing GREEN case here)
+"#,
+);
+
+testcase!(
+    test_exhaustive_literal_union_no_missing_return,
+    r#"
+from typing import Literal
+
+def describe(status: Literal["pending", "done"]) -> str:
+    match status:
+        case "pending":
+            return "Still working"
+        case "done":
+            return "Finished"
+"#,
+);
+
+// Test that an exhaustive match with a branch that doesn't return is correctly
+// identified as having an implicit None return.
+testcase!(
+    test_exhaustive_enum_with_branch_missing_return,
+    r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = "red"
+    BLUE = "blue"
+
+def describe(color: Color) -> str: # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    match color:
+        case Color.RED:
+            return "It's red"
+        case Color.BLUE:
+            pass  # Exhaustive but no return here
+"#,
+);
+
+testcase!(
+    test_exhaustive_literal_with_branch_missing_return,
+    r#"
+from typing import Literal
+
+def describe(status: Literal["pending", "done"]) -> str: # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    match status:
+        case "pending":
+            return "Still working"
+        case "done":
+            pass  # Exhaustive but no return here
+"#,
+);
+
+// Regression test: match on a complex expression (not a name) should not cause
+// an internal error when checking for implicit returns. The subject `1 + 1` is
+// a BinOp which cannot be converted to a narrowing subject.
+testcase!(
+    test_match_on_complex_expr_no_internal_error,
+    r#"
+def foo() -> str: # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    match 1 + 1:
+        case 2:
+            return "two"
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_match_shows_missing_none,
+    r#"
+from typing import final
+
+@final
+class A:
+    pass
+
+def process(x: A | None):
+    match x: # E: Match on `A | None` is not exhaustive
+        case A():
+            pass
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_match_shows_missing_class,
+    r#"
+from typing import final
+
+@final
+class A:
+    pass
+
+@final
+class B:
+    pass
+
+@final
+class C:
+    pass
+
+def process(x: A | B | C):
+    match x: # E: Match on `A | B | C` is not exhaustive
+        case A():
+            pass
+"#,
+);
+
+testcase!(
+    test_match_mapping_after_none,
+    r#"
+from typing import Any, assert_type
+
+def test_dict_or_none(dict_or_none: dict[str, Any] | None):
+    match dict_or_none:
+        case None:
+            pass
+        case {"a": "b"}:
+            # After matching None, dict_or_none is narrowed to dict[str, Any]
+            assert_type(dict_or_none, dict[str, Any])
+        case _:
+            assert_type(dict_or_none, dict[str, Any])
+
+def test_sequence_after_none(seq_or_none: list[int] | None):
+    match seq_or_none:
+        case None:
+            pass
+        case [first, *rest]:
+            # After matching None, seq_or_none is narrowed to list[int]
+            assert_type(seq_or_none, list[int])
+        case _:
+            assert_type(seq_or_none, list[int])
+"#,
+);
+
+testcase!(
+    test_match_mapping_before_none,
+    r#"
+from typing import Any, assert_type
+
+def test_dict_first(dict_or_none: dict[str, Any] | None):
+    match dict_or_none:
+        case {"a": "b"}:
+            # IsMapping narrows dict_or_none to dict[str, Any]
+            assert_type(dict_or_none, dict[str, Any])
+        case None:
+            pass
+        case _:
+            pass
 "#,
 );

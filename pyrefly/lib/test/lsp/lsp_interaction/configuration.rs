@@ -105,6 +105,9 @@ fn test_pythonpath_change() {
             configuration: Some(Some(
                 json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
             )),
+            initialization_options: Some(json!({
+                "pyrefly": {"streamDiagnostics": false},
+            })),
             ..Default::default()
         })
         .expect("Failed to initialize");
@@ -113,7 +116,7 @@ fn test_pythonpath_change() {
     // Prior to the config taking effect, there should be 1 diagnostic showing an import error
     interaction
         .client
-        .expect_publish_diagnostics_error_count(
+        .expect_publish_diagnostics_eventual_error_count(
             test_files_root.path().join("custom_interpreter/src/foo.py"),
             1,
         )
@@ -139,7 +142,7 @@ fn test_pythonpath_change() {
     // After the new config takes effect, publish diagnostics should have 0 errors
     interaction
         .client
-        .expect_publish_diagnostics_error_count(
+        .expect_publish_diagnostics_eventual_error_count(
             test_files_root.path().join("custom_interpreter/src/foo.py"),
             0,
         )
@@ -172,7 +175,7 @@ fn test_pythonpath_change() {
     // After the bad config takes effect, publish diagnostics should have 1 error
     interaction
         .client
-        .expect_publish_diagnostics_error_count(
+        .expect_publish_diagnostics_eventual_error_count(
             test_files_root.path().join("custom_interpreter/src/foo.py"),
             1,
         )
@@ -224,7 +227,7 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
     // config
     interaction
         .client
-        .expect_publish_diagnostics_error_count(
+        .expect_publish_diagnostics_eventual_error_count(
             test_files_root
                 .path()
                 .join("custom_interpreter_config/src/foo.py"),
@@ -257,7 +260,7 @@ fn test_workspace_pythonpath_ignored_when_set_in_config_file() {
     // After the new config takes effect, results should stay the same
     interaction
         .client
-        .expect_publish_diagnostics_error_count(
+        .expect_publish_diagnostics_eventual_error_count(
             test_files_root
                 .path()
                 .join("custom_interpreter_config/src/foo.py"),
@@ -309,7 +312,7 @@ fn test_interpreter_change_removes_type_errors() {
     // Without any interpreter configured, there should be 1 import error
     interaction
         .client
-        .expect_publish_diagnostics_error_count(
+        .expect_publish_diagnostics_eventual_error_count(
             test_files_root.path().join("custom_interpreter/src/foo.py"),
             1,
         )
@@ -327,7 +330,7 @@ fn test_interpreter_change_removes_type_errors() {
         ]));
     interaction
         .client
-        .expect_publish_diagnostics_error_count(
+        .expect_publish_diagnostics_eventual_error_count(
             test_files_root.path().join("custom_interpreter/src/foo.py"),
             1,
         )
@@ -348,7 +351,7 @@ fn test_interpreter_change_removes_type_errors() {
     // After switching to good interpreter, the error should be resolved to 0.
     interaction
         .client
-        .expect_publish_diagnostics_error_count(
+        .expect_publish_diagnostics_eventual_error_count(
             test_files_root.path().join("custom_interpreter/src/foo.py"),
             0,
         )
@@ -384,7 +387,7 @@ fn test_interpreter_change_changes_existing_type_errors() {
     // Without any interpreter configured, there should be 1 import error
     interaction
         .client
-        .expect_publish_diagnostics_error_count(
+        .expect_publish_diagnostics_eventual_error_count(
             test_files_root.path().join("custom_interpreter/src/foo.py"),
             1,
         )
@@ -401,7 +404,7 @@ fn test_interpreter_change_changes_existing_type_errors() {
         ]));
     interaction
         .client
-        .expect_publish_diagnostics_message_contains(
+        .expect_publish_diagnostics_eventual_message_contains(
             test_files_root.path().join("custom_interpreter/src/foo.py"),
             "interpreter_with_no_site_packages",
         )
@@ -1188,7 +1191,7 @@ fn test_fallback_search_path_heuristics_nested() {
     interaction.client.did_open("src/main.py");
     interaction
         .client
-        .expect_publish_diagnostics_error_count(root.join("src/main.py"), 0)
+        .expect_publish_diagnostics_eventual_error_count(root.join("src/main.py"), 0)
         .unwrap();
     interaction.shutdown().unwrap();
 }

@@ -8,7 +8,6 @@
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::notification::DidSaveTextDocument;
-use lsp_types::request::RegisterCapability;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -61,6 +60,9 @@ fn test_edits_while_recheck() {
     interaction.shutdown().unwrap();
 }
 
+/// Test that file watcher registration works during initialization.
+/// The initialize() function handles file watcher registration automatically
+/// when file_watch: true, so we just verify that initialization succeeds.
 #[test]
 fn test_file_watcher() {
     let root = get_test_files_root();
@@ -76,24 +78,8 @@ fn test_file_watcher() {
         })
         .unwrap();
 
-    interaction.client.expect_request::<RegisterCapability>(
-        json!({
-            "registrations": [{
-                "id": "FILEWATCHER",
-                "method": "workspace/didChangeWatchedFiles",
-                "registerOptions": {
-                    "watchers": [
-                        {"globPattern": root.path().join("**/*.py").to_str().unwrap(), "kind": 7},
-                        {"globPattern": root.path().join("**/*.pyi").to_str().unwrap(), "kind": 7},
-                        {"globPattern": root.path().join("**/*.ipynb").to_str().unwrap(), "kind": 7},
-                        {"globPattern": root.path().join("**/pyrefly.toml"), "kind": 7},
-                        {"globPattern": root.path().join("**/pyproject.toml"), "kind": 7}
-                    ]
-                }
-            }]
-        }),
-    ).unwrap()
-    .send_response(json!(null));
+    // File watcher registration is now handled by initialize() when file_watch: true.
+    // Additional file watcher behavior tests are in file_watcher.rs.
 
     interaction.shutdown().unwrap();
 }

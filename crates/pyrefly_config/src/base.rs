@@ -25,6 +25,28 @@ pub enum UntypedDefBehavior {
     SkipAndInferReturnAny,
 }
 
+/// How to handle when recursion depth limit is exceeded.
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
+#[derive(ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecursionOverflowHandler {
+    /// Return a placeholder type and emit an internal error. Safe for IDE use.
+    #[default]
+    BreakWithPlaceholder,
+    /// Dump debug info to stderr and panic. For debugging stack overflow issues.
+    PanicWithDebugInfo,
+}
+
+/// Internal configuration struct combining depth limit and handler.
+/// Not serialized directly - constructed from flat config fields.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct RecursionLimitConfig {
+    /// Maximum recursion depth before triggering overflow protection.
+    pub limit: u32,
+    /// How to handle when the depth limit is exceeded.
+    pub handler: RecursionOverflowHandler,
+}
+
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ConfigBase {
@@ -86,6 +108,23 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_with_first_use: Option<bool>,
 
+    /// Whether to enable tensor shape type inference.
+    /// When enabled, integer literals can be used as type arguments (e.g., Tensor[2, 3]),
+    /// and type variables can participate in dimension arithmetic.
+    /// By default this is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tensor_shapes: Option<bool>,
+
+    /// Maximum recursion depth before triggering overflow protection.
+    /// Set to 0 to disable (default). This helps detect potential stack overflow situations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursion_depth_limit: Option<u32>,
+
+    /// How to handle when recursion depth limit is exceeded.
+    /// Only used when `recursion-depth-limit` is set to a non-zero value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursion_overflow_handler: Option<RecursionOverflowHandler>,
+
     /// Any unknown config items
     #[serde(default, flatten)]
     pub(crate) extras: ExtraConfigs,
@@ -140,7 +179,28 @@ impl ConfigBase {
         base.infer_with_first_use
     }
 
+    pub fn get_tensor_shapes(base: &Self) -> Option<bool> {
+        base.tensor_shapes
+    }
+
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
         base.enabled_ignores.as_ref()
+    }
+
+    /// Get the recursion limit configuration, if enabled.
+    /// Returns None if recursion_depth_limit is not set or is 0.
+    pub fn get_recursion_limit_config(base: &Self) -> Option<RecursionLimitConfig> {
+        base.recursion_depth_limit.and_then(|limit| {
+            if limit == 0 {
+                None
+            } else {
+                Some(RecursionLimitConfig {
+                    limit,
+                    handler: base
+                        .recursion_overflow_handler
+                        .unwrap_or(RecursionOverflowHandler::BreakWithPlaceholder),
+                })
+            }
+        })
     }
 }

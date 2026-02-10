@@ -174,6 +174,8 @@ pub enum ErrorKind {
     InvalidOverload,
     /// An error related to ParamSpec definition or usage.
     InvalidParamSpec,
+    /// An error caused by an invalid match pattern.
+    InvalidPattern,
     /// A use of `typing.Self` in a context where Pyrefly does not recognize it as
     /// mapping to a valid class type.
     InvalidSelfType,
@@ -189,6 +191,8 @@ pub enum ErrorKind {
     InvalidTypeVar,
     /// An error caused by incorrect usage or definition of a TypeVarTuple.
     InvalidTypeVarTuple,
+    /// An error caused by a type variable being used in a position incompatible with its declared variance,
+    InvalidVariance,
     /// Attempting to use `yield` in a way that is not allowed.
     /// e.g. `yield from` with something that's not an iterable.
     InvalidYield,
@@ -275,6 +279,8 @@ pub enum ErrorKind {
     UntypedImport,
     /// Result of async function call is never used or awaited
     UnusedCoroutine,
+    /// A suppression comment is unused (no error to suppress, or specific codes are unused)
+    UnusedIgnore,
 }
 
 impl std::str::FromStr for ErrorKind {
@@ -329,6 +335,7 @@ impl ErrorKind {
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
             ErrorKind::NonExhaustiveMatch => Severity::Warn,
+            ErrorKind::UnusedIgnore => Severity::Ignore,
             _ => Severity::Error,
         }
     }

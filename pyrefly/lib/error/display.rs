@@ -211,7 +211,7 @@ impl TypeCheckKind {
                 ctx.display(want)
             ),
             Self::CycleBreaking => format!(
-                "`{}` is not assignable to `{}` (caused by inconsistent types when breaking cycles)",
+                "Pyrefly detected conflicting types while breaking a dependency cycle: `{}` is not assignable to `{}`. Adding explicit type annotations might possibly help.",
                 ctx.display(got),
                 ctx.display(want)
             ),
@@ -221,7 +221,7 @@ impl TypeCheckKind {
                 ctx.display(want),
             ),
             Self::YieldValue => format!(
-                "Type of yielded value `{}` is not assignable to declared return type `{}`",
+                "Yielded type `{}` is not assignable to declared yield type `{}`",
                 ctx.display(got),
                 ctx.display(want),
             ),
@@ -235,10 +235,14 @@ impl TypeCheckKind {
                 ctx.display(want),
             ),
             Self::PostInit => format!(
-                "`__post_init__` type `{got}` is not assignable to expected type `{want}` generated from the dataclass's `InitVar` fields"
+                "`__post_init__` type `{}` is not assignable to expected type `{}` generated from the dataclass's `InitVar` fields",
+                ctx.display(got),
+                ctx.display(want),
             ),
             Self::OverloadReturn => format!(
-                "Overload return type `{got}` is not assignable to implementation return type `{want}`",
+                "Overload return type `{}` is not assignable to implementation return type `{}`",
+                ctx.display(got),
+                ctx.display(want),
             ),
             Self::OverloadInput(overload_sig, impl_sig) => {
                 format!(
