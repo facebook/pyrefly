@@ -537,6 +537,8 @@ fn compute_implement_abstract_actions_allow_errors(
         actions.iter().map(|action| action.edits.clone()).collect();
     let titles = actions.iter().map(|action| action.title.clone()).collect();
     (module_info, edit_sets, titles)
+}
+
 fn compute_extract_superclass_actions(
     code: &str,
 ) -> (
