@@ -54,8 +54,8 @@ class C:
     def foo(cls) -> int:
         return 42
 def f(c: C):
-    reveal_type(C.foo)  # E: revealed type: BoundMethod[type[C], (cls: type[C]) -> int]
-    reveal_type(c.foo)  # E: revealed type: BoundMethod[type[C], (cls: type[C]) -> int]
+    reveal_type(C.foo)  # E: revealed type: (cls: type[C]) -> int
+    reveal_type(c.foo)  # E: revealed type: (cls: type[C]) -> int
     "#,
 );
 

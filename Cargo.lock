@@ -2116,7 +2116,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2174,7 +2174,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_build"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2194,7 +2194,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anyhow",
  "sha2",
@@ -2205,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2240,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2249,7 +2249,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_graph"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "dupe",
  "itertools 0.14.0",
@@ -2259,7 +2259,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2286,7 +2286,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_types"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "compact_str 0.8.0",
  "dupe",
@@ -2306,7 +2306,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -3494,7 +3494,7 @@ dependencies = [
 
 [[package]]
 name = "tsp_types"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "lsp-server",
  "serde",
@@ -3824,9 +3824,9 @@ dependencies = [
 
 [[package]]
 name = "windows-implement"
-version = "0.60.0"
+version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a47fddd13af08290e67f4acabf4b459f647552718f683a7b415d290ac744a836"
+checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3835,9 +3835,9 @@ dependencies = [
 
 [[package]]
 name = "windows-interface"
-version = "0.59.1"
+version = "0.59.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd9211b69f8dcdfa817bfd14bf1c97c9188afa36f4750130fcdf3f400eca9fa8"
+checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -222,7 +222,7 @@ class MyEnum(Enum):
     def D(self) -> None: pass
 
 reveal_type(MyEnum.A)  # E: revealed type: Literal[MyEnum.A]
-reveal_type(MyEnum.B)  # E: revealed type: nonmember[int]
+reveal_type(MyEnum.B)  # E: revealed type: int
 reveal_type(MyEnum.C)  # E: revealed type: Literal[MyEnum.C]
 reveal_type(MyEnum.D)  # E: revealed type: (self: MyEnum) -> None
 "#,

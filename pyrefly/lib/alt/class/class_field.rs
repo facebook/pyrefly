@@ -383,26 +383,26 @@ impl ClassField {
         )
     }
 
-    pub fn for_variance_inference(&self) -> Option<(&Type, Option<&Annotation>, bool)> {
+    pub fn for_variance_inference(&self) -> (&Type, Option<&Annotation>, bool) {
         match &self.0 {
             ClassFieldInner::Property { ty, .. } => {
                 // Properties don't have annotations (defined by decorator)
-                Some((ty, None, self.is_read_only()))
+                (ty, None, self.is_read_only())
             }
             ClassFieldInner::Descriptor { ty, annotation, .. } => {
                 // Descriptors may have annotations
-                Some((ty, annotation.as_ref(), self.is_read_only()))
+                (ty, annotation.as_ref(), self.is_read_only())
             }
             ClassFieldInner::Method { ty, .. } => {
                 // Methods don't have annotations and are always read-only
-                Some((ty, None, self.is_read_only()))
+                (ty, None, self.is_read_only())
             }
-            ClassFieldInner::NestedClass { ty, .. } => Some((ty, None, self.is_read_only())),
+            ClassFieldInner::NestedClass { ty, .. } => (ty, None, self.is_read_only()),
             ClassFieldInner::ClassAttribute { ty, annotation, .. } => {
-                Some((ty, annotation.as_ref(), self.is_read_only()))
+                (ty, annotation.as_ref(), self.is_read_only())
             }
             ClassFieldInner::InstanceAttribute { ty, annotation, .. } => {
-                Some((ty, annotation.as_ref(), self.is_read_only()))
+                (ty, annotation.as_ref(), self.is_read_only())
             }
         }
     }

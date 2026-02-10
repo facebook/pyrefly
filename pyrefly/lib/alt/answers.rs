@@ -793,7 +793,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } in self.completions(base.clone(), Some(attribute_name), false)
             {
                 match definition {
-                    Some(AttrDefinition::FullyResolved(TextRangeWithModule { module, range })) => {
+                    AttrDefinition::FullyResolved(TextRangeWithModule { module, range }) => {
                         if module.path() != self.bindings().module().path() {
                             index
                                 .lock()
@@ -803,9 +803,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .push((range, attribute_reference_range))
                         }
                     }
-                    Some(AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                        module_name,
-                    }) => {
+                    AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                         index
                             .lock()
                             .externally_defined_variable_references
@@ -813,7 +811,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .or_default()
                             .push(attribute_reference_range);
                     }
-                    Some(AttrDefinition::Submodule { module_name }) => {
+                    AttrDefinition::Submodule { module_name } => {
                         // For submodule access (e.g., `b` in `a.b`), record as a reference to
                         // the submodule. The last component of module_name is the attribute name.
                         if let Some(parent) = module_name.parent() {
@@ -825,7 +823,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .push(attribute_reference_range);
                         }
                     }
-                    None => {}
                 }
             }
         }

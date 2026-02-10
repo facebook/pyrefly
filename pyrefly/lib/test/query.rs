@@ -304,7 +304,7 @@ def f(foos: list[Foo]) -> int:
       "start_col": 12,
       "start_line": 9
     },
-    "type": "BoundMethod[builtins.set[builtins.int], (self: builtins.set[builtins.int], element: builtins.int, /) -> None]"
+    "type": "(self: builtins.set[builtins.int], element: builtins.int, /) -> None"
   },
   {
     "location": {

@@ -6,7 +6,6 @@
  */
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -1067,9 +1066,9 @@ impl<'a> BindingsBuilder<'a> {
 
         // Build an index from Definition idx -> PartialTypeWithUpstreamsCompleted idx,
         // and create a map of the first-use graph to minimize allocations.
-        let def_to_upstreams: HashMap<Idx<Key>, Idx<Key>> =
+        let def_to_upstreams: SmallMap<Idx<Key>, Idx<Key>> =
             self.build_definition_to_upstreams_index();
-        let mut first_uses_to_add: HashMap<Idx<Key>, Vec<Idx<Key>>> = HashMap::new();
+        let mut first_uses_to_add: SmallMap<Idx<Key>, Vec<Idx<Key>>> = SmallMap::new();
 
         // Process each deferred binding, tracking what we find in the first-use graph.
         for deferred_binding in deferred {
@@ -1083,8 +1082,8 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     /// Build an index from Key::Definition idx to Key::PartialTypeWithUpstreamsCompleted idx.
-    fn build_definition_to_upstreams_index(&self) -> HashMap<Idx<Key>, Idx<Key>> {
-        let mut index = HashMap::new();
+    fn build_definition_to_upstreams_index(&self) -> SmallMap<Idx<Key>, Idx<Key>> {
+        let mut index = SmallMap::new();
         for (idx, _) in self.table.types.0.items() {
             if let Some(Binding::PartialTypeWithUpstreamsCompleted(def_idx, _)) =
                 self.table.types.1.get(idx)
@@ -1117,8 +1116,8 @@ impl<'a> BindingsBuilder<'a> {
     fn finalize_bound_name(
         &mut self,
         deferred: DeferredBoundName,
-        def_to_upstreams: &HashMap<Idx<Key>, Idx<Key>>,
-        first_uses_to_add: &mut HashMap<Idx<Key>, Vec<Idx<Key>>>,
+        def_to_upstreams: &SmallMap<Idx<Key>, Idx<Key>>,
+        first_uses_to_add: &mut SmallMap<Idx<Key>, Vec<Idx<Key>>>,
     ) {
         // Follow Forward chains to find any partial type
         let (default_idx, partial_type_info) =

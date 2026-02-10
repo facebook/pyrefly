@@ -78,6 +78,8 @@ pub enum Tool {
     Ty,
     /// Enables `# pyre: ignore`, `# pyre-ignore`, `# pyre-fixme`, and `# pyre-ignore-all-errors`
     Pyre,
+    /// Enables `# zuban: ignore`
+    Zuban,
 }
 
 impl Tool {
@@ -92,6 +94,7 @@ impl Tool {
             "pyright" => Some(Tool::Pyright),
             "mypy" => Some(Tool::Mypy),
             "ty" => Some(Tool::Ty),
+            "zuban" => Some(Tool::Zuban),
             _ => None,
         }
     }
@@ -494,6 +497,13 @@ mod tests {
             &["61"],
         );
         f("pyre-fixme: core type error", Some(Tool::Pyre), &[]);
+
+        f("zuban: ignore", Some(Tool::Zuban), &[]);
+        f(
+            "zuban: ignore[something]",
+            Some(Tool::Zuban),
+            &["something"],
+        );
 
         // For a malformed comment, at least do something with it (works well incrementally)
         f("type: ignore[hello", Some(Tool::Type), &["hello"]);

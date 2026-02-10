@@ -59,7 +59,7 @@ impl<T: TspInterface> TspServer<T> {
             // Increment on DidChange since it affects type checker state via synchronous validation
             LspEvent::DidChangeTextDocument(_) => true,
             // Don't increment on DidChangeWatchedFiles directly since it triggers RecheckFinished
-            // LspEvent::DidChangeWatchedFiles(_) => true,
+            // LspEvent::DidChangeWatchedFiles => true,
             // Don't increment on DidOpen since it triggers RecheckFinished events that will increment
             // LspEvent::DidOpenTextDocument(_) => true,
             _ => false,
@@ -149,11 +149,7 @@ pub fn tsp_loop(
         scope.spawn(|| server.inner.run_recheck_queue(telemetry));
 
         scope.spawn(|| {
-            dispatch_lsp_events(
-                server.inner.connection(),
-                server.inner.lsp_queue(),
-                server.inner.uris_pending_close(),
-            );
+            dispatch_lsp_events(&server.inner);
         });
 
         let mut ide_transaction_manager = TransactionManager::default();

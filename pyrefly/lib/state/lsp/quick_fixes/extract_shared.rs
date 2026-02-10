@@ -389,3 +389,11 @@ pub(super) fn validate_non_empty_selection<'a>(
         Some(selection_text)
     }
 }
+
+/// Returns true if the statement is a member definition (function, class, or assignment).
+pub(super) fn is_member_stmt(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Assign(_) | Stmt::AnnAssign(_)
+    )
+}

@@ -222,7 +222,7 @@ impl Transaction<'_> {
         handle: &Handle,
         attr_info: &AttrInfo,
     ) -> Option<lsp_types::Documentation> {
-        let definition = attr_info.definition.as_ref()?.clone();
+        let definition = attr_info.definition.clone();
         let attribute_definition = self.resolve_attribute_definition(
             handle,
             &attr_info.name,

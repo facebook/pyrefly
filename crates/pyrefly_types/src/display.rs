@@ -502,7 +502,7 @@ impl<'a> TypeDisplayContext<'a> {
                 x.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))?;
                 output.write_str("]")
             }
-            Type::BoundMethod(box BoundMethod { obj, func }) => {
+            Type::BoundMethod(box BoundMethod { obj: _, func }) => {
                 match self.lsp_display_mode {
                     LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
                         match func {
@@ -568,13 +568,7 @@ impl<'a> TypeDisplayContext<'a> {
                     LspDisplayMode::Hover | LspDisplayMode::SignatureHelp => {
                         self.fmt_helper_generic(&func.clone().as_type(), false, output)
                     }
-                    _ => {
-                        output.write_str("BoundMethod[")?;
-                        self.fmt_helper_generic(obj, false, output)?;
-                        output.write_str(", ")?;
-                        self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output)?;
-                        output.write_str("]")
-                    }
+                    _ => self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output),
                 }
             }
             Type::Never(NeverStyle::NoReturn) => {
@@ -1332,7 +1326,7 @@ pub mod tests {
 
     #[test]
     fn test_display_typevar() {
-        let heap = TypeHeap::default();
+        let heap = TypeHeap::new();
         let t1 = fake_tyvar("foo", "bar", 1);
         let t2 = fake_tyvar("foo", "bar", 2);
         let t3 = fake_tyvar("qux", "bar", 2);
@@ -1647,7 +1641,7 @@ pub mod tests {
         let mut ctx = TypeDisplayContext::new(&[&bound_method]);
         assert_eq!(
             ctx.display(&bound_method).to_string(),
-            "BoundMethod[type[MyClass], (self: Any, x: Any, y: Any) -> None]"
+            "(self: Any, x: Any, y: Any) -> None"
         );
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
@@ -1672,7 +1666,7 @@ pub mod tests {
         let mut ctx = TypeDisplayContext::new(&[&bound_method]);
         assert_eq!(
             ctx.display(&bound_method).to_string(),
-            "BoundMethod[type[MyClass], [T](self: Any, x: Any, y: Any) -> None]"
+            "[T](self: Any, x: Any, y: Any) -> None"
         );
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
@@ -1794,7 +1788,7 @@ def overloaded_func[T](
         let ctx = TypeDisplayContext::new(&[&bound_method_overload]);
         assert_eq!(
             ctx.display(&bound_method_overload).to_string(),
-            "BoundMethod[Any, Overload[\n  (x: Any) -> None\n  [T](x: Any, y: Any) -> None\n]]"
+            "Overload[\n  (x: Any) -> None\n  [T](x: Any, y: Any) -> None\n]"
         );
 
         // Test compact display mode as non-toplevel type (non-hover)
@@ -1802,7 +1796,7 @@ def overloaded_func[T](
         let ctx = TypeDisplayContext::new(&[&type_form_of_bound_method_overload]);
         assert_eq!(
             ctx.display(&type_form_of_bound_method_overload).to_string(),
-            "type[BoundMethod[Any, Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]]"
+            "type[Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]"
         );
 
         // Test hover display mode (with @overload decorators)

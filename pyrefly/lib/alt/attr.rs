@@ -2205,7 +2205,7 @@ pub struct AttrInfo {
     pub name: Name,
     pub ty: Option<Type>,
     pub is_deprecated: bool,
-    pub definition: Option<AttrDefinition>,
+    pub definition: AttrDefinition,
     pub docstring_range: Option<TextRange>,
     /// is this defined in another module (true) or in this module (false)?
     pub is_reexport: bool,
@@ -2232,9 +2232,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 name: fld.clone(),
                                 ty: None,
                                 is_deprecated: false,
-                                definition: Some(AttrDefinition::FullyResolved(
+                                definition: AttrDefinition::FullyResolved(
                                     TextRangeWithModule::new(c.module().dupe(), range),
-                                )),
+                                ),
                                 docstring_range: c.field_docstring_range(fld),
                                 is_reexport: false,
                             });
@@ -2247,8 +2247,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             name: expected_attribute_name.clone(),
                             ty: None,
                             is_deprecated: false,
-                            definition: Some(AttrDefinition::FullyResolved(
-                                TextRangeWithModule::new(c.module().dupe(), range),
+                            definition: AttrDefinition::FullyResolved(TextRangeWithModule::new(
+                                c.module().dupe(),
+                                range,
                             )),
                             docstring_range: c.field_docstring_range(expected_attribute_name),
                             is_reexport: false,
@@ -2313,9 +2314,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     name: attr_name.clone(),
                     ty: None,
                     is_deprecated: false,
-                    definition: Some(AttrDefinition::Submodule {
+                    definition: AttrDefinition::Submodule {
                         module_name: ModuleName::from_parts(submodule.parts()),
-                    }),
+                    },
                     docstring_range: None,
                     is_reexport: false,
                 });
@@ -2331,11 +2332,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name: name.clone(),
                         ty: None,
                         is_deprecated: self.exports.get_deprecated(module_name, name).is_some(),
-                        definition: Some(
-                            AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                module_name,
-                            },
-                        ),
+                        definition: AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                            module_name,
+                        },
                         docstring_range: self.exports.docstring_range(module_name, name),
                         is_reexport: self.exports.is_reexport(module_name, name),
                     });
@@ -2347,11 +2346,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name: name.clone(),
                         ty: None,
                         is_deprecated: self.exports.get_deprecated(module_name, name).is_some(),
-                        definition: Some(
-                            AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                                module_name,
-                            },
-                        ),
+                        definition: AttrDefinition::PartiallyResolvedImportedModuleAttribute {
+                            module_name,
+                        },
                         docstring_range: self.exports.docstring_range(module_name, name),
                         is_reexport: self.exports.is_reexport(module_name, name),
                     }));
@@ -2372,42 +2369,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if include_types {
             for info in res {
-                if info.definition.is_some() {
-                    let found_attrs = self
-                        .lookup_attr_from_attribute_base(base.clone(), &info.name)
-                        .found;
-                    let mut is_deprecated = false;
-                    let found_types: Vec<_> = found_attrs
-                        .into_iter()
-                        .filter_map(|(attr, _)| {
-                            match &attr {
-                                Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty))
-                                | Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, _))
-                                | Attribute::Simple(ty)
-                                | Attribute::ClassAttribute(ClassAttribute::Property(ty, _, _))
-                                    if ty.function_deprecation().is_some() =>
-                                {
-                                    is_deprecated = true;
-                                }
-                                _ => {}
+                let found_attrs = self
+                    .lookup_attr_from_attribute_base(base.clone(), &info.name)
+                    .found;
+                let mut is_deprecated = false;
+                let found_types: Vec<_> = found_attrs
+                    .into_iter()
+                    .filter_map(|(attr, _)| {
+                        match &attr {
+                            Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty))
+                            | Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, _))
+                            | Attribute::Simple(ty)
+                            | Attribute::ClassAttribute(ClassAttribute::Property(ty, _, _))
+                                if ty.function_deprecation().is_some() =>
+                            {
+                                is_deprecated = true;
                             }
-                            self.resolve_get_access(
-                                &info.name,
-                                attr,
-                                // Important we do not use the resolved TextRange, as it might be in a different module.
-                                // Whereas the empty TextRange is valid for all modules.
-                                TextRange::default(),
-                                &self.error_swallower(),
-                                None,
-                            )
-                            .ok()
-                        })
-                        .collect();
-                    if !found_types.is_empty() {
-                        info.ty = Some(self.unions(found_types));
-                    }
-                    info.is_deprecated = is_deprecated;
+                            _ => {}
+                        }
+                        self.resolve_get_access(
+                            &info.name,
+                            attr,
+                            // Important we do not use the resolved TextRange, as it might be in a different module.
+                            // Whereas the empty TextRange is valid for all modules.
+                            TextRange::default(),
+                            &self.error_swallower(),
+                            None,
+                        )
+                        .ok()
+                    })
+                    .collect();
+                if !found_types.is_empty() {
+                    info.ty = Some(self.unions(found_types));
                 }
+                info.is_deprecated = is_deprecated;
             }
         }
     }

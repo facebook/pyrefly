@@ -58,6 +58,7 @@ use lsp_types::DocumentHighlightParams;
 use lsp_types::DocumentSymbol;
 use lsp_types::DocumentSymbolParams;
 use lsp_types::DocumentSymbolResponse;
+use lsp_types::FileEvent;
 use lsp_types::FileSystemWatcher;
 use lsp_types::FoldingRange;
 use lsp_types::FoldingRangeKind;
@@ -345,6 +346,8 @@ pub trait TspInterface: Send + Sync {
 
     fn uris_pending_close(&self) -> &Mutex<HashMap<String, usize>>;
 
+    fn pending_watched_file_changes(&self) -> &Mutex<Vec<FileEvent>>;
+
     /// Get access to the recheck queue for async task processing
     fn run_recheck_queue(&self, telemetry: &impl Telemetry);
 
@@ -568,6 +571,8 @@ pub struct Server {
     awaiting_initial_workspace_config: AtomicBool,
     /// Optional callback for remapping paths before converting to URIs.
     path_remapper: Option<PathRemapper>,
+    /// Accumulated file watcher events waiting to be processed as a batch.
+    pending_watched_file_changes: Mutex<Vec<FileEvent>>,
 }
 
 pub fn shutdown_finish(connection: &Connection, id: RequestId) {
@@ -735,24 +740,20 @@ pub fn initialize_finish<C: Serialize>(
 /// - priority_events includes those that should be handled as soon as possible (e.g. know that a
 ///   request is cancelled)
 /// - queued_events includes most of the other events.
-pub fn dispatch_lsp_events(
-    connection: &Connection,
-    lsp_queue: &LspQueue,
-    close_pending_uris: &Mutex<HashMap<String, usize>>,
-) {
-    for msg in &connection.receiver {
+pub fn dispatch_lsp_events(server: &impl TspInterface) {
+    for msg in &server.connection().receiver {
         match msg {
             Message::Request(x) => {
                 if x.method == Shutdown::METHOD {
-                    shutdown_finish(connection, x.id);
+                    shutdown_finish(server.connection(), x.id);
                     break;
                 }
-                if lsp_queue.send(LspEvent::LspRequest(x)).is_err() {
+                if server.lsp_queue().send(LspEvent::LspRequest(x)).is_err() {
                     return;
                 }
             }
             Message::Response(x) => {
-                if lsp_queue.send(LspEvent::LspResponse(x)).is_err() {
+                if server.lsp_queue().send(LspEvent::LspResponse(x)).is_err() {
                     return;
                 }
             }
@@ -760,43 +761,71 @@ pub fn dispatch_lsp_events(
                 let send_result = if let Some(Ok(params)) =
                     as_notification::<DidOpenTextDocument>(&x)
                 {
-                    lsp_queue.send(LspEvent::DidOpenTextDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidOpenTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeTextDocument>(&x) {
-                    lsp_queue.send(LspEvent::DidChangeTextDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidChangeTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidCloseTextDocument>(&x) {
-                    close_pending_uris
+                    server
+                        .uris_pending_close()
                         .lock()
                         .entry(params.text_document.uri.path().to_owned())
                         .and_modify(|pending| *pending += 1)
                         .or_insert(1);
-                    lsp_queue.send(LspEvent::DidCloseTextDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidCloseTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidSaveTextDocument>(&x) {
-                    lsp_queue.send(LspEvent::DidSaveTextDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidSaveTextDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidOpenNotebookDocument>(&x) {
-                    lsp_queue.send(LspEvent::DidOpenNotebookDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidOpenNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeNotebookDocument>(&x) {
-                    lsp_queue.send(LspEvent::DidChangeNotebookDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidChangeNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidCloseNotebookDocument>(&x) {
-                    close_pending_uris
+                    server
+                        .uris_pending_close()
                         .lock()
                         .entry(params.notebook_document.uri.path().to_owned())
                         .and_modify(|pending| *pending += 1)
                         .or_insert(1);
-                    lsp_queue.send(LspEvent::DidCloseNotebookDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidCloseNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidSaveNotebookDocument>(&x) {
-                    lsp_queue.send(LspEvent::DidSaveNotebookDocument(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidSaveNotebookDocument(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeWatchedFiles>(&x) {
-                    lsp_queue.send(LspEvent::DidChangeWatchedFiles(params))
+                    server
+                        .pending_watched_file_changes()
+                        .lock()
+                        .extend(params.changes);
+                    // In order to avoid sequential invalidations, we insert changes in the dispatch thread,
+                    // but drain these in the LSP thread. This coalesces changes on duplicates.
+                    server.lsp_queue().send(LspEvent::DrainWatchedFileChanges)
                 } else if let Some(Ok(params)) = as_notification::<DidChangeWorkspaceFolders>(&x) {
-                    lsp_queue.send(LspEvent::DidChangeWorkspaceFolders(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidChangeWorkspaceFolders(params))
                 } else if let Some(Ok(params)) = as_notification::<DidChangeConfiguration>(&x) {
-                    lsp_queue.send(LspEvent::DidChangeConfiguration(params))
+                    server
+                        .lsp_queue()
+                        .send(LspEvent::DidChangeConfiguration(params))
                 } else if let Some(Ok(params)) = as_notification::<Cancel>(&x) {
                     let id = match params.id {
                         NumberOrString::Number(i) => RequestId::from(i),
                         NumberOrString::String(s) => RequestId::from(s),
                     };
-                    lsp_queue.send(LspEvent::CancelRequest(id))
+                    server.lsp_queue().send(LspEvent::CancelRequest(id))
                 } else if as_notification::<Exit>(&x).is_some() {
                     // Send LspEvent::Exit and stop listening
                     break;
@@ -811,7 +840,7 @@ pub fn dispatch_lsp_events(
         }
     }
     // when the connection closes, make sure we send an exit to the other thread
-    let _ = lsp_queue.send(LspEvent::Exit);
+    let _ = server.lsp_queue().send(LspEvent::Exit);
 }
 
 pub fn capabilities(
@@ -993,11 +1022,7 @@ pub fn lsp_loop(
     );
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            dispatch_lsp_events(
-                &server.connection.0,
-                &server.lsp_queue,
-                &server.uris_pending_close,
-            );
+            dispatch_lsp_events(&server);
         });
         scope.spawn(|| {
             server.recheck_queue.run_until_stopped(&server, telemetry);
@@ -1249,8 +1274,15 @@ impl Server {
                 self.set_file_stats(params.notebook_document.uri.clone(), telemetry_event);
                 self.did_save(params.notebook_document.uri);
             }
-            LspEvent::DidChangeWatchedFiles(params) => {
-                self.did_change_watched_files(params, telemetry, telemetry_event);
+            LspEvent::DrainWatchedFileChanges => {
+                let changes = std::mem::take(&mut *self.pending_watched_file_changes.lock());
+                if !changes.is_empty() {
+                    self.did_change_watched_files(
+                        DidChangeWatchedFilesParams { changes },
+                        telemetry,
+                        telemetry_event,
+                    );
+                }
             }
             LspEvent::DidChangeWorkspaceFolders(params) => {
                 self.workspace_folders_changed(params, telemetry_event);
@@ -1883,6 +1915,7 @@ impl Server {
             // Will be set to true if we send a workspace/configuration request
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
             path_remapper,
+            pending_watched_file_changes: Mutex::new(Vec::new()),
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -2294,6 +2327,27 @@ impl Server {
                         self.populate_all_project_files_in_config(config, telemetry);
                     }
                 }
+            }
+        }
+    }
+
+    /// Populate project files for multiple configs
+    ///
+    /// Deduplication is handled by `indexed_configs`
+    /// Unlike `populate_project_files_if_necessary`, this performs the work directly
+    /// instead of creating a new task on the recheck queue, so it should only be
+    /// called from the recheck queue.
+    fn populate_project_files_for_configs(
+        &self,
+        configs: Vec<ArcId<ConfigFile>>,
+        telemetry: &mut TelemetryEvent,
+    ) {
+        for config in configs {
+            if config.skip_lsp_config_indexing {
+                continue;
+            }
+            if self.indexed_configs.lock().insert(config.dupe()) {
+                self.populate_all_project_files_in_config(config, telemetry);
             }
         }
     }
@@ -3013,23 +3067,22 @@ impl Server {
         if modified {
             self.invalidate_config_and_validate_in_memory();
         }
-        if was_awaiting_initial_config {
-            // This is the initial config response, so we can trigger background indexing.
-            // Find unique configs for all currently open files and populate them.
-            if self.indexing_mode != IndexingMode::None {
-                // ArcId<> does hashing and equality based on the pointer address
-                #[allow(clippy::mutable_key_type)]
-                let configs: HashSet<_> = self
-                    .open_files
-                    .read()
-                    .keys()
-                    .filter_map(|path| path.parent())
-                    .filter_map(|dir| self.state.config_finder().directory(dir))
-                    .collect();
-                for config in configs {
-                    self.populate_project_files_if_necessary(Some(config), telemetry_event);
-                }
-            }
+        if was_awaiting_initial_config && self.indexing_mode != IndexingMode::None {
+            // We need to resolve configs after invalidation completes, so enqueue that
+            // calculation in the recheck queue to ensure ordering.
+            self.recheck_queue.queue_task(
+                TelemetryEventKind::PopulateProjectFiles,
+                Box::new(move |server, _telemetry, telemetry_event, _task_stats| {
+                    let configs: Vec<_> = server
+                        .open_files
+                        .read()
+                        .keys()
+                        .filter_map(|path| path.parent())
+                        .filter_map(|dir| server.state.config_finder().directory(dir))
+                        .collect();
+                    server.populate_project_files_for_configs(configs, telemetry_event);
+                }),
+            );
             self.populate_workspace_files_if_necessary(telemetry_event);
         }
     }
@@ -3377,7 +3430,13 @@ impl Server {
         if let Some(refactors) = transaction.extract_variable_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
+        if let Some(refactors) = transaction.invert_boolean_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
         if let Some(refactors) = transaction.extract_function_code_actions(&handle, range) {
+            push_refactor_actions(refactors);
+        }
+        if let Some(refactors) = transaction.extract_superclass_code_actions(&handle, range) {
             push_refactor_actions(refactors);
         }
         if let Some(refactors) = transaction.inline_variable_code_actions(&handle, range) {
@@ -4747,6 +4806,10 @@ impl TspInterface for Server {
 
     fn uris_pending_close(&self) -> &Mutex<HashMap<String, usize>> {
         &self.uris_pending_close
+    }
+
+    fn pending_watched_file_changes(&self) -> &Mutex<Vec<FileEvent>> {
+        &self.pending_watched_file_changes
     }
 
     fn run_recheck_queue(&self, telemetry: &impl Telemetry) {

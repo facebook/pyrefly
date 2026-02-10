@@ -43,7 +43,7 @@ use crate::types::Union;
 /// A factory for constructing types.
 ///
 /// Currently returns boxed types; will be backed by an arena in the future.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TypeHeap(());
 
 impl TypeHeap {
