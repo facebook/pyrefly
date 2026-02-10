@@ -11,11 +11,11 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug = "conformance: Should use bounds/constraints of type var to determine callable input type for type[T] constructors",
+    bug = "conformance: Should use bounds/constraints of type var to determine callable input type for bounded type[T] constructors",
     test_tyvar_constructor,
     r#"
 def test[T](cls: type[T]) -> T:
-    cls(1)  # should error: no args for object constructor
+    cls(1)  # E: Expected 0 positional arguments, got 1
     return cls()
 class A:
     def __init__(self, x: int) -> None: pass

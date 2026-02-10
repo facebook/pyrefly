@@ -236,14 +236,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 CallTarget::Class(self.erase_tuple_type(tuple), ConstructorKind::TypeOfClass),
             )),
             Type::Type(box Type::Quantified(quantified)) => {
-                CallTargetLookup::Ok(Box::new(CallTarget::Callable(TargetWithTParams(
-                    None,
-                    Callable {
-                        // TODO: use upper bound to determine input parameters
-                        params: Params::Ellipsis,
-                        ret: Type::Quantified(quantified),
-                    },
-                ))))
+                let call_target = match quantified.restriction() {
+                    Restriction::Unrestricted => {
+                        // Assume this is object.__init__, reject any argument
+                        CallTarget::Callable(TargetWithTParams(
+                            None,
+                            Callable {
+                                params: Params::List(ParamList::new(vec![])),
+                                ret: Type::Quantified(quantified),
+                            },
+                        ))
+                    }
+                    _ => CallTarget::Callable(TargetWithTParams(
+                        None,
+                        Callable {
+                            // TODO: use upper bound to determine input parameters
+                            params: Params::Ellipsis,
+                            ret: Type::Quantified(quantified),
+                        },
+                    )),
+                };
+                CallTargetLookup::Ok(Box::new(call_target))
             }
             Type::Type(inner) if let Type::Any(style) = *inner => {
                 CallTargetLookup::Ok(Box::new(CallTarget::Any(style)))

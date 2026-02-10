@@ -37,7 +37,6 @@
   "constructors_call_metaclass.py": [],
   "constructors_call_new.py": [],
   "constructors_call_type.py": [
-    "Line 64: Expected 1 errors",
     "Line 72: Expected 1 errors",
     "Line 81: Expected 1 errors",
     "Line 82: Expected 1 errors"
