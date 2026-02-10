@@ -18,7 +18,6 @@ use ruff_python_ast::Alias;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprBinOp;
-use ruff_python_ast::ExprBoolOp;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprBytesLiteral;
 use ruff_python_ast::ExprCompare;
@@ -706,9 +705,6 @@ fn match_expr_nodes(
         (Expr::BinOp(lhs), Expr::BinOp(rhs)) => {
             match_binop_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
         }
-        (Expr::BoolOp(lhs), Expr::BoolOp(rhs)) => {
-            match_boolop_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
-        }
         (Expr::Compare(lhs), Expr::Compare(rhs)) => {
             match_compare_expr(lhs, rhs, param_set, param_counts, bindings, module_info)
         }
@@ -889,26 +885,6 @@ fn match_binop_expr(
         && match_expr(
             lhs.right.as_ref(),
             rhs.right.as_ref(),
-            param_set,
-            param_counts,
-            bindings,
-            module_info,
-        )
-}
-
-/// Matches boolean operations by operator and values.
-fn match_boolop_expr(
-    lhs: &ExprBoolOp,
-    rhs: &ExprBoolOp,
-    param_set: &HashSet<String>,
-    param_counts: &HashMap<String, usize>,
-    bindings: &mut HashMap<String, ArgBinding>,
-    module_info: &ModuleInfo,
-) -> bool {
-    lhs.op == rhs.op
-        && match_sequence_exprs(
-            &lhs.values,
-            &rhs.values,
             param_set,
             param_counts,
             bindings,
