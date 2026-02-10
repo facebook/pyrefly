@@ -578,10 +578,16 @@ impl Transaction<'_> {
                     && let Some(base_type) = answers.get_type_trace(base_range)
                 {
                     self.ad_hoc_solve(handle, |solver| {
-                        solver
-                            .completions(base_type, None, true)
-                            .iter()
-                            .for_each(|x| {
+                        let completions = solver.completions(base_type.clone(), None, false);
+                        let include_types = completions.len() <= 200;
+                        let completions = if include_types {
+                            solver.completions(base_type, None, true)
+                        } else {
+                            completions
+                        };
+
+                        completions.iter().for_each(|x| {
+                            let (kind, detail, documentation) = if include_types {
                                 let kind = match x.ty {
                                     Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
                                     Some(Type::Function(_) | Type::Overload(_)) => {
@@ -595,24 +601,29 @@ impl Transaction<'_> {
                                 let detail =
                                     ty.clone().map(|t| t.as_lsp_string(LspDisplayMode::Hover));
                                 let documentation = self.get_docstring_for_attribute(handle, x);
-                                result.push(CompletionItem {
-                                    label: x.name.as_str().to_owned(),
-                                    detail,
-                                    kind,
-                                    documentation,
-                                    sort_text: if x.is_reexport {
-                                        Some("1".to_owned())
-                                    } else {
-                                        None
-                                    },
-                                    tags: if x.is_deprecated {
-                                        Some(vec![CompletionItemTag::DEPRECATED])
-                                    } else {
-                                        None
-                                    },
-                                    ..Default::default()
-                                });
+                                (kind, detail, documentation)
+                            } else {
+                                (Some(CompletionItemKind::FIELD), None, None)
+                            };
+
+                            result.push(CompletionItem {
+                                label: x.name.as_str().to_owned(),
+                                detail,
+                                kind,
+                                documentation,
+                                sort_text: if x.is_reexport {
+                                    Some("1".to_owned())
+                                } else {
+                                    None
+                                },
+                                tags: if x.is_deprecated {
+                                    Some(vec![CompletionItemTag::DEPRECATED])
+                                } else {
+                                    None
+                                },
+                                ..Default::default()
                             });
+                        });
                     });
                 }
             }
