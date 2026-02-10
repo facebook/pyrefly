@@ -2058,6 +2058,8 @@ impl<'a> Transaction<'a> {
         quick_fixes::implement_abstract_members::implement_abstract_members_code_actions(
             self, handle, selection,
         )
+    }
+
     pub fn invert_boolean_code_actions(
         &self,
         handle: &Handle,
