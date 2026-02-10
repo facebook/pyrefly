@@ -3136,6 +3136,58 @@ second = mod1.square(3)
 }
 
 #[test]
+fn use_function_zero_args() {
+    let mod1 = r#"
+def one():
+    return 1
+
+local = 1
+"#;
+    let mod2 = r#"
+other = 1
+"#;
+    let (module_infos, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "one");
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod1 = apply_refactor_edits_for_module(module_infos.get("mod1").unwrap(), edits);
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let expected_mod1 = r#"
+def one():
+    return 1
+
+local = one()
+"#;
+    let expected_mod2 = r#"
+import mod1
+other = mod1.one()
+"#;
+    assert_eq!(expected_mod1.trim(), updated_mod1.trim());
+    assert_eq!(expected_mod2.trim(), updated_mod2.trim());
+}
+
+#[test]
+fn use_function_default_arg() {
+    let mod1 = r#"
+def square(p=2):
+    return p ** 2
+"#;
+    let mod2 = r#"
+value = 3 ** 2
+"#;
+    let (module_infos, actions) =
+        compute_use_function_actions(&[("mod1", mod1), ("mod2", mod2)], "mod1", "square");
+    assert_eq!(1, actions.len(), "expected one use-function action");
+    let edits = &actions[0].edits;
+    let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
+    let expected_mod2 = r#"
+import mod1
+value = mod1.square(3)
+"#;
+    assert_eq!(expected_mod2.trim(), updated_mod2.trim());
+}
+
+#[test]
 fn use_function_prefers_outermost_match() {
     let mod1 = r#"
 def inc(x):
