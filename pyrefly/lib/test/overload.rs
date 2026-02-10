@@ -477,7 +477,7 @@ testcase!(
 from typing import Callable, overload
 class defaulty[K, V]:
     @overload
-    def __init__(self: defaulty[str, V], **kwargs: V) -> None: ...
+    def __init__(self: defaulty[str, V], **kwargs: V) -> None: ... # E: `__init__` method self type cannot reference class type parameter `V`
     @overload
     def __init__(self, default_factory: Callable[[], V] | None, /) -> None: ...
     def __init__(self, *args, **kwargs) -> None:
@@ -649,6 +649,20 @@ def f(x: int) -> int: ...
 @overload
 def f(x: str) -> int: ...  # E: Implementation signature `(x: int) -> int` does not accept all arguments that overload signature `(x: str) -> int` accepts
 def f(x: int) -> int:
+    return x
+    "#,
+);
+
+testcase!(
+    test_typevar_bound_consistency,
+    r#"
+from typing import overload
+
+@overload
+def f[T: str](x: T) -> T: ...  # E: `str` is not assignable to upper bound `bytes` of type variable `T`
+@overload
+def f[T: bytes](x: T) -> T: ...
+def f[T: bytes](x: T) -> T:
     return x
     "#,
 );
@@ -1322,5 +1336,60 @@ def f(path: Any, data: Any) -> dict[str, Any]:
     relative_normalized_path = relpath(normpath(path))
     outputs[relative_normalized_path] = data
     return outputs  # E: `dict[LiteralString, Any]` is not assignable to declared return type `dict[str, Any]`
+    "#,
+);
+
+testcase!(
+    test_one_overload_is_typeis,
+    r#"
+from typing import TypeIs, assert_type, overload
+
+@overload
+def f(x: str) -> str: ...
+@overload
+def f(x: int) -> TypeIs[bool]: ...
+def f(x):
+    if isinstance(x, str):
+        return x
+    else:
+        return isinstance(x, bool)
+
+def g(x: str, y: int):
+    assert_type(f(x), str)
+    assert_type(f(y), bool)
+    if f(x):
+        assert_type(x, str)
+    if f(y):
+        assert_type(y, bool)
+    "#,
+);
+
+testcase!(
+    test_tuple_any_with_tuple_ambigious_overload,
+    r#"
+from typing import Any, Literal, Never, overload, assert_type
+
+@overload
+def ndim(shape: tuple[Never, ...]) -> int: ...
+@overload
+def ndim(shape: tuple[int]) -> Literal[1]: ...
+@overload
+def ndim(shape: tuple[int, int]) -> Literal[2]: ...
+@overload
+def ndim(shape: tuple[int, ...]) -> int: ...
+def ndim(shape: tuple[int, ...]) -> int:
+    return len(shape)
+
+def demo_gradual(s: tuple[Any, ...]):
+    assert_type(ndim(s), Any)
+
+def demo_one(s: tuple[int]):
+    assert_type(ndim(s), Literal[1])
+
+def demo_two(s: tuple[int, int]):
+    assert_type(ndim(s), Literal[2])
+
+def demo_variadic(s: tuple[int, ...]):
+    assert_type(ndim(s), int)
     "#,
 );

@@ -137,9 +137,6 @@ impl TypeInfo {
     }
 
     pub fn with_narrow(&self, facets: &Vec1<FacetKind>, ty: Type) -> Self {
-        if ty.is_error() {
-            return self.clone();
-        }
         let mut type_info = self.clone();
         type_info.add_narrow(facets, ty);
         type_info
@@ -332,7 +329,9 @@ impl TypeInfo {
 impl Display for TypeInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.ty().fmt(f)?;
-        if let Some(facets) = &self.facets {
+        if let Some(facets) = &self.facets
+            && facets.has_displayable_content()
+        {
             write!(f, " ({facets})")?;
         }
         Ok(())
@@ -364,6 +363,15 @@ impl NarrowedFacets {
         if self.0.len() < NARROWED_FACETS_LIMIT || self.0.contains_key(&facet) {
             self.0.insert(facet, value);
         }
+    }
+
+    /// Returns true if this facets structure has any content that would be displayed.
+    /// Empty `WithoutRoot` entries don't contribute to display output.
+    fn has_displayable_content(&self) -> bool {
+        self.0.iter().any(|(_, value)| match value {
+            NarrowedFacet::Leaf(_) | NarrowedFacet::WithRoot(_, _) => true,
+            NarrowedFacet::WithoutRoot { facets, .. } => facets.has_displayable_content(),
+        })
     }
 
     fn add_narrow(&mut self, facet: &FacetKind, more_facets: &[FacetKind], ty: Type) {
@@ -512,6 +520,11 @@ impl NarrowedFacets {
     ) -> fmt::Result {
         let mut first = true;
         for (facet, value) in self.0.iter() {
+            // Skip WithoutRoot entries with no displayable content
+            if matches!(value, NarrowedFacet::WithoutRoot { facets, .. } if !facets.has_displayable_content())
+            {
+                continue;
+            }
             if first {
                 first = false
             } else {
@@ -521,8 +534,11 @@ impl NarrowedFacets {
                 NarrowedFacet::Leaf(ty) => Self::fmt_type_with_label(prefix, facet, ty, f),
                 NarrowedFacet::WithRoot(ty, facets) => {
                     Self::fmt_type_with_label(prefix, facet, ty, f)?;
-                    write!(f, ", ")?;
-                    facets.fmt_with_prefix_and_facet(prefix, facet, f)
+                    if facets.has_displayable_content() {
+                        write!(f, ", ")?;
+                        facets.fmt_with_prefix_and_facet(prefix, facet, f)?;
+                    }
+                    Ok(())
                 }
                 NarrowedFacet::WithoutRoot { facets, .. } => {
                     facets.fmt_with_prefix_and_facet(prefix, facet, f)
@@ -972,7 +988,7 @@ mod tests {
         );
         // this clears the narrowing for both x.y[0] and x.y[1], but not x.y
         type_info.invalidate_all_indexes_for_assignment(&[x(), y()]);
-        assert_eq!(type_info.to_string(), "Foo (_.x.y: Bar, )");
+        assert_eq!(type_info.to_string(), "Foo (_.x.y: Bar)");
     }
 
     #[test]

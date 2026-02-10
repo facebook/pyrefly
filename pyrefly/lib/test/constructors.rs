@@ -628,3 +628,149 @@ class Column[T]:
 assert_type(Column(UUID(as_uuid=False)), Column[B])
     "#,
 );
+
+testcase!(
+    test_typevar_with_explicit_any_default,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+
+T = TypeVar("T", bound=int, default=Any)
+
+class A(Generic[T]):
+    def __new__(cls, x: T) -> A[T]: ...
+
+assert_type(A(0), A[int])
+A("oops")  # E: `str` is not assignable to upper bound `int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_typevar_with_explicit_any_default_in_nested_constructor_call,
+    r#"
+from typing import Any, assert_type
+
+class A[T = Any]:
+    def __new__(cls, x: T) -> A[T]: ...
+
+class B[T: int | A[Any] = Any]:
+    def __new__(cls, x: list[A[T]]) -> B[A[T]]: ...
+
+assert_type(B([A(0)]), B[A[int]])
+B([A("oops")])  # E: `str` is not assignable to upper bound `A[Any] | int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_init_overload_with_self,
+    r#"
+from typing import Generic, TypeVar, overload, Callable
+T = TypeVar("T")
+class C(Generic[T]):
+    @overload
+    def __init__(self: "C[int]", x: int) -> None:
+        ...
+    @overload
+    def __init__(self: "C[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        ...
+
+def takes_Cint(x: Callable[[int], C[int]]) -> None:
+    pass
+def takes_Cstr(x: Callable[[str], C[str]]) -> None:
+    pass
+def takes_Cstr_wrong(x: Callable[[str], C[int]]) -> None:
+    pass
+takes_Cint(C)
+takes_Cstr(C)
+takes_Cstr_wrong(C) # E: Argument `type[C]` is not assignable to parameter `x` with type `(str) -> C[int]` in function `takes_Cstr_wrong`
+    "#,
+);
+
+testcase!(
+    test_init_class_scoped_typevars_in_self,
+    r#"
+from typing import Generic, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+
+class Class8(Generic[T1, T2]):
+    def __init__(self: "Class8[T2, T1]") -> None:  # E: `__init__` method self type cannot reference class type parameters `T2`, `T1`
+        pass
+"#,
+);
+
+testcase!(
+    test_constructor_typevar_scope,
+    r#"
+from typing import Generic, TypeVar
+T = TypeVar("T")
+class Ok1(Generic[T]):
+    def __init__(self: "Ok1[int]") -> None:
+        pass
+class Ok2[T]:
+    def __init__(self: "Ok2[int]") -> None:
+        pass
+class Ok3(Generic[T]):
+    def __init__(self) -> None:
+        pass
+class Ok4[T]:
+    def __init__(self) -> None:
+        pass
+class Ok5(Generic[T]):
+    def __init__[V](self: "Ok5[V]", arg: V) -> None:
+        pass
+class Ok6[T]:
+    def __init__[V](self: "Ok6[V]", arg: V) -> None:
+        pass
+class Bad1(Generic[T]):
+    def __init__(self: "Bad1[T]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+class Bad2[T]:
+    def __init__(self: "Bad2[T]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+"#,
+);
+
+testcase!(
+    test_constructor_typevar_scope_nested,
+    r#"
+from typing import Generic, TypeVar
+T = TypeVar("T")
+# Nested type variables should also be detected (e.g., Foo[list[T]])
+class Bad1(Generic[T]):
+    def __init__(self: "Bad1[list[T]]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+class Bad2[T]:
+    def __init__(self: "Bad2[tuple[T, int]]") -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        pass
+"#,
+);
+
+testcase!(
+    test_constructor_typevar_scope_overload,
+    r#"
+from typing import Generic, TypeVar, overload
+T = TypeVar("T")
+# Overloaded __init__ methods should also be checked
+class Bad1(Generic[T]):
+    @overload
+    def __init__(self: "Bad1[T]", x: int) -> None: # E: `__init__` method self type cannot reference class type parameter `T`
+        ...
+    @overload
+    def __init__(self: "Bad1[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        pass
+class Ok1(Generic[T]):
+    @overload
+    def __init__(self: "Ok1[int]", x: int) -> None:
+        ...
+    @overload
+    def __init__(self: "Ok1[str]", x: str) -> None:
+        ...
+    def __init__(self, x: int | str) -> None:
+        pass
+"#,
+);

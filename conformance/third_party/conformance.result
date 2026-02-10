@@ -10,40 +10,20 @@
   ],
   "aliases_newtype.py": [],
   "aliases_recursive.py": [
-    "Line 19: Expected 1 errors",
-    "Line 20: Expected 1 errors",
-    "Line 38: Expected 1 errors",
-    "Line 39: Expected 1 errors",
-    "Line 50: Expected 1 errors",
-    "Line 51: Expected 1 errors",
-    "Line 52: Expected 1 errors",
     "Line 63: Expected 1 errors",
-    "Line 69: Expected 1 errors",
-    "Line 72: Expected 1 errors",
-    "Line 75: Expected 1 errors"
+    "Line 69: Expected 1 errors"
   ],
   "aliases_type_statement.py": [
-    "Line 82: Expected 1 errors",
-    "Line 84: Expected 1 errors",
-    "Lines 51, 52: Expected error (tag 'TA14')",
-    "Lines 88, 89: Expected error (tag 'RTA6+')"
+    "Line 84: Expected 1 errors"
   ],
   "aliases_typealiastype.py": [
-    "Line 46: Expected 1 errors",
     "Line 47: Expected 1 errors",
     "Line 48: Expected 1 errors",
     "Line 66: Expected 1 errors"
   ],
-  "aliases_variance.py": [
-    "Line 24: Expected 1 errors",
-    "Line 28: Expected 1 errors",
-    "Line 32: Expected 1 errors",
-    "Line 44: Expected 1 errors"
-  ],
+  "aliases_variance.py": [],
   "annotations_coroutines.py": [],
   "annotations_forward_refs.py": [
-    "Line 24: Expected 1 errors",
-    "Line 25: Expected 1 errors",
     "Line 87: Unexpected errors ['Expected a type form, got instance of `(self: Self@ClassD) -> None`']",
     "Line 96: Unexpected errors ['assert_type(Any, int) failed']"
   ],
@@ -51,17 +31,15 @@
   "annotations_methods.py": [],
   "annotations_typeexpr.py": [],
   "callables_annotation.py": [
-    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `BoundMethod[Proto4[Ellipsis], (Proto4[Ellipsis], int, ...) -> None]`, which is not assignable to `BoundMethod[Proto4[Ellipsis], (self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None]`, the type of `Proto3.__call__`']",
-    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`\\n  `Proto7.__call__` has type `BoundMethod[Proto7, (self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None]`, which is not assignable to `BoundMethod[Proto7, (self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None]`, the type of `Proto6.__call__`']"
+    "Line 156: Unexpected errors ['`Proto4[Ellipsis]` is not assignable to `Proto3`\\n  `Proto4[Ellipsis].__call__` has type `(Proto4[Ellipsis], int, ...) -> None`, which is not assignable to `(self: Proto4[Ellipsis], a: int, *args: Any, **kwargs: Any) -> None`, the type of `Proto3.__call__`']",
+    "Line 157: Unexpected errors ['`Proto7` is not assignable to `Proto6`\\n  `Proto7.__call__` has type `(self: Proto7, a: float, /, b: int, *, k: str, m: str) -> None`, which is not assignable to `(self: Proto7, a: int, /, *args: Any, *, k: str, **kwargs: Any) -> None`, the type of `Proto6.__call__`']"
   ],
   "callables_kwargs.py": [],
   "callables_protocol.py": [],
   "callables_subtyping.py": [],
   "classes_classvar.py": [],
   "classes_override.py": [],
-  "constructors_call_init.py": [
-    "Line 107: Expected 1 errors"
-  ],
+  "constructors_call_init.py": [],
   "constructors_call_metaclass.py": [],
   "constructors_call_new.py": [],
   "constructors_call_type.py": [
@@ -77,14 +55,13 @@
     "Line 184: Expected 1 errors",
     "Line 195: Expected 1 errors",
     "Line 62: Unexpected errors ['Argument `type[Class3]` is not assignable to parameter `cb` with type `(*args: Unknown, **kwargs: Unknown) -> Class3` in function `accepts_callable`']",
-    "Line 164: Unexpected errors ['assert_type(Class7[Any], Class7[int]) failed']",
-    "Line 165: Unexpected errors ['assert_type(Class7[Any], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
+    "Line 165: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
     "Line 183: Unexpected errors ['assert_type(Class8[Any], Class8[str]) failed']"
   ],
   "constructors_consistency.py": [],
   "dataclasses_descriptors.py": [
-    "Line 32: Unexpected errors ['Data descriptor `y` has incompatible default: `__get__` returns `Desc1 | int` which is not assignable to `__set__` value type `int`. The class-level descriptor value cannot be used as a default.']",
-    "Line 58: Unexpected errors ['Non-data descriptor `z` in dataclass is unsound. The dataclass __init__ writes to the instance dict, shadowing the descriptor. Add a __set__ method to make it a data descriptor.']",
+    "Line 32: Unexpected errors ['Cannot set field `y` to data descriptor `Desc1` with inconsistent types\\n  Return type `Desc1 | int` of `Desc1.__get__` is not assignable to value type `int` of `Desc1.__set__`']",
+    "Line 58: Unexpected errors ['Cannot set field `z` to non-data descriptor `Desc2`\\n  Hint: add a `__set__` method to make `Desc2` a data descriptor']",
     "Line 61: Unexpected errors ['assert_type(Desc2[int], list[int]) failed']",
     "Line 62: Unexpected errors ['assert_type(Desc2[str], list[str]) failed']",
     "Line 66: Unexpected errors ['assert_type(Desc2[int], int) failed']",
@@ -137,7 +114,7 @@
     "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
   ],
   "generics_defaults.py": [
-    "Line 170: Unexpected errors ['assert_type([DefaultIntT](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
+    "Line 170: Unexpected errors ['assert_type([DefaultIntT = int](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
   ],
   "generics_defaults_referential.py": [],
   "generics_defaults_specialization.py": [],
@@ -196,20 +173,7 @@
   ],
   "generics_typevartuple_unpack.py": [],
   "generics_upper_bound.py": [],
-  "generics_variance.py": [
-    "Line 77: Expected 1 errors",
-    "Line 81: Expected 1 errors",
-    "Line 93: Expected 1 errors",
-    "Line 105: Expected 1 errors",
-    "Line 113: Expected 1 errors",
-    "Line 163: Expected 1 errors",
-    "Line 167: Expected 1 errors",
-    "Line 191: Expected 1 errors",
-    "Lines 125, 126: Expected error (tag 'CoContra_Child2')",
-    "Lines 131, 132: Expected error (tag 'CoContra_Child3')",
-    "Lines 141, 142: Expected error (tag 'CoContra_Child5')",
-    "Lines 195, 196: Expected error (tag 'ContraToContraToContra_WithTA')"
-  ],
+  "generics_variance.py": [],
   "generics_variance_inference.py": [],
   "historical_positional.py": [],
   "literals_interactions.py": [],

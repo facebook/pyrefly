@@ -44,6 +44,7 @@ use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
+use crate::heap::TypeHeap;
 use crate::keywords::DataclassTransformMetadata;
 use crate::keywords::KwCall;
 use crate::literal::Lit;
@@ -56,7 +57,7 @@ use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
-use crate::type_output::TypeOutput;
+use crate::type_alias::TypeAliasData;
 use crate::type_var::PreInferenceVariance;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
@@ -81,8 +82,8 @@ impl Var {
         Self(uniques.fresh())
     }
 
-    pub fn to_type(self) -> Type {
-        Type::Var(self)
+    pub fn to_type(self, heap: &TypeHeap) -> Type {
+        heap.mk_var(self)
     }
 }
 
@@ -103,16 +104,37 @@ impl Display for TParamsSource {
     }
 }
 
+// TODO: Consider removing TParam since it would be no longer needed
+// now that variance is pushed in quantified.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct TParam {
     pub quantified: Quantified,
-    pub variance: PreInferenceVariance,
 }
 
 impl Display for TParam {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())
+        write!(f, "{}", self.name())?;
+        // Display bounds/constraints
+        match self.restriction() {
+            Restriction::Bound(t) => write!(f, ": {}", t)?,
+            Restriction::Constraints(ts) => {
+                write!(f, ": (")?;
+                for (i, t) in ts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", t)?;
+                }
+                write!(f, ")")?;
+            }
+            Restriction::Unrestricted => {}
+        }
+        // Display default
+        if let Some(default) = self.default() {
+            write!(f, " = {}", default)?;
+        }
+        Ok(())
     }
 }
 
@@ -127,6 +149,10 @@ impl TParam {
 
     pub fn restriction(&self) -> &Restriction {
         self.quantified.restriction()
+    }
+
+    pub fn variance(&self) -> PreInferenceVariance {
+        self.quantified.variance()
     }
 }
 
@@ -162,6 +188,10 @@ impl Display for TParams {
 impl TParams {
     pub fn new(tparams: Vec<TParam>) -> TParams {
         Self(tparams)
+    }
+
+    pub fn empty() -> TParams {
+        Self(Vec::new())
     }
 
     pub fn len(&self) -> usize {
@@ -305,88 +335,6 @@ impl AnyStyle {
         match self {
             Self::Implicit | Self::Error => Type::Any(self),
             Self::Explicit => Type::Any(Self::Implicit),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub enum TypeAliasStyle {
-    /// A type alias declared with the `type` keyword
-    Scoped,
-    /// A type alias declared with a `: TypeAlias` annotation
-    LegacyExplicit,
-    /// An unannotated assignment that may be either an implicit type alias or an untyped value
-    LegacyImplicit,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct TypeAlias {
-    pub name: Box<Name>,
-    ty: Box<Type>,
-    pub style: TypeAliasStyle,
-    annotated_metadata: Box<[Type]>,
-}
-
-impl TypeAlias {
-    pub fn new(name: Name, ty: Type, style: TypeAliasStyle, annotated_metadata: Vec<Type>) -> Self {
-        Self {
-            name: Box::new(name),
-            ty: Box::new(ty),
-            style,
-            annotated_metadata: annotated_metadata.into_boxed_slice(),
-        }
-    }
-
-    pub fn annotated_metadata(&self) -> &[Type] {
-        &self.annotated_metadata
-    }
-
-    /// Gets the type contained within the type alias for use in a value
-    /// position - for example, for a function call or attribute access.
-    pub fn as_value(&self, stdlib: &Stdlib) -> Type {
-        if self.style == TypeAliasStyle::Scoped {
-            stdlib.type_alias_type().clone().to_type()
-        } else {
-            *self.ty.clone()
-        }
-    }
-
-    /// Gets the type contained within the type alias for use in a type
-    /// position - for example, in a variable type annotation. Note that
-    /// the caller is still responsible for untyping the type. That is,
-    /// `type X = int` is represented as `TypeAlias(X, type[int])`, and
-    /// `as_type` returns `type[int]`; the caller must turn it into `int`.
-    pub fn as_type(&self) -> Type {
-        *self.ty.clone()
-    }
-
-    pub fn fmt_with_type<O: TypeOutput>(
-        &self,
-        output: &mut O,
-        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
-        tparams: Option<&TParams>,
-    ) -> fmt::Result {
-        use pyrefly_util::display::commas_iter;
-        match (&self.style, tparams) {
-            (TypeAliasStyle::LegacyImplicit, _) => write_type(&self.ty, output),
-            (_, None) => {
-                output.write_str("TypeAlias[")?;
-                output.write_str(self.name.as_str())?;
-                output.write_str(", ")?;
-                write_type(&self.ty, output)?;
-                output.write_str("]")
-            }
-            (_, Some(tparams)) => {
-                output.write_str("TypeAlias[")?;
-                output.write_str(self.name.as_str())?;
-                output.write_str("[")?;
-                output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
-                output.write_str("], ")?;
-                write_type(&self.ty, output)?;
-                output.write_str("]")
-            }
         }
     }
 }
@@ -550,7 +498,7 @@ impl Forall<Forallable> {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Forallable {
-    TypeAlias(TypeAlias),
+    TypeAlias(TypeAliasData),
     Function(Function),
     Callable(Callable),
 }
@@ -571,7 +519,7 @@ impl Forallable {
         match self {
             Self::Function(func) => func.metadata.kind.function_name(),
             Self::Callable(_) => Cow::Owned(Name::new_static("<callable>")),
-            Self::TypeAlias(ta) => Cow::Borrowed(&ta.name),
+            Self::TypeAlias(ta) => Cow::Borrowed(ta.name()),
         }
     }
 
@@ -613,7 +561,7 @@ pub enum SuperObj {
 #[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
 pub struct Union {
     pub members: Vec<Type>,
-    pub display_name: Option<String>,
+    pub display_name: Option<Box<str>>,
 }
 
 impl PartialEq for Union {
@@ -725,7 +673,7 @@ pub enum Type {
     Ellipsis,
     Any(AnyStyle),
     Never(NeverStyle),
-    TypeAlias(Box<TypeAlias>),
+    TypeAlias(Box<TypeAliasData>),
     /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
     /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
@@ -1074,8 +1022,19 @@ impl Type {
     /// Check if the type contains a Var that may have been instantiated from a Quantified.
     pub fn may_contain_quantified_var(&self) -> bool {
         let mut seen = false;
-        self.visit_type_variables(&mut |t| seen |= matches!(t, TypeVariable::Var));
+        self.visit_type_variables(&mut |t| seen |= matches!(t, TypeVariable::Var(_)));
         seen
+    }
+
+    /// Collect vars that may have been instantiated from Quantifieds.
+    pub fn collect_maybe_quantified_vars(&self) -> Vec<Var> {
+        let mut vs = Vec::new();
+        self.visit_type_variables(&mut |t| {
+            if let TypeVariable::Var(v) = t {
+                vs.push(v);
+            }
+        });
+        vs
     }
 
     pub fn is_kind_param_spec(&self) -> bool {
@@ -1458,10 +1417,25 @@ impl Type {
         }
     }
 
-    // This doesn't handle generics currently
-    pub fn set_callable_return_type(&mut self, ret: Type) {
+    /// When a constructor is cast used as a callable, we need to set its return type to the instance type.
+    /// If a `self` type is in the callable, then this is set as the return type.
+    /// Otherwise, the return type is set to the class type.
+    /// This doesn't handle generics currently.
+    pub fn set_callable_return_type_for_constructor(&mut self, ret: Type) {
         let mut set_ret = |callable: &mut Callable| {
-            callable.ret = ret.clone();
+            match &callable.params {
+                Params::List(param_list)
+                    if let Some(first_param) = param_list.items().first()
+                        && let Param::Pos(_, ty, _) = first_param =>
+                {
+                    // Set the return type to the type of the first parameter
+                    // (i.e. `self`) if it exists and is positional.
+                    callable.ret = ty.clone();
+                }
+                _ => {
+                    callable.ret = ret.clone();
+                }
+            }
         };
         self.transform_toplevel_callable(&mut set_ret);
     }
@@ -1613,6 +1587,15 @@ impl Type {
             {
                 ts.sort();
                 *display_name = None;
+            }
+        })
+    }
+
+    /// Simplify intersection types to their fallback type.
+    pub fn simplify_intersections(self) -> Self {
+        self.transform(&mut |ty| {
+            if let Type::Intersect(box (_, fallback)) = ty {
+                *ty = fallback.clone();
             }
         })
     }
@@ -1783,7 +1766,7 @@ enum TypeVariable<'a> {
     /// A legacy typing.ParamSpec appearing in a position where it is not resolved to an in-scope type variable
     LegacyParamSpec(&'a ParamSpec),
     /// A placeholder type that may have been instantiated from a Quantified
-    Var,
+    Var(Var),
 }
 
 impl<'a> TypeVariable<'a> {
@@ -1793,7 +1776,7 @@ impl<'a> TypeVariable<'a> {
             Type::TypeVar(t) => Some(Self::LegacyTypeVar(t)),
             Type::TypeVarTuple(t) => Some(Self::LegacyTypeVarTuple(t)),
             Type::ParamSpec(p) => Some(Self::LegacyParamSpec(p)),
-            Type::Var(_) => Some(Self::Var),
+            Type::Var(v) => Some(Self::Var(*v)),
             _ => None,
         }
     }

@@ -210,6 +210,38 @@ def level1():
 }
 
 #[test]
+fn find_callers_nested_in_print_statement_works_at_definition_test() {
+    let code = r#"
+def main():
+#    ^
+    print("Hello")
+
+def calling_from_print_statement():
+    print(main())
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_callers_report);
+    assert!(report.contains("# main.py"));
+    assert!(report.contains("Caller: main.calling_from_print_statement"));
+    assert!(report.contains("main()"));
+}
+
+#[test]
+fn find_callers_in_dunder_main_at_definition_test() {
+    let code = r#"
+def main():
+#    ^
+    print("Hello")
+
+if __name__ == "__main__":
+    main()
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_callers_report);
+    assert!(report.contains("# main.py"));
+    assert!(report.contains("Caller: main.<module>"));
+    assert!(report.contains("main()"));
+}
+
+#[test]
 fn find_callers_method_at_definition_test() {
     let code = r#"
 class A:

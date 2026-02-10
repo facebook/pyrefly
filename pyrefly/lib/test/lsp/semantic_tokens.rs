@@ -29,7 +29,7 @@ fn utf16_to_byte_index(line: &str, utf16_offset: usize) -> usize {
 }
 
 fn assert_full_semantic_tokens(files: &[(&'static str, &str)], expected: &str) {
-    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::indexing());
+    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::Exports);
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");

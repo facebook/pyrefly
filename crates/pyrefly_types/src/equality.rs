@@ -290,6 +290,7 @@ mod tests {
     use crate::callable::Function;
     use crate::callable::FunctionKind;
     use crate::callable::ParamList;
+    use crate::heap::TypeHeap;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedKind;
     use crate::type_var::PreInferenceVariance;
@@ -367,23 +368,24 @@ mod tests {
     #[test]
     fn test_equal_forall() {
         let uniques = UniqueFactory::new();
+        let heap = TypeHeap::new();
 
-        fn mk_function(uniques: &UniqueFactory) -> Type {
+        fn mk_function(uniques: &UniqueFactory, heap: &TypeHeap) -> Type {
             let q = Quantified::new(
                 uniques.fresh(),
                 Name::new_static("test"),
                 QuantifiedKind::TypeVar,
                 None,
                 Restriction::Unrestricted,
+                PreInferenceVariance::Invariant,
             );
 
             let tparams = TParams::new(vec![TParam {
                 quantified: q.clone(),
-                variance: PreInferenceVariance::Invariant,
             }]);
 
             Forallable::Function(Function {
-                signature: Callable::list(ParamList::everything(), q.clone().to_type()),
+                signature: Callable::list(ParamList::everything(), q.clone().to_type(heap)),
                 metadata: FuncMetadata {
                     kind: FunctionKind::Overload,
                     flags: FuncFlags::default(),
@@ -392,8 +394,8 @@ mod tests {
             .forall(Arc::new(tparams))
         }
 
-        let a = mk_function(&uniques);
-        let b = mk_function(&uniques);
+        let a = mk_function(&uniques, &heap);
+        let b = mk_function(&uniques, &heap);
         assert_eq!(a, a);
         assert_ne!(a, b);
 

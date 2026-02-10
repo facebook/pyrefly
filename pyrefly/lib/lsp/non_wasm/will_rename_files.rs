@@ -28,6 +28,7 @@ use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
 use tracing::info;
 
+use crate::lsp::non_wasm::module_helpers::PathRemapper;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::state::load::LspFile;
@@ -135,6 +136,7 @@ pub fn will_rename_files(
     _open_files: &RwLock<HashMap<std::path::PathBuf, Arc<LspFile>>>,
     params: RenameFilesParams,
     supports_document_changes: bool,
+    path_remapper: Option<&PathRemapper>,
 ) -> Option<WorkspaceEdit> {
     info!(
         "will_rename_files called with {} file(s)",
@@ -265,7 +267,7 @@ pub fn will_rename_files(
                 let edits_for_file = visitor.take_edits();
 
                 if !edits_for_file.is_empty() {
-                    let uri = module_info_to_uri(&module_info)?;
+                    let uri = module_info_to_uri(&module_info, path_remapper)?;
                     info!(
                         "    Found {} import(s) to update in {}",
                         edits_for_file.len(),

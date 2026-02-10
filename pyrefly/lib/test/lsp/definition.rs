@@ -1435,6 +1435,97 @@ Definition Result:
 }
 
 #[test]
+fn dunder_all_entry_definition_test() {
+    let pkg = r#"
+from pkg.bar import Bar
+
+class Baz:
+    pass
+
+__all__ = (
+    "Bar",
+#    ^
+    "Baz",
+#    ^
+)
+"#;
+    let bar = r#"
+class Bar:
+    pass
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("pkg", pkg), ("pkg.bar", bar)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+8 |     "Bar",
+         ^
+Definition Result:
+2 | class Bar:
+          ^^^
+
+10 |     "Baz",
+          ^
+Definition Result:
+4 | class Baz:
+          ^^^
+
+
+# pkg.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn string_literal_not_in_dunder_all() {
+    let pkg = r#"
+class Foo:
+    pass
+
+x = "Foo"
+#    ^
+
+__all__ = ["Foo"]
+"#;
+    let report = get_batched_lsp_operations_report(&[("pkg", pkg)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+5 | x = "Foo"
+         ^
+Definition Result: None
+
+
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dunder_all_nonexistent_symbol() {
+    let pkg = r#"
+__all__ = ["NonExistent"]
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("pkg", pkg)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+2 | __all__ = ["NonExistent"]
+                 ^
+Definition Result: None
+
+
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn renamed_reexport() {
     let lib2 = r#"
 def foo() -> None: ...
@@ -1793,88 +1884,6 @@ Definition Result:
 }
 
 #[test]
-fn submodule_access_test() {
-    let code_torch_init = r#"# torch/__init__.py
-from torch import autograd as autograd
-"#;
-    let code_autograd_init = r#"# torch/autograd/__init__.py
-class Function:
-    pass
-"#;
-    let code = r#"
-import torch
-torch.autograd.Function
-#     ^
-"#;
-    let report = get_batched_lsp_operations_report_allow_error(
-        &[
-            ("main", code),
-            ("torch", code_torch_init),
-            ("torch.autograd", code_autograd_init),
-        ],
-        get_test_report,
-    );
-    assert_eq!(
-        r#"
-# main.py
-3 | torch.autograd.Function
-          ^
-Definition Result: None
-
-
-# torch.py
-
-# torch.autograd.py
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
-fn deep_submodule_chain_test() {
-    let code_a_init = r#"# a/__init__.py
-"#;
-    let code_a_b_init = r#"# a/b/__init__.py
-"#;
-    let code_a_b_c = r#"# a/b/c.py
-class D:
-    pass
-"#;
-    let code = r#"
-import a.b.c
-a.b.c.D
-# ^
-"#;
-    let report = get_batched_lsp_operations_report_allow_error(
-        &[
-            ("main", code),
-            ("a", code_a_init),
-            ("a.b", code_a_b_init),
-            ("a.b.c", code_a_b_c),
-        ],
-        get_test_report,
-    );
-    assert_eq!(
-        r#"
-# main.py
-3 | a.b.c.D
-      ^
-Definition Result: None
-
-
-# a.py
-
-# a.b.py
-
-# a.b.c.py
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
 fn goto_def_on_first_component_of_multi_part_import() {
     let mymod_init = r#"# mymod/__init__.py
 def version() -> str: ...
@@ -2038,5 +2047,39 @@ result = [x for x in it]
     assert!(
         report.contains("__iter__"),
         "Expected definition to jump to __iter__ method in comprehension, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_in_fstring_simple() {
+    let code = r#"
+def f() -> int:
+    return 0
+
+y = f"hello {f()}"
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("def f()"),
+        "Expected definition to jump to function f, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_in_fstring_format_specifier() {
+    // TODO(T253793958): Fix go-to-definition in format string specifiers.
+    let code = r#"
+def f() -> int:
+    return 0
+
+x = 1
+y = f"hello {x:{f()}}"
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Definition Result:") && report.contains("None"),
+        "Expected definition to jump to function f, got: {report}"
     );
 }

@@ -17,8 +17,8 @@ T = TypeVar("T", contravariant=True)
 # Intentionally set up 2 type variables:
 # - U needs to has its variance inferred (to be covariant)
 # - T has its variance specified incorrectly -- but downstream logic is expected to respect it.
-class Foo[U](Generic[T]):  # E:
-    def m0(self) -> T: ...
+class Foo[U](Generic[T]):  # E: Type parameter T is not included in the type parameter list
+    def m0(self) -> T: ...  # E: Type variable `T` is Contravariant but is used in covariant position
     def m1(self) -> U: ...
 
 t_good: Foo[int, int] = Foo[int, float]()
@@ -318,5 +318,314 @@ class Container[T]:
 
 def widen(c: Container[int]) -> Container[float]:
     return c  # OK - T is covariant since Mapping's V type is covariant
+"#,
+);
+
+testcase!(
+    test_variance_enforcement_in_base_classes,
+    r#"
+from typing import TypeVar, Generic
+
+T = TypeVar("T")
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Co(Generic[T_co]): ...
+class Contra(Generic[T_contra]): ...
+class Inv(Generic[T]): ...
+class CoContra(Generic[T_co, T_contra]): ...
+
+class Class1(
+    Inv[T_co]  # E: Type variable `T_co` is Covariant but is used in invariant position
+): ...
+class Class2(
+    Inv[T_contra]  # E: Type variable `T_contra` is Contravariant but is used in invariant position
+): ...
+
+class Co_Child3(
+    Co[T_contra]  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+): ...
+class Contra_Child3(
+    Contra[T_co]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
+class Contra_Child5(
+    Contra[Co[T_co]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
+
+class CoContra_Child2(
+    CoContra[T_co, T_co]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
+class CoContra_Child3(
+    CoContra[T_contra, T_contra]  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+): ...
+class CoContra_Child5(
+    CoContra[Co[T_co], Co[T_co]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
+
+class CoToContraToContra(
+    Contra[Co[Contra[T_contra]]]  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+): ...
+class ContraToContraToContra(
+    Contra[Contra[Contra[T_co]]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
+
+Co_TA = Co[T_co]
+Contra_TA = Contra[T_contra]
+
+class CoToContraToContra_WithTA(
+    Contra_TA[Co_TA[Contra_TA[T_contra]]]  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+): ...
+class ContraToContraToContra_WithTA(
+    Contra_TA[Contra_TA[Contra_TA[T_co]]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
+"#,
+);
+
+testcase!(
+    bug = "conformance: Should warn when inferred variance differs from declared variance in protocols",
+    test_protocols_variance_conformance,
+    r#"
+from typing import Protocol, TypeVar
+
+T1 = TypeVar("T1")
+T1_co = TypeVar("T1_co", covariant=True)
+T1_contra = TypeVar("T1_contra", contravariant=True)
+
+class AnotherBox(Protocol[T1]):  # should warn: T should be covariant
+    def content(self) -> T1: ...
+
+class Protocol4(Protocol[T1]):  # should warn: T1 should be contravariant
+    def m1(self, p0: T1) -> None: ...
+
+class Protocol5(Protocol[T1_co]):
+    def m1(self, p0: T1_co) -> None: ...  # E: Type variable `T1_co` is Covariant but is used in contravariant position
+
+class Protocol6(Protocol[T1]):  # should warn: T1 should be covariant
+    def m1(self) -> T1: ...
+
+class Protocol7(Protocol[T1_contra]):
+    def m1(self) -> T1_contra: ...  # E: Type variable `T1_contra` is Contravariant but is used in covariant position
+
+class Protocol12(Protocol[T1]):  # should warn: T1 should be covariant
+    def __init__(self, x: T1) -> None: ...
+"#,
+);
+
+testcase!(
+    test_shallow_covariant_in_param,
+    r#"
+from typing import TypeVar, Generic
+T_co = TypeVar("T_co", covariant=True)
+
+class Foo(Generic[T_co]):
+    def f(self, x: T_co) -> None: ...  # E: Type variable `T_co` is Covariant but is used in contravariant position
+"#,
+);
+
+testcase!(
+    test_shallow_contravariant_in_return,
+    r#"
+from typing import TypeVar, Generic
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Foo(Generic[T_contra]):
+    def f(self) -> T_contra: ...  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+"#,
+);
+
+// Deep check: we should NOT raise an error here
+testcase!(
+    test_deep_covariant_in_contra_return,
+    r#"
+from typing import TypeVar, Generic
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Contra(Generic[T_contra]): ...
+
+class Foo(Generic[T_co]):  
+    def f(self) -> Contra[T_co]: ...
+"#,
+);
+
+// Deep check: we should NOT raise an error here
+testcase!(
+    test_deep_covariant_in_co_param,
+    r#"
+from typing import TypeVar, Generic
+T_co = TypeVar("T_co", covariant=True)
+
+class Co(Generic[T_co]): ...
+
+class Foo(Generic[T_co]):  
+    def f(self, x: Co[T_co]) -> None: ...
+"#,
+);
+
+// Deep check: we should NOT raise an error here
+testcase!(
+    test_deep_callable_param_in_return,
+    r#"
+from typing import TypeVar, Generic, Callable
+T_co = TypeVar("T_co", covariant=True)
+
+class Foo(Generic[T_co]):  
+    def f(self) -> Callable[[T_co], None]: ...
+"#,
+);
+
+// Deep check: we should NOT raise an error here
+testcase!(
+    test_deep_callable_return_in_param,
+    r#"
+from typing import TypeVar, Generic, Callable
+T_co = TypeVar("T_co", covariant=True)
+
+class Foo(Generic[T_co]):  
+    def f(self, x: Callable[[], T_co]) -> None: ...
+"#,
+);
+
+// Deep check: we should NOT raise an error here
+testcase!(
+    test_deep_double_callable,
+    r#"
+from typing import TypeVar, Generic, Callable
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Foo(Generic[T_contra]):
+    def f(self) -> Callable[[Callable[[T_contra], None]], None]: ...
+"#,
+);
+
+// We skip checking fields
+testcase!(
+    test_field_covariant_in_mutable,
+    r#"
+from typing import TypeVar, Generic
+T_co = TypeVar("T_co", covariant=True)
+
+class Foo(Generic[T_co]):
+    x: T_co 
+"#,
+);
+
+// We skip checking fields
+testcase!(
+    test_field_contravariant_in_mutable,
+    r#"
+from typing import TypeVar, Generic
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Foo(Generic[T_contra]):
+    x: T_contra  
+"#,
+);
+
+testcase!(
+    test_base_covariant_in_invariant,
+    r#"
+from typing import TypeVar, Generic
+T_co = TypeVar("T_co", covariant=True)
+T = TypeVar("T")
+
+class Inv(Generic[T]): ...
+
+class Foo(
+    Inv[T_co]  # E: Type variable `T_co` is Covariant but is used in invariant position
+): ...
+"#,
+);
+
+testcase!(
+    test_base_contravariant_in_invariant,
+    r#"
+from typing import TypeVar, Generic
+T_contra = TypeVar("T_contra", contravariant=True)
+T = TypeVar("T")
+
+class Inv(Generic[T]): ...
+
+class Foo(
+    Inv[T_contra]  # E: Type variable `T_contra` is Contravariant but is used in invariant position
+): ...
+"#,
+);
+
+testcase!(
+    test_base_covariant_in_contravariant,
+    r#"
+from typing import TypeVar, Generic
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Contra(Generic[T_contra]): ...
+
+class Foo(
+    Contra[T_co]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
+"#,
+);
+
+testcase!(
+    test_base_contravariant_in_covariant,
+    r#"
+from typing import TypeVar, Generic
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Co(Generic[T_co]): ...
+
+class Foo(
+    Co[T_contra]  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+): ...
+"#,
+);
+
+testcase!(
+    test_base_nested_double,
+    r#"
+from typing import TypeVar, Generic
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Co(Generic[T_co]): ...
+class Contra(Generic[T_contra]): ...
+
+# pyright errors and mypy does not
+class Foo(
+    Contra[Co[T_co]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
+"#,
+);
+
+testcase!(
+    test_base_nested_triple_error,
+    r#"
+from typing import TypeVar, Generic
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Contra(Generic[T_contra]): ...
+
+# pyright errors and mypy does not
+class Foo(
+    Contra[Contra[Contra[T_co]]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
+"#,
+);
+
+testcase!(
+    test_base_nested_triple_ok,
+    r#"
+from typing import TypeVar, Generic
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class Co(Generic[T_co]): ...
+class Contra(Generic[T_contra]): ...
+
+# contra * co * contra = co, so T_co in covariant position - OK
+class Foo(Contra[Co[Contra[T_co]]]): ...
 "#,
 );

@@ -7,6 +7,7 @@
 
 //! Tests of the `State` object.
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::sleep;
@@ -23,6 +24,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
+use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
@@ -30,6 +32,7 @@ use crate::error::error::print_errors;
 use crate::module::finder::find_import;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
+use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
 
@@ -58,7 +61,9 @@ else:
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None).finding().unwrap();
+        let path = find_import(&config_file, name, None, None)
+            .finding()
+            .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -150,8 +155,10 @@ fn test_change_require() {
     assert!(state.transaction().get_bindings(&handle).is_none());
     state.run(
         &[handle.dupe()],
-        Require::Errors,
-        Require::Exports,
+        RequireLevels {
+            specified: Require::Errors,
+            default: Require::Exports,
+        },
         None,
         None,
     );
@@ -167,8 +174,10 @@ fn test_change_require() {
     assert!(state.transaction().get_bindings(&handle).is_none());
     state.run(
         &[handle.dupe()],
-        Require::Everything,
-        Require::Exports,
+        RequireLevels {
+            specified: Require::Everything,
+            default: Require::Exports,
+        },
         None,
         None,
     );
@@ -383,4 +392,66 @@ fn test_sequential_committable_transactions() {
     // When we are here, we are sure that there is no deadlock.
     let lock = counter.lock();
     assert_eq!(10, *lock);
+}
+
+/// Test that fixing a previously malformed notebook triggers a rebuild.
+/// Regression test for a bug where the reload logic returned `false` when
+/// old_load.module_info.notebook() was None, preventing rebuilds.
+#[test]
+fn test_notebook_reload_after_parse_failure() {
+    let temp_dir = TempDir::new().unwrap();
+    let notebook_path = temp_dir.path().join("test.ipynb");
+
+    // Start with invalid JSON
+    fs::write(&notebook_path, "{ invalid json }").unwrap();
+
+    let mut config = ConfigFile::default();
+    config.python_environment.set_empty_to_default();
+    config.configure();
+    let config = ArcId::new(config);
+    let sys_info = config.get_sys_info();
+    let state = State::new(ConfigFinder::new_constant(config));
+    let module_name = ModuleName::from_str("test");
+    let module_path = ModulePath::filesystem(notebook_path.clone());
+    let handle = Handle::new(module_name, module_path, sys_info);
+
+    // First run: malformed notebook produces load error
+    let mut t = state.new_committable_transaction(Require::Exports, None);
+    t.as_mut().run(&[handle.dupe()], Require::Errors);
+    state.commit_transaction(t, None);
+    assert_eq!(
+        1,
+        state
+            .transaction()
+            .get_errors([&handle])
+            .collect_errors()
+            .shown
+            .len()
+    );
+
+    // Fix the notebook with valid JSON
+    let valid_notebook = r#"{
+        "cells": [],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 4
+    }"#;
+    fs::write(&notebook_path, valid_notebook).unwrap();
+
+    // Invalidate and re-run - should now have no errors
+    let mut t = state.new_committable_transaction(Require::Exports, None);
+    t.as_mut()
+        .invalidate_disk(std::slice::from_ref(&notebook_path));
+    t.as_mut().run(&[handle.dupe()], Require::Errors);
+    state.commit_transaction(t, None);
+
+    assert_eq!(
+        0,
+        state
+            .transaction()
+            .get_errors([&handle])
+            .collect_errors()
+            .shown
+            .len()
+    );
 }

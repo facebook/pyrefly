@@ -87,7 +87,10 @@ interface SandboxProps {
 
 // Minimum heights for editor and results panes (in pixels)
 const MIN_EDITOR_HEIGHT = 100;
-const MIN_RESULTS_HEIGHT = 60;
+// Results panel needs enough height to show the tab bar and remain draggable
+const MIN_RESULTS_HEIGHT = 120;
+// Height of the resize handle between editor and results
+const RESIZE_HANDLE_HEIGHT = 6;
 
 export default function Sandbox({
     sampleFilename,
@@ -381,7 +384,9 @@ export default function Sandbox({
                 if (newContainerHeight > 0 && editorHeight !== null) {
                     // Clamp the editor height to stay within valid bounds
                     const maxEditorHeight =
-                        newContainerHeight - MIN_RESULTS_HEIGHT;
+                        newContainerHeight -
+                        MIN_RESULTS_HEIGHT -
+                        RESIZE_HANDLE_HEIGHT;
                     const clampedHeight = Math.max(
                         MIN_EDITOR_HEIGHT,
                         Math.min(editorHeight, maxEditorHeight)
@@ -412,8 +417,9 @@ export default function Sandbox({
             const mouseY = e.clientY;
             const newEditorHeight = mouseY - containerTop;
 
-            // Enforce minimum heights
-            const maxEditorHeight = containerHeight - MIN_RESULTS_HEIGHT;
+            // Enforce minimum heights (accounting for resize handle between editor and results)
+            const maxEditorHeight =
+                containerHeight - MIN_RESULTS_HEIGHT - RESIZE_HANDLE_HEIGHT;
             const clampedEditorHeight = Math.max(
                 MIN_EDITOR_HEIGHT,
                 Math.min(newEditorHeight, maxEditorHeight)
@@ -1185,7 +1191,7 @@ function getMonacoButtons(
                 createNewFile,
                 setActiveFileName
             ),
-            getGitHubIssuesButton(model, pythonVersion),
+            getGitHubIssuesButton(models, activeFileName, pythonVersion),
         ];
     }
 
@@ -1229,14 +1235,23 @@ function getShareUrlButton(
 }
 
 function getGitHubIssuesButton(
-    model: editor.ITextModel | null,
+    models: Map<string, editor.ITextModel>,
+    activeFileName: string,
     pythonVersion: string
 ): React.ReactElement {
     return (
         <MonacoEditorButton
             id="github-issues-button"
             onClick={() => {
+                // Update URL with current state before generating issue link
+                const allFiles: Record<string, string> = {};
+                models.forEach((model, filename) => {
+                    allFiles[filename] = model.getValue();
+                });
+                updateURL(allFiles, activeFileName);
+
                 const sandboxURL = window.location.href;
+                const model = models.get(activeFileName);
                 const code = model ? model.getValue() : '';
 
                 const title = 'Bug Report';
@@ -1441,6 +1456,9 @@ const styles = stylex.create({
         display: 'flex',
         flexDirection: 'column',
         flex: 1,
+        height: '100vh', // Fixed viewport height to prevent container from growing infinitely
+        maxHeight: '100vh',
+        overflow: 'hidden',
     },
     sandboxPadding: {
         paddingHorizontal: '10px',
@@ -1615,6 +1633,7 @@ const styles = stylex.create({
         flexDirection: 'column',
         flex: 1,
         minHeight: 0, // Allow flex children to shrink below content size
+        overflow: 'hidden', // Prevent content from pushing container beyond viewport
     },
     // Draggable resize handle between editor and results
     resizeHandle: {

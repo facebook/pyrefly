@@ -26,7 +26,6 @@ use lsp_types::ConfigurationParams;
 use lsp_types::HoverContents;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::RegistrationParams;
-use lsp_types::UnregistrationParams;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeConfiguration;
 use lsp_types::notification::DidChangeNotebookDocument;
@@ -58,7 +57,6 @@ use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::Shutdown;
 use lsp_types::request::SignatureHelpRequest;
-use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
 use pretty_assertions::assert_eq;
@@ -635,6 +633,7 @@ impl TestClient {
     }
 
     /// Send a file creation event notification
+    #[allow(dead_code)]
     pub fn file_created(&self, file: &str) {
         let path = self.get_root_or_panic().join(file);
         self.send_notification::<DidChangeWatchedFiles>(json!({
@@ -657,6 +656,7 @@ impl TestClient {
     }
 
     /// Send a file deletion event notification
+    #[allow(dead_code)]
     pub fn file_deleted(&self, file: &str) {
         let path = self.get_root_or_panic().join(file);
         self.send_notification::<DidChangeWatchedFiles>(json!({
@@ -905,6 +905,35 @@ impl TestClient {
         Ok(())
     }
 
+    /// Wait for a publishDiagnostics notification for the given file path, regardless of error count.
+    pub fn expect_publish_diagnostics_for_file(
+        &self,
+        path: PathBuf,
+    ) -> Result<(), LspMessageError> {
+        self.expect_message(
+            &format!(
+                "publishDiagnostics notification for file: {}",
+                path.display()
+            ),
+            |msg| {
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    let params =
+                        serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
+                    if params.uri.to_file_path().unwrap() == path {
+                        Some(Ok(()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+        )?;
+        Ok(())
+    }
+
     /// Wait for a publishDiagnostics notification that has the correct path and count
     pub fn expect_publish_diagnostics_eventual_error_count(
         &self,
@@ -961,6 +990,47 @@ impl TestClient {
                             Some(Err(LspMessageError::Custom {
                                 description: format!(
                                     "Expected next publish diagnostics for file {} to have {count} errors, but got {}",
+                                    path.display(),
+                                    params.diagnostics.len()
+                                ),
+                            }))
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+        )?;
+        Ok(())
+    }
+
+    /// The next publishDiagnostics for that path should have diagnostic count in this inclusive range, otherwise error
+    pub fn expect_publish_diagnostics_must_have_error_count_between(
+        &self,
+        path: PathBuf,
+        min: usize,
+        max: usize,
+    ) -> Result<(), LspMessageError> {
+        self.expect_message(
+            &format!(
+                "Next publishDiagnostics notification for file {} should have {min}-{max} errors",
+                path.display()
+            ),
+            |msg| {
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    let params =
+                        serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
+                    if params.uri.to_file_path().unwrap() == path {
+                        if params.diagnostics.len() >= min && params.diagnostics.len() <= max {
+                            Some(Ok(()))
+                        } else {
+                            Some(Err(LspMessageError::Custom {
+                                description: format!(
+                                    "Expected next publish diagnostics for file {} to have {min}-{max} errors, but got {}",
                                     path.display(),
                                     params.diagnostics.len()
                                 ),
@@ -1086,43 +1156,29 @@ impl TestClient {
 
     /// Expect a file watcher registration request.
     /// Validates that the request is specifically registering the file watcher (ID: "FILEWATCHER").
-    pub fn expect_file_watcher_register(&self) -> Result<(), LspMessageError> {
-        let params: RegistrationParams =
+    /// Returns a handle to send the response.
+    pub fn expect_file_watcher_register(
+        &self,
+    ) -> Result<ServerRequestHandle<'_, RegisterCapability>, LspMessageError> {
+        let (id, params): (RequestId, RegistrationParams) =
             self.expect_message(&format!("Request {}", RegisterCapability::METHOD), |msg| {
                 if let Message::Request(x) = msg
                     && x.method == RegisterCapability::METHOD
                 {
-                    Some(Ok(serde_json::from_value(x.params).unwrap()))
+                    Some(Ok((
+                        x.id.clone(),
+                        serde_json::from_value(x.params).unwrap(),
+                    )))
                 } else {
                     None
                 }
             })?;
         assert!(params.registrations.iter().any(|x| x.id == "FILEWATCHER"));
-        Ok(())
-    }
-
-    /// Expect a file watcher unregistration request.
-    /// Validates that the request is specifically unregistering the file watcher (ID: "FILEWATCHER").
-    pub fn expect_file_watcher_unregister(&self) -> Result<(), LspMessageError> {
-        let params: UnregistrationParams = self.expect_message(
-            &format!("Request {}", UnregisterCapability::METHOD),
-            |msg| {
-                if let Message::Request(x) = msg
-                    && x.method == UnregisterCapability::METHOD
-                {
-                    Some(Ok(serde_json::from_value(x.params).unwrap()))
-                } else {
-                    None
-                }
-            },
-        )?;
-        assert!(
-            params
-                .unregisterations
-                .iter()
-                .any(|x| x.id == "FILEWATCHER")
-        );
-        Ok(())
+        Ok(ServerRequestHandle {
+            id,
+            client: self,
+            _type: PhantomData,
+        })
     }
 
     #[expect(dead_code)]
@@ -1198,7 +1254,7 @@ impl LspInteraction {
                 workspace_indexing_limit: 50,
                 build_system_blocking: false,
             };
-            let _ = run_lsp(conn_server, args, None, &NoTelemetry);
+            let _ = run_lsp(conn_server, args, None, None, &NoTelemetry);
             finish_server.notify_finished();
         });
 
@@ -1208,16 +1264,32 @@ impl LspInteraction {
     }
 
     pub fn initialize(&self, settings: InitializeSettings) -> Result<(), LspMessageError> {
+        let scope_uris: Vec<Url> = settings
+            .workspace_folders
+            .as_ref()
+            .map(|folders| folders.iter().map(|(_, uri)| uri.clone()).collect())
+            .unwrap_or_default();
+        let file_watch = settings.file_watch;
+
         self.client
             .send_initialize(self.client.get_initialize_params(&settings));
         self.client.expect_any_message()?;
         self.client.send_initialized();
-        if let Some(settings) = settings.configuration {
-            self.client.expect_any_message()?;
-            self.client.send_response::<WorkspaceConfiguration>(
-                RequestId::from(1),
-                settings.unwrap_or(json!([])),
-            );
+
+        // Handle file watcher registration if enabled.
+        // This must come before configuration request handling because the server
+        // sends client/registerCapability before workspace/configuration.
+        if file_watch {
+            self.client
+                .expect_file_watcher_register()?
+                .send_response(json!(null));
+        }
+
+        if let Some(config) = settings.configuration {
+            let scope_uri_refs: Vec<&Url> = scope_uris.iter().collect();
+            self.client
+                .expect_configuration_request(Some(scope_uri_refs))?
+                .send_configuration_response(config.unwrap_or(json!([])));
         }
         Ok(())
     }

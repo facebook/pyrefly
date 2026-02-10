@@ -284,7 +284,7 @@ reveal_type(transform(bar)) # Should return (a: str, /, *args: bool) -> bool # E
 );
 
 testcase!(
-    bug = "P.args and P.kwargs should only work when P is in scope",
+    bug = "conformance: P.args and P.kwargs should only work when P is in scope",
     test_paramspec_component_usage,
     r#"
 from typing import Callable, ParamSpec

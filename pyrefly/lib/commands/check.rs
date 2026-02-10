@@ -62,10 +62,12 @@ use crate::error::legacy::LegacyErrors;
 use crate::error::legacy::severity_to_str;
 use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
+use crate::error::suppress::SerializedError;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
+use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::ProgressBarSubscriber;
@@ -183,7 +185,6 @@ impl SnippetCheckArgs {
                 suppress_errors: false,
                 expectations: false,
                 remove_unused_ignores: false,
-                all: false,
             },
         };
         match check_args.run_once_with_snippet(self.code, config_finder) {
@@ -304,9 +305,6 @@ struct BehaviorArgs {
     /// Remove unused ignores from the input files.
     #[arg(long)]
     remove_unused_ignores: bool,
-    /// If we are removing unused ignores, should we remove all unused ignores or only Pyrefly specific `pyrefly: ignore`s?
-    #[arg(long, requires("remove_unused_ignores"))]
-    all: bool,
 }
 
 impl OutputFormat {
@@ -563,11 +561,6 @@ impl Handles {
                 .remove(&ModulePath::filesystem(file.to_path_buf()));
         }
     }
-}
-
-struct RequireLevels {
-    specified: Require,
-    default: Require,
 }
 
 async fn get_watcher_events(watcher: &mut Watcher) -> anyhow::Result<CategorizedEvents> {
@@ -883,6 +876,23 @@ impl CheckArgs {
             errors.shown
         };
 
+        // Collect unused ignore errors for display (respects severity configuration)
+        let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display();
+        let shown_errors: Vec<_> = if let Some(only) = &self.output.only {
+            let only = only.iter().collect::<SmallSet<_>>();
+            let filtered: Vec<_> = unused_ignore_errors
+                .shown
+                .into_iter()
+                .filter(|e| only.contains(&e.error_kind()))
+                .collect();
+            shown_errors.into_iter().chain(filtered).collect()
+        } else {
+            shown_errors
+                .into_iter()
+                .chain(unused_ignore_errors.shown)
+                .collect()
+        };
+
         // We update the baseline file if requested, after reporting any new errors using the old baseline
         if self.output.update_baseline
             && let Some(baseline_path) = &self.output.baseline
@@ -996,10 +1006,19 @@ impl CheckArgs {
             fs_anyhow::write(path, report::trace::trace(transaction))?;
         }
         if self.behavior.suppress_errors {
-            suppress::suppress_errors(shown_errors.clone());
+            // TODO: Move this into separate command
+            let serialized_errors: Vec<SerializedError> = shown_errors
+                .iter()
+                .filter(|e| e.severity() >= Severity::Warn)
+                .filter_map(SerializedError::from_error)
+                .filter(|e| !e.is_unused_ignore())
+                .collect();
+            suppress::suppress_errors(serialized_errors);
         }
         if self.behavior.remove_unused_ignores {
-            suppress::remove_unused_ignores(&loads, self.behavior.all);
+            // TODO: Move this into separate command
+            let unused_errors = loads.collect_unused_ignore_errors();
+            suppress::remove_unused_ignores(unused_errors);
         }
         if self.behavior.expectations {
             loads.check_against_expectations()?;

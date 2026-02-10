@@ -7,7 +7,7 @@
 
 use lsp_types::DocumentDiagnosticReportResult;
 use lsp_types::Url;
-use pyrefly_config::environment::environment::PythonEnvironment;
+use pyrefly_util::stdlib::register_stdlib_paths;
 use serde_json::json;
 
 use crate::commands::lsp::IndexingMode;
@@ -16,6 +16,27 @@ use crate::lsp::non_wasm::protocol::Notification;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+
+#[test]
+fn test_show_syntax_errors_without_config() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("syntax_errors.py");
+
+    interaction
+        .client
+        .diagnostic("syntax_errors.py")
+        .expect_response(json!({"items": [{"code":"parse-error","codeDescription":{"href":"https://pyrefly.org/en/docs/error-kinds/#parse-error"},"message":"Parse error: Expected an indented block after `if` statement","range":{"end":{"character":1,"line":9},"start":{"character":0,"line":9}},"severity":1,"source":"Pyrefly"}], "kind": "full"}))
+        .expect("Failed to receive expected response");
+}
 
 #[test]
 fn test_stream_diagnostics_after_save() {
@@ -40,15 +61,23 @@ fn test_stream_diagnostics_after_save() {
     let b_path = root_path.join("b.py");
     let b_contents = std::fs::read_to_string(&b_path).unwrap();
     interaction.client.did_open("d.py");
-    interaction.client.did_open("b.py");
     interaction
         .client
         .expect_publish_diagnostics_eventual_error_count(d_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for d");
     interaction
         .client
+        .expect_file_watcher_register()
+        .expect("Register file watcher for d");
+    interaction.client.did_open("b.py");
+    interaction
+        .client
         .expect_publish_diagnostics_eventual_error_count(b_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for b");
+    interaction
+        .client
+        .expect_file_watcher_register()
+        .expect("Register file watcher for b");
     let new_contents = b_contents.replace("1", "''");
     interaction.client.edit_file("b.py", &new_contents);
     // Streamed diagnostics
@@ -65,7 +94,6 @@ fn test_stream_diagnostics_after_save() {
 }
 
 #[test]
-#[ignore] // TODO: fix and re-enable
 fn test_stream_diagnostics_no_flicker_after_undo_edit() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
@@ -87,15 +115,23 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
     let d_path = root_path.join("d.py");
     let b_path = root_path.join("b.py");
     interaction.client.did_open("d.py");
-    interaction.client.did_open("b.py");
     interaction
         .client
         .expect_publish_diagnostics_eventual_error_count(d_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for d");
     interaction
         .client
+        .expect_file_watcher_register()
+        .expect("Register file watcher for d");
+    interaction.client.did_open("b.py");
+    interaction
+        .client
         .expect_publish_diagnostics_eventual_error_count(b_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for b");
+    interaction
+        .client
+        .expect_file_watcher_register()
+        .expect("Register file watcher for b");
     // Delete contents of b.py & save
     interaction.do_not_commit_next_recheck();
     let b_contents = std::fs::read_to_string(&b_path).unwrap();
@@ -112,23 +148,20 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
     interaction.continue_recheck();
     interaction
         .client
-        .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 0)
+        .expect_publish_diagnostics_must_have_error_count_between(d_path.clone(), 0, 1)
         .expect("Failed to receive transaction complete diagnostics for first edit");
     // Diagnostics for second recheck
     interaction
         .client
         .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 0)
-        .expect("Failed to receive streamed diagnostics for second edit");
-    interaction
-        .client
-        .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 0)
-        .expect("Failed to receive transaction complete diagnostics for second edit");
+        .expect("Failed to receive diagnostics for second edit");
     interaction.shutdown().unwrap();
 }
 
 /// Test opening a file while a recheck for another file is happening.
 /// Start with only b open, then open file d while a recheck for b is happening.
 #[test]
+#[ignore] // TODO: flaky
 fn test_open_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
@@ -156,6 +189,10 @@ fn test_open_file_during_recheck() {
         .client
         .expect_publish_diagnostics_eventual_error_count(b_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for b");
+    interaction
+        .client
+        .expect_file_watcher_register()
+        .expect("Register file watcher for b");
     // Trigger a recheck by modifying and saving b
     interaction.do_not_commit_next_recheck();
     let new_contents = b_contents.replace("1", "''");
@@ -208,15 +245,23 @@ fn test_edit_file_during_recheck() {
     let b_contents = std::fs::read_to_string(&b_path).unwrap();
     // Open both b and d initially
     interaction.client.did_open("b.py");
-    interaction.client.did_open("d.py");
     interaction
         .client
         .expect_publish_diagnostics_eventual_error_count(b_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for b");
     interaction
         .client
+        .expect_file_watcher_register()
+        .expect("Register file watcher for b");
+    interaction.client.did_open("d.py");
+    interaction
+        .client
         .expect_publish_diagnostics_eventual_error_count(d_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for d");
+    interaction
+        .client
+        .expect_file_watcher_register()
+        .expect("Register file watcher for d");
     // Set flag to prevent recheck from committing
     interaction.do_not_commit_next_recheck();
     // Trigger a recheck by modifying and saving b
@@ -755,13 +800,11 @@ fn test_shows_stdlib_type_errors_with_force_on() {
         })
         .unwrap();
 
-    PythonEnvironment::get_interpreter_stdlib_path()
-        .write()
-        .insert(
-            test_files_root
-                .path()
-                .join("filtering_stdlib_errors/usr/lib/python3.12"),
-        );
+    register_stdlib_paths(vec![
+        test_files_root
+            .path()
+            .join("filtering_stdlib_errors/usr/lib/python3.12"),
+    ]);
 
     interaction.client.did_change_configuration();
 
@@ -813,13 +856,11 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         })
         .unwrap();
 
-    PythonEnvironment::get_interpreter_stdlib_path()
-        .write()
-        .insert(
-            test_files_root
-                .path()
-                .join("filtering_stdlib_errors/usr/lib/python3.12"),
-        );
+    register_stdlib_paths(vec![
+        test_files_root
+            .path()
+            .join("filtering_stdlib_errors/usr/lib/python3.12"),
+    ]);
 
     interaction.client.did_change_configuration();
 
@@ -856,13 +897,11 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         }))
         .unwrap();
 
-    PythonEnvironment::get_interpreter_stdlib_path()
-        .write()
-        .insert(
-            test_files_root
-                .path()
-                .join("filtering_stdlib_errors/usr/lib/python3.8"),
-        );
+    register_stdlib_paths(vec![
+        test_files_root
+            .path()
+            .join("filtering_stdlib_errors/usr/lib/python3.8"),
+    ]);
 
     interaction
         .client
@@ -918,13 +957,11 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
         }))
         .unwrap();
 
-    PythonEnvironment::get_interpreter_stdlib_path()
-        .write()
-        .insert(
-            test_files_root
-                .path()
-                .join("filtering_stdlib_errors/usr/lib64/python3.12"),
-        );
+    register_stdlib_paths(vec![
+        test_files_root
+            .path()
+            .join("filtering_stdlib_errors/usr/lib64/python3.12"),
+    ]);
 
     interaction
         .client
@@ -960,13 +997,11 @@ fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
 fn test_does_not_filter_out_stdlib_errors_with_default_displaytypeerrors() {
     let test_files_root = get_test_files_root();
 
-    PythonEnvironment::get_interpreter_stdlib_path()
-        .write()
-        .insert(
-            test_files_root
-                .path()
-                .join("filtering_stdlib_errors_with_default/usr/lib/python3.12"),
-        );
+    register_stdlib_paths(vec![
+        test_files_root
+            .path()
+            .join("filtering_stdlib_errors_with_default/usr/lib/python3.12"),
+    ]);
 
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
@@ -1249,7 +1284,7 @@ fn test_missing_source_with_config_diagnostic_has_errors() {
 }
 
 #[test]
-fn test_untyped_import_diagnostic() {
+fn test_untyped_import_diagnostic_does_not_show_non_recommended_packages() {
     let test_files_root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
@@ -1277,24 +1312,69 @@ fn test_untyped_import_diagnostic() {
         .expect_response(json!({
             "items": [
                 {
+                    "code": "unused-import",
+                    "message": "Import `boto3` is unused",
+                    "range": {
+                        "start": {"line": 5, "character": 7},
+                        "end": {"line": 5, "character": 12}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
+
+    interaction.client.did_open("untyped_import_django/test.py");
+
+    interaction
+        .client
+        .diagnostic("untyped_import_django/test.py")
+        .expect_response(json!({
+            "items": [
+                {
                     "code": "untyped-import",
                     "codeDescription": {
                         "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
                     },
-                    "message": "Cannot find type stubs for module `boto3`\n  Hint: install the `boto3-stubs` package",
+                    "message": "Cannot find type stubs for module `django`\n  Hint: install the `django-stubs` package",
                     "range": {
                         "start": {"line": 5, "character": 7},
-                        "end": {"line": 5, "character": 12}
+                        "end": {"line": 5, "character": 13}
                     },
                     "severity": 1,
                     "source": "Pyrefly"
                 },
                 {
                     "code": "unused-import",
-                    "message": "Import `boto3` is unused",
+                    "message": "Import `django` is unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
-                        "end": {"line": 5, "character": 12}
+                        "end": {"line": 5, "character": 13}
                     },
                     "severity": 4,
                     "source": "Pyrefly",

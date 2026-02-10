@@ -31,6 +31,7 @@ use crate::report::pysa::ast_visitor::Scopes;
 use crate::report::pysa::ast_visitor::visit_module_ast;
 use crate::report::pysa::call_graph::FunctionTrait;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::function::FunctionId;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::module::ModuleId;
 use crate::report::pysa::module::ModuleIds;
@@ -193,6 +194,8 @@ impl<'a> CapturedVariableVisitor<'a> {
         if let Some(definition) = self.get_definition_from_usage(key)
             && let Some(current_function) = &self.current_exported_function
             && definition != *current_function
+            && definition.function_id != FunctionId::ModuleTopLevel
+            && !matches!(definition.function_id, FunctionId::ClassTopLevel { .. })
         {
             self.captured_variables
                 .entry(current_function.clone())
