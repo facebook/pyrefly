@@ -34,7 +34,6 @@ import {
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
 let traceOutputChannel: vscode.OutputChannel;
-const COMPLETION_SELECTED_COMMAND = 'pyrefly.completionItemSelected';
 
 /// Get a setting at the path, or throw an error if it's not set.
 function requireSetting<T>(path: string): T {
@@ -45,62 +44,6 @@ function requireSetting<T>(path: string): T {
   return ret;
 }
 
-function completionItemPayload(item: vscode.CompletionItem): object {
-  const label =
-    typeof item.label === 'string' ? item.label : item.label.label;
-  const payload: Record<string, unknown> = {
-    label,
-  };
-  if (item.kind !== undefined) {
-    payload.kind = item.kind;
-  }
-  if (item.detail) {
-    payload.detail = item.detail;
-  }
-  if (item.labelDetails) {
-    payload.labelDetails = item.labelDetails;
-  } else if (typeof item.label !== 'string') {
-    payload.labelDetails = {
-      detail: item.label.detail,
-      description: item.label.description,
-    };
-  }
-  if (item.additionalTextEdits && item.additionalTextEdits.length > 0) {
-    payload.additionalTextEdits = [];
-  }
-  return payload;
-}
-
-function attachCompletionCommand(
-  item: vscode.CompletionItem,
-  uri: vscode.Uri,
-): vscode.CompletionItem {
-  if (item.command) {
-    return item;
-  }
-  const payload = completionItemPayload(item);
-  item.command = {
-    title: 'Record completion',
-    command: COMPLETION_SELECTED_COMMAND,
-    arguments: [uri.toString(), payload],
-  };
-  return item;
-}
-
-function attachCompletionCommandToResult(
-  result: vscode.CompletionItem | vscode.CompletionList | null | undefined,
-  uri: vscode.Uri,
-): vscode.CompletionItem | vscode.CompletionList | null | undefined {
-  if (!result) {
-    return result;
-  }
-  if ((result as vscode.CompletionList).items !== undefined) {
-    const list = result as vscode.CompletionList;
-    list.items = list.items.map(item => attachCompletionCommand(item, uri));
-    return list;
-  }
-  return attachCompletionCommand(result as vscode.CompletionItem, uri);
-}
 
 /**
  * This function adds the pythonPath to any section with configuration of 'python'.
@@ -209,16 +152,6 @@ export async function activate(context: ExtensionContext) {
     outputChannel: outputChannel,
     traceOutputChannel: traceOutputChannel,
     middleware: {
-      provideCompletionItem: async (
-        document,
-        position,
-        context,
-        token,
-        next,
-      ): Promise<vscode.CompletionItem | vscode.CompletionList | null | undefined> => {
-        const result = await next(document, position, context, token);
-        return attachCompletionCommandToResult(result, document.uri);
-      },
       workspace: {
         configuration: async (
           params: ConfigurationParams,
@@ -246,21 +179,6 @@ export async function activate(context: ExtensionContext) {
     'Pyrefly language server',
     serverOptions,
     clientOptions,
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand(
-      COMPLETION_SELECTED_COMMAND,
-      (uri: string, item: object) => {
-        if (!client || typeof uri !== 'string') {
-          return;
-        }
-        client.sendNotification('pyrefly/completionItemSelected', {
-          textDocument: {uri},
-          item,
-        });
-      },
-    ),
   );
 
   context.subscriptions.push(

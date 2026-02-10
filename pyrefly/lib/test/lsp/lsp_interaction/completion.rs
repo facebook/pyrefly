@@ -15,10 +15,9 @@ use lsp_types::InsertTextFormat;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::request::Completion;
+use lsp_types::request::ResolveCompletionItem;
 use serde_json::json;
 
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Notification;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -236,7 +235,7 @@ fn test_completion_mru_ranked() {
 
     let insert_text = "\nclass Alchemy:\n    pass\nclass Alpha:\n    pass\n\nAl";
 
-    // First session: select Alpha to populate MRU.
+    // Select Alpha to populate MRU.
     let mut interaction = LspInteraction::new();
     interaction.set_root(workspace_root.clone());
     interaction
@@ -286,41 +285,9 @@ fn test_completion_mru_ranked() {
 
     interaction
         .client
-        .send_message(Message::Notification(Notification {
-            method: "pyrefly/completionItemSelected".to_owned(),
-            params: json!({
-                "textDocument": { "uri": foo_uri.clone() },
-                "item": alpha_item,
-            }),
-            activity_key: None,
-        }));
-
-    interaction.shutdown().unwrap();
-
-    // Second session: MRU should promote Alpha.
-    let mut interaction = LspInteraction::new();
-    interaction.set_root(workspace_root.clone());
-    interaction
-        .initialize(InitializeSettings::default())
+        .send_request::<ResolveCompletionItem>(json!(alpha_item))
+        .expect_response_with(|resolved| resolved.label == "Alpha")
         .unwrap();
-
-    interaction.client.did_open("foo.py");
-    interaction
-        .client
-        .send_notification::<DidChangeTextDocument>(json!({
-            "textDocument": {
-                "uri": foo_uri,
-                "languageId": "python",
-                "version": 2
-            },
-            "contentChanges": [{
-                "range": {
-                    "start": {"line": 10, "character": 0},
-                    "end": {"line": 10, "character": 0}
-                },
-                "text": insert_text
-            }],
-        }));
 
     let captured = RefCell::new(None);
     interaction
