@@ -843,6 +843,18 @@ fn redundant_cast_cursor_inside_args() {
 }
 
 #[test]
+fn redundant_cast_preserves_multiplication_precedence() {
+    let code =
+        "from typing import cast\nx: int = 1\ny: int = 2\nz: int = 3\nx * cast(int, y + z)\n";
+    let cursor_offset = code.find("cast(").unwrap();
+    let after = redundant_cast_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import cast\nx: int = 1\ny: int = 2\nz: int = 3\nx * (y + z)\n",
+        after
+    );
+}
+
+#[test]
 fn test_import_from_stdlib() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[("a", "TypeVar('T')\n# ^")],
