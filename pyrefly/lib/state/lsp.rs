@@ -67,6 +67,7 @@ use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::completion::CompletionOptions;
+use crate::lsp::wasm::completion::RankedCompletion;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::import_regular_import_edit;
 use crate::state::ide::insert_import_edit;
@@ -2663,7 +2664,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],
-        completions: &mut Vec<CompletionItem>,
+        completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
     ) {
         let mut is_match_value_pattern = false;
