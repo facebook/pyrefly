@@ -4,6 +4,13 @@ title: Pyrefly Error Kinds
 description: Pyrefly error categories and suppression codes
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Pyrefly Error Kinds
 
 An _error kind_ categorizes an error by the part of the typing specification
@@ -168,6 +175,23 @@ This error occurs when a type that cannot be used as a context manager appears i
 class A:
     def __enter__(self): ...
 with A(): ...  # `A` is missing an `__exit__` method!
+```
+
+## bad-dunder-all
+
+This error occurs when `__all__` is explicitly defined for a module but contains an entry that cannot be found in the module's definitions, wildcard imports, or submodules (for `__init__.py` files).
+
+```python
+__all__ = ["x", "y"]  # Name `y` is listed in `__all__` but is not defined in the module
+x = 5
+```
+
+To fix this error, either define the missing name or remove it from `__all__`:
+
+```python
+__all__ = ["x", "y"]
+x = 5
+y = 10  # Now `y` is defined
 ```
 
 ## bad-function-definition
@@ -612,6 +636,23 @@ def f(x, *args: P1.args, **kwargs: P2.kwargs) -> None:
 
 Here, `P1.args` and `P2.kwargs` can't be used together; `*args` and `**kwargs` must come from the same `ParamSpec`.
 
+## invalid-pattern
+
+This error is reported when a pattern is invalid at runtime. For example, enum members are values,
+so they must be matched as value patterns (without `()`), not class patterns:
+
+```python
+from enum import Enum
+
+class Color(Enum):
+  RED = "red"
+
+def describe(color: Color) -> None:
+  match color:
+    case Color.RED():  # Invalid pattern: use `Color.RED` (without parentheses)
+      pass
+```
+
 ## invalid-self-type
 
 This error occurs when `Self` is used in a context Pyrefly does not currently support.
@@ -706,6 +747,27 @@ def two_tups[*Xs, *Ys](xs: tuple[*Xs], ys: tuple[*Ys]) -> None:
   ...
 ```
 
+## invalid-variance
+
+An error caused by a type variable being used in a position incompatible with its declared variance.
+
+For example, a covariant type variable cannot be used in a contravariant position (such as a method parameter), and a contravariant type variable cannot be used in a covariant position (such as a return type).
+
+```python
+from typing import TypeVar, Generic
+
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class BadCovariant(Generic[T_co]):
+    # Error: covariant type variable used in contravariant position
+    def set_value(self, value: T_co) -> None: ...
+
+class BadContravariant(Generic[T_contra]):
+    # Error: contravariant type variable used in covariant position
+    def get_value(self) -> T_contra: ...
+```
+
 ## invalid-yield
 
 This error arises when `yield` is used in a way that is not allowed. For example:
@@ -769,6 +831,32 @@ os.perkeo  # missing-attribute
 In this example, `os.bacarat` is treated as a module name, so failing to find it results in an `missing-import`.
 `from os import joker` does not tell us if `joker` is a module, class, function, etc., so it is treated as the more general `missing-module-attribute`.
 
+## missing-override-decorator
+
+A method overrides a parent class method but does not have the `@override` decorator.
+
+This error supports strict override enforcement as specified in the [typing spec](https://typing.python.org/en/latest/spec/class-compat.html#strict-enforcement-per-project). When enabled, it requires all overriding methods to be explicitly marked with `@typing.override`.
+
+```python
+from typing import override
+
+class Base:
+    def foo(self) -> None: ...
+
+class Derived(Base):
+    def foo(self) -> None: ...  # missing-override-decorator
+
+    @override
+    def foo(self) -> None: ...  # OK
+```
+
+The default severity of this diagnostic is `ignore`. To enable strict override enforcement, set the severity to `error` in your configuration:
+
+```toml
+[tool.pyrefly]
+errors = { missing-override-decorator = "error" }
+```
+
 ## missing-source
 
 Pyrefly was able to find a stubs package but no corresponding source package. For example, this can
@@ -815,6 +903,24 @@ def f(x: int | str) -> int | str:
     return x
 
 f(1.0)
+```
+
+## non-exhaustive-match
+
+Pyrefly warns when a `match` statement over an `Enum` attempts to enumerate the members
+but forgets at least one case. Add the missing members or a default arm.
+
+```python
+from enum import Enum
+
+class Color(Enum):
+  RED = "red"
+  BLUE = "blue"
+
+def describe(color: Color) -> str:
+  match color:  # non-exhaustive-match
+    case Color.RED:
+      return "danger"
 ```
 
 ## not-a-type
@@ -873,6 +979,32 @@ This is most likely to be seen in a `for` loop:
 x = 1  # Or some other value
 for val in x:  # not-iterable
   ...
+```
+
+## not-required-key-access
+
+This warning indicates that a [`TypedDict`](https://typing.python.org/en/latest/spec/typeddict.html)
+key marked `NotRequired` (or inherited from a `total=False` TypedDict) is being accessed without
+first ensuring that the key is present. Even if the value type is non-optional, the key itself may
+not exist at runtime, so Pyrefly encourages guarding the access with an `in` check or a `.get()`
+call.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+from typing import NotRequired, TypedDict
+
+class Movie(TypedDict):
+    title: str
+    year: NotRequired[int]
+
+def describe(movie: Movie) -> int:
+    return movie["year"]  # not-required-key-access
+
+def safe_describe(movie: Movie) -> int:
+    if "year" in movie:
+        return movie["year"]  # OK: key presence established
+    raise ValueError("Missing year")
 ```
 
 ## open-unpacking
@@ -1108,7 +1240,59 @@ def test1(x: object) -> None:
         pass
 ```
 
-This check is relatively conservative and only warn on limited cases where the comparison is highly likely to be redundant.
+This check is relatively conservative and only warns on limited cases where the comparison is highly likely to be redundant.
+
+## unreachable
+
+This error is raised when a `return` or `yield` can never be reached because it comes
+after a statement that always exits the current flow, such as `return`, `raise`, `break`, or `continue`.
+
+```python
+def example():
+    return 1
+    return 2  # This `return` statement is unreachable [unreachable]
+
+def generator():
+    return
+    yield 1  # This `yield` expression is unreachable [unreachable]
+
+def loop_example():
+    while True:
+        break
+        return 1  # This `return` statement is unreachable [unreachable]
+```
+
+Note that `yield` statements can follow other `yield` statements without error, since generators
+can produce multiple values:
+
+```python
+def valid_generator():
+    yield 1
+    yield 2  # This is valid
+```
+
+## unsafe-overlap
+
+Protocols decorated with `@runtime_checkable` may be used in `isinstance` and `issubclass` checks, but the runtime will only checks that all the required attributes are present, without looking at their types.
+
+This error occurs when the object you're checking against the protocol has all the required attributes, but their types are not compatible.
+
+In the example below, `C` should not match with `P`, but the `isinstance` check will succeed at runtime.
+
+```python
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class P(Protocol):
+    x: int
+
+class C:
+    x: str
+
+c = C()
+if isinstance(c, P):
+    pass
+```
 
 ## unsupported
 
@@ -1150,4 +1334,25 @@ async def bar():
     foo()  # error
     await foo()  # ok
     x = foo()  # ok
+```
+
+## unused-ignore
+
+This error is raised when a `# pyrefly: ignore` comment is not used to suppress an error, and can be safely removed.
+
+The default severity of this diagnostic is `ignore`.
+
+## variance-mismatch
+
+The inferred variance of a type variable does not match its declared variance. This warning is raised for protocols where the way a type variable is used implies a different variance than what was declared. For example, if a protocol only uses `T` in covariant positions but `T` is declared as invariant, this warning suggests declaring `T` as covariant.
+
+The default severity of this diagnostic is `warn`.
+
+```python
+from typing import Protocol, TypeVar
+
+T = TypeVar("T")
+
+class A(Protocol[T]):  # variance-mismatch: Type variable `T` is declared as invariant, but could be covariant based on its usage
+    def f(self) -> T: ...
 ```

@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_util::telemetry::TelemetryEvent;
+
 use crate::state::require::Require;
 use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
@@ -31,8 +33,7 @@ impl<'a> TransactionManager<'a> {
     ) -> Result<CommittingTransaction<'a>, Transaction<'a>> {
         // If there is no ongoing recheck due to on-disk changes, we should prefer to commit
         // the in-memory changes into the main state.
-        if let Some(transaction) = state.try_new_committable_transaction(Require::indexing(), None)
-        {
+        if let Some(transaction) = state.try_new_committable_transaction(Require::Exports, None) {
             // If we can commit in-memory changes, then there is no point of holding the
             // non-committable transaction with a possibly outdated view of the `ReadableState`
             // so we can destroy the saved state.
@@ -64,7 +65,7 @@ impl<'a> TransactionManager<'a> {
     }
 
     /// This function should be called once we finished using transaction for an LSP request.
-    pub fn save(&mut self, transaction: Transaction<'a>) {
-        self.saved_state = Some(transaction.save())
+    pub fn save(&mut self, transaction: Transaction<'a>, telemetry: &mut TelemetryEvent) {
+        self.saved_state = Some(transaction.save(telemetry))
     }
 }

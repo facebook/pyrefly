@@ -658,6 +658,25 @@
           "spans": [
             {
               "length": 3,
+              "start": 59
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "exports_all.U"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "exports_all.py"
+          },
+          "spans": [
+            {
+              "length": 3,
               "start": 77
             }
           ],
@@ -707,6 +726,16 @@
               "target": {
                 "id": 0,
                 "key": "exports_all.x"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 59
+              },
+              "target": {
+                "id": 0,
+                "key": "exports_all.U"
               }
             },
             {
@@ -932,6 +961,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "b7943ae76a8e6adb45598859f7c7b073"
+    "schema_id": "835e529061f1429222e801fbfe85f209"
   }
 ]

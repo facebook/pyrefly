@@ -284,7 +284,7 @@ reveal_type(transform(bar)) # Should return (a: str, /, *args: bool) -> bool # E
 );
 
 testcase!(
-    bug = "P.args and P.kwargs should only work when P is in scope",
+    bug = "conformance: P.args and P.kwargs should only work when P is in scope",
     test_paramspec_component_usage,
     r#"
 from typing import Callable, ParamSpec
@@ -321,7 +321,7 @@ def puts_p_into_scope(f: Callable[P, int]) -> None:
 testcase!(
     test_paramspec_decorator,
     r#"
-from typing import Callable, ParamSpec, assert_type
+from typing import Callable, ParamSpec, assert_type, Any
 
 P = ParamSpec("P")
 
@@ -330,6 +330,11 @@ def decorator(f: Callable[P, int]) -> Callable[P, None]:
     assert_type(f(*args, **kwargs), int)    # Accepted, should resolve to int
     f(*kwargs, **args)    # Rejected # E: Expected *-unpacked P.args and **-unpacked P.kwargs
     f(1, *args, **kwargs) # Rejected # E: Expected 0 positional arguments, got 1
+
+  # Allow tuple[Any, ...] to match P.args, and dict[str, Any] to match P.kwargs
+  def bar(t1: tuple[Any, ...], t2: tuple[object, ...], d1: dict[str, Any], d2: dict[str, object]) -> None:
+    f(*t1, **d1) # OK
+    f(*t2, **d2) # # E: Expected *-unpacked P.args and **-unpacked P.kwargs
   return foo              # Accepted
 "#,
 );
@@ -557,5 +562,21 @@ def caller(
             _ = action(val, *args, **kwargs)
 
 caller([], T.c1)
+"#,
+);
+
+testcase!(
+    test_paramspec_any,
+    r#"
+from typing import Callable, Any, ParamSpec, Generic
+
+P = ParamSpec('P')
+
+class Task(Generic[P]):
+    __call__: Callable[P, None]
+
+# Any should be accepted as a valid ParamSpec argument
+def foo(task: Task[Any]) -> None:
+    pass
 "#,
 );

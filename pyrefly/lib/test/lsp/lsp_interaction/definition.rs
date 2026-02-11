@@ -7,8 +7,6 @@
 
 use std::path::PathBuf;
 
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Location;
@@ -16,6 +14,8 @@ use lsp_types::Url;
 use serde_json::json;
 use tempfile::TempDir;
 
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Request;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::bundled_typeshed_path;
@@ -278,6 +278,7 @@ fn malformed_missing_position() {
                 "uri": Url::from_file_path(root.path().join("basic/foo.py")).unwrap().to_string()
             },
         }),
+        activity_key: None,
     }));
     interaction
         .client
@@ -534,4 +535,120 @@ fn goto_def_on_none_goes_to_builtins_stub() {
             _ => false,
         })
         .unwrap();
+}
+
+#[test]
+fn test_goto_def_imported_submodule_with_alias() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("nested_package_imports");
+    test_go_to_def(
+        root_path,
+        None,
+        "main.py",
+        vec![
+            // `from pkg import sub as sub` -> first `sub`
+            (5, 16, "pkg/sub.py", 0, 0, 0, 0),
+            // `from pkg import sub as sub` -> second `sub`
+            (5, 23, "pkg/sub.py", 0, 0, 0, 0),
+        ],
+    );
+}
+
+#[test]
+fn test_goto_def_submodule_access() {
+    // Test go-to-definition on `autograd` in `torch.autograd.Function`
+    // This tests submodule access with proper package structure (torch/__init__.py, torch/autograd/__init__.py)
+    let root = get_test_files_root();
+    let root_path = root.path().join("submodule_access");
+    test_go_to_def(
+        root_path,
+        None,
+        "main.py",
+        vec![
+            // `torch.autograd.Function` -> `autograd` (line 7, char 6)
+            // Should navigate to torch/autograd/__init__.py
+            (7, 6, "torch/autograd/__init__.py", 0, 0, 0, 0),
+        ],
+    );
+}
+
+#[test]
+fn test_goto_def_deep_submodule_chain() {
+    // Test go-to-definition on submodule components in `a.b.c.D`
+    // This tests accessing nested packages with proper package structure
+    let root = get_test_files_root();
+    let root_path = root.path().join("deep_submodule_chain");
+    test_go_to_def(
+        root_path,
+        None,
+        "main.py",
+        vec![
+            // `a.b.c.D` -> `a` (line 7, char 0)
+            // Should navigate to a/__init__.py
+            (7, 0, "a/__init__.py", 0, 0, 0, 0),
+            // `a.b.c.D` -> `b` (line 7, char 2)
+            // Should navigate to a/b/__init__.py
+            (7, 2, "a/b/__init__.py", 0, 0, 0, 0),
+            // `a.b.c.D` -> `c` (line 7, char 4)
+            // Should navigate to a/b/c.py
+            (7, 4, "a/b/c.py", 0, 0, 0, 0),
+            // `a.b.c.D` -> `D` (line 7, char 6)
+            // Should navigate to class D definition in a/b/c.py
+            (7, 6, "a/b/c.py", 6, 6, 6, 7),
+        ],
+    );
+}
+
+#[test]
+fn test_goto_def_deep_submodule_chain_reexport() {
+    // Test go-to-definition on submodule components in `a.b.c.D`
+    // This tests the same pattern as deep_submodule_chain but with explicit re-exports
+    // using `from . import x as x` pattern (similar to D91081404's implicit_submodule test).
+    // Unlike deep_submodule_chain (which has empty __init__.py files), this should work
+    // because the submodules are explicitly re-exported.
+    let root = get_test_files_root();
+    let root_path = root.path().join("deep_submodule_chain_reexport");
+    test_go_to_def(
+        root_path,
+        None,
+        "main.py",
+        vec![
+            // `a.b.c.D` -> `a` (line 7, char 0)
+            // Should navigate to a/__init__.py
+            (7, 0, "a/__init__.py", 0, 0, 0, 0),
+            // `a.b.c.D` -> `b` (line 7, char 2)
+            // Should navigate to a/b/__init__.py
+            (7, 2, "a/b/__init__.py", 0, 0, 0, 0),
+            // `a.b.c.D` -> `c` (line 7, char 4)
+            // Should navigate to a/b/c.py
+            (7, 4, "a/b/c.py", 0, 0, 0, 0),
+            // `a.b.c.D` -> `D` (line 7, char 6)
+            // Should navigate to class D definition in a/b/c.py
+            (7, 6, "a/b/c.py", 6, 6, 6, 7),
+        ],
+    );
+}
+
+#[test]
+fn test_goto_def_dunder_all_submodule() {
+    // Test go-to-definition on a submodule name in __all__.
+    // When __all__ = ["sub"] in pkg/__init__.py, clicking on "sub" should
+    // navigate to pkg/sub.py.
+    let root = get_test_files_root();
+    let root_path = root.path().join("dunder_all_submodule");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.client.did_open("pkg/__init__.py");
+    // Click on "sub" in __all__ = ["sub"] (line 5, char 12 is inside "sub")
+    interaction
+        .client
+        .definition("pkg/__init__.py", 5, 12)
+        .expect_definition_response_from_root("pkg/sub.py", 0, 0, 0, 0)
+        .unwrap();
+    interaction.shutdown().unwrap();
 }

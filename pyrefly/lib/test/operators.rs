@@ -227,6 +227,24 @@ def f(x: int, y: str | Literal[False]):
 "#,
 );
 
+// Regression test: generic function calls in `and` expressions should not
+// have the narrowed type from earlier branches used as a hint for type variable
+// inference. The narrowing of `bool` to `Literal[False]` is for the result of
+// the `and` expression, not for contextual typing of later generic calls.
+testcase!(
+    test_boolop_generic_call_hint,
+    r#"
+def f[U](u: U) -> U:
+    return u
+
+def caller(x: bool, y: bool) -> int:
+    if f(x) and f(y):
+        return 1
+    else:
+        return 0
+"#,
+);
+
 testcase!(
     test_unary_not_unknown,
     r#"
@@ -283,6 +301,27 @@ c = C()
 assert_type(+c, Literal[5])
 assert_type(-c, Literal[-5])
 assert_type(~c, Literal[100])
+    "#,
+);
+
+testcase!(
+    test_unary_dunders_typevar_bound,
+    r#"
+from typing import Self
+
+class Foo:
+    def __neg__(self) -> Self:
+        return self
+    def __pos__(self) -> Self:
+        return self
+    def __invert__(self) -> Self:
+        return self
+
+def test[F: Foo](foo: F) -> F:
+    a: F = -foo
+    b: F = +foo
+    c: F = ~foo
+    return c
     "#,
 );
 
@@ -441,6 +480,21 @@ a += B()  # E: `B` is not assignable to parameter `other` with type `Never` in f
 );
 
 testcase!(
+    test_iadd_ignores_getattr,
+    r#"
+from typing import assert_type
+class A:
+    def __add__(self, other: str) -> "A":
+        return self
+    def __getattr__(self, name: str) -> str:
+        return "x"
+a = A()
+a += "hi"
+assert_type(a, A)
+    "#,
+);
+
+testcase!(
     test_custom_eq,
     r#"
 from typing import assert_type
@@ -492,7 +546,7 @@ assert_type(Truthy() or int(), Truthy)
 assert_type(int() if Truthy() else str(), int)
 assert_type(int() if Falsey() else str(), str)
 
-# Test the use of a non-boolean-convertable type in boolean operators.
+# Test the use of a non-boolean-convertible type in boolean operators.
 #
 # The runtime only uses truthiness in short-circuiting here, so it is actually
 # legal to use a non-boolable value as the rightmost entry of a bool op.

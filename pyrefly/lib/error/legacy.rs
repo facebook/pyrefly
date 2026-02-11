@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::error::error::Error;
 
-fn severity_to_str(severity: Severity) -> String {
+pub(crate) fn severity_to_str(severity: Severity) -> String {
     match severity {
         Severity::Ignore => "ignore".to_owned(),
         Severity::Info => "info".to_owned(),

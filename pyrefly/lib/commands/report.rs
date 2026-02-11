@@ -6,12 +6,16 @@
  */
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use clap::Parser;
 use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::module::Module;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::class::ClassDefIndex;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
 use regex::Regex;
@@ -20,9 +24,14 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use serde::Serialize;
 
+use crate::alt::answers::Answers;
+use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingClass;
+use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::Bindings;
 use crate::commands::check::Handles;
@@ -32,14 +41,14 @@ use crate::state::require::Require;
 use crate::state::state::State;
 
 /// Location information for code elements
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct Location {
     start: Position,
     end: Position,
 }
 
 /// Position with line and column
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct Position {
     line: usize,
     column: usize,
@@ -70,11 +79,27 @@ struct Function {
     location: Location,
 }
 
+/// An incomplete attribute within a class (method with missing annotations)
+#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct IncompleteAttribute {
+    name: String,
+    declared_in: String,
+}
+
+/// Information about a class with incomplete annotations
+#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct ReportClass {
+    name: String,
+    incomplete_attributes: Vec<IncompleteAttribute>,
+    location: Location,
+}
+
 /// File report
 #[derive(Debug, Serialize)]
 struct FileReport {
     line_count: usize,
     functions: Vec<Function>,
+    classes: Vec<ReportClass>,
     suppressions: Vec<Suppression>,
 }
 
@@ -183,6 +208,12 @@ impl ReportArgs {
 
     fn parse_functions(module: &Module, bindings: Bindings) -> Vec<Function> {
         let mut functions = Vec::new();
+        let module_prefix = if module.name() != ModuleName::unknown() {
+            format!("{}.", module.name())
+        } else {
+            String::new()
+        };
+
         for idx in bindings.keys::<Key>() {
             if let Key::Definition(id) = bindings.idx_to_key(idx)
                 && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
@@ -192,14 +223,23 @@ impl ReportArgs {
                 let func_name = if let Some(class_key) = fun.class_key {
                     match bindings.get(class_key) {
                         BindingClass::ClassDef(cls) => {
-                            format!("{}.{}", cls.def.name, fun.def.name)
+                            // Build full qualified name using nesting context
+                            let parent_path = module.display(&cls.parent).to_string();
+                            if parent_path.is_empty() {
+                                format!("{}{}.{}", module_prefix, cls.def.name, fun.def.name)
+                            } else {
+                                format!(
+                                    "{}{}.{}.{}",
+                                    module_prefix, parent_path, cls.def.name, fun.def.name
+                                )
+                            }
                         }
                         BindingClass::FunctionalClassDef(..) => {
                             continue;
                         }
                     }
                 } else {
-                    format!("{}", fun.def.name)
+                    format!("{}{}", module_prefix, fun.def.name)
                 };
                 // Get return annotation from ReturnTypeKind
                 let return_annotation = {
@@ -210,12 +250,8 @@ impl ReportArgs {
                             ReturnTypeKind::ShouldValidateAnnotation { range, .. } => {
                                 Some(module.code_at(*range).to_owned())
                             }
-                            ReturnTypeKind::ShouldTrustAnnotation { .. } => {
-                                // For trusted annotations, get from AST
-                                fun.def
-                                    .returns
-                                    .as_ref()
-                                    .map(|ann| module.code_at(ann.range()).to_owned())
+                            ReturnTypeKind::ShouldTrustAnnotation { range, .. } => {
+                                Some(module.code_at(*range).to_owned())
                             }
                             _ => None,
                         }
@@ -252,6 +288,157 @@ impl ReportArgs {
         functions
     }
 
+    /// Check if a function is completely annotated (has return annotation and all params annotated except self/cls)
+    fn is_function_completely_annotated(bindings: &Bindings, func_def: &FunctionDefData) -> bool {
+        // Check return annotation
+        let return_key = Key::ReturnType(ShortIdentifier::new(&func_def.name));
+        let return_idx = bindings.key_to_idx(&return_key);
+        let has_return_annotation = if let Binding::ReturnType(ret) = bindings.get(return_idx) {
+            match &ret.kind {
+                ReturnTypeKind::ShouldValidateAnnotation { .. }
+                | ReturnTypeKind::ShouldTrustAnnotation { .. } => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+
+        if !has_return_annotation {
+            return false;
+        }
+
+        // Check all parameters (except self/cls which don't need annotations)
+        let all_params = Self::extract_parameters(&func_def.parameters);
+        for param in all_params {
+            let param_name = param.name.as_str();
+            // Skip self and cls parameters
+            if param_name == "self" || param_name == "cls" {
+                continue;
+            }
+            if param.annotation.is_none() {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn parse_classes(
+        module: &Module,
+        bindings: Bindings,
+        answers: Arc<Answers>,
+    ) -> Vec<ReportClass> {
+        let mut classes = Vec::new();
+        let module_prefix = if module.name() != ModuleName::unknown() {
+            format!("{}.", module.name())
+        } else {
+            String::new()
+        };
+        for class_idx in bindings.keys::<KeyClass>() {
+            let binding_class = bindings.get(class_idx);
+            let cls_binding = match binding_class {
+                BindingClass::ClassDef(cls) => cls,
+                BindingClass::FunctionalClassDef(..) => continue,
+            };
+            let class_type = match answers.get_idx(class_idx) {
+                Some(result) => match &result.0 {
+                    Some(cls) => cls.clone(),
+                    None => continue,
+                },
+                None => continue,
+            };
+            let class_name = {
+                let parent_path = module.display(&cls_binding.parent).to_string();
+                if parent_path.is_empty() {
+                    format!("{}{}", module_prefix, cls_binding.def.name)
+                } else {
+                    format!("{}{}.{}", module_prefix, parent_path, cls_binding.def.name)
+                }
+            };
+            let mro = answers
+                .get_idx(bindings.key_to_idx(&KeyClassMro(ClassDefIndex(class_type.index().0))))
+                .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
+            // Check methods defined directly on this class
+            let mut incomplete_attributes = Vec::new();
+            for idx in bindings.keys::<Key>() {
+                if let Key::Definition(_id) = bindings.idx_to_key(idx)
+                    && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
+                {
+                    let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                    if let Some(func_class_key) = fun.class_key {
+                        if func_class_key != class_idx {
+                            continue;
+                        }
+                        let method_name = fun.def.name.to_string();
+                        if !Self::is_function_completely_annotated(&bindings, &fun.def) {
+                            incomplete_attributes.push(IncompleteAttribute {
+                                name: method_name.clone(),
+                                declared_in: class_name.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            // Check inherited methods
+            if let ClassMro::Resolved(ancestors) = &*mro {
+                for ancestor_class_type in ancestors {
+                    let ancestor_class = ancestor_class_type.class_object();
+                    let ancestor_name = {
+                        let ancestor_module = ancestor_class.module();
+                        let ancestor_module_prefix =
+                            if ancestor_module.name() != ModuleName::unknown() {
+                                format!("{}.", ancestor_module.name())
+                            } else {
+                                String::new()
+                            };
+                        let ancestor_parent_path = ancestor_module
+                            .display(ancestor_class.qname().parent())
+                            .to_string();
+                        if ancestor_parent_path.is_empty() {
+                            format!("{}{}", ancestor_module_prefix, ancestor_class.name())
+                        } else {
+                            format!(
+                                "{}{}.{}",
+                                ancestor_module_prefix,
+                                ancestor_parent_path,
+                                ancestor_class.name()
+                            )
+                        }
+                    };
+                    // Skip methods inherited from builtins
+                    if ancestor_class.module_name().as_str() == "builtins" {
+                        continue;
+                    }
+                    for field_name in ancestor_class.fields() {
+                        let field_name_str = field_name.to_string();
+                        // Skip if we already have this attribute listed (it has been overridden by the current class or another class in the MRO)
+                        if incomplete_attributes
+                            .iter()
+                            .any(|a| a.name == field_name_str)
+                        {
+                            continue;
+                        }
+                        if !ancestor_class.is_field_annotated(field_name) {
+                            incomplete_attributes.push(IncompleteAttribute {
+                                name: field_name_str,
+                                declared_in: ancestor_name.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            let location = Self::range_to_location(module, cls_binding.def.range);
+            incomplete_attributes.sort();
+            classes.push(ReportClass {
+                name: class_name,
+                incomplete_attributes,
+                location,
+            });
+        }
+        classes.sort();
+        classes
+    }
+
     fn run_inner(
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
@@ -261,7 +448,7 @@ impl ReportArgs {
         let holder = Forgetter::new(state, false);
         let handles = Handles::new(expanded_file_list);
         let mut forgetter = Forgetter::new(
-            holder.as_ref().new_transaction(Require::Everything, None),
+            holder.as_ref().new_transaction(Require::Exports, None),
             true,
         );
 
@@ -276,15 +463,15 @@ impl ReportArgs {
         }
 
         let mut report: HashMap<String, FileReport> = HashMap::new();
-
+        transaction.run(handles.as_slice(), Require::Everything);
         for handle in handles {
-            transaction.run(&[handle.dupe()], Require::Everything);
-
             if let Some(bindings) = transaction.get_bindings(&handle)
                 && let Some(module) = transaction.get_module_info(&handle)
+                && let Some(answers) = transaction.get_answers(&handle)
             {
                 let line_count = module.lined_buffer().line_index().line_count();
-                let functions = Self::parse_functions(&module, bindings);
+                let functions = Self::parse_functions(&module, bindings.dupe());
+                let classes = Self::parse_classes(&module, bindings.dupe(), answers);
                 let suppressions = Self::parse_suppressions(&module);
 
                 report.insert(
@@ -292,6 +479,7 @@ impl ReportArgs {
                     FileReport {
                         line_count,
                         functions,
+                        classes,
                         suppressions,
                     },
                 );
@@ -303,5 +491,261 @@ impl ReportArgs {
         println!("{}", json);
 
         Ok(CommandExitStatus::Success)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+
+    use super::*;
+    use crate::state::require::Require;
+    use crate::test::util::TestEnv;
+
+    /// Helper to create a module from source code for testing
+    fn create_test_module(code: &str) -> Module {
+        Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::memory(PathBuf::from("test.py")),
+            Arc::new(code.to_owned()),
+        )
+    }
+
+    #[test]
+    fn test_parse_suppressions() {
+        let code = r#"
+x = 1  # pyrefly: ignore[error-code]
+y = 2
+z = 3  # pyrefly: ignore[code1, code2]
+"#;
+        let module = create_test_module(code);
+        let suppressions = ReportArgs::parse_suppressions(&module);
+
+        assert_eq!(suppressions.len(), 2);
+
+        // Suppression with single error code
+        assert_eq!(suppressions[0].kind, "ignore");
+        assert_eq!(suppressions[0].codes, vec!["error-code"]);
+        assert_eq!(suppressions[0].location.start.line, 2);
+
+        // Suppression with multiple error codes
+        assert_eq!(suppressions[1].kind, "ignore");
+        assert_eq!(suppressions[1].codes, vec!["code1", "code2"]);
+        assert_eq!(suppressions[1].location.start.line, 4);
+    }
+
+    #[test]
+    fn test_parse_functions() {
+        let code = r#"
+def foo(x: int, y: str) -> bool:
+    return True
+def foo_unannotated(x, y):
+    return True
+class C:
+    def bar(self, x: int, y: str) -> bool:
+        return True
+    class Inner:
+        def baz(self, x: int, y: str) -> bool:
+            return True
+"#;
+        let (state, handle_fn) = TestEnv::one("test", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let transaction = state.transaction();
+
+        let module = transaction.get_module_info(&handle).unwrap();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+
+        let functions = ReportArgs::parse_functions(&module, bindings);
+
+        assert_eq!(functions.len(), 4);
+
+        // functions[0]: foo - fully annotated top-level function
+        let foo = &functions[0];
+        assert_eq!(foo.name, "test.foo");
+        assert_eq!(foo.return_annotation, Some("bool".to_owned()));
+        assert_eq!(foo.parameters.len(), 2);
+        assert_eq!(foo.parameters[0].name, "x");
+        assert_eq!(foo.parameters[0].annotation, Some("int".to_owned()));
+        assert_eq!(foo.parameters[1].name, "y");
+        assert_eq!(foo.parameters[1].annotation, Some("str".to_owned()));
+
+        // functions[1]: foo_unannotated - no annotations
+        let foo_unannotated = &functions[1];
+        assert_eq!(foo_unannotated.name, "test.foo_unannotated");
+        assert_eq!(foo_unannotated.return_annotation, None);
+        assert_eq!(foo_unannotated.parameters.len(), 2);
+        assert_eq!(foo_unannotated.parameters[0].name, "x");
+        assert_eq!(foo_unannotated.parameters[0].annotation, None);
+        assert_eq!(foo_unannotated.parameters[1].name, "y");
+        assert_eq!(foo_unannotated.parameters[1].annotation, None);
+
+        // functions[2]: C.bar - method in class C
+        let c_bar = &functions[2];
+        assert_eq!(c_bar.name, "test.C.bar");
+        assert_eq!(c_bar.return_annotation, Some("bool".to_owned()));
+        assert_eq!(c_bar.parameters.len(), 3);
+        assert_eq!(c_bar.parameters[0].name, "self");
+        assert_eq!(c_bar.parameters[0].annotation, None);
+        assert_eq!(c_bar.parameters[1].name, "x");
+        assert_eq!(c_bar.parameters[1].annotation, Some("int".to_owned()));
+        assert_eq!(c_bar.parameters[2].name, "y");
+        assert_eq!(c_bar.parameters[2].annotation, Some("str".to_owned()));
+
+        // functions[3]: C.Inner.baz - method in nested class Inner
+        let inner_baz = &functions[3];
+        assert_eq!(inner_baz.name, "test.C.Inner.baz");
+        assert_eq!(inner_baz.return_annotation, Some("bool".to_owned()));
+        assert_eq!(inner_baz.parameters.len(), 3);
+        assert_eq!(inner_baz.parameters[0].name, "self");
+        assert_eq!(inner_baz.parameters[0].annotation, None);
+        assert_eq!(inner_baz.parameters[1].name, "x");
+        assert_eq!(inner_baz.parameters[1].annotation, Some("int".to_owned()));
+        assert_eq!(inner_baz.parameters[2].name, "y");
+        assert_eq!(inner_baz.parameters[2].annotation, Some("str".to_owned()));
+    }
+
+    #[test]
+    fn test_unknown_module() {
+        let code = r#"
+def foo():
+    pass
+"#;
+        let module = Module::new(
+            ModuleName::unknown(),
+            ModulePath::memory(PathBuf::from("test.py")),
+            Arc::new(code.to_owned()),
+        );
+        let (state, handle_fn) = TestEnv::one("__unknown__", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("__unknown__");
+        let transaction = state.transaction();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+
+        let functions = ReportArgs::parse_functions(&module, bindings);
+
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].name, "foo");
+    }
+
+    #[test]
+    fn test_parse_classes_with_incomplete_methods() {
+        let code = r#"
+class Complete:
+    def method(self, x: int) -> bool:
+        return True
+
+class Incomplete:
+    def method_unannotated(self, x):
+        pass
+    def method_partial(self, x: int):
+        pass
+    def method_complete(self, x: int) -> bool:
+        return True
+"#;
+        let (state, handle_fn) = TestEnv::one("test", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let transaction = state.transaction();
+
+        let module = transaction.get_module_info(&handle).unwrap();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+        let answers = transaction.get_answers(&handle).unwrap();
+
+        let classes = ReportArgs::parse_classes(&module, bindings, answers);
+
+        assert_eq!(classes.len(), 2);
+
+        assert_eq!(classes[0].name, "test.Complete");
+        assert_eq!(classes[0].incomplete_attributes.len(), 0);
+
+        assert_eq!(classes[1].name, "test.Incomplete");
+        assert_eq!(classes[1].incomplete_attributes.len(), 2);
+        assert_eq!(
+            classes[1].incomplete_attributes[0].name.as_str(),
+            "method_partial"
+        );
+        assert_eq!(
+            classes[1].incomplete_attributes[1].name.as_str(),
+            "method_unannotated"
+        );
+        for attr in &classes[1].incomplete_attributes {
+            assert_eq!(attr.declared_in, "test.Incomplete");
+        }
+    }
+
+    #[test]
+    fn test_parse_classes_nested() {
+        let code = r#"
+class Outer:
+    def method(self, x: int) -> bool:
+        return True
+
+    class Inner:
+        def inner_method(self, x):
+            pass
+"#;
+        let (state, handle_fn) = TestEnv::one("test", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let transaction = state.transaction();
+
+        let module = transaction.get_module_info(&handle).unwrap();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+        let answers = transaction.get_answers(&handle).unwrap();
+
+        let classes = ReportArgs::parse_classes(&module, bindings, answers);
+        assert_eq!(classes.len(), 2);
+        assert_eq!(classes[0].name, "test.Outer");
+        assert_eq!(classes[0].incomplete_attributes.len(), 0);
+        assert_eq!(classes[1].name, "test.Outer.Inner");
+        assert_eq!(classes[1].incomplete_attributes.len(), 1);
+        assert_eq!(classes[1].incomplete_attributes[0].name, "inner_method");
+    }
+
+    #[test]
+    fn test_parse_classes_inheritance() {
+        let code = r#"
+class Base:
+    def base_method(self, x):
+        pass
+
+class Child(Base):
+    def child_method(self, x: int) -> bool:
+        return True
+"#;
+        let (state, handle_fn) = TestEnv::one("test", code)
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let transaction = state.transaction();
+
+        let module = transaction.get_module_info(&handle).unwrap();
+        let bindings = transaction.get_bindings(&handle).unwrap();
+        let answers = transaction.get_answers(&handle).unwrap();
+
+        let classes = ReportArgs::parse_classes(&module, bindings, answers);
+
+        // Both Base and Child should be reported
+        // Base has base_method incomplete
+        // Child inherits base_method from Base
+        assert!(!classes.is_empty());
+
+        // Find Base class
+        let base = classes.iter().find(|c| c.name == "test.Base");
+        assert!(base.is_some(), "Base class should be reported");
+        let base = base.unwrap();
+        assert_eq!(base.incomplete_attributes.len(), 1);
+        assert_eq!(base.incomplete_attributes[0].name, "base_method");
+        assert_eq!(base.incomplete_attributes[0].declared_in, "test.Base");
     }
 }

@@ -13,7 +13,6 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 pydantic_testcase!(
-    bug = "we could support ranges, but this is not for v1",
     test_field_right_type,
     r#"
 from pydantic import BaseModel, Field
@@ -21,9 +20,95 @@ class Model(BaseModel):
    x: int = Field(gt=0, lt=10)
 
 Model(x=5) 
-Model(x=0)  
-Model(x=15)
+Model(x=0)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
+Model(x=15)  # E: Argument value `Literal[15]` violates Pydantic `lt` constraint `Literal[10]` for field `x`
 "#,
+);
+
+pydantic_testcase!(
+    test_field_range_ge_le,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(ge=0, le=10)
+
+Model(x=0)
+Model(x=10)
+Model(x=-1)  # E: Argument value `Literal[-1]` violates Pydantic `ge` constraint `Literal[0]` for field `x`
+Model(x=11)  # E: Argument value `Literal[11]` violates Pydantic `le` constraint `Literal[10]` for field `x`
+"#,
+);
+
+pydantic_testcase!(
+    test_field_range_positional,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(gt=0, kw_only=False)
+    y: int = Field(lt=3, kw_only=False)
+
+Model(1, 2)
+Model(0, 2)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
+Model(1, 3)  # E: Argument value `Literal[3]` violates Pydantic `lt` constraint `Literal[3]` for field `y`
+"#,
+);
+
+pydantic_testcase!(
+    test_field_range_kw_only,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(ge=1, kw_only=True)
+
+Model(x=1)
+Model(x=0)  # E: Argument value `Literal[0]` violates Pydantic `ge` constraint `Literal[1]` for field `x`
+"#,
+);
+
+pydantic_testcase!(
+    test_field_range_alias,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel, validate_by_name=True, validate_by_alias=True):
+    x: int = Field(gt=0, validation_alias="y")
+
+Model(x=0)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
+Model(y=0)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
+"#,
+);
+
+pydantic_testcase!(
+    test_field_range_alias_only,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel, validate_by_name=False, validate_by_alias=True):
+    x: int = Field(gt=0, validation_alias="y")
+
+Model(y=0)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
+Model(x=0)  # E: Missing argument `y`
+"#,
+);
+
+pydantic_testcase!(
+    test_field_range_multiple,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(gt=1, kw_only=False)
+    y: int = Field(lt=0, kw_only=False)
+
+Model(2, -1)
+Model(y=-1, x=2)
+
+Model(2, 0)  # E: violates Pydantic `lt` constraint `Literal[0]` for field `y`
+Model(y=-1, x=1)  # E: violates Pydantic `gt` constraint `Literal[1]` for field `x`
+    "#,
 );
 
 pydantic_testcase!(
@@ -32,7 +117,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, Field
 
 class Model(BaseModel):
-    x: int = Field(gt="A", lt="B") # E:  Pydantic `gt` value is of type `Literal['A']` but the field is annotated with `int` # E: Pydantic `lt` value is of type `Literal['B']` but the field is annotated with `int`
+    x: int = Field(gt="A", lt="B") # E:  Pydantic `gt` value has type `Literal['A']`, which is not assignable to field type `int` # E: Pydantic `lt` value has type `Literal['B']`, which is not assignable to field type `int`
 
 Model(x=5)
 "#,
@@ -44,7 +129,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, Field
 
 class Model(BaseModel):
-    x: int = Field(ge="B") # E: Pydantic `ge` value is of type `Literal['B']` but the field is annotated with `int`
+    x: int = Field(ge="B") # E: Pydantic `ge` value has type `Literal['B']`, which is not assignable to field type `int`
 
 Model(x=5)
 "#,
@@ -198,5 +283,27 @@ class A(BaseModel):
     x: int = Field(default='oops')  # E: `str` is not assignable to `int`
 class B(BaseModel):
     x: int = Field(default_factory=lambda: 'oops')  # E: `str` is not assignable to `int`
+    "#,
+);
+
+pydantic_testcase!(
+    test_annotated_field_with_defaults,
+    r#"
+from typing import Annotated
+from pydantic import BaseModel, Field
+
+class House(BaseModel):
+    street: str
+    city: str
+    zipcode: str
+    notes: Annotated[str, Field(default="")]
+    extra_fields: Annotated[dict, Field(default_factory=dict)]
+    something: dict = Field(default_factory=dict)
+
+house = House(
+    street="House Street",
+    city="House City",
+    zipcode="House Zipcode",
+)
     "#,
 );

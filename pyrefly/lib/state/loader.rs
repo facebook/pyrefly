@@ -6,6 +6,7 @@
  */
 
 use std::fmt::Debug;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -24,6 +25,7 @@ use crate::config::config::ImportLookupPathPart;
 use crate::error::context::ErrorContext;
 use crate::module::finder::find_import;
 use crate::module::finder::find_import_filtered;
+use crate::module::finder::suggest_stdlib_import;
 
 #[derive(Debug, Clone, Dupe, PartialEq, Eq)]
 pub enum FindError {
@@ -83,10 +85,17 @@ impl FindError {
 
     pub fn display(&self) -> (Option<Box<dyn Fn() -> ErrorContext + '_>>, Vec1<String>) {
         match self {
-            Self::NotFound(module, err) => (
-                Some(Box::new(|| ErrorContext::ImportNotFound(*module))),
-                (**err).clone(),
-            ),
+            Self::NotFound(module, err) => {
+                let mut lines = (**err).clone();
+                // Compute suggestion lazily at display time, using global cache
+                if let Some(suggested) = suggest_stdlib_import(*module) {
+                    lines.insert(0, format!("Did you mean `{suggested}`?"));
+                }
+                (
+                    Some(Box::new(|| ErrorContext::ImportNotFound(*module))),
+                    lines,
+                )
+            }
             Self::Ignored => (None, vec1!["Ignored import".to_owned()]),
             Self::NoSource(module) => (
                 None,
@@ -180,7 +189,10 @@ impl<T> FindingOrError<T> {
 #[derive(Debug)]
 pub struct LoaderFindCache {
     config: ArcId<ConfigFile>,
-    cache: LockedMap<(ModuleName, Option<ModulePath>), FindingOrError<ModulePath>>,
+    cache: LockedMap<
+        (ModuleName, Option<ModulePath>),
+        (FindingOrError<ModulePath>, Arc<Vec<PathBuf>>),
+    >,
     // If a python executable module (excludes .pyi) exists and differs from the imported python module, store it here
     executable_cache: LockedMap<(ModuleName, Option<ModulePath>), Option<ModulePath>>,
 }
@@ -231,8 +243,29 @@ impl LoaderFindCache {
     ) -> FindingOrError<ModulePath> {
         self.cache
             .ensure(&(module.dupe(), origin.cloned()), || {
-                find_import(&self.config, module, origin)
+                let mut phantom_paths = Vec::new();
+                let result = find_import(&self.config, module, origin, Some(&mut phantom_paths));
+                (result, Arc::new(phantom_paths))
             })
+            .0
+            .0
             .dupe()
+    }
+
+    #[allow(unused)] // will be used soon
+    pub fn find_import_with_phantom_paths(
+        &self,
+        module: ModuleName,
+        origin: Option<&ModulePath>,
+    ) -> (FindingOrError<ModulePath>, Arc<Vec<PathBuf>>) {
+        let cached = self
+            .cache
+            .ensure(&(module.dupe(), origin.cloned()), || {
+                let mut phantom_paths = Vec::new();
+                let result = find_import(&self.config, module, origin, Some(&mut phantom_paths));
+                (result, Arc::new(phantom_paths))
+            })
+            .0;
+        (cached.0.dupe(), cached.1.dupe())
     }
 }

@@ -10,14 +10,18 @@ use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use dupe::Dupe as _;
+use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
+use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -28,6 +32,7 @@ use vec1::Vec1;
 use crate::handle::Handle;
 use crate::query::Include;
 use crate::query::PythonLibraryManifest;
+use crate::query::QueryResult;
 use crate::query::SourceDbQuerier;
 use crate::query::TargetManifestDatabase;
 use crate::source_db::ModulePathCache;
@@ -53,6 +58,21 @@ impl ManifestLookupResult {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+enum WatchPatternPart {
+    Extension(String),
+    FullFileName(String),
+}
+
+impl WatchPatternPart {
+    fn get_pattern(&self) -> String {
+        match self {
+            Self::Extension(ext) => format!("**/*.{}", ext),
+            Self::FullFileName(file) => format!("**/{}", file),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Inner {
     /// The mapping from targets to their manifests, including sources, dependencies,
@@ -63,7 +83,7 @@ struct Inner {
     /// - if a path exists in `path_lookup`, its target must exist in `db`.
     /// - if a path exists in `path_lookup`, its target's `srcs` must have a
     ///   module name with `path` as a module path.
-    path_lookup: SmallMap<ModulePathBuf, Target>,
+    path_lookup: SmallMap<InternedPath, Target>,
     /// An index for doing fast lookups of a package to possible owning targets.
     /// We keep this, since it's possible an init file is defined in one target, but not
     /// a dependency or dependent target in the same directory. We also need to
@@ -74,9 +94,11 @@ struct Inner {
     /// The key in this map will always point to an `__init__` file if *any*
     /// target pointing to the "regular package" contains a real `__init__` file on
     /// disk. Otherwise, the key will point to a synthesized package's directory.
-    package_lookup: SmallMap<ModulePathBuf, SmallSet<Target>>,
+    package_lookup: SmallMap<InternedPath, SmallSet<Target>>,
     /// Is this module known by the build system?
     known_modules: SmallSet<ModuleName>,
+    /// Which file suffixes have we seen and should we watch?
+    watched_patterns: SmallSet<WatchPatternPart>,
 }
 
 impl Inner {
@@ -86,6 +108,7 @@ impl Inner {
             path_lookup: SmallMap::new(),
             package_lookup: SmallMap::new(),
             known_modules: SmallSet::new(),
+            watched_patterns: SmallSet::new(),
         }
     }
 }
@@ -99,7 +122,7 @@ pub struct QuerySourceDatabase {
     includes: Mutex<SmallSet<Include>>,
     /// The directory that will be passed into the sourcedb query shell-out. Should
     /// be the same as the directory containing the config this sourcedb is a part of.
-    cwd: PathBuf,
+    repo_root: InternedPath,
     querier: Arc<dyn SourceDbQuerier>,
     cached_modules: ModulePathCache,
 }
@@ -107,7 +130,7 @@ pub struct QuerySourceDatabase {
 impl QuerySourceDatabase {
     pub fn new(cwd: PathBuf, querier: Arc<dyn SourceDbQuerier>) -> Self {
         QuerySourceDatabase {
-            cwd,
+            repo_root: InternedPath::new(cwd),
             inner: RwLock::new(Inner::new()),
             includes: Mutex::new(SmallSet::new()),
             querier,
@@ -115,17 +138,33 @@ impl QuerySourceDatabase {
         }
     }
 
-    fn update_with_target_manifest(&self, raw_db: TargetManifestDatabase) -> bool {
+    fn update_with_target_manifest(&self, raw_db: TargetManifestDatabase) -> (bool, Duration) {
+        let start = Instant::now();
         let new_db = raw_db.produce_map();
         let read = self.inner.read();
         if new_db == read.db {
             debug!("No source DB changes from Buck query");
-            return false;
+            return (false, start.elapsed());
         }
         drop(read);
-        let mut path_lookup: SmallMap<ModulePathBuf, Target> = SmallMap::new();
-        let mut package_lookup: SmallMap<ModulePathBuf, SmallSet<Target>> = SmallMap::new();
+        let mut path_lookup: SmallMap<InternedPath, Target> = SmallMap::new();
+        let mut package_lookup: SmallMap<InternedPath, SmallSet<Target>> = SmallMap::new();
         let mut known_modules: SmallSet<ModuleName> = SmallSet::new();
+        let mut watched_patterns: SmallSet<WatchPatternPart> = SmallSet::new();
+        let mut known_extensions: SmallSet<String> =
+            PYTHON_EXTENSIONS.iter().map(|x| (*x).to_owned()).collect();
+        let mut known_files: SmallSet<String> = SmallSet::new();
+        let mut append_pattern = |path: &Path| {
+            if let Some(extension) = path.extension().map(|e| e.to_string_lossy()) {
+                if !known_extensions.contains(&*extension) {
+                    known_extensions.insert(extension.into_owned());
+                }
+            } else if let Some(file) = path.file_name().map(|f| f.to_string_lossy())
+                && !known_files.contains(&*file)
+            {
+                known_files.insert(file.into_owned());
+            }
+        };
         for (target, manifest) in new_db.iter() {
             known_modules.extend(
                 manifest
@@ -141,6 +180,7 @@ impl QuerySourceDatabase {
                 } else {
                     path_lookup.insert(source.dupe(), target.dupe());
                 }
+                append_pattern(source);
             }
             for paths in manifest.packages.values() {
                 for path in paths {
@@ -150,7 +190,14 @@ impl QuerySourceDatabase {
                         .insert(target.dupe());
                 }
             }
+            append_pattern(&manifest.buildfile_path)
         }
+        watched_patterns.extend(
+            known_extensions
+                .into_iter()
+                .map(WatchPatternPart::Extension)
+                .chain(known_files.into_iter().map(WatchPatternPart::FullFileName)),
+        );
         let mut write = self.inner.write();
         // force dropping write before exiting and dropping other large data structures
         // by binding the replaced data and explicitly dropping `write`
@@ -158,9 +205,10 @@ impl QuerySourceDatabase {
         let _old_path_lookup = mem::replace(&mut write.path_lookup, path_lookup);
         let _old_package_lookup = mem::replace(&mut write.package_lookup, package_lookup);
         let _old_known_modules = mem::replace(&mut write.known_modules, known_modules);
+        let _old_patterns = mem::replace(&mut write.watched_patterns, watched_patterns);
         drop(write);
         debug!("Finished updating source DB with Buck response");
-        true
+        (true, start.elapsed())
     }
 
     /// Attempts to search in the given [`PythonLibraryManifest`] for the import,
@@ -174,7 +222,7 @@ impl QuerySourceDatabase {
         style_filter: Option<ModuleStyle>,
         namespace_candidates: &mut SmallSet<ModulePath>,
     ) -> Option<ManifestLookupResult> {
-        let get_lookup_result = |paths: &Vec1<ModulePathBuf>| {
+        let get_lookup_result = |paths: &Vec1<InternedPath>| {
             let style = style_filter.unwrap_or(ModuleStyle::Interface);
             if let Some(result) = paths.iter().find(|p| ModuleStyle::of_path(p) == style) {
                 return ManifestLookupResult::ExactMatch(self.cached_modules.get(result));
@@ -255,7 +303,7 @@ impl SourceDatabase for QuerySourceDatabase {
         origin: Option<&Path>,
         style_filter: Option<ModuleStyle>,
     ) -> Option<ModulePath> {
-        let origin = ModulePathBuf::from_path(origin?);
+        let origin = InternedPath::from_path(origin?);
         let read = self.inner.read();
         if !read.known_modules.contains(&module) {
             return None;
@@ -274,7 +322,7 @@ impl SourceDatabase for QuerySourceDatabase {
             //    case we can return immediately. The build system will complain if
             //    multiple reachable targets have files that write to the same output
             //    location, so we don't need to check for/handle that.
-            // 3. a result that's a package file, which might refer to mulitple directories.
+            // 3. a result that's a package file, which might refer to multiple directories.
             //    In this case, we collect all possible results, and deterministically
             //    return one of them.
             for target in package_targets {
@@ -329,78 +377,67 @@ impl SourceDatabase for QuerySourceDatabase {
         ))
     }
 
-    fn query_source_db(&self, files: SmallSet<ModulePathBuf>, force: bool) -> anyhow::Result<bool> {
-        let new_includes = files.into_iter().map(Include::path).collect();
-        let mut includes = self.includes.lock();
-        if *includes == new_includes && !force {
-            debug!("Not querying Buck source DB, since no inputs have changed");
-            return Ok(false);
-        }
-        *includes = new_includes;
-        info!("Querying Buck for source DB");
-        let raw_db = self.querier.query_source_db(&includes, &self.cwd)?;
-        info!("Finished querying Buck for source DB");
-        Ok(self.update_with_target_manifest(raw_db))
+    fn query_source_db(
+        &self,
+        files: SmallSet<InternedPath>,
+        force: bool,
+    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
+        let mut stats = TelemetrySourceDbRebuildInstanceStats::default();
+        stats.common.forced = force;
+        stats.common.files = files.len();
+        let run = || {
+            let new_includes = files.into_iter().map(Include::path).collect();
+            let mut includes = self.includes.lock();
+            if *includes == new_includes && !force {
+                debug!("Not querying Buck source DB, since no inputs have changed");
+                return Ok(false);
+            }
+            *includes = new_includes;
+            info!("Querying Buck for source DB");
+            let QueryResult {
+                db: raw_db,
+                build_id,
+                build_duration,
+                parse_duration,
+                stdout_size,
+            } = self.querier.query_source_db(&includes, &self.repo_root);
+            stats.build_id = build_id;
+            stats.build_time = build_duration;
+            stats.parse_time = parse_duration;
+            stats.raw_size = stdout_size;
+            let raw_db = raw_db?;
+            info!("Finished querying Buck for source DB");
+            let (changed, process_duration) = self.update_with_target_manifest(raw_db);
+            stats.common.changed = changed;
+            stats.process_time = Some(process_duration);
+            Ok(changed)
+        };
+        (run(), stats)
     }
 
-    fn get_paths_to_watch<'a>(&'a self) -> SmallSet<WatchPattern<'a>> {
+    fn get_paths_to_watch<'a>(&'a self) -> SmallSet<WatchPattern> {
         let read = self.inner.read();
-        fn get_pattern(path: &Path) -> Option<String> {
-            if let Some(ext) = path.extension() {
-                Some(format!("**/*.{}", ext.to_str()?))
-            } else {
-                // this isn't a file with an extension, but we should probably
-                // still try to watch it.
-                Some(format!("**/{}", path.file_name()?.to_str()?))
-            }
-        }
-        let mut patterns: SmallMap<Option<&Path>, SmallSet<_>> = SmallMap::new();
-        for manifest in read.db.values() {
-            let Some(buildfile_pattern) = get_pattern(&manifest.buildfile_path) else {
-                continue;
-            };
-            let buildfile_root = if manifest.buildfile_path.starts_with(&self.cwd) {
-                None
-            } else if let Some(path) = manifest.buildfile_path.parent() {
-                Some(path)
-            } else {
-                continue;
-            };
-            patterns
-                .entry(buildfile_root)
-                .or_default()
-                .insert(buildfile_pattern);
-            for path in manifest.srcs.values().flatten() {
-                let Some(file_pattern) = get_pattern(path) else {
-                    continue;
-                };
-                patterns
-                    .entry(buildfile_root)
-                    .or_default()
-                    .insert(file_pattern);
-            }
+        let mut patterns: SmallSet<WatchPattern> = SmallSet::new();
+        for pattern in &read.watched_patterns {
+            patterns.insert(WatchPattern::root(
+                self.repo_root.dupe(),
+                pattern.get_pattern(),
+            ));
         }
         patterns
-            .into_iter()
-            .flat_map(|(r, ps)| ps.into_iter().map(move |p| (r, p)))
-            .map(|(r, p)| match r {
-                None => WatchPattern::root(&self.cwd, p),
-                Some(buildfile_root) => WatchPattern::owned_root(buildfile_root.to_owned(), p),
-            })
-            .collect()
     }
 
     fn get_target(&self, origin: Option<&Path>) -> Option<Target> {
-        let origin = ModulePathBuf::from_path(origin?);
+        let origin = InternedPath::from_path(origin?);
         let read = self.inner.read();
         read.path_lookup.get(&origin).copied()
     }
 
-    fn get_generated_files(&self) -> SmallSet<ModulePathBuf> {
+    fn get_generated_files(&self) -> SmallSet<InternedPath> {
         let read = self.inner.read();
         read.db
             .values()
-            .filter_map(|x| -> Option<Box<dyn Iterator<Item = ModulePathBuf>>> {
+            .filter_map(|x| -> Option<Box<dyn Iterator<Item = InternedPath>>> {
                 if x.relative_to.is_some() {
                     Some(Box::new(x.srcs.values().flatten().copied()))
                 } else if let Some(build_root) = x.buildfile_path.parent() {
@@ -422,6 +459,7 @@ impl SourceDatabase for QuerySourceDatabase {
 
 #[cfg(test)]
 mod tests {
+
     use pretty_assertions::assert_eq;
     use pyrefly_python::sys_info::PythonPlatform;
     use pyrefly_python::sys_info::PythonVersion;
@@ -437,15 +475,17 @@ mod tests {
     struct DummyQuerier {}
 
     impl SourceDbQuerier for DummyQuerier {
-        fn query_source_db(
-            &self,
-            _: &SmallSet<Include>,
-            _: &Path,
-        ) -> anyhow::Result<TargetManifestDatabase> {
-            Ok(TargetManifestDatabase::get_test_database())
+        fn query_source_db(&self, _: &SmallSet<Include>, _: &Path) -> QueryResult {
+            QueryResult {
+                db: Ok(TargetManifestDatabase::get_test_database()),
+                build_id: None,
+                build_duration: None,
+                parse_duration: None,
+                stdout_size: None,
+            }
         }
 
-        fn construct_command(&self) -> std::process::Command {
+        fn construct_command(&self, _: Option<&Path>) -> std::process::Command {
             panic!("We shouldn't be calling this...");
         }
     }
@@ -453,7 +493,7 @@ mod tests {
     impl QuerySourceDatabase {
         fn from_target_manifest_db(
             raw_db: TargetManifestDatabase,
-            root: PathBuf,
+            root: &Path,
             files: &SmallSet<PathBuf>,
         ) -> Self {
             let new = Self {
@@ -461,10 +501,10 @@ mod tests {
                 includes: Mutex::new(
                     files
                         .iter()
-                        .map(|p| Include::path(ModulePathBuf::new(p.to_path_buf())))
+                        .map(|p| Include::path(InternedPath::new(p.to_path_buf())))
                         .collect(),
                 ),
-                cwd: root,
+                repo_root: InternedPath::from_path(root),
                 querier: Arc::new(DummyQuerier {}),
                 cached_modules: ModulePathCache::new(),
             };
@@ -482,7 +522,7 @@ mod tests {
         };
 
         (
-            QuerySourceDatabase::from_target_manifest_db(raw_db, root.clone(), &files),
+            QuerySourceDatabase::from_target_manifest_db(raw_db, &root, &files),
             root,
         )
     }
@@ -492,36 +532,36 @@ mod tests {
         let (db, root) = get_db();
         let path_lookup = db.inner.read().path_lookup.clone();
         let expected = smallmap! {
-            ModulePathBuf::new(root.join("colorama/__init__.py")) =>
+            InternedPath::new(root.join("colorama/__init__.py")) =>
                 Target::from_string("//colorama:py".to_owned()),
-            ModulePathBuf::new(root.join("colorama/__init__.pyi")) =>
+            InternedPath::new(root.join("colorama/__init__.pyi")) =>
                 Target::from_string("//colorama:py-stubs".to_owned()),
-            ModulePathBuf::new(root.join("click/__init__.pyi")) =>
+            InternedPath::new(root.join("click/__init__.pyi")) =>
                 Target::from_string("//click:py".to_owned()),
-            ModulePathBuf::new(root.join("click/__init__.py")) =>
+            InternedPath::new(root.join("click/__init__.py")) =>
                 Target::from_string("//click:py".to_owned()),
-            ModulePathBuf::new(root.join("pyre/client/log/__init__.py")) =>
+            InternedPath::new(root.join("pyre/client/log/__init__.py")) =>
                 Target::from_string("//pyre/client/log:log".to_owned()),
-            ModulePathBuf::new(root.join("pyre/client/log/log.py")) =>
+            InternedPath::new(root.join("pyre/client/log/log.py")) =>
                 Target::from_string("//pyre/client/log:log".to_owned()),
-            ModulePathBuf::new(root.join("pyre/client/log/log.pyi")) =>
+            InternedPath::new(root.join("pyre/client/log/log.pyi")) =>
                 Target::from_string("//pyre/client/log:log".to_owned()),
-            ModulePathBuf::new(root.join("pyre/client/log/format.py")) =>
+            InternedPath::new(root.join("pyre/client/log/format.py")) =>
                 Target::from_string("//pyre/client/log:log".to_owned()),
-            ModulePathBuf::new(root.join("implicit_package/test/main.py")) =>
+            InternedPath::new(root.join("implicit_package/test/main.py")) =>
                 Target::from_string("//implicit_package/test:main".to_owned()),
-            ModulePathBuf::new(root.join("implicit_package/test/lib/utils.py")) =>
+            InternedPath::new(root.join("implicit_package/test/lib/utils.py")) =>
                 Target::from_string("//implicit_package/test:lib".to_owned()),
-            ModulePathBuf::new(root.join("implicit_package/package_boundary_violation.py")) =>
+            InternedPath::new(root.join("implicit_package/package_boundary_violation.py")) =>
                 Target::from_string("//implicit_package/test:lib".to_owned()),
-            ModulePathBuf::new(root.join("implicit_package/test/deeply/nested/package/file.py")) =>
+            InternedPath::new(root.join("implicit_package/test/deeply/nested/package/file.py")) =>
                 Target::from_string("//implicit_package/test:lib".to_owned()),
-            ModulePathBuf::new(PathBuf::from("/path/to/another/repository/package/external_package/main.py")) =>
+            InternedPath::new(PathBuf::from("/path/to/another/repository/package/external_package/main.py")) =>
                 Target::from_string("//external:package".to_owned()),
-            ModulePathBuf::new(PathBuf::from("/path/to/another/repository/package/external_package/non_python_file.thrift")) =>
+            InternedPath::new(PathBuf::from("/path/to/another/repository/package/external_package/non_python_file.thrift")) =>
                 Target::from_string("//external:package".to_owned()),
-            ModulePathBuf::new(root.join("generated/main.py")) => Target::from_string("//generated:main".to_owned()),
-            ModulePathBuf::new(root.join("build-out/materialized/generated/__init__.py")) => Target::from_string("//generated:lib".to_owned()),
+            InternedPath::new(root.join("generated/main.py")) => Target::from_string("//generated:main".to_owned()),
+            InternedPath::new(root.join("build-out/materialized/generated/__init__.py")) => Target::from_string("//generated:lib".to_owned()),
         };
 
         assert_eq!(expected, path_lookup);
@@ -532,45 +572,52 @@ mod tests {
         let (db, root) = get_db();
         let path_lookup = db.inner.read().package_lookup.clone();
         let expected = smallmap! {
-            ModulePathBuf::new(root.join("click/__init__.py")) => smallset! {
+            InternedPath::new(root.join("click/__init__.py")) => smallset! {
                 Target::from_string("//click:py".to_owned()),
             },
-            ModulePathBuf::new(root.join("click/__init__.pyi")) => smallset! {
+            InternedPath::new(root.join("click/__init__.pyi")) => smallset! {
                 Target::from_string("//click:py".to_owned()),
             },
-            ModulePathBuf::new(root.join("colorama/__init__.py")) => smallset! {
+            InternedPath::new(root.join("colorama/__init__.py")) => smallset! {
                 Target::from_string("//colorama:py".to_owned()),
             },
-            ModulePathBuf::new(root.join("colorama/__init__.pyi")) => smallset! {
+            InternedPath::new(root.join("colorama/__init__.pyi")) => smallset! {
                 Target::from_string("//colorama:py-stubs".to_owned()),
             },
-            ModulePathBuf::new(root.join("pyre/client/log/__init__.py")) => smallset! {
+            InternedPath::new(root.join("pyre/client/log/__init__.py")) => smallset! {
                 Target::from_string("//pyre/client/log:log".to_owned()),
                 Target::from_string("//pyre/client/log:log2".to_owned()),
             },
-            ModulePathBuf::new(root.join("implicit_package/test")) => smallset! {
+            // Synthesized parent packages from pyre.client.log.log and pyre.client.log.format
+            InternedPath::new(root.join("pyre/client")) => smallset! {
+                Target::from_string("//pyre/client/log:log".to_owned()),
+            },
+            InternedPath::new(root.join("pyre")) => smallset! {
+                Target::from_string("//pyre/client/log:log".to_owned()),
+            },
+            InternedPath::new(root.join("implicit_package/test")) => smallset! {
                 Target::from_string("//implicit_package/test:main".to_owned()),
                 Target::from_string("//implicit_package/test:lib".to_owned()),
             },
-            ModulePathBuf::new(root.join("implicit_package/test/lib")) => smallset! {
+            InternedPath::new(root.join("implicit_package/test/lib")) => smallset! {
                 Target::from_string("//implicit_package/test:lib".to_owned()),
             },
-            ModulePathBuf::new(root.join("implicit_package/test/deeply/nested/package")) => smallset! {
+            InternedPath::new(root.join("implicit_package/test/deeply/nested/package")) => smallset! {
                 Target::from_string("//implicit_package/test:lib".to_owned()),
             },
-            ModulePathBuf::new(root.join("implicit_package/test/deeply/nested")) => smallset! {
+            InternedPath::new(root.join("implicit_package/test/deeply/nested")) => smallset! {
                 Target::from_string("//implicit_package/test:lib".to_owned()),
             },
-            ModulePathBuf::new(root.join("implicit_package/test/deeply")) => smallset! {
+            InternedPath::new(root.join("implicit_package/test/deeply")) => smallset! {
                 Target::from_string("//implicit_package/test:lib".to_owned()),
             },
-            ModulePathBuf::new(PathBuf::from("/path/to/another/repository/package/external_package")) => smallset! {
+            InternedPath::new(PathBuf::from("/path/to/another/repository/package/external_package")) => smallset! {
                 Target::from_string("//external:package".to_owned()),
             },
-            ModulePathBuf::new(root.join("generated")) => smallset! {
+            InternedPath::new(root.join("generated")) => smallset! {
                 Target::from_string("//generated:main".to_owned()),
             },
-            ModulePathBuf::new(root.join("build-out/materialized/generated/__init__.py")) => smallset! {
+            InternedPath::new(root.join("build-out/materialized/generated/__init__.py")) => smallset! {
                 Target::from_string("//generated:lib".to_owned()),
             },
         };
@@ -797,7 +844,7 @@ mod tests {
         let (db, root) = get_db();
         let manifest = TargetManifestDatabase::get_test_database();
 
-        assert!(!db.update_with_target_manifest(manifest));
+        assert!(!db.update_with_target_manifest(manifest).0);
 
         let manifest = TargetManifestDatabase::new(
             smallmap! {
@@ -857,38 +904,45 @@ mod tests {
             root.clone(),
         );
         let manifest_db = manifest.clone().produce_map();
-        assert!(db.update_with_target_manifest(manifest));
+        assert!(db.update_with_target_manifest(manifest).0);
         let inner = db.inner.read();
         assert_eq!(inner.db, manifest_db);
         let expected_path_lookup = smallmap! {
-            ModulePathBuf::new(root.join("colorama/__init__.py")) =>
+            InternedPath::new(root.join("colorama/__init__.py")) =>
                 Target::from_string("//colorama:py".to_owned()),
-            ModulePathBuf::new(root.join("colorama/__init__.pyi")) =>
+            InternedPath::new(root.join("colorama/__init__.pyi")) =>
                 Target::from_string("//colorama:py".to_owned()),
-            ModulePathBuf::new(root.join("pyre/client/log/__init__.py")) =>
+            InternedPath::new(root.join("pyre/client/log/__init__.py")) =>
                 Target::from_string("//pyre/client/log:log".to_owned()),
-            ModulePathBuf::new(root.join("pyre/client/log/log.py")) =>
+            InternedPath::new(root.join("pyre/client/log/log.py")) =>
                 Target::from_string("//pyre/client/log:log".to_owned()),
-            ModulePathBuf::new(root.join("pyre/client/log/log.pyi")) =>
+            InternedPath::new(root.join("pyre/client/log/log.pyi")) =>
                 Target::from_string("//pyre/client/log:log".to_owned()),
-            ModulePathBuf::new(root.join("implicit_package/test/lib/utils.py")) =>
+            InternedPath::new(root.join("implicit_package/test/lib/utils.py")) =>
                 Target::from_string("//implicit_package/test:lib".to_owned()),
         };
         assert_eq!(inner.path_lookup, expected_path_lookup);
         let expected_package_lookup = smallmap! {
-            ModulePathBuf::new(root.join("implicit_package/test")) => smallset! {
+            InternedPath::new(root.join("implicit_package/test")) => smallset! {
                 Target::from_string("//implicit_package/test:lib".to_owned()),
             },
-            ModulePathBuf::new(root.join("implicit_package/test/lib")) => smallset! {
+            InternedPath::new(root.join("implicit_package/test/lib")) => smallset! {
                 Target::from_string("//implicit_package/test:lib".to_owned()),
             },
-            ModulePathBuf::new(root.join("colorama/__init__.py")) => smallset! {
+            InternedPath::new(root.join("colorama/__init__.py")) => smallset! {
                 Target::from_string("//colorama:py".to_owned()),
             },
-            ModulePathBuf::new(root.join("colorama/__init__.pyi")) => smallset! {
+            InternedPath::new(root.join("colorama/__init__.pyi")) => smallset! {
                 Target::from_string("//colorama:py".to_owned()),
             },
-            ModulePathBuf::new(root.join("pyre/client/log/__init__.py")) => smallset! {
+            InternedPath::new(root.join("pyre/client/log/__init__.py")) => smallset! {
+                Target::from_string("//pyre/client/log:log".to_owned()),
+            },
+            // Synthesized parent packages from pyre.client.log.log
+            InternedPath::new(root.join("pyre/client")) => smallset! {
+                Target::from_string("//pyre/client/log:log".to_owned()),
+            },
+            InternedPath::new(root.join("pyre")) => smallset! {
                 Target::from_string("//pyre/client/log:log".to_owned()),
             },
         };
@@ -900,13 +954,128 @@ mod tests {
         let (db, root) = get_db();
 
         let expected = smallset! {
-            WatchPattern::root(&root, "**/*.py".to_owned()),
-            WatchPattern::root(&root, "**/*.pyi".to_owned()),
-            WatchPattern::root(&root, "**/BUCK".to_owned()),
-            WatchPattern::owned_root(PathBuf::from("/path/to/another/repository/package"), "**/BUCK".to_owned()),
-            WatchPattern::owned_root(PathBuf::from("/path/to/another/repository/package"), "**/*.thrift".to_owned()),
-            WatchPattern::owned_root(PathBuf::from("/path/to/another/repository/package"), "**/*.py".to_owned()),
+            WatchPattern::root(InternedPath::from_path(&root), "**/*.py".to_owned()),
+            WatchPattern::root(InternedPath::from_path(&root), "**/*.pyi".to_owned()),
+            WatchPattern::root(InternedPath::from_path(&root), "**/*.ipynb".to_owned()),
+            WatchPattern::root(InternedPath::from_path(&root), "**/*.thrift".to_owned()),
+            WatchPattern::root(InternedPath::from_path(&root), "**/BUCK".to_owned()),
         };
         assert_eq!(db.get_paths_to_watch(), expected);
+    }
+
+    #[test]
+    fn test_cross_target_package_lookup() {
+        // Setup:
+        // - //dir:target1 has __init__.py
+        // - //dir:target2 has a.py and b.py, depends on target1
+        let raw_db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//dir:target1".to_owned()) => TargetManifest::lib(
+                    &[("dir", &["dir/__init__.py"])],
+                    &[],
+                    "dir/BUCK",
+                    &[],
+                    None
+                ),
+                Target::from_string("//dir:target2".to_owned()) => TargetManifest::lib(
+                    &[
+                        ("dir.a", &["dir/a.py"]),
+                        ("dir.b", &["dir/b.py"]),
+                    ],
+                    &["//dir:target1"],
+                    "dir/BUCK",
+                    &[],
+                    None
+                ),
+            },
+            PathBuf::from("/repo"),
+        );
+        let root = raw_db.root.to_path_buf();
+        let files = smallset! {
+            root.join("dir/a.py"),
+            root.join("dir/b.py"),
+        };
+
+        let db = QuerySourceDatabase::from_target_manifest_db(raw_db, &root, &files);
+
+        // When looking up 'dir' from a.py (which is in target2), we should find
+        // the __init__.py from target1 because target2 depends on target1
+        let result = db.lookup(
+            ModuleName::from_str("dir"),
+            Some(&root.join("dir/a.py")),
+            None,
+        );
+        assert!(
+            result.is_some(),
+            "Should be able to lookup 'dir' package from a.py"
+        );
+        let result_path = result.unwrap();
+        assert!(
+            result_path
+                .as_path()
+                .to_string_lossy()
+                .contains("__init__.py"),
+            "Lookup of 'dir' from a.py should resolve to __init__.py, got: {:?}",
+            result_path
+        );
+    }
+
+    #[test]
+    fn test_cross_target_package_lookup_no_dep() {
+        // Setup:
+        // - //dir:target1 has __init__.py and depends on target2
+        // - //dir:target2 has a.py and b.py, but does NOT depend on target1
+        let raw_db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//dir:target1".to_owned()) => TargetManifest::lib(
+                    &[("dir", &["dir/__init__.py"])],
+                    &["//dir:target2"],  // target1 depends on target2
+                    "dir/BUCK",
+                    &[],
+                    None
+                ),
+                Target::from_string("//dir:target2".to_owned()) => TargetManifest::lib(
+                    &[
+                        ("dir.a", &["dir/a.py"]),
+                        ("dir.b", &["dir/b.py"]),
+                    ],
+                    &[],  // target2 does NOT depend on target1
+                    "dir/BUCK",
+                    &[],
+                    None
+                ),
+            },
+            PathBuf::from("/repo"),
+        );
+        let root = raw_db.root.to_path_buf();
+        let files = smallset! {
+            root.join("dir/a.py"),
+            root.join("dir/b.py"),
+        };
+
+        let db = QuerySourceDatabase::from_target_manifest_db(raw_db, &root, &files);
+
+        // When looking up 'dir' from a.py (which is in target2), we should NOT find
+        // the __init__.py because target2 doesn't depend on target1.
+        // Instead, we get the synthesized directory package.
+        let result = db.lookup(
+            ModuleName::from_str("dir"),
+            Some(&root.join("dir/a.py")),
+            None,
+        );
+        assert!(
+            result.is_some(),
+            "Should be able to lookup 'dir' package from a.py (synthesized)"
+        );
+        let result_path = result.unwrap();
+        // The result should be the synthesized directory, not __init__.py
+        assert!(
+            !result_path
+                .as_path()
+                .to_string_lossy()
+                .contains("__init__.py"),
+            "Lookup of 'dir' from a.py should NOT resolve to __init__.py (no dep), got: {:?}",
+            result_path
+        );
     }
 }

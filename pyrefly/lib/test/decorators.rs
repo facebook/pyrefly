@@ -657,16 +657,28 @@ reveal_type(my_func)  # E: revealed type: (object) -> None
 "#,
 );
 
-testcase!(
-    test_numba_jit_decorators_preserve_signature,
-    TestEnv::one_with_path(
+fn env_numba() -> TestEnv {
+    let mut env = TestEnv::one_with_path(
         "numba",
-        "numba.pyi",
+        "numba/__init__.pyi",
+        r#"
+from numba.core.decorators import jit, njit
+"#,
+    );
+    env.add_with_path(
+        "numba.core.decorators",
+        "numba/core/decorators.pyi",
         r#"
 def jit(*args, **kwargs): ...
 def njit(*args, **kwargs): ...
 "#,
-    ),
+    );
+    env
+}
+
+testcase!(
+    test_numba_jit_decorators_preserve_signature,
+    env_numba(),
     r#"
 import numba
 from typing import assert_type

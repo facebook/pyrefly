@@ -111,6 +111,7 @@ pub fn binding_memory(transaction: &Transaction) -> String {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_graph::index::Idx;
     use pyrefly_python::nesting_context::NestingContext;
     use pyrefly_python::short_identifier::ShortIdentifier;
     use ruff_python_ast::Identifier;
@@ -121,7 +122,6 @@ mod tests {
     use crate::binding::binding::BindingClassMetadata;
     use crate::binding::binding::Key;
     use crate::binding::pydantic::PydanticConfigDict;
-    use crate::graph::index::Idx;
     use crate::types::class::ClassDefIndex;
 
     #[test]
@@ -165,7 +165,7 @@ mod tests {
             decorators: Default::default(),
             is_new_type: false,
             pydantic_config_dict: PydanticConfigDict::default(),
-            django_primary_key_field: None,
+            django_field_info: Box::default(),
         };
         assert_eq!(
             ReportKey::new(module, &v),

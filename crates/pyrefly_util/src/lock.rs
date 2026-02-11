@@ -13,6 +13,7 @@
 //! These wrappers just panic if we encounter a poisoned lock.
 
 use std::sync;
+use std::time::Duration;
 
 #[derive(Debug, Default)]
 pub struct Mutex<T>(sync::Mutex<T>);
@@ -89,5 +90,43 @@ impl Condvar {
         duration: std::time::Duration,
     ) -> (sync::MutexGuard<'a, T>, sync::WaitTimeoutResult) {
         self.0.wait_timeout(guard, duration).unwrap()
+    }
+
+    pub fn wait_timeout_while<'a, T>(
+        &self,
+        guard: sync::MutexGuard<'a, T>,
+        duration: std::time::Duration,
+        condition: impl FnMut(&mut T) -> bool,
+    ) -> (sync::MutexGuard<'a, T>, sync::WaitTimeoutResult) {
+        self.0
+            .wait_timeout_while(guard, duration, condition)
+            .unwrap()
+    }
+}
+
+pub struct FinishHandle {
+    finished: Mutex<bool>,
+    cvar: Condvar,
+}
+impl FinishHandle {
+    pub fn new() -> Self {
+        Self {
+            finished: Mutex::new(false),
+            cvar: Condvar::new(),
+        }
+    }
+
+    pub fn notify_finished(&self) {
+        let mut finished = self.finished.lock();
+        *finished = true;
+        self.cvar.notify_one();
+    }
+
+    pub fn wait_for_finish(&self, timeout: Duration) -> bool {
+        let finished = self.finished.lock();
+        *self
+            .cvar
+            .wait_timeout_while(finished, timeout, |finished| !*finished)
+            .0
     }
 }

@@ -5,14 +5,20 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::io::Write;
+
 use clap::Parser;
 use clap::ValueEnum;
-use lsp_server::Connection;
-use lsp_server::ProtocolError;
 use lsp_types::InitializeParams;
+use lsp_types::ServerInfo;
+use pyrefly_util::telemetry::Telemetry;
 
 use crate::commands::util::CommandExitStatus;
+use crate::lsp::non_wasm::module_helpers::PathRemapper;
+use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::capabilities;
+use crate::lsp::non_wasm::server::initialize_finish;
+use crate::lsp::non_wasm::server::initialize_start;
 use crate::lsp::non_wasm::server::lsp_loop;
 
 /// Pyrefly's indexing strategy for open projects when performing go-to-definition
@@ -51,62 +57,83 @@ pub struct LspArgs {
     pub(crate) build_system_blocking: bool,
 }
 
-pub fn run_lsp(connection: Connection, args: LspArgs, version_string: &str) -> anyhow::Result<()> {
-    let initialization_params = match initialize_connection(&connection, &args, version_string) {
-        Ok(it) => it,
-        Err(e) => {
-            // Use this in later versions of LSP server
-            // if e.channel_is_disconnected() {
-            // io_threads.join()?;
-            // }
-            return Err(e.into());
-        }
-    };
-    lsp_loop(
-        connection,
-        initialization_params,
-        args.indexing_mode,
-        args.workspace_indexing_limit,
-        args.build_system_blocking,
-    )?;
+/// Run LSP server with optional path remapping.
+/// When a path remapper is provided, go-to-definition will use the remapped
+/// paths for URIs, allowing navigation to source files instead of installed
+/// package files.
+pub fn run_lsp(
+    connection: Connection,
+    args: LspArgs,
+    server_info: Option<ServerInfo>,
+    path_remapper: Option<PathRemapper>,
+    telemetry: &impl Telemetry,
+) -> anyhow::Result<()> {
+    if let Some(initialize_params) =
+        initialize_connection(&connection, args.indexing_mode, server_info)?
+    {
+        lsp_loop(
+            connection,
+            initialize_params,
+            args.indexing_mode,
+            args.workspace_indexing_limit,
+            args.build_system_blocking,
+            path_remapper,
+            telemetry,
+        )?;
+    }
     Ok(())
 }
 
 fn initialize_connection(
     connection: &Connection,
-    args: &LspArgs,
-    version_string: &str,
-) -> Result<InitializeParams, ProtocolError> {
-    let (request_id, initialization_params) = connection.initialize_start()?;
-    let initialization_params: InitializeParams =
-        serde_json::from_value(initialization_params).unwrap();
-    let server_capabilities =
-        serde_json::to_value(capabilities(args.indexing_mode, &initialization_params)).unwrap();
-    let initialize_data = serde_json::json!({
-        "capabilities": server_capabilities,
-        "serverInfo": {
-            "name": "pyrefly-lsp",
-            "version": version_string,
-        }
-    });
-
-    connection.initialize_finish(request_id, initialize_data)?;
-    Ok(initialization_params)
+    indexing_mode: IndexingMode,
+    server_info: Option<ServerInfo>,
+) -> anyhow::Result<Option<InitializeParams>> {
+    let Some((id, initialize_params)) = initialize_start(connection)? else {
+        return Ok(None);
+    };
+    let capabilities = capabilities(indexing_mode, &initialize_params);
+    if !initialize_finish(connection, id, capabilities, server_info)? {
+        return Ok(None);
+    }
+    Ok(Some(initialize_params))
 }
 
 impl LspArgs {
-    pub fn run(self, version_string: &str) -> anyhow::Result<CommandExitStatus> {
-        // Note that  we must have our logging only write out to stderr.
+    /// Run LSP with optional path remapping.
+    /// When a path remapper is provided, go-to-definition will navigate to
+    /// remapped source files instead of installed package files.
+    pub fn run(
+        self,
+        version: &str,
+        path_remapper: Option<PathRemapper>,
+        telemetry: &impl Telemetry,
+    ) -> anyhow::Result<CommandExitStatus> {
+        // Note that we must have our logging only write out to stderr.
         eprintln!("starting generic LSP server");
 
         // Create the transport. Includes the stdio (stdin and stdout) versions but this could
         // also be implemented to use sockets or HTTP.
         let (connection, io_threads) = Connection::stdio();
 
-        run_lsp(connection, self, version_string)?;
+        let server_info = ServerInfo {
+            name: "pyrefly-lsp".to_owned(),
+            version: Some(version.to_owned()),
+        };
+
+        run_lsp(
+            connection,
+            self,
+            Some(server_info),
+            path_remapper,
+            telemetry,
+        )?;
         io_threads.join()?;
         // We have shut down gracefully.
-        eprintln!("shutting down server");
+        // Use writeln! instead of eprintln! to avoid panicking if stderr is closed.
+        // This can happen, for example, when stderr is connected to an LSP client which
+        // closes the connection before Pyrefly language server exits.
+        let _ = writeln!(std::io::stderr(), "shutting down server");
         Ok(CommandExitStatus::Success)
     }
 }

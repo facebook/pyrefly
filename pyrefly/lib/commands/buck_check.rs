@@ -32,6 +32,7 @@ use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::error::legacy::LegacyErrors;
 use crate::state::require::Require;
+use crate::state::require::RequireLevels;
 use crate::state::state::State;
 
 /// Arguments for Buck-powered type checking.
@@ -79,18 +80,32 @@ fn compute_errors(sys_info: SysInfo, sourcedb: impl SourceDatabase + 'static) ->
     config.root.untyped_def_behavior = Some(UntypedDefBehavior::CheckAndInferReturnAny);
     let mut error_config = ErrorDisplayConfig::default();
     error_config.set_error_severity(ErrorKind::Deprecated, Severity::Ignore);
+    error_config.set_error_severity(ErrorKind::UnusedIgnore, Severity::Error);
     config.root.errors = Some(error_config);
 
     config.configure();
     let config = ArcId::new(config);
 
     let state = State::new(ConfigFinder::new_constant(config));
-    state.run(&modules_to_check, Require::Errors, Require::Exports, None);
+    state.run(
+        &modules_to_check,
+        RequireLevels {
+            specified: Require::Errors,
+            default: Require::Exports,
+        },
+        None,
+        None,
+    );
     let transaction = state.transaction();
-    transaction
-        .get_errors(&modules_to_check)
-        .collect_errors()
-        .shown
+    let errors = transaction.get_errors(&modules_to_check);
+
+    // Collect main errors
+    let mut shown = errors.collect_errors().shown;
+
+    // Also collect unused ignore errors (respects severity config)
+    shown.extend(errors.collect_unused_ignore_errors_for_display().shown);
+
+    shown
 }
 
 fn write_output_to_file(path: &Path, legacy_errors: &LegacyErrors) -> anyhow::Result<()> {

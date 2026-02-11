@@ -9,6 +9,7 @@ use std::fmt;
 use std::fmt::Display;
 
 use pyrefly_derive::TypeEq;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::name::Name;
 use vec1::Vec1;
 
@@ -65,6 +66,54 @@ impl FacetChain {
 }
 
 impl Display for FacetChain {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for facet in self.0.iter() {
+            write!(f, "{facet}")?;
+        }
+        Ok(())
+    }
+}
+
+// This is like `FacetKind`, but it can also represent subscripts that are arbitrary names with unknown types
+// `VariableSubscript` may resolve to a `FacetKind::Index`, `FacetKind::Key`, or nothing at all
+// depending on the type of the variable it contains
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnresolvedFacetKind {
+    Attribute(Name),
+    Index(usize),
+    Key(String),
+    VariableSubscript(ExprName),
+}
+
+impl Display for UnresolvedFacetKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Attribute(name) => write!(f, ".{name}"),
+            Self::Index(idx) => write!(f, "[{idx}]"),
+            Self::Key(key) => write!(f, "[\"{key}\"]"),
+            Self::VariableSubscript(name) => write!(f, "[{}]", name.id),
+        }
+    }
+}
+
+// This is like `FacetChain`, but it can also represent subscripts that are arbitrary names with unknown types
+// It gets resolved to `FacetChain` if all names in the chain resolve to literal int or string types
+#[derive(Clone, Debug)]
+pub struct UnresolvedFacetChain(pub Box<Vec1<UnresolvedFacetKind>>);
+
+impl UnresolvedFacetChain {
+    pub fn new(chain: Vec1<UnresolvedFacetKind>) -> Self {
+        Self(Box::new(chain))
+    }
+
+    pub fn facets(&self) -> &Vec1<UnresolvedFacetKind> {
+        match self {
+            Self(chain) => chain,
+        }
+    }
+}
+
+impl Display for UnresolvedFacetChain {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for facet in self.0.iter() {
             write!(f, "{facet}")?;

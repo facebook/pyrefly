@@ -4,460 +4,149 @@
     },
     "requests": [
         {
-            "method": "typeServer/getSnapshot",
-            "typeName": "GetSnapshotRequest",
-            "result": {
-                "kind": "base",
-                "name": "integer"
-            },
+            "method": "typeServer/getComputedType",
+            "typeName": "GetComputedTypeRequest",
             "messageDirection": "clientToServer",
-            "documentation": "Request from client to get the current snapshot of the type server. A snapshot is a point-in-time representation of the type server's state, including all loaded files and their types."
-        },
-        {
-            "method": "typeServer/getSupportedProtocolVersion",
-            "typeName": "GetSupportedProtocolVersionRequest",
-            "result": {
-                "kind": "base",
-                "name": "string"
-            },
-            "messageDirection": "clientToServer",
-            "documentation": "Request to get the version of the protocol the type server supports. Returns a string representation of the protocol version (should be semver format)."
-        },
-        {
-            "method": "typeServer/getDiagnostics",
-            "typeName": "GetDiagnosticsRequest",
-            "result": {
-                "kind": "or",
-                "items": [
+            "documentation": "Requests and notifications for the type server protocol. Request for the computed type of a declaration or node. Computed type is the type that is inferred based on the code flow. Example: def foo(a: int | str): if instanceof(a, int): b = a + 1  # Computed type of 'b' is 'int'",
+            "params": {
+                "kind": "interface",
+                "properties": [
                     {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Diagnostic"
-                        }
+                        "name": "arg",
+                        "type": {
+                            "kind": "or",
+                            "items": [
+                                {
+                                    "kind": "reference",
+                                    "name": "Declaration"
+                                },
+                                {
+                                    "kind": "reference",
+                                    "name": "Node"
+                                }
+                            ]
+                        },
+                        "optional": false
                     },
                     {
-                        "kind": "base",
-                        "name": "null"
+                        "name": "snapshot",
+                        "type": {
+                            "kind": "base",
+                            "name": "number"
+                        },
+                        "optional": false
                     }
                 ]
             },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetDiagnosticsParams"
-            },
-            "documentation": "Request to get diagnostics for a specific file."
-        },
-        {
-            "method": "typeServer/getDiagnosticsVersion",
-            "typeName": "GetDiagnosticsVersionRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetDiagnosticsVersionParams"
-            },
-            "documentation": "Request to get the version of diagnostics for a specific file."
-        },
-        {
-            "method": "typeServer/getType",
-            "typeName": "GetTypeRequest",
             "result": {
                 "kind": "or",
                 "items": [
                     {
                         "kind": "reference",
                         "name": "Type"
+                    }
+                ]
+            }
+        },
+        {
+            "method": "typeServer/getDeclaredType",
+            "typeName": "GetDeclaredTypeRequest",
+            "messageDirection": "clientToServer",
+            "documentation": "Request for the declared type of a declaration or node. Declared type is the type that is explicitly declared in the source code. Example: def foo(a: int | str): # Declared type of parameter 'a' is 'int | str' pass",
+            "params": {
+                "kind": "interface",
+                "properties": [
+                    {
+                        "name": "arg",
+                        "type": {
+                            "kind": "or",
+                            "items": [
+                                {
+                                    "kind": "reference",
+                                    "name": "Declaration"
+                                },
+                                {
+                                    "kind": "reference",
+                                    "name": "Node"
+                                }
+                            ]
+                        },
+                        "optional": false
                     },
                     {
-                        "kind": "base",
-                        "name": "null"
+                        "name": "snapshot",
+                        "type": {
+                            "kind": "base",
+                            "name": "number"
+                        },
+                        "optional": false
                     }
                 ]
             },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetTypeParams"
-            },
-            "documentation": "Request to get the type information for a specific node."
-        },
-        {
-            "method": "typeServer/getBuiltinType",
-            "typeName": "GetBuiltinTypeRequest",
             "result": {
                 "kind": "or",
                 "items": [
                     {
                         "kind": "reference",
                         "name": "Type"
+                    }
+                ]
+            }
+        },
+        {
+            "method": "typeServer/getExpectedType",
+            "typeName": "GetExpectedTypeRequest",
+            "messageDirection": "clientToServer",
+            "documentation": "Request for the expected type of a declaration or node. Expected type is the type that the context expects. Example: def foo(a: int | str): pass foo(4)  # Expected type of argument 'a' is 'int | str'",
+            "params": {
+                "kind": "interface",
+                "properties": [
+                    {
+                        "name": "arg",
+                        "type": {
+                            "kind": "or",
+                            "items": [
+                                {
+                                    "kind": "reference",
+                                    "name": "Declaration"
+                                },
+                                {
+                                    "kind": "reference",
+                                    "name": "Node"
+                                }
+                            ]
+                        },
+                        "optional": false
                     },
                     {
-                        "kind": "base",
-                        "name": "null"
+                        "name": "snapshot",
+                        "type": {
+                            "kind": "base",
+                            "name": "number"
+                        },
+                        "optional": false
                     }
                 ]
             },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetBuiltinTypeParams"
-            },
-            "documentation": "Request to get the type information for a specific builtin type."
-        },
-        {
-            "method": "typeServer/getTypeArgs",
-            "typeName": "GetTypeArgsRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Type"
-                        }
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetTypeArgsParams"
-            },
-            "documentation": "Request to get the collection of subtypes that make up a union type or the types that makes up a generic type."
-        },
-        {
-            "method": "typeServer/getSymbolsForType",
-            "typeName": "GetSymbolsForTypeRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Symbol"
-                        }
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetSymbolsForTypeParams"
-            },
-            "documentation": "Request to find symbols from a type."
-        },
-        {
-            "method": "typeServer/getSymbolsForNode",
-            "typeName": "GetSymbolsForNodeRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Symbol"
-                        }
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetSymbolsForNodeParams"
-            },
-            "documentation": "Request to find symbols from a node."
-        },
-        {
-            "method": "typeServer/getOverloads",
-            "typeName": "GetOverloadsRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Type"
-                        }
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetOverloadsParams"
-            },
-            "documentation": "Request to get all overloads of a function or method. The returned value doesn't include the implementation signature."
-        },
-        {
-            "method": "typeServer/getMatchingOverloads",
-            "typeName": "GetMatchingOverloadsRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Type"
-                        }
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetMatchingOverloadsParams"
-            },
-            "documentation": "Request to get the overloads that a call node matches."
-        },
-        {
-            "method": "typeServer/getMetaclass",
-            "typeName": "GetMetaclassRequest",
             "result": {
                 "kind": "or",
                 "items": [
                     {
                         "kind": "reference",
                         "name": "Type"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
                     }
                 ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetMetaclassParams"
-            },
-            "documentation": "Request to get the meta class of a type."
-        },
-        {
-            "method": "typeServer/getTypeOfDeclaration",
-            "typeName": "GetTypeOfDeclarationRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetTypeOfDeclarationParams"
-            },
-            "documentation": "Request to get the type of a declaration."
-        },
-        {
-            "method": "typeServer/getRepr",
-            "typeName": "GetReprRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetReprParams"
-            },
-            "documentation": "Request to get the string representation of a type in a human-readable format. This may or may not be the same as the type's \"name\"."
-        },
-        {
-            "method": "typeServer/getDocString",
-            "typeName": "GetDocStringRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetDocStringParams"
-            },
-            "documentation": "Request to get the docstring for a specific declaration."
-        },
-        {
-            "method": "typeServer/resolveImportDeclaration",
-            "typeName": "ResolveImportDeclarationRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "reference",
-                        "name": "Declaration"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "ResolveImportDeclarationParams"
-            },
-            "documentation": "Request to resolve an import declaration."
-        },
-        {
-            "method": "typeServer/resolveImport",
-            "typeName": "ResolveImportRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "ResolveImportParams"
-            },
-            "documentation": "Request to resolve an import. This is used to resolve the import name to its location in the file system."
-        },
-        {
-            "method": "typeServer/getTypeAliasInfo",
-            "typeName": "GetTypeAliasInfoRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "reference",
-                        "name": "TypeAliasInfo"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "GetTypeAliasInfoParams"
-            },
-            "documentation": "Get information about a type alias."
-        },
-        {
-            "method": "typeServer/combineTypes",
-            "typeName": "CombineTypesRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "CombineTypesParams"
-            },
-            "documentation": "Request to combine types. This is used to combine multiple types into a single type."
-        },
-        {
-            "method": "typeServer/createInstanceType",
-            "typeName": "CreateInstanceTypeRequest",
-            "result": {
-                "kind": "or",
-                "items": [
-                    {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
-                    }
-                ]
-            },
-            "messageDirection": "clientToServer",
-            "params": {
-                "kind": "reference",
-                "name": "CreateInstanceTypeParams"
-            },
-            "documentation": "Request to generate an instance type representation for the provided type."
+            }
         },
         {
             "method": "typeServer/getPythonSearchPaths",
             "typeName": "GetPythonSearchPathsRequest",
+            "messageDirection": "clientToServer",
+            "documentation": "Request to get the search paths that the type server uses for Python modules.",
+            "params": {
+                "kind": "reference",
+                "name": "GetPythonSearchPathsParams"
+            },
             "result": {
                 "kind": "or",
                 "items": [
@@ -467,19 +156,48 @@
                             "kind": "base",
                             "name": "string"
                         }
-                    },
-                    {
-                        "kind": "base",
-                        "name": "null"
                     }
                 ]
-            },
+            }
+        },
+        {
+            "method": "typeServer/getSnapshot",
+            "typeName": "GetSnapshotRequest",
             "messageDirection": "clientToServer",
+            "documentation": "Request from client to get the current snapshot of the type server. A snapshot is a point-in-time representation of the type server's state, including all loaded files and their types. A type server should change its snapshot whenever any type it might have returned is no longer valid. Meaning types are only usable for the snapshot they were returned with. Snapshots are not meant to survive any changes that would make the type server throw away its internal cache. They are merely an identifier to indicate to the client that the type server will accept requests for types from that snapshot.",
+            "result": {
+                "kind": "base",
+                "name": "number"
+            }
+        },
+        {
+            "method": "typeServer/getSupportedProtocolVersion",
+            "typeName": "GetSupportedProtocolVersionRequest",
+            "messageDirection": "clientToServer",
+            "documentation": "Request to get the version of the protocol the type server supports. Returns a string representation of the protocol version (should be semver format)",
+            "result": {
+                "kind": "base",
+                "name": "string"
+            }
+        },
+        {
+            "method": "typeServer/resolveImport",
+            "typeName": "ResolveImportRequest",
+            "messageDirection": "clientToServer",
+            "documentation": "Request to resolve an import. This is used to resolve the import name to its location in the file system.",
             "params": {
                 "kind": "reference",
-                "name": "GetPythonSearchPathsParams"
+                "name": "ResolveImportParams"
             },
-            "documentation": "Request to get the search paths that the type server uses for Python modules."
+            "result": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "base",
+                        "name": "string"
+                    }
+                ]
+            }
         }
     ],
     "notifications": [
@@ -487,46 +205,16 @@
             "method": "typeServer/snapshotChanged",
             "typeName": "SnapshotChangedNotification",
             "messageDirection": "serverToClient",
+            "documentation": "Notification sent by the server to indicate any outstanding snapshots are invalid.",
             "params": {
                 "kind": "reference",
-                "name": "SnapshotChangedParams"
-            },
-            "documentation": "Notification sent by the server to indicate any outstanding snapshots are invalid."
-        },
-        {
-            "method": "typeServer/diagnosticsChanged",
-            "typeName": "DiagnosticsChangedNotification",
-            "messageDirection": "serverToClient",
-            "params": {
-                "kind": "reference",
-                "name": "DiagnosticsChangedParams"
-            },
-            "documentation": "Notification sent by the server to indicate that diagnostics have changed and the client should re-request diagnostics for the file."
+                "name": "{ old: number; new: number }"
+            }
         }
     ],
-    "constants": [
-        {
-            "name": "TypeServerVersion",
-            "type": {
-                "kind": "base",
-                "name": "string"
-            },
-            "value": "0.2.0",
-            "documentation": "The version of the Type Server Protocol"
-        },
-        {
-            "name": "InvalidHandle",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "value": -1,
-            "documentation": "Represents an invalid handle value"
-        }
-    ],
-    "structures": [
-        {
-            "name": "Position",
+    "types": {
+        "Position": {
+            "kind": "interface",
             "properties": [
                 {
                     "name": "line",
@@ -534,6 +222,7 @@
                         "kind": "base",
                         "name": "uinteger"
                     },
+                    "optional": false,
                     "documentation": "Line position in a document (zero-based)."
                 },
                 {
@@ -542,13 +231,14 @@
                         "kind": "base",
                         "name": "uinteger"
                     },
+                    "optional": false,
                     "documentation": "Character offset on a line in a document (zero-based)."
                 }
             ],
             "documentation": "Position in a text document expressed as zero-based line and character offset."
         },
-        {
-            "name": "Range",
+        "Range": {
+            "kind": "interface",
             "properties": [
                 {
                     "name": "start",
@@ -556,6 +246,7 @@
                         "kind": "reference",
                         "name": "Position"
                     },
+                    "optional": false,
                     "documentation": "The range's start position."
                 },
                 {
@@ -564,71 +255,263 @@
                         "kind": "reference",
                         "name": "Position"
                     },
+                    "optional": false,
                     "documentation": "The range's end position."
                 }
             ],
             "documentation": "A range in a text document expressed as (zero-based) start and end positions."
         },
-        {
-            "name": "Diagnostic",
+        "TypeBase": {
+            "kind": "interface",
             "properties": [
                 {
-                    "name": "range",
+                    "name": "kind",
                     "type": {
                         "kind": "reference",
-                        "name": "Range"
+                        "name": "TypeKind"
                     },
-                    "documentation": "The range at which the message applies."
+                    "optional": false,
+                    "documentation": "The kind/category of this type."
                 },
                 {
-                    "name": "severity",
+                    "name": "flags",
                     "type": {
-                        "kind": "base",
-                        "name": "integer"
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "TypeFlags"
+                        }
                     },
                     "optional": true,
-                    "documentation": "The diagnostic's severity."
-                },
-                {
-                    "name": "code",
-                    "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "base",
-                                "name": "integer"
-                            },
-                            {
-                                "kind": "base",
-                                "name": "string"
-                            }
-                        ]
-                    },
-                    "optional": true,
-                    "documentation": "The diagnostic's code."
-                },
-                {
-                    "name": "source",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "optional": true,
-                    "documentation": "A human-readable string describing the source of this diagnostic."
-                },
-                {
-                    "name": "message",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The diagnostic's message."
+                    "documentation": "Flags that describe the characteristics of this type."
                 }
             ],
-            "documentation": "Represents a diagnostic, such as a compiler error or warning."
+            "documentation": "Base interface for all type variants. Contains common fields shared by all types."
         },
-        {
-            "name": "Node",
+        "DeclarationBase": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "category",
+                    "type": {
+                        "kind": "reference",
+                        "name": "DeclarationCategory"
+                    },
+                    "optional": false,
+                    "documentation": "The category of this declaration."
+                },
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "The name of the declaration."
+                },
+                {
+                    "name": "moduleName",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "The module where this declaration is defined."
+                }
+            ],
+            "documentation": "Base interface for all declaration variants."
+        },
+        "DeclaredType": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "declaration",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Declaration"
+                    },
+                    "optional": true,
+                    "documentation": "The declaration that defines this type."
+                },
+                {
+                    "name": "typeArgs",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    "optional": true,
+                    "documentation": "Type arguments if this is a generic type."
+                }
+            ],
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "TypeBase"
+                }
+            ],
+            "documentation": "A type that is declared in source code."
+        },
+        "TypeServerVersion": {
+            "kind": "stringEnum",
+            "values": {
+                "v0_1_0": "0.1.0",
+                "v0_2_0": "0.2.0",
+                "v0_3_0": "0.3.0",
+                "current": "0.4.0"
+            },
+            "valueDocumentation": {
+                "v0_1_0": "Initial protocol version",
+                "v0_2_0": "Added new request types and fields",
+                "v0_3_0": "Switch to more complex types",
+                "current": "Switch to Type union and using stubs"
+            }
+        },
+        "TypeFlags": {
+            "kind": "stringLiteral",
+            "value": [
+                "None",
+                "Instantiable",
+                "Instance",
+                "Callable",
+                "Literal",
+                "Interface",
+                "Generic",
+                "FromAlias",
+                "Unpacked",
+                "Optional",
+                "Unbound"
+            ],
+            "documentation": "Flags that describe the characteristics of a type. These flags can be combined using bitwise operations.",
+            "valueDocumentation": {
+                "Instantiable": "Indicates if the type can be instantiated.",
+                "Instance": "Indicates if the type represents an instance (as opposed to a class or type itself).",
+                "Callable": "Indicates if an instance of the type can be called like a function. (It has a `__call__` method).",
+                "Literal": "Indicates if the instance is a literal (like `42`, `\"hello\"`, etc.).",
+                "Interface": "Indicates if the type is an interface (a type that defines a set of methods and properties). In Python this would be a Protocol.",
+                "Generic": "Indicates if the type is a generic type (a type that can be parameterized with other types).",
+                "FromAlias": "Indicates if the type came from an alias (a type that refers to another type).",
+                "Unpacked": "Indicates if the type is unpacked (used with TypeVarTuple).",
+                "Optional": "Indicates if the type is optional (used with Tuple type arguments).",
+                "Unbound": "Indicates if the type is unbound (used with *args in tuple type arguments)."
+            }
+        },
+        "TypeVarFlags": {
+            "kind": "stringLiteral",
+            "value": ["None", "IsParamSpec", "IsTypeVarTuple"],
+            "documentation": "Flags that describe the characteristics of a type variable. These flags can be combined using bitwise operations.",
+            "valueDocumentation": {
+                "IsParamSpec": "Indicates if the type variable is a ParamSpec (as defined in PEP 612).",
+                "IsTypeVarTuple": "Indicates if the type variable is a TypeVarTuple (as defined in PEP 646)."
+            }
+        },
+        "DeclarationCategory": {
+            "kind": "stringLiteral",
+            "value": ["Intrinsic", "Variable", "Param", "TypeParam", "TypeAlias", "Function", "Class", "Import"],
+            "documentation": "Represents the category of a declaration in the type system. This is used to classify declarations such as variables, functions, classes, etc.",
+            "valueDocumentation": {
+                "Intrinsic": "An intrinsic refers to a symbol that has no actual declaration in the source code, such as built-in types or functions. One such example is a '__class__' declaration.",
+                "Variable": "A variable is a named storage location that can hold a value.",
+                "Param": "A parameter is a variable that is passed to a function or method.",
+                "TypeParam": "This is for PEP 695 type parameters.",
+                "TypeAlias": "This is for PEP 695 type aliases.",
+                "Function": "A function is any construct that begins with the `def` keyword and has a body, which can be called with arguments.",
+                "Class": "A class is any construct that begins with the `class` keyword and has a body, which can be instantiated.",
+                "Import": "An import declaration, which is a reference to another module."
+            }
+        },
+        "ClassTypeFlags": {
+            "kind": "stringLiteral",
+            "value": [
+                "None",
+                "BuiltIn",
+                "SpecialBuiltIn",
+                "TypedDictClass",
+                "TypedDictMarkedClosed",
+                "TypedDictEffectivelyClosed",
+                "CanOmitDictValues",
+                "SupportsAbstractMethods",
+                "PropertyClass",
+                "Final",
+                "ProtocolClass",
+                "PseudoGenericClass",
+                "RuntimeCheckable",
+                "TypingExtensionClass",
+                "HasCustomClassGetItem",
+                "TupleClass",
+                "EnumClass",
+                "ClassProperty",
+                "DefinedInStub",
+                "TypeCheckOnly",
+                "NewTypeClass",
+                "ValidTypeAliasClass",
+                "SpecialFormClass",
+                "IllegalIsinstanceClass"
+            ]
+        },
+        "ParamCategory": {
+            "kind": "stringLiteral",
+            "value": ["Simple", "ArgsList", "KwargsDict"],
+            "valueDocumentation": {
+                "Simple": "Regular parameter: def foo(x: int)",
+                "ArgsList": "Variadic positional: def foo(*args: int)",
+                "KwargsDict": "Variadic keyword: def foo(**kwargs: str)"
+            }
+        },
+        "FunctionParamFlags": {
+            "kind": "stringLiteral",
+            "value": ["None", "NameSynthesized", "TypeDeclared"]
+        },
+        "TypeKind": {
+            "kind": "stringLiteral",
+            "value": [
+                "BuiltIn",
+                "Declared",
+                "Function",
+                "Class",
+                "Union",
+                "Module",
+                "TypeVar",
+                "Overloaded",
+                "Synthesized",
+                "TypeReference"
+            ],
+            "valueDocumentation": {
+                "BuiltIn": "unknown, any, never, etc.",
+                "Declared": "Base for source-declared types (rarely used directly)",
+                "Function": "Functions and methods from def statements",
+                "Class": "Classes from class statements",
+                "Union": "int | str | None",
+                "Module": "import os -> os is ModuleType",
+                "TypeVar": "T, P, Ts in generics",
+                "Overloaded": "Functions with multiple @overload signatures",
+                "Synthesized": "Types that are synthesized by the type checker",
+                "TypeReference": "Reference by ID for deduplication"
+            }
+        },
+        "DeclarationKind": {
+            "kind": "stringLiteral",
+            "value": ["Regular", "Synthesized"],
+            "valueDocumentation": {
+                "Regular": "Declaration exists in source code with AST node",
+                "Synthesized": "Declaration created by type checker (no source node)"
+            }
+        },
+        "Variance": {
+            "kind": "stringLiteral",
+            "value": ["Auto", "Unknown", "Invariant", "Covariant", "Contravariant"],
+            "valueDocumentation": {
+                "Auto": "Variance not yet determined, will be inferred",
+                "Unknown": "Variance cannot be determined",
+                "Invariant": "No subtyping relationship (default for mutable types)",
+                "Covariant": "Preserves subtyping: Generic[Child] <: Generic[Parent]",
+                "Contravariant": "Reverses subtyping: Generic[Parent] <: Generic[Child]"
+            }
+        },
+        "Node": {
+            "kind": "interface",
             "properties": [
                 {
                     "name": "uri",
@@ -636,6 +519,7 @@
                         "kind": "base",
                         "name": "string"
                     },
+                    "optional": false,
                     "documentation": "URI of the source file containing this node."
                 },
                 {
@@ -644,20 +528,22 @@
                         "kind": "reference",
                         "name": "Range"
                     },
-                    "documentation": "The range of the node in the source file. This is a zero-based range, meaning the start and end positions are both zero-based. The range uses character offsets the same way the LSP does."
+                    "optional": false,
+                    "documentation": "The range of the node in the source file. This is a zero-based range, meaning the start and end positions are both zero-based The range uses character offsets the same way the LSP does."
                 }
             ],
-            "documentation": "Represents a node in an AST (Abstract Syntax Tree) or similar structure."
+            "documentation": "Represents a location in source code (a node in the AST). Used to point to specific declarations, expressions, or statements in Python source files. Used for: - Pointing to where a type is declared - Identifying the location of expressions for type inference - Error reporting and diagnostics - Linking types back to their source definitions Examples: - For `def foo():`, the node points to the function declaration - For a variable `x = 42`, the node points to the assignment - For default parameter values in functions"
         },
-        {
-            "name": "ModuleName",
+        "ModuleName": {
+            "kind": "interface",
             "properties": [
                 {
                     "name": "leadingDots",
                     "type": {
                         "kind": "base",
-                        "name": "integer"
+                        "name": "number"
                     },
+                    "optional": false,
                     "documentation": "The leading dots in the module name. This is used to determine the relative import level."
                 },
                 {
@@ -669,224 +555,14 @@
                             "name": "string"
                         }
                     },
+                    "optional": false,
                     "documentation": "The parts of the module name, split by dots. For example, for `my_module.sub_module`, this would be `['my_module', 'sub_module']`."
                 }
             ],
-            "documentation": "Represents a module name with optional leading dots for relative imports."
+            "documentation": "Represents a Python module name, handling both absolute and relative imports. Used for: - Import statement resolution - Tracking module dependencies - Resolving relative imports (from . import, from .. import) Examples: - `import os.path`: leadingDots=0, nameParts=['os', 'path'] - `from . import utils`: leadingDots=1, nameParts=['utils'] - `from ...parent import module`: leadingDots=3, nameParts=['parent', 'module'] - `import mymodule`: leadingDots=0, nameParts=['mymodule']"
         },
-        {
-            "name": "Type",
-            "properties": [
-                {
-                    "name": "handle",
-                    "type": {
-                        "kind": "reference",
-                        "name": "TypeHandle"
-                    },
-                    "documentation": "Unique identifier for the type definition within the snapshot. A handle doesn't need to exist beyond the lifetime of the snapshot."
-                },
-                {
-                    "name": "category",
-                    "type": {
-                        "kind": "reference",
-                        "name": "TypeCategory"
-                    },
-                    "documentation": "Essential classification of the Type."
-                },
-                {
-                    "name": "flags",
-                    "type": {
-                        "kind": "reference",
-                        "name": "TypeFlags"
-                    },
-                    "documentation": "Flags describing the type."
-                },
-                {
-                    "name": "moduleName",
-                    "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "reference",
-                                "name": "ModuleName"
-                            },
-                            {
-                                "kind": "base",
-                                "name": "null"
-                            }
-                        ]
-                    },
-                    "documentation": "Name of the module the type comes from"
-                },
-                {
-                    "name": "name",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "Simple name of the type. For example, for a class `MyClass` in module `my_module`, this would be `MyClass`."
-                },
-                {
-                    "name": "aliasName",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "optional": true,
-                    "documentation": "The typing module defines aliases for builtin types (e.g. Tuple, List, Dict). This field holds the alias name."
-                },
-                {
-                    "name": "categoryFlags",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "Flags specific to the category. For example, for a class type, this would be ClassFlags. For a function type, this would be FunctionFlags."
-                },
-                {
-                    "name": "decl",
-                    "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "reference",
-                                "name": "Declaration"
-                            },
-                            {
-                                "kind": "base",
-                                "name": "null"
-                            }
-                        ]
-                    },
-                    "documentation": "Declaration of the type, if available."
-                }
-            ],
-            "documentation": "Represents a type in the type system."
-        },
-        {
-            "name": "Declaration",
-            "properties": [
-                {
-                    "name": "handle",
-                    "type": {
-                        "kind": "reference",
-                        "name": "DeclarationHandle"
-                    },
-                    "documentation": "Unique identifier for the declaration within the session."
-                },
-                {
-                    "name": "category",
-                    "type": {
-                        "kind": "reference",
-                        "name": "DeclarationCategory"
-                    },
-                    "documentation": "Category of this symbol (function, variable, etc.)."
-                },
-                {
-                    "name": "flags",
-                    "type": {
-                        "kind": "reference",
-                        "name": "DeclarationFlags"
-                    },
-                    "documentation": "Extra information about the declaration."
-                },
-                {
-                    "name": "node",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Node"
-                    },
-                    "optional": true,
-                    "documentation": "Parse node associated with the declaration"
-                },
-                {
-                    "name": "moduleName",
-                    "type": {
-                        "kind": "reference",
-                        "name": "ModuleName"
-                    },
-                    "documentation": "The dot-separated import name for the file that contains the declaration."
-                },
-                {
-                    "name": "name",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The symbol name for the declaration (as the user sees it)"
-                },
-                {
-                    "name": "uri",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The file that contains the declaration. Unless this is an import declaration, then the uri refers to the file the import is referring to."
-                }
-            ],
-            "documentation": "Represents a symbol declaration in the type system."
-        },
-        {
-            "name": "Symbol",
-            "properties": [
-                {
-                    "name": "name",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The name of the symbol found."
-                },
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The type of the symbol found."
-                },
-                {
-                    "name": "decls",
-                    "type": {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Declaration"
-                        }
-                    },
-                    "documentation": "The declarations for the symbol. This can include multiple declarations for the same symbol, such as when a symbol is defined in multiple files."
-                },
-                {
-                    "name": "flags",
-                    "type": {
-                        "kind": "reference",
-                        "name": "SymbolFlags"
-                    },
-                    "documentation": "Flags giving more information about the symbol."
-                },
-                {
-                    "name": "parent",
-                    "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "reference",
-                                "name": "Type"
-                            },
-                            {
-                                "kind": "base",
-                                "name": "null"
-                            }
-                        ]
-                    },
-                    "optional": true,
-                    "documentation": "The type that is the semantic parent of this symbol. For example if the symbol is for a parameter, the parent would be the function or method that contains the parameter. If the symbol is for a class member, the parent would be the class that contains the member."
-                }
-            ],
-            "documentation": "Symbol information for a node"
-        },
-        {
-            "name": "ResolveImportOptions",
+        "ResolveImportOptions": {
+            "kind": "interface",
             "properties": [
                 {
                     "name": "resolveLocalNames",
@@ -895,7 +571,7 @@
                         "name": "boolean"
                     },
                     "optional": true,
-                    "documentation": "Whether to resolve local names in the import declaration."
+                    "documentation": "Whether to resolve local names in the import declaration. When true, considers local variable assignments that shadow imports."
                 },
                 {
                     "name": "allowExternallyHiddenAccess",
@@ -904,7 +580,7 @@
                         "name": "boolean"
                     },
                     "optional": true,
-                    "documentation": "Whether to allow access to members that are hidden by external modules."
+                    "documentation": "Whether to allow access to members that are hidden by external modules. When true, permits access to symbols marked as private (e.g., _private or not in __all__)."
                 },
                 {
                     "name": "skipFileNeededCheck",
@@ -913,13 +589,13 @@
                         "name": "boolean"
                     },
                     "optional": true,
-                    "documentation": "Whether to skip checking if the file is needed for the import resolution."
+                    "documentation": "Whether to skip checking if the file is needed for the import resolution. When true, optimizes by not verifying file existence/validity."
                 }
             ],
-            "documentation": "Options for resolving an import declaration."
+            "documentation": "Options for customizing import resolution behavior. Controls how the type server resolves import statements and accesses imported symbols. Used for: - Fine-tuning import resolution during type checking - Controlling access to private/hidden module members - Optimizing resolution by skipping file checks TODO: See if we can remove this as these are pretty specific to Pyright at the moment. Examples: ```python # resolveLocalNames affects whether local assignments are resolved: from module import name name = something_else  # Does 'name' refer to import or local assignment? # allowExternallyHiddenAccess affects access to _private names: from module import _internal_function  # Normally hidden from external access ```"
         },
-        {
-            "name": "ResolveImportParams",
+        "ResolveImportParams": {
+            "kind": "interface",
             "properties": [
                 {
                     "name": "sourceUri",
@@ -927,7 +603,8 @@
                         "kind": "base",
                         "name": "string"
                     },
-                    "documentation": "The URI of the source file where the import is referenced."
+                    "optional": false,
+                    "documentation": "The URI of the source file where the import is referenced. Used to resolve relative imports and determine the import context."
                 },
                 {
                     "name": "moduleDescriptor",
@@ -935,544 +612,23 @@
                         "kind": "reference",
                         "name": "ModuleName"
                     },
-                    "documentation": "The descriptor of the imported module."
+                    "optional": false,
+                    "documentation": "The descriptor of the imported module. Contains the module name parts and leading dots for relative imports."
                 },
                 {
                     "name": "snapshot",
                     "type": {
                         "kind": "base",
-                        "name": "integer"
+                        "name": "number"
                     },
-                    "documentation": "The snapshot version."
+                    "optional": false,
+                    "documentation": "Snapshot version of the type server. Type server should throw a ServerCanceled exception if this snapshot is no longer current."
                 }
             ],
-            "documentation": "Parameters for resolving an import"
+            "documentation": "Parameters for the ResolveImportRequest. Provides the context needed to resolve a Python import statement to its file location. Used when: - Resolving `import` or `from...import` statements - Finding the file that contains an imported module - Navigating to imported symbols Examples: ```python # In file.py: from os.path import join  # sourceUri = file.py, moduleDescriptor = os.path import mymodule          # sourceUri = file.py, moduleDescriptor = mymodule from . import utils      # sourceUri = file.py, moduleDescriptor = .utils (relative) ```"
         },
-        {
-            "name": "GetSymbolsForTypeParams",
-            "properties": [
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The type for which the symbols are being requested. If this is a class, the symbols are based on the members of the class. If this is a function, the symbols are the parameters and the return value."
-                },
-                {
-                    "name": "node",
-                    "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "reference",
-                                "name": "Node"
-                            },
-                            {
-                                "kind": "base",
-                                "name": "null"
-                            }
-                        ]
-                    },
-                    "optional": true,
-                    "documentation": "The location where the symbols are being requested. This can help search for symbols."
-                },
-                {
-                    "name": "name",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "optional": true,
-                    "documentation": "The name to search for. If undefined, returns all the symbols for the type or node."
-                },
-                {
-                    "name": "flags",
-                    "type": {
-                        "kind": "reference",
-                        "name": "SymbolSearchFlags"
-                    },
-                    "documentation": "Flags used to do the search"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version of the type server state."
-                }
-            ],
-            "documentation": "Parameters for getting symbols for a type."
-        },
-        {
-            "name": "GetSymbolsForNodeParams",
-            "properties": [
-                {
-                    "name": "node",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Node"
-                    },
-                    "documentation": "The location to search for symbols from. This node is essentially used to scope the symbol search. It can be a Module node in order to search for top level symbols."
-                },
-                {
-                    "name": "name",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "optional": true,
-                    "documentation": "The name to search for. If undefined, returns all the symbols for the type or node."
-                },
-                {
-                    "name": "flags",
-                    "type": {
-                        "kind": "reference",
-                        "name": "SymbolSearchFlags"
-                    },
-                    "documentation": "Flags used to do the search"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version of the type server state."
-                }
-            ],
-            "documentation": "Parameters for getting symbols for a node."
-        },
-        {
-            "name": "GetBuiltinTypeParams",
-            "properties": [
-                {
-                    "name": "scopingNode",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Node"
-                    },
-                    "documentation": "The node that is used to scope the builtin type. Every module may have a different set of builtins based on where the module is located."
-                },
-                {
-                    "name": "name",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The name of the builtin type being requested."
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version of the type server state."
-                }
-            ],
-            "documentation": "Parameters for getting builtin type information."
-        },
-        {
-            "name": "TypeAliasInfo",
-            "properties": [
-                {
-                    "name": "name",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The original name of the alias."
-                },
-                {
-                    "name": "typeArgs",
-                    "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "array",
-                                "element": {
-                                    "kind": "reference",
-                                    "name": "Type"
-                                }
-                            },
-                            {
-                                "kind": "base",
-                                "name": "null"
-                            }
-                        ]
-                    },
-                    "documentation": "The arguments for the type alias, if any."
-                }
-            ],
-            "documentation": "Information about a type alias."
-        },
-        {
-            "name": "GetDiagnosticsParams",
-            "properties": [
-                {
-                    "name": "uri",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The URI of the file to get diagnostics for"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting diagnostics for a file."
-        },
-        {
-            "name": "GetDiagnosticsVersionParams",
-            "properties": [
-                {
-                    "name": "uri",
-                    "type": {
-                        "kind": "base",
-                        "name": "string"
-                    },
-                    "documentation": "The URI of the file"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting diagnostics version for a file."
-        },
-        {
-            "name": "GetTypeParams",
-            "properties": [
-                {
-                    "name": "node",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Node"
-                    },
-                    "documentation": "The node to get type information for"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting type information for a node."
-        },
-        {
-            "name": "GetTypeArgsParams",
-            "properties": [
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The type to get arguments for"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting type arguments."
-        },
-        {
-            "name": "GetOverloadsParams",
-            "properties": [
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The type to get overloads for"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting function overloads."
-        },
-        {
-            "name": "GetMatchingOverloadsParams",
-            "properties": [
-                {
-                    "name": "callNode",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Node"
-                    },
-                    "documentation": "The call node to get matching overloads for"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting matching overloads for a call."
-        },
-        {
-            "name": "GetMetaclassParams",
-            "properties": [
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The type to get metaclass for"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting metaclass of a type."
-        },
-        {
-            "name": "GetTypeOfDeclarationParams",
-            "properties": [
-                {
-                    "name": "decl",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Declaration"
-                    },
-                    "documentation": "The declaration to get type for"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting type of a declaration."
-        },
-        {
-            "name": "GetReprParams",
-            "properties": [
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The type to get representation for"
-                },
-                {
-                    "name": "flags",
-                    "type": {
-                        "kind": "reference",
-                        "name": "TypeReprFlags"
-                    },
-                    "documentation": "Formatting flags"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting type representation."
-        },
-        {
-            "name": "GetDocStringParams",
-            "properties": [
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "reference",
-                                "name": "Type"
-                            },
-                            {
-                                "kind": "base",
-                                "name": "null"
-                            }
-                        ]
-                    },
-                    "optional": true,
-                    "documentation": "The type context"
-                },
-                {
-                    "name": "decl",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Declaration"
-                    },
-                    "documentation": "The declaration to get documentation for"
-                },
-                {
-                    "name": "boundObjectOrClass",
-                    "type": {
-                        "kind": "or",
-                        "items": [
-                            {
-                                "kind": "reference",
-                                "name": "Type"
-                            },
-                            {
-                                "kind": "base",
-                                "name": "null"
-                            }
-                        ]
-                    },
-                    "optional": true,
-                    "documentation": "The bound object or class type"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting documentation string."
-        },
-        {
-            "name": "ResolveImportDeclarationParams",
-            "properties": [
-                {
-                    "name": "decl",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Declaration"
-                    },
-                    "documentation": "The import declaration to resolve"
-                },
-                {
-                    "name": "options",
-                    "type": {
-                        "kind": "reference",
-                        "name": "ResolveImportOptions"
-                    },
-                    "documentation": "Resolution options"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for resolving import declaration."
-        },
-        {
-            "name": "GetTypeAliasInfoParams",
-            "properties": [
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The type to get alias info for"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for getting type alias information."
-        },
-        {
-            "name": "CombineTypesParams",
-            "properties": [
-                {
-                    "name": "types",
-                    "type": {
-                        "kind": "array",
-                        "element": {
-                            "kind": "reference",
-                            "name": "Type"
-                        }
-                    },
-                    "documentation": "The types to combine"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for combining types."
-        },
-        {
-            "name": "CreateInstanceTypeParams",
-            "properties": [
-                {
-                    "name": "type",
-                    "type": {
-                        "kind": "reference",
-                        "name": "Type"
-                    },
-                    "documentation": "The type to create instance from"
-                },
-                {
-                    "name": "snapshot",
-                    "type": {
-                        "kind": "base",
-                        "name": "integer"
-                    },
-                    "documentation": "The snapshot version"
-                }
-            ],
-            "documentation": "Parameters for creating instance type."
-        },
-        {
-            "name": "GetPythonSearchPathsParams",
+        "GetPythonSearchPathsParams": {
+            "kind": "interface",
             "properties": [
                 {
                     "name": "fromUri",
@@ -1480,43 +636,290 @@
                         "kind": "base",
                         "name": "string"
                     },
-                    "documentation": "The URI to get search paths from"
+                    "optional": false,
+                    "documentation": "Root folder to get search paths from. Determines the Python environment and project context for path resolution."
                 },
                 {
                     "name": "snapshot",
                     "type": {
                         "kind": "base",
-                        "name": "integer"
+                        "name": "number"
                     },
-                    "documentation": "The snapshot version"
+                    "optional": false,
+                    "documentation": "Snapshot version of the type server. Type server should throw a ServerCanceled exception if this snapshot is no longer current."
                 }
             ],
-            "documentation": "Parameters for getting Python search paths."
+            "documentation": "Parameters for the GetPythonSearchPathsRequest. Requests the list of directories that Python searches for modules and packages. The search paths include: - Standard library directories - Site-packages directories (third-party packages) - Virtual environment paths (if active) - Project-specific paths (PYTHONPATH, src directories) Used for: - Resolving import statements to find module files - Auto-import suggestions - Determining which packages are available Example search paths: ``` [ \"/usr/lib/python3.11\",              # Standard library \"/venv/lib/python3.11/site-packages\",  # Virtual env packages \"/project/src\"                       # Project source ] ```"
         },
-        {
-            "name": "SnapshotChangedParams",
+        "TypedDictEntry": {
+            "kind": "interface",
             "properties": [
                 {
-                    "name": "old",
+                    "name": "valueType",
                     "type": {
-                        "kind": "base",
-                        "name": "integer"
+                        "kind": "reference",
+                        "name": "Type"
                     },
-                    "documentation": "The old snapshot version"
+                    "optional": false,
+                    "documentation": "The type of values for this TypedDict key. Example: For `name: str`, valueType is the str type."
                 },
                 {
-                    "name": "new",
+                    "name": "isRequired",
                     "type": {
                         "kind": "base",
-                        "name": "integer"
+                        "name": "boolean"
                     },
-                    "documentation": "The new snapshot version"
+                    "optional": false,
+                    "documentation": "True if this key must be present in the dictionary. False for NotRequired[] fields. Example: `year: NotRequired[int]` has isRequired=false."
+                },
+                {
+                    "name": "isReadOnly",
+                    "type": {
+                        "kind": "base",
+                        "name": "boolean"
+                    },
+                    "optional": false,
+                    "documentation": "True if this key cannot be modified after creation. Set by ReadOnly[] annotation. Example: `id: ReadOnly[int]` has isReadOnly=true."
+                },
+                {
+                    "name": "isProvided",
+                    "type": {
+                        "kind": "base",
+                        "name": "boolean"
+                    },
+                    "optional": false,
+                    "documentation": "True if this key has been provided during partial TypedDict construction. Used for tracking incremental TypedDict building."
                 }
             ],
-            "documentation": "Parameters for snapshot changed notification."
+            "documentation": "Represents a single field in a TypedDict. Contains the type and metadata for one key-value pair in a TypedDict definition. Fields: - valueType: The type of the value for this key - isRequired: Whether this key must be present (vs. optional using NotRequired[]) - isReadOnly: Whether this key cannot be modified (using ReadOnly[]) - isProvided: Whether this key has been provided in a partial TypedDict construction Examples: ```python class Movie(TypedDict): name: str              # isRequired=true, isReadOnly=false year: int              # isRequired=true, isReadOnly=false rating: NotRequired[float]  # isRequired=false id: ReadOnly[int]      # isRequired=true, isReadOnly=true ```"
         },
-        {
-            "name": "DiagnosticsChangedParams",
+        "TypedDictEntries": {
+            "kind": "interface",
+            "properties": [],
+            "documentation": "Represents all fields in a TypedDict class. Contains both explicitly declared fields and optional extra items. Fields: - knownItems: Dictionary mapping field names to their TypedDictEntry definitions - extraItems: Optional type for additional keys (when using extra_items parameter) Examples: ```python # Standard TypedDict class Movie(TypedDict): name: str year: int # knownItems = {\"name\": TypedDictEntry(...), \"year\": TypedDictEntry(...)} # extraItems = undefined # TypedDict with extra_items (closed TypedDict) class Config(TypedDict, extra_items=str): host: str port: int # knownItems = {\"host\": ..., \"port\": ...} # extraItems = TypedDictEntry for str type ```"
+        },
+        "TupleTypeArg": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "optional": false,
+                    "documentation": "The type of this tuple element. Example: In `tuple[int, str, bool]`, each position has a different type."
+                },
+                {
+                    "name": "isUnbounded",
+                    "type": {
+                        "kind": "base",
+                        "name": "boolean"
+                    },
+                    "optional": false,
+                    "documentation": "Does the type argument represent a single value or an \"unbounded\" (zero or more) arguments? True for `tuple[int, ...]` (variadic), false for `tuple[int, str]` (fixed)."
+                },
+                {
+                    "name": "isOptional",
+                    "type": {
+                        "kind": "base",
+                        "name": "boolean"
+                    },
+                    "optional": true,
+                    "documentation": "For tuples captured from a callable, this indicates the corresponding positional parameter has a default argument and can therefore be omitted. Example: For `def foo(a: int, b: str = \"\")`, b's type has isOptional=true."
+                }
+            ],
+            "documentation": "Represents a single type argument in a tuple type. Used for tuple[...] generic type arguments, handling both fixed and variadic elements. Fields: - type: The type of this tuple element - isUnbounded: True for *args-style variadic elements (zero or more of this type) - isOptional: True if this element can be omitted (has a default) Examples: ```python # Fixed tuple x: tuple[int, str, bool] # Three TupleTypeArg: [int, str, bool], all with isUnbounded=false # Unbounded tuple y: tuple[int, ...] # One TupleTypeArg: int with isUnbounded=true # Callable with optional params def foo(a: int, b: str = \"\") -> None: ... # Captured as tuple[int, str] where str has isOptional=true ```"
+        },
+        "PropertyMethodInfo": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "methodType",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "optional": false,
+                    "documentation": "The type of the decorated function (fget, fset, or fdel). Contains the function signature including parameters and return type. Example: For `@property def name(self) -> str`, this is the function type."
+                },
+                {
+                    "name": "classType",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "optional": true,
+                    "documentation": "The class that declared this property method. Used to track which class in the inheritance hierarchy defined the method. Example: If a property is inherited, classType points to the declaring class."
+                }
+            ],
+            "documentation": "Represents information about a property method (getter, setter, or deleter). Used to track the implementation of @property decorated methods. Fields: - methodType: The type of the decorated function (fget, fset, or fdel) - classType: The class that declared this method Examples: ```python class Person: @property def name(self) -> str:  # fgetInfo contains this method's type return self._name @name.setter def name(self, value: str) -> None:  # fsetInfo contains this method's type self._name = value @name.deleter def name(self) -> None:  # fdelInfo contains this method's type del self._name ```"
+        },
+        "SpecializedFunctionTypes": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "parameterTypes",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    "optional": false,
+                    "documentation": "Specialized types for each of the parameters in the \"parameters\" array. Array matches the parameters array, with type variables replaced by concrete types. Example: For `def foo[T](x: T)` specialized to `T=int`, parameterTypes=[int]."
+                },
+                {
+                    "name": "parameterDefaultTypes",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "or",
+                            "items": [
+                                {
+                                    "kind": "reference",
+                                    "name": "Type"
+                                },
+                                {
+                                    "kind": "base",
+                                    "name": "null"
+                                }
+                            ]
+                        }
+                    },
+                    "optional": true,
+                    "documentation": "Specialized types of default arguments for each parameter in the \"parameters\" array. If an entry is undefined or the entire array is missing, there is no specialized type, and the original \"defaultType\" should be used. Example: For a generic default value that depends on T, this contains the specialized version."
+                },
+                {
+                    "name": "returnType",
+                    "type": {
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "reference",
+                                "name": "Type"
+                            }
+                        ]
+                    },
+                    "optional": false,
+                    "documentation": "Specialized type of the declared return type. Undefined if there is no declared return type. Example: For `def foo[T](x: T) -> T` specialized to `T=int`, returnType=int."
+                }
+            ],
+            "documentation": "Represents specialized (concrete) types for a generic function's parameters and return type. Used when generic type parameters are substituted with actual types. Fields: - parameterTypes: Concrete types for each parameter after type variable substitution - parameterDefaultTypes: Specialized types for default values (if different from declared) - returnType: Specialized return type after type variable substitution Examples: ```python # Generic function def identity[T](x: T) -> T: return x # When called as identity[int](42): # - parameterTypes = [int] (T substituted with int) # - returnType = int (T substituted with int) # For list.append bound to list[str]: # - parameterTypes = [str] (specialized from generic T) ```"
+        },
+        "EnumLiteral": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "className",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "Name of the enum class. Example: \"Color\" for the Color enum."
+                },
+                {
+                    "name": "itemName",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "Name of the specific enum member. Example: \"RED\" for Color.RED."
+                },
+                {
+                    "name": "itemType",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "optional": false,
+                    "documentation": "Type of the enum member's value. Example: int type if the enum values are integers."
+                }
+            ],
+            "documentation": "Represents a literal value from an Enum. Used to track specific enum members as literal types. Fields: - className: Name of the enum class - itemName: Name of the specific enum member - itemType: Type of the enum member's value Examples: ```python from enum import Enum class Color(Enum): RED = 1 GREEN = 2 BLUE = 3 # Color.RED is an EnumLiteral: # className=\"Color\", itemName=\"RED\", itemType=int (for value 1) def process(color: Literal[Color.RED]) -> None: pass  # EnumLiteral tracks that it's specifically Color.RED ```"
+        },
+        "SentinelLiteral": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "classNode",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Node"
+                    },
+                    "optional": false,
+                    "documentation": "AST node pointing to the sentinel class definition. Used to locate the class in source code."
+                },
+                {
+                    "name": "moduleName",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "Fully qualified module name where the sentinel is defined. Example: \"dataclasses\" for dataclasses.MISSING."
+                },
+                {
+                    "name": "className",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "Name of the sentinel class. Example: \"_MISSING_TYPE\" for the class of dataclasses.MISSING."
+                }
+            ],
+            "documentation": "Represents a sentinel value (a unique object used as a marker). Used for special singleton values that act as sentinels in APIs. Fields: - classNode: AST node where the sentinel class is defined - moduleName: Module containing the sentinel - className: Name of the sentinel class Examples: ```python # Common sentinel pattern class _Sentinel: pass MISSING = _Sentinel() def get_value(key: str, default: int | _Sentinel = MISSING) -> int: ... # MISSING is a SentinelLiteral pointing to the _Sentinel class instance # Used in standard library (e.g., dataclasses.MISSING) from dataclasses import field, MISSING # MISSING is tracked as a SentinelLiteral ```"
+        },
+        "RegularDeclaration": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "category",
+                    "type": {
+                        "kind": "reference",
+                        "name": "DeclarationCategory"
+                    },
+                    "optional": false,
+                    "documentation": "Category of the declaration (Variable, Function, Class, etc.). Determines how the declaration should be interpreted. Example: DeclarationCategory.Function for `def foo():`."
+                },
+                {
+                    "name": "node",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Node"
+                    },
+                    "optional": false,
+                    "documentation": "AST node pointing to the declaration location in source code. Contains file URI and range information. Example: Points to the `def` keyword and function name for function declarations."
+                },
+                {
+                    "name": "name",
+                    "type": {
+                        "kind": "or",
+                        "items": [
+                            {
+                                "kind": "base",
+                                "name": "string"
+                            }
+                        ]
+                    },
+                    "optional": false,
+                    "documentation": "Name of the declared symbol, or undefined for anonymous declarations. Example: \"foo\" for `def foo():`, undefined for lambda functions."
+                }
+            ],
+            "documentation": "Represents a declaration that exists in source code. Points to the actual AST node where a symbol is declared. Fields: - category: Type of declaration (Variable, Function, Class, etc.) - node: AST node pointing to the declaration location - name: Name of the declared symbol (undefined for anonymous/implicit declarations) Examples: ```python def my_function(x: int) -> str:  # Function declaration return str(x) class MyClass:  # Class declaration x: int      # Variable declaration T = TypeVar('T')  # TypeParam declaration ```",
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "DeclarationBase"
+                }
+            ]
+        },
+        "SynthesizedDeclaration": {
+            "kind": "interface",
             "properties": [
                 {
                     "name": "uri",
@@ -1524,491 +927,481 @@
                         "kind": "base",
                         "name": "string"
                     },
-                    "documentation": "The URI of the file with changed diagnostics"
-                },
+                    "optional": false,
+                    "documentation": "URI of the file where this symbol is conceptually declared. For built-ins, this might be a special URI; for decorator-generated code, it's the file containing the decorator. Example: File URI of a @dataclass-decorated class for synthesized __init__."
+                }
+            ],
+            "documentation": "Represents a synthesized declaration (not in source code). Used for implicitly created symbols like built-in types or decorator-generated members. Fields: - uri: The file URI where this is conceptually declared (often the module using it) Examples: ```python # Built-in functions have synthesized declarations len([1, 2, 3])  # len is synthesized, not from source # @dataclass generates __init__, __eq__, etc. - synthesized declarations @dataclass class Point: x: int y: int # Point.__init__ is synthesized ```",
+            "extends": [
                 {
-                    "name": "snapshot",
+                    "kind": "reference",
+                    "name": "DeclarationBase"
+                }
+            ]
+        },
+        "TypeAliasInfo": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "name",
                     "type": {
                         "kind": "base",
-                        "name": "integer"
+                        "name": "string"
                     },
-                    "documentation": "The snapshot version"
+                    "optional": false,
+                    "documentation": "Short name of the type alias. Example: \"IntList\" for `type IntList = list[int]`."
                 },
                 {
-                    "name": "version",
+                    "name": "fullName",
                     "type": {
                         "kind": "base",
-                        "name": "integer"
+                        "name": "string"
                     },
-                    "documentation": "The diagnostics version"
+                    "optional": false,
+                    "documentation": "Fully qualified name including module path. Example: \"mymodule.IntList\"."
+                },
+                {
+                    "name": "moduleName",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "Module where the type alias is defined. Example: \"mymodule\" for a type defined in mymodule.py."
+                },
+                {
+                    "name": "fileUri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "URI of the file containing the type alias definition. Example: \"file:///path/to/mymodule.py\"."
+                },
+                {
+                    "name": "scopeId",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "Scope identifier for type variables used in this alias. Ensures type variables are scoped to this alias definition. Example: Different aliases can use the same type variable name 'T' without conflict."
+                },
+                {
+                    "name": "isTypeAliasType",
+                    "type": {
+                        "kind": "base",
+                        "name": "boolean"
+                    },
+                    "optional": false,
+                    "documentation": "True if this alias uses the `type` keyword (PEP 695), false for traditional assignment. Example: true for `type X = int`, false for `X = int`."
+                },
+                {
+                    "name": "typeParams",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    "optional": true,
+                    "documentation": "Generic type parameters declared by this alias. Example: [T] for `type Pair[T] = tuple[T, T]`."
+                },
+                {
+                    "name": "typeArgs",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    "optional": true,
+                    "documentation": "Concrete type arguments when this alias is specialized. Example: [int] when `Pair[int]` is used (specializing Pair[T])."
+                },
+                {
+                    "name": "computedVariance",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Variance"
+                        }
+                    },
+                    "optional": true,
+                    "documentation": "Computed variance for each type parameter. Inferred based on how type parameters are used in the alias definition. Example: [Covariant] if the type parameter only appears in return positions."
                 }
             ],
-            "documentation": "Parameters for diagnostics changed notification."
-        }
-    ],
-    "enumerations": [
-        {
-            "name": "TypeCategory",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
-                {
-                    "name": "Any",
-                    "value": 0,
-                    "documentation": "Type can be anything"
-                },
-                {
-                    "name": "Function",
-                    "value": 1,
-                    "documentation": "Callable type"
-                },
-                {
-                    "name": "Overloaded",
-                    "value": 2,
-                    "documentation": "Functions defined with @overload decorator"
-                },
-                {
-                    "name": "Class",
-                    "value": 3,
-                    "documentation": "Class definition"
-                },
-                {
-                    "name": "Module",
-                    "value": 4,
-                    "documentation": "Module instance"
-                },
-                {
-                    "name": "Union",
-                    "value": 5,
-                    "documentation": "Union of two or more other types"
-                },
-                {
-                    "name": "TypeVar",
-                    "value": 6,
-                    "documentation": "Type variable"
-                }
-            ],
-            "documentation": "Represents a category of a type, such as class, function, variable, etc."
+            "documentation": "Contains metadata about a type alias. Used when a type is created through a type alias statement (PEP 613) or traditional assignment. Fields: - name: Short name of the alias - fullName: Fully qualified name including module path - moduleName: Module where the alias is defined - fileUri: File location of the alias definition - scopeId: Scope identifier for the alias (for scoped type variables) - isTypeAliasType: True if this uses the `type` keyword (PEP 695) - typeParams: Generic type parameters declared by the alias - typeArgs: Concrete type arguments when the alias is specialized - computedVariance: Inferred variance for type parameters Examples: ```python # PEP 695 style (isTypeAliasType=true) type IntList = list[int] # Traditional style (isTypeAliasType=false) IntList = list[int] # Generic alias with type parameters type Pair[T] = tuple[T, T] # typeParams=[T], can be specialized to Pair[int] # Using typing.TypeAlias from typing import TypeAlias UserId: TypeAlias = int ```"
         },
-        {
-            "name": "TypeFlags",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
+        "BuiltInType": {
+            "kind": "interface",
+            "properties": [
                 {
-                    "name": "None",
-                    "value": 0
+                    "name": "declaration",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Declaration"
+                    },
+                    "optional": true,
+                    "documentation": "Optional declaration information for built-in types (usually undefined for true built-ins). Example: Some built-ins like __class__ have synthesized declarations."
                 },
                 {
-                    "name": "Instantiable",
-                    "value": 1,
-                    "documentation": "Indicates if the type can be instantiated."
+                    "name": "name",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "The name of the built-in type. Limited to specific known built-in types. 'unknown': Type cannot be determined 'any': Accepts any value (gradual typing) 'unbound': Variable not yet bound to a value 'ellipsis': The ... literal 'never': Type that never occurs (e.g., function that always raises) 'noreturn': Function that doesn't return (alias for never)"
                 },
                 {
-                    "name": "Instance",
-                    "value": 2,
-                    "documentation": "Indicates if the type represents an instance (as opposed to a class or type itself)."
-                },
-                {
-                    "name": "Callable",
-                    "value": 4,
-                    "documentation": "Indicates if an instance of the type can be called like a function."
-                },
-                {
-                    "name": "Literal",
-                    "value": 8,
-                    "documentation": "Indicates if the instance is a literal (like `42`, `\"hello\"`, etc.)."
-                },
-                {
-                    "name": "Interface",
-                    "value": 16,
-                    "documentation": "Indicates if the type is an interface (a type that defines a set of methods and properties)."
-                },
-                {
-                    "name": "Generic",
-                    "value": 32,
-                    "documentation": "Indicates if the type is a generic type (a type that can be parameterized with other types)."
-                },
-                {
-                    "name": "FromAlias",
-                    "value": 64,
-                    "documentation": "Indicates if the type came from an alias (a type that refers to another type)."
-                },
-                {
-                    "name": "Unpacked",
-                    "value": 128,
-                    "documentation": "Indicates if the type is unpacked (used with TypeVarTuple)."
+                    "name": "possibleType",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "optional": true,
+                    "documentation": "For 'unknown' types, this may contain a possible type based on context. Used when type inference has partial information but can't fully determine the type. Example: In `if isinstance(x, int): ...` the possibleType of unknown x might be int"
                 }
             ],
-            "documentation": "Flags that describe the characteristics of a type. These flags can be combined using bitwise operations."
+            "documentation": "Represents special built-in types that are fundamental to Python's type system. These are not regular classes but represent special semantic meanings. Used for: - Type inference failures (unknown) - Gradual typing (any) - Uninitialized variables (unbound) - Special literals (ellipsis for ...) - Non-returning functions (never/noreturn) Examples: - `unknown`: `x` in `def foo(x):` with no type hints and no usage to infer from - `any`: Explicit `Any` annotation or from untyped imports - `unbound`: Variable declared but not yet assigned: `x: int` (before assignment) - `ellipsis`: The `...` in `def foo(...): ...` or `Tuple[int, ...]` - `never`: `def raise_error() -> Never:` or function with only raise statements",
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "TypeBase"
+                }
+            ]
         },
-        {
-            "name": "FunctionFlags",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
+        "FunctionType": {
+            "kind": "interface",
+            "properties": [
                 {
-                    "name": "None",
-                    "value": 0
+                    "name": "returnType",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "optional": true,
+                    "documentation": "The return type annotation of the function. Example: In `def foo() -> int:`, returnType is the int type."
                 },
                 {
-                    "name": "Async",
-                    "value": 1,
-                    "documentation": "Indicates if the function is asynchronous."
+                    "name": "specializedTypes",
+                    "type": {
+                        "kind": "reference",
+                        "name": "SpecializedFunctionTypes"
+                    },
+                    "optional": true,
+                    "documentation": "Specialized versions of parameter types and return type when the function has type parameters. Contains concrete types substituted for generic type variables. Example: When calling `list[int].append(1)`, the self parameter is specialized to list[int]."
                 },
                 {
-                    "name": "Generator",
-                    "value": 2,
-                    "documentation": "Indicates if the function is a generator (can yield values)."
-                },
-                {
-                    "name": "Abstract",
-                    "value": 4,
-                    "documentation": "Indicates if the function is abstract (must be implemented in a subclass)."
-                },
-                {
-                    "name": "Static",
-                    "value": 8,
-                    "documentation": "Indicates if the function has a @staticmethod decorator."
-                },
-                {
-                    "name": "GradualCallableForm",
-                    "value": 16,
-                    "documentation": "The *args and **kwargs parameters do not need to be present for this function to be compatible. This is used for Callable[..., x] and ... type arguments to ParamSpec and Concatenate."
+                    "name": "boundToType",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "optional": true,
+                    "documentation": "The class or object instance that this method is bound to. Example: In `obj.method`, boundToType is the type of `obj`."
                 }
             ],
-            "documentation": "Flags that describe the characteristics of a function or method. These flags can be combined using bitwise operations."
+            "documentation": "Represents a function or method that has a declaration in the source code. Used for functions parsed from actual `def` statements. Uses TypeKind.Function for discrimination from ClassType and other types. Binding behavior: - boundToType: Contains the class/instance the method is bound to. Used for: - User-defined functions with `def` statements - Methods declared in source classes - Lambda functions (though simple ones) Not used for: - Built-in functions like `len`, `print` (use SynthesizedType) - Synthesized methods from decorators like @dataclass (use SynthesizedType) Example: ```python def calculate(x: int, y: int) -> int: return x + y class MyClass: def method(self, value: str) -> None: pass ```",
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "DeclaredType"
+                }
+            ]
         },
-        {
-            "name": "ClassFlags",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
+        "ClassType": {
+            "kind": "interface",
+            "properties": [
                 {
-                    "name": "None",
-                    "value": 0
+                    "name": "literalValue",
+                    "type": {
+                        "kind": "reference",
+                        "name": "LiteralValue"
+                    },
+                    "optional": true,
+                    "documentation": "The literal value if this class represents a literal (e.g., int literal 42, str literal \"hello\"). Can be a primitive value, enum member, or sentinel object. Example: For the literal `42`, literalValue = 42."
                 },
                 {
-                    "name": "Enum",
-                    "value": 1,
-                    "documentation": "Indicates if the class is an enum (a special kind of class that defines a set of named values)."
-                },
-                {
-                    "name": "TypedDict",
-                    "value": 2,
-                    "documentation": "Indicates if the class is a TypedDict or derived from a TypedDict."
+                    "name": "typeArgs",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    "optional": true,
+                    "documentation": "Type arguments when this class is a specialized generic type. Example: For `list[int]`, typeArgs = [int]."
                 }
             ],
-            "documentation": "Flags that describe the characteristics of a class. These flags can be combined using bitwise operations."
+            "documentation": "Represents a class or class instance that has a declaration in the source code. Used for classes parsed from actual `class` statements. Uses TypeKind.Class for discrimination from FunctionType and other types. Used for: - User-defined classes with `class` statements - Class instances (instances of user-defined classes) - Specialized generic classes (e.g., `MyClass[int]`) - Literal instances (e.g., the number `42` is an instance of `int`) Not used for: - Built-in classes like `int`, `str`, `list` (use SynthesizedType) - Classes synthesized by decorators (use SynthesizedType) Example: ```python class Point: x: int y: int class Container[T]: value: T # point has ClassType (instance of Point) point = Point() # container has ClassType with typeArgs=[int] container: Container[int] = Container() ```",
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "DeclaredType"
+                }
+            ]
         },
-        {
-            "name": "TypeVarFlags",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
+        "UnionType": {
+            "kind": "interface",
+            "properties": [
                 {
-                    "name": "None",
-                    "value": 0
-                },
-                {
-                    "name": "IsParamSpec",
-                    "value": 1,
-                    "documentation": "Indicates if the type variable is a ParamSpec (as defined in PEP 612)."
-                },
-                {
-                    "name": "IsTypeVarTuple",
-                    "value": 2,
-                    "documentation": "Indicates if the type variable is a TypeVarTuple (as defined in PEP 646)."
+                    "name": "subTypes",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    "optional": false,
+                    "documentation": "Array of types that make up this union. Example: For `int | str | None`, subTypes = [int, str, None]."
                 }
             ],
-            "documentation": "Flags that describe the characteristics of a type variable. These flags can be combined using bitwise operations."
+            "documentation": "Represents a union of multiple types (Type1 | Type2 | ...). Used when a value can be one of several different types. Used for: - Explicit union type annotations using `|` or `Union[...]` - Optional types (which are unions with None) - Type narrowing results (e.g., after isinstance checks) - Inferred types from multiple branches Examples: ```python # Explicit union annotation def process(value: int | str) -> None: pass # Optional (union with None) def find(key: str) -> str | None: return None # Inferred union from branches if condition: x = 42        # int else: x = \"hello\"  # str # x has type int | str ```",
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "TypeBase"
+                }
+            ]
         },
-        {
-            "name": "DeclarationCategory",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
+        "ModuleType": {
+            "kind": "interface",
+            "properties": [
                 {
-                    "name": "Intrinsic",
-                    "value": 0,
-                    "documentation": "An intrinsic refers to a symbol that has no actual declaration in the source code, such as built-in types or functions."
+                    "name": "moduleName",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "Fully qualified name of the module. Example: \"os.path\" for the os.path module."
                 },
                 {
-                    "name": "Variable",
-                    "value": 1,
-                    "documentation": "A variable is a named storage location that can hold a value."
-                },
-                {
-                    "name": "Param",
-                    "value": 2,
-                    "documentation": "A parameter is a variable that is passed to a function or method."
-                },
-                {
-                    "name": "TypeParam",
-                    "value": 3,
-                    "documentation": "This is for PEP 695 type parameters."
-                },
-                {
-                    "name": "TypeAlias",
-                    "value": 4,
-                    "documentation": "This is for PEP 695 type aliases."
-                },
-                {
-                    "name": "Function",
-                    "value": 5,
-                    "documentation": "A function is any construct that begins with the `def` keyword and has a body, which can be called with arguments."
-                },
-                {
-                    "name": "Class",
-                    "value": 6,
-                    "documentation": "A class is any construct that begins with the `class` keyword and has a body, which can be instantiated."
-                },
-                {
-                    "name": "Import",
-                    "value": 7,
-                    "documentation": "An import declaration, which is a reference to another module."
+                    "name": "uri",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false,
+                    "documentation": "URI of the module's source file. Example: \"file:///path/to/module.py\" or \"<builtin>\" for built-in modules."
                 }
             ],
-            "documentation": "Represents the category of a declaration in the type system."
+            "documentation": "Represents a Python module as a type. Used when a module object itself is referenced (not its contents). Used for: - Module imports: `import os` makes `os` a ModuleType - Module attributes accessed via __file__, __name__, etc. - Submodule references: `os.path` is also a ModuleType The loaderFields contain all the symbols exported by the module that would be accessible via attribute access (module.symbol_name). Examples: ```python import os import os.path as path from typing import Protocol # `os` has ModuleType with loaderFields containing {\"path\": ..., \"getcwd\": ..., etc.} # `path` has ModuleType for the os.path module # In type stubs, Protocol is a module symbol that gets loaded ```",
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "TypeBase"
+                }
+            ]
         },
-        {
-            "name": "DeclarationFlags",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
+        "OverloadedType": {
+            "kind": "interface",
+            "properties": [
                 {
-                    "name": "None",
-                    "value": 0
+                    "name": "overloads",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "Type"
+                        }
+                    },
+                    "optional": false,
+                    "documentation": "List of overload signatures for this overloaded function. Each overload represents a different way the function can be called. Example: For a function with @overload decorators, each overload is in this array."
                 },
                 {
-                    "name": "ClassMember",
-                    "value": 1,
-                    "documentation": "Indicates if the declaration is a method (a function defined within a class)."
-                },
-                {
-                    "name": "Constant",
-                    "value": 2,
-                    "documentation": "Indicates if the declaration is a constant (a variable that cannot be changed)."
-                },
-                {
-                    "name": "Final",
-                    "value": 4,
-                    "documentation": "Indicates if the declaration is final variable (a class that cannot be subclassed)."
-                },
-                {
-                    "name": "IsDefinedBySlots",
-                    "value": 8,
-                    "documentation": "Indicates if the declaration is defined by slots (a class that uses __slots__)."
-                },
-                {
-                    "name": "UsesLocalName",
-                    "value": 16,
-                    "documentation": "Indicates if the import declaration uses 'as' with a different name."
-                },
-                {
-                    "name": "UnresolvedImport",
-                    "value": 32,
-                    "documentation": "Indicates if the import declaration is unresolved (the module or symbol could not be found)."
-                },
-                {
-                    "name": "SimpleParam",
-                    "value": 64,
-                    "documentation": "Indicates if the declaration is a simple parameter (e.g., a function parameter)."
-                },
-                {
-                    "name": "ArgsListParam",
-                    "value": 128,
-                    "documentation": "Indicates if a declaration is an argument list (e.g., `*args`)."
-                },
-                {
-                    "name": "KwargsDictParam",
-                    "value": 256,
-                    "documentation": "Indicates if the declaration is a keyword argument dictionary (e.g., `**kwargs`)."
-                },
-                {
-                    "name": "PositionalParam",
-                    "value": 512,
-                    "documentation": "Indicates if the declaration is a positional parameter."
-                },
-                {
-                    "name": "StandardParam",
-                    "value": 1024,
-                    "documentation": "Indicates if the declaration is a standard parameter."
-                },
-                {
-                    "name": "KeywordParam",
-                    "value": 2048,
-                    "documentation": "Indicates if the declaration is a keyword parameter."
-                },
-                {
-                    "name": "ExpandedArgsParam",
-                    "value": 4096,
-                    "documentation": "Indicates if the declaration is an expanded *args parameter."
-                },
-                {
-                    "name": "ReturnType",
-                    "value": 8192,
-                    "documentation": "Indicates if the declaration is a return type (e.g., the return value of a function)."
-                },
-                {
-                    "name": "EnumMember",
-                    "value": 16384,
-                    "documentation": "Indicates if the declaration is a member of an enum type."
-                },
-                {
-                    "name": "TypeDeclared",
-                    "value": 32768,
-                    "documentation": "Indicates if the declaration has an explicitly declared type."
-                },
-                {
-                    "name": "SpecializedType",
-                    "value": 65536,
-                    "documentation": "Indicates if the declaration is a specialization of a generic type."
+                    "name": "implementation",
+                    "type": {
+                        "kind": "reference",
+                        "name": "Type"
+                    },
+                    "optional": true,
+                    "documentation": "The implementation signature (if present). This is the actual function body, as opposed to the @overload declarations. Example: The non-decorated function definition after all @overload decorators."
                 }
             ],
-            "documentation": "Flags that describe extra information about a declaration."
+            "documentation": "Represents an overloaded function with multiple signatures. Used when a function has multiple `@overload` decorators defining different call signatures. Used for: - Functions with @overload decorators - Built-in functions with multiple signatures (e.g., `range(stop)` vs `range(start, stop, step)`) - Methods with different signatures for different argument types The `overloads` array contains all the @overload signatures, and `implementation` contains the actual implementation (if present). Examples: ```python from typing import overload @overload def process(value: int) -> str: ... @overload def process(value: str) -> int: ... def process(value: int | str) -> int | str: if isinstance(value, int): return str(value) return len(value) # The type of `process` is OverloadedType with: # - overloads = [signature for (int)->str, signature for (str)->int] # - implementation = signature for (int|str)->(int|str) ```",
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "TypeBase"
+                }
+            ]
         },
-        {
-            "name": "SymbolSearchFlags",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
+        "SynthesizedTypeMetadata": {
+            "kind": "interface",
+            "properties": [
                 {
-                    "name": "None",
-                    "value": 0
+                    "name": "module",
+                    "type": {
+                        "kind": "reference",
+                        "name": "ModuleType"
+                    },
+                    "optional": false
                 },
                 {
-                    "name": "SkipInstanceAttributes",
-                    "value": 1,
-                    "documentation": "Skip instance attributes when searching for attributes of a type."
-                },
-                {
-                    "name": "SkipTypeBaseClass",
-                    "value": 2,
-                    "documentation": "Skip members from the base class of a type when searching for members of a type."
-                },
-                {
-                    "name": "SkipAttributeAccessOverrides",
-                    "value": 4,
-                    "documentation": "Skip attribute access overrides when searching for members of a type."
-                },
-                {
-                    "name": "GetBoundAttributes",
-                    "value": 8,
-                    "documentation": "Look for bound attributes when searching for attributes of a type. That is methods bound specifically to an instance."
-                },
-                {
-                    "name": "SkipUnreachableCode",
-                    "value": 16,
-                    "documentation": "When searching for a name, skip symbols that are in unreachable code."
+                    "name": "primaryDefinitionOffset",
+                    "type": {
+                        "kind": "base",
+                        "name": "number"
+                    },
+                    "optional": false
                 }
             ],
-            "documentation": "Flags that are used for searching for symbols."
+            "documentation": "Metadata about a synthesized type that provides additional context. This information is used by the client to enhance IntelliSense and type checking."
         },
-        {
-            "name": "SymbolFlags",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
+        "SynthesizedType": {
+            "kind": "interface",
+            "properties": [
                 {
-                    "name": "None",
-                    "value": 0
+                    "name": "stubContent",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false
                 },
                 {
-                    "name": "SynthesizedName",
-                    "value": 1,
-                    "documentation": "Indicates if the symbol name was synthesized by the type server and not present in the source code."
+                    "name": "metadata",
+                    "type": {
+                        "kind": "reference",
+                        "name": "SynthesizedTypeMetadata"
+                    },
+                    "optional": false
                 }
             ],
-            "documentation": "Flags that give more information about a symbol."
+            "documentation": "Represents synthesized/generated types. When the type server generates its own types that do not directly correspond to source code declarations, it uses this handle. The stub content should be a complete, valid Python stub (.pyi) that includes: 1. All necessary imports (typing module, collections.abc, etc.) 2. TypeVar and ParamSpec declarations used in the type 3. Type aliases or class definitions 4. Function signatures with full parameter and return type annotations This approach is particularly useful for: - Synthesized methods from decorators like @dataclass.__init__ - NewType declarations - Generic type specializations Examples: # Example 1: Synthesized dataclass __init__ from dataclasses import dataclass @dataclass class Point: x: int y: int # Stub content for Point.__init__: \"\"\" def __init__(self, x: int, y: int) -> None: '''Initialize Point''' \"\"\" # metadata: { primaryDefinitionOffset: 0 } # Example 2: Generic function with TypeVar from typing import TypeVar T = TypeVar('T') def identity(x: T) -> T: return x # Stub content: \"\"\" from typing import TypeVar T = TypeVar('T') def identity(x: T) -> T: ... \"\"\" # metadata: { primaryDefinitionOffset: 45 } (offset points to 'def') # Example 3: ParamSpec function from typing import ParamSpec, Callable P = ParamSpec('P') def wrapper(func: Callable[P, int]) -> Callable[P, str]: ... # Stub content: \"\"\" from typing import ParamSpec, Callable P = ParamSpec('P') def wrapper(func: Callable[P, int]) -> Callable[P, str]: ... \"\"\" # metadata: { primaryDefinitionOffset: 67 } # Example 4: NewType from typing import NewType UserId = NewType('UserId', int) # Stub content: \"\"\" from typing import NewType UserId = NewType('UserId', int) \"\"\" # metadata: { primaryDefinitionOffset: 25 } (offset points to 'UserId') # Example 5: Complex generic specialization with ParamSpec class Wrapper[P, R]: func: Callable[P, R] def example(x: int, y: str) -> bool: ... w: Wrapper[(x: int, y: str), bool] = Wrapper() # Stub content for Wrapper[(x: int, y: str), bool]: \"\"\" from typing import ParamSpec, TypeVar, Generic, Callable P = ParamSpec('P') R = TypeVar('R') class Wrapper(Generic[P, R]): func: Callable[P, R] \"\"\" # metadata: { primaryDefinitionOffset: 87 } (offset points to 'class Wrapper') ``` Important: The stub content is used to reconstruct the type on the client side by: 1. Parsing the stub as a Python type stub file 2. Evaluating the type expressions within the stub 3. Extracting the resulting type for use in type checking and IntelliSense",
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "TypeBase"
+                }
+            ]
         },
-        {
-            "name": "TypeReprFlags",
-            "type": {
-                "kind": "base",
-                "name": "integer"
-            },
-            "values": [
+        "TypeReferenceType": {
+            "kind": "interface",
+            "properties": [
                 {
-                    "name": "None",
-                    "value": 0
-                },
-                {
-                    "name": "ExpandTypeAliases",
-                    "value": 1,
-                    "documentation": "Turn type aliases into their original type."
-                },
-                {
-                    "name": "PrintTypeVarVariance",
-                    "value": 2,
-                    "documentation": "Print the variance of a type parameter."
-                },
-                {
-                    "name": "ConvertToInstanceType",
-                    "value": 4,
-                    "documentation": "Convert the type into an instance type before printing it."
-                },
-                {
-                    "name": "PythonSyntax",
-                    "value": 8,
-                    "documentation": "Limit output to legal Python syntax."
+                    "name": "typeReferenceId",
+                    "type": {
+                        "kind": "base",
+                        "name": "number"
+                    },
+                    "optional": false,
+                    "documentation": "Identifier that references another Type by its id. Used to avoid duplicating large type structures and handle forward references. Example: When a type appears multiple times, later occurrences use TypeReference pointing to the first occurrence's id."
                 }
             ],
-            "documentation": "Flags that control how type representations are formatted."
-        }
-    ],
-    "typeAliases": [
-        {
-            "name": "TypeHandle",
+            "documentation": "Represents a reference to another type by its ID. Used to avoid duplicating large type structures and to handle forward references. Used for: - Deduplication: When the same type appears multiple times, subsequent occurrences can reference the first occurrence instead of duplicating all fields - Cyclic references: Breaking cycles in recursive type definitions - Large types: Reducing payload size for complex types used repeatedly This is an optimization mechanism in the protocol to keep type handles compact when transmitting over the wire. Examples: ```python # Recursive type definition class Node: value: int next: Node | None  # 'Node' references back to itself # When serializing the type of 'next', the second occurrence of Node # uses TypeReferenceType pointing to the first Node's ID # Repeated complex type def process_lists( list1: list[dict[str, int]], list2: list[dict[str, int]],  # Can reference the type from list1 list3: list[dict[str, int]]   # Can reference the type from list1 ) -> None: pass ```",
+            "extends": [
+                {
+                    "kind": "reference",
+                    "name": "TypeBase"
+                }
+            ]
+        },
+        "LiteralValue": {
+            "kind": "alias",
             "type": {
                 "kind": "or",
                 "items": [
                     {
                         "kind": "base",
-                        "name": "string"
+                        "name": "number"
                     },
                     {
                         "kind": "base",
-                        "name": "integer"
+                        "name": "boolean"
+                    },
+                    {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "EnumLiteral"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "SentinelLiteral"
                     }
                 ]
-            },
-            "documentation": "Unique identifier for a type definition within the snapshot. A handle doesn't need to exist beyond the lifetime of the snapshot."
+            }
         },
-        {
-            "name": "DeclarationHandle",
+        "Declaration": {
+            "kind": "alias",
             "type": {
                 "kind": "or",
                 "items": [
                     {
-                        "kind": "base",
-                        "name": "string"
+                        "kind": "reference",
+                        "name": "RegularDeclaration"
                     },
                     {
-                        "kind": "base",
-                        "name": "integer"
+                        "kind": "reference",
+                        "name": "SynthesizedDeclaration"
                     }
                 ]
-            },
-            "documentation": "Unique identifier for a declaration within the session."
+            }
+        },
+        "TypeVarType": {
+            "kind": "alias",
+            "type": {
+                "kind": "reference",
+                "name": "DeclaredType"
+            }
+        },
+        "Type": {
+            "kind": "alias",
+            "type": {
+                "kind": "or",
+                "items": [
+                    {
+                        "kind": "reference",
+                        "name": "BuiltInType"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "DeclaredType"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "FunctionType"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "ClassType"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "UnionType"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "ModuleType"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "TypeVarType"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "OverloadedType"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "SynthesizedType"
+                    },
+                    {
+                        "kind": "reference",
+                        "name": "TypeReferenceType"
+                    }
+                ]
+            }
         }
-    ]
+    }
 }

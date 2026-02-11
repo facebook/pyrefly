@@ -1181,11 +1181,15 @@ Definition Result:
 
 25 | dict["foo"]
             ^
-Definition Result: None
+Definition Result:
+3618 |     def __getitem__(self, key: _KT, /) -> _VT:
+               ^^^^^^^^^^^
 
 27 | dict["bar"]
             ^
-Definition Result: None
+Definition Result:
+3618 |     def __getitem__(self, key: _KT, /) -> _VT:
+               ^^^^^^^^^^^
 "#
         .trim(),
         report.trim(),
@@ -1424,6 +1428,97 @@ Definition Result:
 
 
 # foo.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dunder_all_entry_definition_test() {
+    let pkg = r#"
+from pkg.bar import Bar
+
+class Baz:
+    pass
+
+__all__ = (
+    "Bar",
+#    ^
+    "Baz",
+#    ^
+)
+"#;
+    let bar = r#"
+class Bar:
+    pass
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("pkg", pkg), ("pkg.bar", bar)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+8 |     "Bar",
+         ^
+Definition Result:
+2 | class Bar:
+          ^^^
+
+10 |     "Baz",
+          ^
+Definition Result:
+4 | class Baz:
+          ^^^
+
+
+# pkg.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn string_literal_not_in_dunder_all() {
+    let pkg = r#"
+class Foo:
+    pass
+
+x = "Foo"
+#    ^
+
+__all__ = ["Foo"]
+"#;
+    let report = get_batched_lsp_operations_report(&[("pkg", pkg)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+5 | x = "Foo"
+         ^
+Definition Result: None
+
+
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dunder_all_nonexistent_symbol() {
+    let pkg = r#"
+__all__ = ["NonExistent"]
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("pkg", pkg)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+2 | __all__ = ["NonExistent"]
+                 ^
+Definition Result: None
+
+
 "#
         .trim(),
         report.trim(),
@@ -1693,4 +1788,298 @@ x = None
     // None should resolve to builtins.pyi
     assert!(report.contains("Definition Result:"));
     assert!(report.contains("None"));
+}
+
+#[test]
+fn goto_def_on_import_same_name_alias_first_token_test() {
+    let lib = r#"
+def func():
+    pass
+"#;
+    let code = r#"
+from lib import func as func
+#                ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import func as func
+                     ^
+Definition Result:
+2 | def func():
+        ^^^^
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_on_import_same_name_alias_second_token_test() {
+    let lib = r#"
+def func():
+    pass
+"#;
+    let code = r#"
+from lib import func as func
+#                        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import func as func
+                             ^
+Definition Result:
+2 | def func():
+        ^^^^
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_on_import_different_name_alias_test() {
+    let lib = r#"
+def bar():
+    pass
+"#;
+    let code = r#"
+from lib import bar as baz
+#                ^      ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import bar as baz
+                     ^
+Definition Result:
+2 | def bar():
+        ^^^
+
+2 | from lib import bar as baz
+                            ^
+Definition Result:
+2 | def bar():
+        ^^^
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_on_first_component_of_multi_part_import() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# mymod/__init__.py"),
+        "Expected go-to-definition to point to mymod/__init__.py, got: {report}"
+    );
+    assert!(
+        !report.contains("# mymod/submod/__init__.py"),
+        "Go-to-definition should not point to mymod/submod/__init__.py when clicking on 'mymod', got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_middle_component_of_multi_part_import() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let mymod_submod_deep_init = r#"# mymod/submod/deep/__init__.py
+class Bar: ...
+"#;
+    let code = r#"
+from mymod.submod.deep import Bar
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+            ("mymod.submod.deep", mymod_submod_deep_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# mymod/submod/__init__.py"),
+        "Expected go-to-definition to point to mymod/submod/__init__.py, got: {report}"
+    );
+    assert!(
+        !report.contains("# mymod/submod/deep/__init__.py"),
+        "Go-to-definition should not point to mymod/submod/deep/__init__.py when clicking on 'submod', got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_first_component_when_intermediate_module_missing() {
+    // Only mymod.submod exists, not mymod itself
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("mymod.submod", mymod_submod_init)],
+        get_test_report,
+    );
+    assert!(
+        report.contains("Definition Result:") && report.contains("None"),
+        "Expected no definition when clicking on 'mymod' if mymod/__init__.py doesn't exist, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_middle_component_when_intermediate_module_missing() {
+    // Only mymod and mymod.submod.deep exist, not mymod.submod
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_deep_init = r#"# mymod/submod/deep/__init__.py
+class Bar: ...
+"#;
+    let code = r#"
+from mymod.submod.deep import Bar
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod.deep", mymod_submod_deep_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("Definition Result:") && report.contains("None"),
+        "Expected no definition when clicking on 'submod' if mymod/submod/__init__.py doesn't exist, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_in_membership_operator() {
+    let code = r#"
+class Container:
+    def __contains__(self, item: int) -> bool: ...
+
+c = Container()
+1 in c
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("__contains__"),
+        "Expected definition to jump to __contains__ method, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_in_iteration_for_loop() {
+    let code = r#"
+from typing import Iterator
+
+class MyIterable:
+    def __iter__(self) -> Iterator[int]: ...
+
+it = MyIterable()
+for x in it:
+#     ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("__iter__"),
+        "Expected definition to jump to __iter__ method, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_in_iteration_comprehension() {
+    let code = r#"
+from typing import Iterator
+
+class MyIterable:
+    def __iter__(self) -> Iterator[int]: ...
+
+it = MyIterable()
+result = [x for x in it]
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("__iter__"),
+        "Expected definition to jump to __iter__ method in comprehension, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_in_fstring_simple() {
+    let code = r#"
+def f() -> int:
+    return 0
+
+y = f"hello {f()}"
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("def f()"),
+        "Expected definition to jump to function f, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_in_fstring_format_specifier() {
+    // TODO(T253793958): Fix go-to-definition in format string specifiers.
+    let code = r#"
+def f() -> int:
+    return 0
+
+x = 1
+y = f"hello {x:{f()}}"
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Definition Result:") && report.contains("None"),
+        "Expected definition to jump to function f, got: {report}"
+    );
 }
