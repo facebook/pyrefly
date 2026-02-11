@@ -883,6 +883,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 Type::any_error()
             }
+        }
+    }
     /// Checks for incompatible equality comparisons between types that cannot overlap.
     fn check_incompatible_comparison(
         &self,
