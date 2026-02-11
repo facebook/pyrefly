@@ -2107,6 +2107,15 @@ assert-type = false
 ...
 ```
 
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0    | Success - command completed without issues |
+| 1    | User error - command completed but problems (e.g., type errors) were found |
+| 3    | Infrastructure error - an error in the environment prevented the command from completing |
+| 101  | Panic - Pyrefly encountered an internal error and crashed |
+
 
 ---
 
@@ -3744,6 +3753,21 @@ async def bar():
 This error is raised when a `# pyrefly: ignore` comment is not used to suppress an error, and can be safely removed.
 
 The default severity of this diagnostic is `ignore`.
+
+## variance-mismatch
+
+The inferred variance of a type variable does not match its declared variance. This warning is raised for protocols where the way a type variable is used implies a different variance than what was declared. For example, if a protocol only uses `T` in covariant positions but `T` is declared as invariant, this warning suggests declaring `T` as covariant.
+
+The default severity of this diagnostic is `warn`.
+
+```python
+from typing import Protocol, TypeVar
+
+T = TypeVar("T")
+
+class A(Protocol[T]):  # variance-mismatch: Type variable `T` is declared as invariant, but could be covariant based on its usage
+    def f(self) -> T: ...
+```
 
 
 ---
