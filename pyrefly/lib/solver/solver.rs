@@ -20,6 +20,7 @@ use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_alias::TypeAliasRef;
+use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
@@ -1712,13 +1713,44 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             .clone()
                             .promote_implicit_literals(self.type_order.stdlib());
                         let name = q.name.clone();
-                        let bound = q
-                            .restriction()
-                            .as_type(self.type_order.stdlib(), &self.solver.heap);
+                        let restriction = q.restriction().clone();
+                        let bound =
+                            restriction.as_type(self.type_order.stdlib(), &self.solver.heap);
                         drop(v2_ref);
-                        variables.update(*v2, Variable::Answer(t1_p.clone()));
                         drop(variables);
-                        if let Err(err_p) = self.is_subset_eq(&t1_p, &bound) {
+                        // For constrained TypeVars, promote the argument type to the
+                        // matching constraint. A constrained TypeVar must resolve to
+                        // exactly one of its constraints, not a subtype of a constraint.
+                        // Skip promotion for Any and Never, which are compatible with all
+                        // constraints and should not lock in a specific one.
+                        let answer = if let Restriction::Constraints(constraints) = &restriction
+                            && !t1_p.is_any()
+                            && !t1_p.is_never()
+                        {
+                            // Find the narrowest matching constraint, mirroring mypy's
+                            // get_target_type() in applytype.py. This handles cases like
+                            // TypeVar("T", date, time, datetime) where datetime is a
+                            // subtype of date -- passing datetime should resolve to the
+                            // datetime constraint, not date.
+                            let mut best: Option<&Type> = None;
+                            for c in constraints.iter() {
+                                if self.is_subset_eq(&t1_p, c).is_ok() {
+                                    best = Some(match best {
+                                        Some(prev) if self.is_subset_eq(c, prev).is_ok() => c,
+                                        Some(prev) => prev,
+                                        None => c,
+                                    });
+                                }
+                            }
+                            best.cloned().unwrap_or(t1_p.clone())
+                        } else {
+                            t1_p.clone()
+                        };
+                        self.solver
+                            .variables
+                            .lock()
+                            .update(*v2, Variable::Answer(answer.clone()));
+                        if let Err(err_p) = self.is_subset_eq(&answer, &bound) {
                             // If the promoted type fails, try again with the original type, in case the bound itself is literal.
                             // This could be more optimized, but errors are rare, so this code path should not be hot.
                             self.solver
@@ -1730,12 +1762,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                                 self.solver
                                     .variables
                                     .lock()
-                                    .update(*v2, Variable::Answer(t1_p.clone()));
+                                    .update(*v2, Variable::Answer(answer.clone()));
                                 self.solver.instantiation_errors.write().insert(
                                     *v2,
                                     TypeVarSpecializationError {
                                         name,
-                                        got: t1_p.clone(),
+                                        got: answer.clone(),
                                         want: bound,
                                         error: err_p,
                                     },

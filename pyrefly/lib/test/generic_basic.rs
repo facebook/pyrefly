@@ -294,7 +294,6 @@ class F(Generic[_b]):
 );
 
 testcase!(
-    bug = "conformance: Constrained TypeVar with subtype should resolve to constraint, not subtype",
     test_constrained_typevar_subtype_resolves_to_constraint,
     r#"
 from typing import TypeVar, assert_type
@@ -305,10 +304,57 @@ def concat(x: AnyStr, y: AnyStr) -> AnyStr:
     return x + y  # E: `+` is not supported  # E: `+` is not supported
 
 class MyStr(str): ...
+class MyBytes(bytes): ...
 
-def test(m: MyStr, s: str):
-    assert_type(concat(m, m), str)  # E: assert_type(MyStr, str) failed
-    assert_type(concat(m, s), str)  # E: assert_type(MyStr, str) failed  # E: Argument `str` is not assignable to parameter `y` with type `MyStr`
+def test(m: MyStr, s: str, mb: MyBytes, b: bytes):
+    # Subtypes should resolve to their matching constraint
+    assert_type(concat(m, m), str)
+    assert_type(concat(m, s), str)
+    assert_type(concat(mb, mb), bytes)
+    assert_type(concat(mb, b), bytes)
+    # Exact constraint types should still work
+    assert_type(concat(s, s), str)
+    assert_type(concat(b, b), bytes)
+    # Mixing subtypes of different constraints should error
+    concat(m, mb)  # E: Argument `MyBytes` is not assignable to parameter `y` with type `str`
+    concat(m, b)  # E: Argument `bytes` is not assignable to parameter `y` with type `str`
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_overlapping_constraints,
+    r#"
+from typing import TypeVar, assert_type
+from datetime import date, time, datetime
+
+# datetime is a subclass of date, and both are constraints.
+# When datetime is passed, it should resolve to the most specific
+# matching constraint (datetime), not the first match (date).
+T = TypeVar("T", date, time, datetime)
+
+def f(x: T) -> T:
+    return x
+
+assert_type(f(datetime.now()), datetime)
+assert_type(f(date.today()), date)
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_literal_string,
+    r#"
+from typing import TypeVar, LiteralString, assert_type
+
+AnyStr = TypeVar("AnyStr", str, bytes)
+
+def f(x: AnyStr) -> AnyStr:
+    return x
+
+def test(ls: LiteralString):
+    # LiteralString is a subtype of str, should resolve to str constraint
+    assert_type(f(ls), str)
+    # Literal string values should also resolve to str
+    assert_type(f("hello"), str)
 "#,
 );
 

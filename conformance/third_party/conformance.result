@@ -103,9 +103,7 @@
     "Line 98: Expected 1 errors"
   ],
   "generics_basic.py": [
-    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__` called with arguments: (AnyStr)\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]']",
-    "Line 67: Unexpected errors ['assert_type(MyStr, str) failed']",
-    "Line 68: Unexpected errors ['assert_type(MyStr, str) failed', 'Argument `str` is not assignable to parameter `y` with type `MyStr` in function `concat`']"
+    "Line 34: Unexpected errors ['`+` is not supported between `AnyStr` and `AnyStr`\\n  Argument `AnyStr` is not assignable to parameter `value` with type `Buffer` in function `bytes.__add__`\\n  Protocol `Buffer` requires attribute `__buffer__`', '`+` is not supported between `AnyStr` and `AnyStr`\\n  No matching overload found for function `str.__add__` called with arguments: (AnyStr)\\n  Possible overloads:\\n  (value: LiteralString, /) -> LiteralString\\n  (value: str, /) -> str [closest match]']"
   ],
   "generics_defaults.py": [
     "Line 170: Unexpected errors ['assert_type([DefaultIntT = int](Foo7[DefaultIntT]) -> Foo7[DefaultIntT], (Foo7[int]) -> Foo7[int]) failed']"
