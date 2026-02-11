@@ -487,8 +487,10 @@ class C:
 
 ## incompatible-comparison
 
-This error is raised when an equality (`==`) or inequality (`!=`) comparison is
-made between types that cannot overlap. This is almost always a bug.
+This error is raised when Pyrefly can prove that an equality (`==`) or inequality
+(`!=`) comparison is made between incompatible built-in scalar types (for example,
+`int` versus `str`). This check is currently limited to primitive scalar types and
+does not analyze unions, `None`, or user-defined classes.
 
 ```python
 x: int = 1
