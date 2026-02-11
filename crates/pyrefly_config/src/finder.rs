@@ -38,6 +38,8 @@ pub struct ConfigError {
     severity: Severity,
     msg: String,
     file_path: Option<PathBuf>,
+    /// Optional span (line, column) information, 1-indexed
+    span: Option<(usize, usize)>,
 }
 
 impl ConfigError {
@@ -46,6 +48,7 @@ impl ConfigError {
             severity: Severity::Error,
             msg: format!("{:#}", msg),
             file_path,
+            span: None,
         }
     }
 
@@ -54,6 +57,21 @@ impl ConfigError {
             severity: Severity::Warn,
             msg: format!("{:#}", msg),
             file_path,
+            span: None,
+        }
+    }
+
+    /// Create an error with span information (line, column), 1-indexed
+    pub fn error_with_span(
+        msg: anyhow::Error,
+        file_path: Option<PathBuf>,
+        span: (usize, usize),
+    ) -> Self {
+        Self {
+            severity: Severity::Error,
+            msg: format!("{:#}", msg),
+            file_path,
+            span: Some(span),
         }
     }
 
@@ -77,6 +95,7 @@ impl ConfigError {
             severity: self.severity,
             msg: format!("{}: {}", context, self.msg),
             file_path: self.file_path,
+            span: self.span,
         }
     }
 
@@ -90,6 +109,11 @@ impl ConfigError {
 
     pub fn file_path(&self) -> Option<&Path> {
         self.file_path.as_deref()
+    }
+
+    /// Get the span (line, column) if available, 1-indexed
+    pub fn span(&self) -> Option<(usize, usize)> {
+        self.span
     }
 }
 

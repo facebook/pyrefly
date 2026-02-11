@@ -1925,10 +1925,8 @@ impl Server {
 
     /// Convert a ConfigError to an LSP Diagnostic
     fn config_error_to_diagnostic(error: &ConfigError) -> Diagnostic {
-        // Try to extract line number from TOML error message
-        // TOML errors often contain "at line X" or "TOML parse error at line X, column Y"
-        let error_message = error.get_message();
-        let (line, column) = Self::extract_line_col_from_toml_error(&error_message);
+        // Use span information from ConfigError if available, otherwise default to (1, 1)
+        let (line, column) = error.span().unwrap_or((1, 1));
 
         let range = Range {
             start: Position {
@@ -1950,30 +1948,10 @@ impl Server {
                 pyrefly_config::error_kind::Severity::Ignore => DiagnosticSeverity::HINT,
             }),
             source: Some("Pyrefly".to_owned()),
-            message: error_message,
+            message: error.get_message(),
             code: Some(NumberOrString::String("config-error".to_owned())),
             ..Default::default()
         }
-    }
-
-    /// Extract line and column numbers from TOML error messages
-    /// Returns (line, column) with 1-based indexing, defaults to (1, 1)
-    fn extract_line_col_from_toml_error(error_msg: &str) -> (usize, usize) {
-        let line = error_msg
-            .split("line ")
-            .nth(1)
-            .and_then(|s| s.split(&[',', ' ', '\n'][..]).next())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(1);
-
-        let column = error_msg
-            .split("column ")
-            .nth(1)
-            .and_then(|s| s.split(&[',', ' ', '\n'][..]).next())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(1);
-
-        (line, column)
     }
 
     /// Publish diagnostics for config files (pyrefly.toml or pyproject.toml)

@@ -1211,6 +1211,34 @@ impl ConfigFile {
     }
 
     pub fn from_file(config_path: &Path) -> (ConfigFile, Vec<ConfigError>) {
+        /// Extract line and column from toml error by checking if it's a toml::de::Error
+        fn extract_toml_span(error: &anyhow::Error) -> Option<(usize, usize)> {
+            // Check if the error is a toml deserialization error
+            error
+                .downcast_ref::<toml::de::Error>()
+                .and_then(|toml_err| {
+                    // Get the span from toml error
+                    toml_err.span().map(|_span| {
+                        // The span is in bytes, but toml errors also expose line/column in their Display
+                        // For now, we parse the display string which includes "at line X, column Y"
+                        let error_str = toml_err.to_string();
+                        let line = error_str
+                            .split("line ")
+                            .nth(1)
+                            .and_then(|s| s.split(&[',', ' ', '\n'][..]).next())
+                            .and_then(|s| s.parse::<usize>().ok())
+                            .unwrap_or(1);
+                        let column = error_str
+                            .split("column ")
+                            .nth(1)
+                            .and_then(|s| s.split(&[',', ' ', '\n'][..]).next())
+                            .and_then(|s| s.parse::<usize>().ok())
+                            .unwrap_or(1);
+                        (line, column)
+                    })
+                })
+        }
+
         fn read_path(config_path: &Path) -> anyhow::Result<Option<ConfigFile>> {
             let config_str = fs_anyhow::read_to_string(config_path)?;
             if config_path.file_name() == Some(OsStr::new(ConfigFile::PYPROJECT_FILE_NAME)) {
@@ -1231,7 +1259,13 @@ impl ConfigFile {
                 Ok(Some(config)) => (Some(config), ConfigSource::File(config_path.to_path_buf())),
                 Ok(None) => (None, ConfigSource::Marker(config_path.to_path_buf())),
                 Err(e) => {
-                    errors.push(ConfigError::error(e, Some(config_path.to_path_buf())));
+                    // Extract span information if this is a TOML error
+                    let config_error = if let Some(span) = extract_toml_span(&e) {
+                        ConfigError::error_with_span(e, Some(config_path.to_path_buf()), span)
+                    } else {
+                        ConfigError::error(e, Some(config_path.to_path_buf()))
+                    };
+                    errors.push(config_error);
                     (None, ConfigSource::File(config_path.to_path_buf()))
                 }
             };
@@ -1284,12 +1318,16 @@ impl ConfigFile {
     }
 
     fn parse_config(config_str: &str) -> anyhow::Result<ConfigFile> {
-        toml::from_str::<ConfigFile>(config_str).map_err(|err| anyhow::Error::msg(err.to_string()))
+        toml::from_str::<ConfigFile>(config_str).map_err(|err| {
+            // The toml error's Display implementation includes line/column info
+            // which we'll extract in from_file when creating ConfigError
+            anyhow::Error::new(err)
+        })
     }
 
     fn parse_pyproject_toml(config_str: &str) -> anyhow::Result<Option<ConfigFile>> {
         Ok(toml::from_str::<PyProject>(config_str)
-            .map_err(|err| anyhow::Error::msg(err.to_string()))?
+            .map_err(anyhow::Error::new)?
             .pyrefly())
     }
 }
