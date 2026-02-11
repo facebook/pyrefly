@@ -1230,7 +1230,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If the class has a custom metaclass and the return type of the metaclass's __call__
             // is not a subclass of the current class, use that and ignore __new__ and __init__
             if metaclass_call_attr_ty
-                .callable_return_type()
+                .callable_return_type(self.heap)
                 .is_some_and(|ret| !self.is_compatible_constructor_return(&ret, cls.class_object()))
             {
                 return metaclass_call_attr_ty;
@@ -1249,7 +1249,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .get_dunder_new(cls)
             .and_then(|t| self.bind_dunder_new(&t, cls.clone()))
         {
-            if t.callable_return_type()
+            if t.callable_return_type(self.heap)
                 .is_some_and(|ret| !self.is_compatible_constructor_return(&ret, cls.class_object()))
             {
                 // If the return type of __new__ is not a subclass of the current class, use that and ignore __init__

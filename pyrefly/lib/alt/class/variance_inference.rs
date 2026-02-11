@@ -493,61 +493,6 @@ fn initialize_environment<'a>(
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn compute_variance_env(&self, class: &Class) -> VarianceEnv {
-        fn fixpoint<'a, Ans: LookupAnswer>(
-            solver: &AnswersSolver<'a, Ans>,
-            mut env: VarianceEnv,
-        ) -> VarianceEnv {
-            let mut changed = true;
-
-            while changed {
-                changed = false;
-                let mut new_environment: VarianceEnv = SmallMap::new();
-
-                for (my_class, params) in env.iter() {
-                    let mut new_params = params.clone();
-
-                    let mut on_var =
-                        |name: &Name,
-                         variance: Variance,
-                         has_inferred: bool,
-                         _: PreInferenceVariance| {
-                            if let Some(old_status) = new_params.get_mut(name) {
-                                let new_inferred_variance =
-                                    variance.union(old_status.inferred_variance);
-                                // Mark as inferred if:
-                                // 1. It was already marked as inferred, OR
-                                // 2. The caller says this is an injective (reliable) constraint, OR
-                                // 3. The inferred variance is no longer Bivariant (we found a constraint)
-                                // Case 3 fixes self-referential types where `has_inferred` is always false
-                                // but we still discover variance constraints through the fixpoint iteration.
-                                let new_has_variance_inferred = old_status.has_variance_inferred
-                                    || has_inferred
-                                    || new_inferred_variance != Variance::Bivariant;
-                                if new_inferred_variance != old_status.inferred_variance
-                                    || new_has_variance_inferred != old_status.has_variance_inferred
-                                {
-                                    old_status.inferred_variance = new_inferred_variance;
-                                    old_status.has_variance_inferred = new_has_variance_inferred;
-                                    changed = true;
-                                }
-                            }
-                        };
-                    let mut on_edge = |c: &Class| env.get(c).cloned().unwrap_or_default();
-                    on_class(
-                        my_class,
-                        solver.heap,
-                        &mut on_edge,
-                        &mut on_var,
-                        &|c| solver.get_base_types_for_class(c),
-                        &|c| solver.get_class_field_map(c),
-                    );
-                    new_environment.insert(my_class.dupe(), new_params);
-                }
-                env = new_environment;
-            }
-            env
-        }
-
         let mut environment = VarianceEnv::new();
         let initial_inference_map_for_class =
             initial_inference_map(self.get_class_tparams(class).as_vec());
@@ -566,8 +511,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &|c| self.get_class_field_map(c),
                 &|c| self.get_class_tparams(c),
             );
-            fixpoint(self, environment)
+            self.fixpoint(environment)
         }
+    }
+
+    fn fixpoint(&self, mut env: VarianceEnv) -> VarianceEnv {
+        let mut changed = true;
+
+        while changed {
+            changed = false;
+            let mut new_environment: VarianceEnv = SmallMap::new();
+
+            for (my_class, params) in env.iter() {
+                let mut new_params = params.clone();
+
+                let mut on_var = |name: &Name,
+                                  variance: Variance,
+                                  has_inferred: bool,
+                                  _: PreInferenceVariance| {
+                    if let Some(old_status) = new_params.get_mut(name) {
+                        let new_inferred_variance = variance.union(old_status.inferred_variance);
+                        // Mark as inferred if:
+                        // 1. It was already marked as inferred, OR
+                        // 2. The caller says this is an injective (reliable) constraint, OR
+                        // 3. The inferred variance is no longer Bivariant (we found a constraint)
+                        // Case 3 fixes self-referential types where `has_inferred` is always false
+                        // but we still discover variance constraints through the fixpoint iteration.
+                        let new_has_variance_inferred = old_status.has_variance_inferred
+                            || has_inferred
+                            || new_inferred_variance != Variance::Bivariant;
+                        if new_inferred_variance != old_status.inferred_variance
+                            || new_has_variance_inferred != old_status.has_variance_inferred
+                        {
+                            old_status.inferred_variance = new_inferred_variance;
+                            old_status.has_variance_inferred = new_has_variance_inferred;
+                            changed = true;
+                        }
+                    }
+                };
+                let mut on_edge = |c: &Class| env.get(c).cloned().unwrap_or_default();
+                on_class(
+                    my_class,
+                    self.heap,
+                    &mut on_edge,
+                    &mut on_var,
+                    &|c| self.get_base_types_for_class(c),
+                    &|c| self.get_class_field_map(c),
+                );
+                new_environment.insert(my_class.dupe(), new_params);
+            }
+            env = new_environment;
+        }
+        env
     }
 
     /// Compute variance for a class, optionally checking for violations.

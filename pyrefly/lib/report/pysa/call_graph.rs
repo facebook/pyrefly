@@ -2586,12 +2586,13 @@ impl<'a> CallGraphVisitor<'a> {
                          attr_type: callee_type,
                      }| {
                         // TODO(T252263933): Need more precise return types for `__getitem__` in `typed_dict.py`
-                        let return_type =
-                            if let Some(return_type) = callee_type.callable_return_type() {
-                                ScalarTypeProperties::from_type(&return_type, self.module_context)
-                            } else {
-                                ScalarTypeProperties::none()
-                            };
+                        let return_type = if let Some(return_type) =
+                            callee_type.callable_return_type(self.module_context.answers.heap())
+                        {
+                            ScalarTypeProperties::from_type(&return_type, self.module_context)
+                        } else {
+                            ScalarTypeProperties::none()
+                        };
                         DunderAttrCallees {
                             callees: self.resolve_pyrefly_target(
                                 Some(target),
@@ -2993,7 +2994,7 @@ impl<'a> CallGraphVisitor<'a> {
     // for a call expression, we could simply query its type (e.g., query the type of `c(1)`).
     fn get_return_type_for_callee(&self, callee_type: Option<&Type>) -> ScalarTypeProperties {
         callee_type
-            .and_then(|ty| ty.callable_return_type())
+            .and_then(|ty| ty.callable_return_type(self.module_context.answers.heap()))
             .map(|return_type| ScalarTypeProperties::from_type(&return_type, self.module_context))
             .unwrap_or(ScalarTypeProperties::none())
     }
@@ -3279,7 +3280,9 @@ impl<'a> CallGraphVisitor<'a> {
         } = self.call_targets_from_magic_dunder_attr(
             /* base */
             iter_callee_type
-                .and_then(|iter_callee_type| iter_callee_type.callable_return_type())
+                .and_then(|iter_callee_type| {
+                    iter_callee_type.callable_return_type(self.module_context.answers.heap())
+                })
                 .as_ref(),
             /* attribute */ Some(&next_callee_name),
             iter_range,
@@ -3973,7 +3976,7 @@ impl<'a> CallGraphVisitor<'a> {
                 if should_export_decorated_function(&decorated_function, self.module_context) {
                     let return_type = decorated_function
                         .ty
-                        .callable_return_type()
+                        .callable_return_type(self.module_context.answers.heap())
                         .map_or(ScalarTypeProperties::none(), |type_| {
                             ScalarTypeProperties::from_type(&type_, self.module_context)
                         });

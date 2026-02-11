@@ -12,6 +12,7 @@ use std::cell::RefMut;
 use std::fmt;
 use std::fmt::Display;
 use std::mem;
+use std::sync::Arc;
 
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
@@ -19,6 +20,7 @@ use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_alias::TypeAliasRef;
+use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -102,7 +104,7 @@ enum Variable {
     /// we encounter the name of the same alias. Unlike most other variables, AliasRecursive
     /// represents a known, fixed type and exists so that we can reference the type before we've
     /// finished computing it.
-    AliasRecursive(TypeAliasRef),
+    AliasRecursive(TypeAliasRef, Arc<TParams>),
     /// A variable that used to decompose a type, e.g. getting T from Awaitable[T]
     Unwrap,
     /// A variable used for a parameter type (either a function or lambda parameter).
@@ -157,7 +159,7 @@ impl Display for Variable {
                 }
             }
             Variable::LoopRecursive(t, _) => write!(f, "LoopRecursive(prior={t}, _)"),
-            Variable::AliasRecursive(r) => write!(f, "AliasRecursive({})", r.name),
+            Variable::AliasRecursive(r, _) => write!(f, "AliasRecursive({})", r.name),
             Variable::Recursive => write!(f, "Recursive"),
             Variable::Parameter => write!(f, "Parameter"),
             Variable::Unwrap => write!(f, "Unwrap"),
@@ -392,8 +394,8 @@ impl Solver {
                 *variable = Variable::Answer(self.heap.mk_any_implicit());
                 None
             }
-            Variable::AliasRecursive(r) => {
-                *variable = Variable::Answer(Self::finish_alias_recursive(r));
+            Variable::AliasRecursive(r, tparams) => {
+                *variable = Variable::Answer(Self::finish_alias_recursive(r, tparams));
                 None
             }
             Variable::Parameter => {
@@ -472,7 +474,9 @@ impl Solver {
                 let ty = match &mut *e {
                     Variable::Quantified(q) => q.as_gradual_type(),
                     Variable::PartialQuantified(q) => q.as_gradual_type(),
-                    Variable::AliasRecursive(r) => Self::finish_alias_recursive(r),
+                    Variable::AliasRecursive(r, tparams) => {
+                        Self::finish_alias_recursive(r, tparams)
+                    }
                     _ => self.heap.mk_any_implicit(),
                 };
                 *e = Variable::Answer(ty.clone());
@@ -513,7 +517,7 @@ impl Solver {
                 display_name: original_name,
             }) = x
             {
-                let mut merged = unions(mem::take(xs));
+                let mut merged = unions(mem::take(xs), &self.heap);
                 // Preserve union display names during simplification
                 if let Type::Union(box Union { display_name, .. }) = &mut merged {
                     *display_name = original_name.clone();
@@ -521,10 +525,12 @@ impl Solver {
                 *x = merged;
             }
             if let Type::Intersect(y) = x {
-                *x = intersect(mem::take(&mut y.0), y.1.clone());
+                *x = intersect(mem::take(&mut y.0), y.1.clone(), &self.heap);
             }
             if let Type::Tuple(tuple) = x {
-                *x = self.heap.mk_tuple(simplify_tuples(mem::take(tuple)));
+                *x = self
+                    .heap
+                    .mk_tuple(simplify_tuples(mem::take(tuple), &self.heap));
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
             if let Type::Concatenate(ts, box Type::ParamSpecValue(paramlist)) = x {
@@ -925,8 +931,8 @@ impl Solver {
             })
     }
 
-    fn finish_alias_recursive(r: &TypeAliasRef) -> Type {
-        Type::TypeAlias(Box::new(TypeAliasData::Ref(r.clone())))
+    fn finish_alias_recursive(r: &TypeAliasRef, tparams: &Arc<TParams>) -> Type {
+        Forallable::TypeAlias(TypeAliasData::Ref(r.clone())).forall(tparams.clone())
     }
 
     /// Generate a fresh variable used to tie recursive bindings.
@@ -945,11 +951,16 @@ impl Solver {
         v
     }
 
-    pub fn fresh_alias_recursive(&self, uniques: &UniqueFactory, r: TypeAliasRef) -> Var {
+    pub fn fresh_alias_recursive(
+        &self,
+        uniques: &UniqueFactory,
+        r: TypeAliasRef,
+        tparams: Arc<TParams>,
+    ) -> Var {
         let v = Var::new(uniques);
         self.variables
             .lock()
-            .insert_fresh(v, Variable::AliasRecursive(r));
+            .insert_fresh(v, Variable::AliasRecursive(r, tparams));
         v
     }
 
@@ -1025,9 +1036,12 @@ impl Solver {
             })
             .collect::<Vec<_>>();
         branches.extend(modules.into_values().map(Type::Module));
-        unions_with_literals(branches, type_order.stdlib(), &|cls| {
-            type_order.get_enum_member_count(cls)
-        })
+        unions_with_literals(
+            branches,
+            type_order.stdlib(),
+            &|cls| type_order.get_enum_member_count(cls),
+            &self.heap,
+        )
     }
 
     /// Record a variable that is used recursively.
@@ -1118,7 +1132,7 @@ impl Solver {
                 expand(ty, &lock, &VarRecurser::new(), &self.heap, &mut res);
                 // Then remove any reference to self, before unioning it back together
                 res.retain(|x| x != &Type::Var(var));
-                let ty = unions(res);
+                let ty = unions(res, &self.heap);
                 match bounds_to_check {
                     Some(bounds) => {
                         lock.update(var, Variable::Answer(ty.clone()));
@@ -1536,8 +1550,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             }
                             (true, true) => {
                                 // Both have restrictions, need to compare bounds
-                                let b1 = r1.as_type(self.type_order.stdlib());
-                                let b2 = r2.as_type(self.type_order.stdlib());
+                                let b1 = r1.as_type(self.type_order.stdlib(), &self.solver.heap);
+                                let b2 = r2.as_type(self.type_order.stdlib(), &self.solver.heap);
                                 drop(variables);
 
                                 let b1_subtype_of_b2 = self.is_subset_eq(&b1, &b2).is_ok();
@@ -1586,7 +1600,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
                     )),
-                    Variable::AliasRecursive(_) => Err(SubsetError::internal_error(
+                    Variable::AliasRecursive(_, _) => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
                     )),
                     Variable::Answer(t1) => {
@@ -1597,7 +1611,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                     Variable::Quantified(q) | Variable::PartialQuantified(q) => {
                         let name = q.name.clone();
-                        let bound = q.restriction().as_type(self.type_order.stdlib());
+                        let bound = q
+                            .restriction()
+                            .as_type(self.type_order.stdlib(), &self.solver.heap);
                         drop(v1_ref);
                         variables.update(*v1, Variable::Answer(t2.clone()));
                         drop(variables);
@@ -1682,7 +1698,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Parameter => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::Parameter` to ever appear in is_subset_eq",
                     )),
-                    Variable::AliasRecursive(_) => Err(SubsetError::internal_error(
+                    Variable::AliasRecursive(_, _) => Err(SubsetError::internal_error(
                         "Did not expect a `Variable::AliasRecursive` to ever appear in is_subset_eq",
                     )),
                     Variable::Answer(t2) => {
@@ -1696,7 +1712,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             .clone()
                             .promote_implicit_literals(self.type_order.stdlib());
                         let name = q.name.clone();
-                        let bound = q.restriction().as_type(self.type_order.stdlib());
+                        let bound = q
+                            .restriction()
+                            .as_type(self.type_order.stdlib(), &self.solver.heap);
                         drop(v2_ref);
                         variables.update(*v2, Variable::Answer(t1_p.clone()));
                         drop(variables);

@@ -1091,15 +1091,20 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         attr_name: &Name,
         definition: AttrDefinition,
-        docstring_range: Option<TextRange>,
         preference: FindPreference,
     ) -> Option<(TextRangeWithModule, Option<TextRange>)> {
         match definition {
-            AttrDefinition::FullyResolved(text_range_with_module_info) => {
+            AttrDefinition::FullyResolved {
+                cls,
+                range,
+                docstring_range,
+            } => {
                 // If prefer_pyi is false and the current module is a .pyi file,
                 // try to find the corresponding .py file
+                let text_range_with_module_info =
+                    TextRangeWithModule::new(cls.module().dupe(), range);
                 if !preference.prefer_pyi
-                    && text_range_with_module_info.module.path().is_interface()
+                    && cls.module_path().is_interface()
                     && let Some((exec_module, exec_range, exec_docstring)) = self
                         .search_corresponding_py_module_for_attribute(
                             handle,
@@ -1289,13 +1294,8 @@ impl<'a> Transaction<'a> {
     ) -> Option<FindDefinitionItemWithDocstring> {
         completions.into_iter().find_map(|x| {
             if &x.name == name {
-                let (definition, docstring_range) = self.resolve_attribute_definition(
-                    handle,
-                    &x.name,
-                    x.definition,
-                    x.docstring_range,
-                    preference,
-                )?;
+                let (definition, docstring_range) =
+                    self.resolve_attribute_definition(handle, &x.name, x.definition, preference)?;
                 Some(FindDefinitionItemWithDocstring {
                     metadata: DefinitionMetadata::Attribute,
                     definition_range: definition.range,
@@ -2461,7 +2461,6 @@ impl<'a> Transaction<'a> {
                         ty: _,
                         is_deprecated: _,
                         definition,
-                        docstring_range,
                         is_reexport: _,
                     } in solver.completions(base_type, Some(expected_name), false)
                     {
@@ -2470,7 +2469,6 @@ impl<'a> Transaction<'a> {
                                 handle,
                                 &name,
                                 definition,
-                                docstring_range,
                                 FindPreference::default(),
                             )
                             && module.path() == module.path()
@@ -2652,47 +2650,6 @@ impl<'a> Transaction<'a> {
             }
         }
         Some(references)
-    }
-
-    /// Suggest Literal values when completing inside a `match` value pattern.
-    ///
-    /// We can't reuse the call-argument literal completion path here because
-    /// `case <value>:` isn't a call site, so we never get parameter types to
-    /// infer literals from. Instead, we look for a match value/singleton
-    /// pattern at the cursor and pull the `match` subject's type to surface
-    /// its Literal members.
-    pub(crate) fn add_match_literal_completions(
-        &self,
-        handle: &Handle,
-        covering_nodes: &[AnyNodeRef],
-        completions: &mut Vec<CompletionItem>,
-        in_string_literal: bool,
-    ) {
-        let mut is_match_value_pattern = false;
-        let mut subject = None;
-        for node in covering_nodes {
-            match node {
-                AnyNodeRef::PatternMatchValue(_) | AnyNodeRef::PatternMatchSingleton(_) => {
-                    is_match_value_pattern = true;
-                }
-                AnyNodeRef::StmtMatch(stmt_match) => {
-                    subject = Some(stmt_match.subject.as_ref());
-                }
-                _ => {}
-            }
-            if is_match_value_pattern && subject.is_some() {
-                break;
-            }
-        }
-        if !is_match_value_pattern {
-            return;
-        }
-        let Some(subject) = subject else {
-            return;
-        };
-        if let Some(subject_type) = self.get_type_trace(handle, subject.range()) {
-            Self::add_literal_completions_from_type(&subject_type, completions, in_string_literal);
-        }
     }
 
     // Kept for backwards compatibility - used by external callers who don't need the

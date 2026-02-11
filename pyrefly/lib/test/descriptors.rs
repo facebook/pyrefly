@@ -177,6 +177,23 @@ def f(c: C) -> None:
     "#,
 );
 
+testcase!(
+    bug = "cached_property's __name__ should not exist and attrname should be a str",
+    test_cached_property_attrname,
+    r#"
+from functools import cached_property
+from typing import reveal_type
+
+class C:
+    @cached_property
+    def foo(self) -> int:
+        return 42
+
+reveal_type(C.foo.__name__)  # E: revealed type: str
+reveal_type(C.foo.attrname)  # E: revealed type: Any
+    "#,
+);
+
 // Make sure we don't crash.
 testcase!(
     test_staticmethod_class,

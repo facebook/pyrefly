@@ -13,7 +13,7 @@ anyhow = "1.0.98"
 clap = { version = "4.5.42", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 dupe = "0.9.1"
 enum-iterator = "2.1"
-equivalent = "1.0"
+equivalent = "1.0.2"
 itertools = "0.14.0"
 lsp-types = { git = "https://github.com/astral-sh/lsp-types", rev = "3512a9f33eadc5402cfab1b8f7340824c8ca1439" }
 parse-display = "0.8.2"

@@ -755,7 +755,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             extra
         } else {
             values.push(extra);
-            unions_with_literals(values, self.stdlib, &|cls| self.get_enum_member_count(cls))
+            unions_with_literals(
+                values,
+                self.stdlib,
+                &|cls| self.get_enum_member_count(cls),
+                self.heap,
+            )
         }
     }
 

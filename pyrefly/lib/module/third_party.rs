@@ -82,7 +82,7 @@ impl BundledStub for BundledThirdParty {
 
     fn config() -> ArcId<ConfigFile> {
         static CONFIG: LazyLock<ArcId<ConfigFile>> = LazyLock::new(|| {
-            let config_file = create_bundled_stub_config(None, None);
+            let config_file = create_bundled_stub_config(None, None, None);
             ArcId::new(config_file)
         });
         CONFIG.dupe()

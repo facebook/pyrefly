@@ -288,7 +288,13 @@ impl TArgs {
     }
 
     pub fn substitute_into_mut(&self, ty: &mut Type) {
-        self.substitution().substitute_into_mut(ty)
+        if let Type::TypeAlias(box TypeAliasData::Ref(r)) = ty {
+            // We don't have the value of the type alias available to do the substitution, so store
+            // the targs so that we can apply them when the value is looked up.
+            r.args = Some(self.clone())
+        } else {
+            self.substitution().substitute_into_mut(ty)
+        }
     }
 
     pub fn substitute_into(&self, mut ty: Type) -> Type {
@@ -674,6 +680,11 @@ pub enum Type {
     Any(AnyStyle),
     Never(NeverStyle),
     TypeAlias(Box<TypeAliasData>),
+    /// The result of untyping a type alias. For example, if we have `type X = int`, the type alias
+    /// stores `type[int]` as its value, which untypes to `int`. Since recursive references cannot
+    /// be immediately looked up for untyping (see `TypeAliasData::TypeAliasRef`), `UntypedAlias`
+    /// stores a reference that is untyped once we actually look up the value.
+    UntypedAlias(Box<TypeAliasData>),
     /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
     /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
@@ -743,6 +754,7 @@ impl Visit for Type {
             Type::Any(x) => x.visit(f),
             Type::Never(x) => x.visit(f),
             Type::TypeAlias(x) => x.visit(f),
+            Type::UntypedAlias(x) => x.visit(f),
             Type::SuperInstance(x) => x.visit(f),
             Type::SelfType(x) => x.visit(f),
             Type::KwCall(x) => x.visit(f),
@@ -791,6 +803,7 @@ impl VisitMut for Type {
             Type::Any(x) => x.visit_mut(f),
             Type::Never(x) => x.visit_mut(f),
             Type::TypeAlias(x) => x.visit_mut(f),
+            Type::UntypedAlias(x) => x.visit_mut(f),
             Type::SuperInstance(x) => x.visit_mut(f),
             Type::SelfType(x) => x.visit_mut(f),
             Type::KwCall(x) => x.visit_mut(f),
@@ -1404,7 +1417,7 @@ impl Type {
     }
 
     // This doesn't handle generics currently
-    pub fn callable_return_type(&self) -> Option<Type> {
+    pub fn callable_return_type(&self, heap: &TypeHeap) -> Option<Type> {
         let mut rets = Vec::new();
         let mut get_ret = |callable: &Callable| {
             rets.push(callable.ret.clone());
@@ -1413,7 +1426,7 @@ impl Type {
         if rets.is_empty() {
             None
         } else {
-            Some(unions(rets))
+            Some(unions(rets, heap))
         }
     }
 
@@ -1440,7 +1453,7 @@ impl Type {
         self.transform_toplevel_callable(&mut set_ret);
     }
 
-    pub fn callable_first_param(&self) -> Option<Type> {
+    pub fn callable_first_param(&self, heap: &TypeHeap) -> Option<Type> {
         let mut params = Vec::new();
         let mut get_param = |callable: &Callable| {
             if let Some(p) = callable.get_first_param() {
@@ -1451,7 +1464,7 @@ impl Type {
         if params.is_empty() {
             None
         } else {
-            Some(unions(params))
+            Some(unions(params, heap))
         }
     }
 
@@ -1523,10 +1536,10 @@ impl Type {
     }
 
     /// type[a | b] -> type[a] | type[b]
-    pub fn distribute_type_over_union(self) -> Self {
+    pub fn distribute_type_over_union(self, heap: &TypeHeap) -> Self {
         self.transform(&mut |ty| {
             if let Type::Type(box Type::Union(box Union { members, .. })) = ty {
-                *ty = unions(members.drain(..).map(Type::type_form).collect());
+                *ty = unions(members.drain(..).map(Type::type_form).collect(), heap);
             }
         })
     }

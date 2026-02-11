@@ -680,6 +680,28 @@
     },
     {
       "code": -2,
+      "column": 30,
+      "concise_description": "`list[list[float] | str | GenericTypeAlias1[str]]` is not assignable to `list[str | GenericTypeAlias1[str]]`",
+      "description": "`list[list[float] | str | GenericTypeAlias1[str]]` is not assignable to `list[str | GenericTypeAlias1[str]]`",
+      "line": 63,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 43,
+      "stop_line": 63
+    },
+    {
+      "code": -2,
+      "column": 35,
+      "concise_description": "`list[int | list[int | list[int | list[float] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]]` is not assignable to `list[int | str | GenericTypeAlias2[str, int]]`",
+      "description": "`list[int | list[int | list[int | list[float] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]]` is not assignable to `list[int | str | GenericTypeAlias2[str, int]]`",
+      "line": 69,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 64,
+      "stop_line": 69
+    },
+    {
+      "code": -2,
       "column": 29,
       "concise_description": "Found cyclic self-reference in `RecursiveUnion`",
       "description": "Found cyclic self-reference in `RecursiveUnion`",
@@ -925,8 +947,8 @@
     {
       "code": -2,
       "column": 6,
-      "concise_description": "Cannot redefine existing name `BadTypeAlias14` as a type alias",
-      "description": "Cannot redefine existing name `BadTypeAlias14` as a type alias",
+      "concise_description": "Cannot redefine existing type alias `BadTypeAlias14`",
+      "description": "Cannot redefine existing type alias `BadTypeAlias14`",
       "line": 52,
       "name": "redefinition",
       "severity": "error",
@@ -998,6 +1020,17 @@
       "severity": "error",
       "stop_column": 47,
       "stop_line": 82
+    },
+    {
+      "code": -2,
+      "column": 31,
+      "concise_description": "Found cyclic self-reference in `RecursiveTypeAlias4`",
+      "description": "Found cyclic self-reference in `RecursiveTypeAlias4`",
+      "line": 84,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 59,
+      "stop_line": 84
     },
     {
       "code": -2,
@@ -1077,6 +1110,17 @@
       "severity": "error",
       "stop_column": 50,
       "stop_line": 46
+    },
+    {
+      "code": -2,
+      "column": 40,
+      "concise_description": "Found cyclic self-reference in `BadAlias5`",
+      "description": "Found cyclic self-reference in `BadAlias5`",
+      "line": 47,
+      "name": "invalid-type-alias",
+      "severity": "error",
+      "stop_column": 60,
+      "stop_line": 47
     },
     {
       "code": -2,

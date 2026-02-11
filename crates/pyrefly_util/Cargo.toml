@@ -17,7 +17,7 @@ bstr = { version = "1.10.0", features = ["serde", "std", "unicode"] }
 compact_str = { version = "0.8.0", features = ["serde"] }
 const-str = "0.4.3"
 dupe = "0.9.1"
-equivalent = "1.0"
+equivalent = "1.0.2"
 fxhash = "0.2.1"
 glob = "0.3.2"
 hashbrown = { version = "0.14.5", features = ["ahash", "raw", "serde"] }

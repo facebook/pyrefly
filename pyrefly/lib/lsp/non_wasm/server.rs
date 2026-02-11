@@ -353,6 +353,8 @@ pub trait TspInterface: Send + Sync {
 
     fn stop_recheck_queue(&self);
 
+    fn dispatch_lsp_events(&self);
+
     /// Process an LSP event and return the next step
     fn process_event<'a>(
         &'a self,
@@ -740,7 +742,7 @@ pub fn initialize_finish<C: Serialize>(
 /// - priority_events includes those that should be handled as soon as possible (e.g. know that a
 ///   request is cancelled)
 /// - queued_events includes most of the other events.
-pub fn dispatch_lsp_events(server: &impl TspInterface) {
+pub fn dispatch_lsp_events(server: &Server) {
     for msg in &server.connection().receiver {
         match msg {
             Message::Request(x) => {
@@ -2130,20 +2132,6 @@ impl Server {
         );
     }
 
-    fn validate_in_memory_without_committing<'a>(
-        &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
-        telemetry: &mut TelemetryEvent,
-    ) {
-        let noncommittable_transaction =
-            ide_transaction_manager.non_committable_transaction(&self.state);
-        self.validate_in_memory_for_possibly_committable_transaction(
-            ide_transaction_manager,
-            Err(noncommittable_transaction),
-            telemetry,
-        );
-    }
-
     fn supports_completion_item_details(&self) -> bool {
         self.initialize_params
             .capabilities
@@ -2629,21 +2617,14 @@ impl Server {
         self.open_files.write().insert(path.clone(), contents);
         self.queue_source_db_rebuild_and_recheck(telemetry, telemetry_event, false);
         if !subsequent_mutation {
-            // In order to improve perceived startup perf, when a file is opened, we run a
-            // non-committing transaction that indexes the file with default require level Exports.
-            // This is very fast but doesn't follow transitive dependencies, so completions are
-            // incomplete. This makes most IDE features available immediately while
-            // populate_{project,workspace}_files below runs a transaction at default require level
-            // Indexing in the background, generating a more complete index which becomes available
-            // a few seconds later.
-            //
-            // Note that this trick works only when a pyrefly config file is present. In the absence
-            // of a config file, all features become available when background indexing completes.
             info!(
                 "File {} opened, prepare to validate open files.",
                 path.display()
             );
-            self.validate_in_memory_without_committing(ide_transaction_manager, telemetry_event);
+            self.validate_in_memory_and_commit_if_possible(
+                ide_transaction_manager,
+                telemetry_event,
+            );
         }
         // Skip background indexing if we're still waiting for the initial workspace config.
         // The indexing will be triggered when we receive the config response.
@@ -4810,6 +4791,10 @@ impl TspInterface for Server {
 
     fn pending_watched_file_changes(&self) -> &Mutex<Vec<FileEvent>> {
         &self.pending_watched_file_changes
+    }
+
+    fn dispatch_lsp_events(&self) {
+        dispatch_lsp_events(self);
     }
 
     fn run_recheck_queue(&self, telemetry: &impl Telemetry) {
