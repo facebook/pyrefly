@@ -45,7 +45,8 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::ModuleInfo;
-use crate::state::ide::import_regular_import_edit;
+use crate::state::ide::insert_import_edit;
+use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 use crate::state::lsp::ast_helpers::find_containing_function_def;
@@ -106,9 +107,13 @@ pub(crate) fn use_function_code_actions(
         let Some(target_ast) = transaction.get_ast(&target_handle) else {
             continue;
         };
-        let Some(call_target) =
-            call_target_for_module(&target_handle, target_ast.as_ref(), &pattern, handle)
-        else {
+        let Some(call_target) = call_target_for_module(
+            transaction,
+            &target_handle,
+            target_ast.as_ref(),
+            &pattern,
+            handle,
+        ) else {
             continue;
         };
         let same_module = target_handle.module() == pattern.module_name;
@@ -331,6 +336,7 @@ fn validate_opt_expr(
 
 /// Determines how the target module should call the function (import reuse or new import).
 fn call_target_for_module(
+    transaction: &Transaction<'_>,
     target_handle: &Handle,
     ast: &ModModule,
     pattern: &FunctionPattern,
@@ -355,18 +361,20 @@ fn call_target_for_module(
             import_edit: None,
         });
     }
-    let module_binding = module_str
-        .split('.')
-        .next()
-        .unwrap_or(module_str)
-        .to_owned();
-    if module_has_top_level_binding(ast, &module_binding) {
+    if module_has_top_level_binding(ast, &pattern.name) {
         return None;
     }
-    let (position, insert_text) = import_regular_import_edit(ast, function_handle.dupe());
+    let (position, insert_text, _) = insert_import_edit(
+        ast,
+        transaction.config_finder(),
+        target_handle.dupe(),
+        function_handle.dupe(),
+        &pattern.name,
+        ImportFormat::Absolute,
+    );
     let range = TextRange::at(position, TextSize::new(0));
     Some(CallTarget {
-        callee: format!("{module_str}.{}", pattern.name),
+        callee: pattern.name.clone(),
         import_edit: Some((range, insert_text)),
     })
 }
