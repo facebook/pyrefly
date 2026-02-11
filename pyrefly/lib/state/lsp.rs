@@ -52,6 +52,8 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -82,6 +84,7 @@ use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::lsp_attributes::AttributeContext;
 use crate::state::lsp_attributes::definition_from_executable_ast;
+use crate::state::lsp_attributes::expr_matches_name;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
@@ -872,6 +875,79 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn refine_keyword_argument_definition_for_class(
+        &self,
+        class_def: &StmtClassDef,
+        param_name: &Identifier,
+    ) -> Option<(TextRange, DefinitionMetadata)> {
+        let param_id = param_name.id();
+
+        // Prefer class field annotations/assignments when present.
+        for stmt in &class_def.body {
+            match stmt {
+                Stmt::AnnAssign(assign) if expr_matches_name(assign.target.as_ref(), param_id) => {
+                    return Some((assign.target.range(), DefinitionMetadata::Attribute));
+                }
+                Stmt::Assign(assign) => {
+                    if let Some(target) = assign
+                        .targets
+                        .iter()
+                        .find(|target| expr_matches_name(target, param_id))
+                    {
+                        return Some((target.range(), DefinitionMetadata::Attribute));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Fall back to __init__ parameters if no class field matches.
+        for stmt in &class_def.body {
+            if let Stmt::FunctionDef(function_def) = stmt
+                && function_def.name.id == dunder::INIT
+            {
+                for regular_param in function_def.parameters.args.iter() {
+                    if regular_param.name().id() == param_id {
+                        return Some((
+                            regular_param.name().range(),
+                            DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
+                        ));
+                    }
+                }
+                for kwonly_param in function_def.parameters.kwonlyargs.iter() {
+                    if kwonly_param.name().id() == param_id {
+                        return Some((
+                            kwonly_param.name().range(),
+                            DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
+                        ));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn refine_keyword_argument_definition_for_callee(
+        &self,
+        ast: &ModModule,
+        callee_range: TextRange,
+        param_name: &Identifier,
+    ) -> Option<(TextRange, DefinitionMetadata)> {
+        let covering_nodes = Ast::locate_node(ast, callee_range.start());
+        match (covering_nodes.first(), covering_nodes.get(1)) {
+            (Some(AnyNodeRef::Identifier(_)), Some(AnyNodeRef::StmtClassDef(class_def))) => {
+                self.refine_keyword_argument_definition_for_class(class_def, param_name)
+            }
+            _ => None,
+        }
+    }
+
+    fn definition_at(&self, handle: &Handle, position: TextSize) -> Option<Key> {
+        self.get_bindings(handle)?
+            .definition_at_position(position)
+            .cloned()
+    }
     pub fn get_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
         match self.identifier_at(handle, position) {
             Some(IdentifierWithContext {
@@ -1816,6 +1892,16 @@ impl<'a> Transaction<'a> {
             };
 
             for range in ranges.into_iter() {
+                if let Some((definition_range, metadata)) = self
+                    .refine_keyword_argument_definition_for_callee(ast.as_ref(), range, identifier)
+                {
+                    results.push(FindDefinitionItem {
+                        metadata,
+                        definition_range,
+                        module: module_info.dupe(),
+                    });
+                    continue;
+                }
                 let refined_param_range =
                     self.refine_param_location_for_callee(ast.as_ref(), range, identifier);
                 // TODO(grievejia): Should we filter out unrefinable ranges here?
