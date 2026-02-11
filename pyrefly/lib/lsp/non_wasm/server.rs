@@ -1121,36 +1121,6 @@ impl Server {
         self.completion_mru.write().record(label, auto_import_text);
     }
 
-    fn apply_completion_mru(&self, items: &mut Vec<CompletionItem>) {
-        if items.is_empty() {
-            return;
-        }
-        let mru_snapshot = self.completion_mru.read().clone();
-        for item in items.iter_mut() {
-            let (label, auto_import_text) = Self::completion_item_mru_parts(item);
-            let mru_index = if label.is_empty() {
-                None
-            } else {
-                mru_snapshot.index_for(label, auto_import_text)
-            };
-            let base_sort_text = item.sort_text.as_deref().unwrap_or("0");
-            let rank = mru_index.unwrap_or(9999).min(9999);
-            item.sort_text = Some(format!("{base_sort_text}.{rank:04}.{}", item.label));
-            item.preselect = if mru_index == Some(0) {
-                Some(true)
-            } else {
-                None
-            };
-        }
-        items.sort_by(|item1, item2| {
-            item1
-                .sort_text
-                .cmp(&item2.sort_text)
-                .then_with(|| item1.label.cmp(&item2.label))
-                .then_with(|| item1.detail.cmp(&item2.detail))
-        });
-    }
-
     fn extract_request_params_or_send_err_response<T>(
         &self,
         params: Result<T::Params, serde_json::Error>,
@@ -3389,19 +3359,26 @@ impl Server {
                 &self.initialize_params.capabilities,
             ),
         };
+        let mru_snapshot = self.completion_mru.read().clone();
         let (items, is_incomplete) = transaction
             .get_module_info(&handle)
             .map(|info| {
-                transaction.completion_with_incomplete(
+                transaction.completion_with_incomplete_mru(
                     &handle,
                     self.from_lsp_position(uri, &info, params.text_document_position.position),
                     import_format,
                     completion_options,
+                    |item| {
+                        let (label, auto_import_text) = Self::completion_item_mru_parts(item);
+                        if label.is_empty() {
+                            None
+                        } else {
+                            mru_snapshot.index_for(label, auto_import_text)
+                        }
+                    },
                 )
             })
             .unwrap_or_default();
-        let mut items = items;
-        self.apply_completion_mru(&mut items);
         Ok(CompletionResponse::List(CompletionList {
             is_incomplete,
             items,
