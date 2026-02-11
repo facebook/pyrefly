@@ -118,11 +118,11 @@ fn assign_sort_text(ranked: &mut RankedCompletion) {
     });
 }
 
-fn autoimport_sort_text(module_name: &str) -> &'static str {
+fn autoimport_source(module_name: &str) -> CompletionSource {
     if module_name.split('.').any(|part| part.starts_with('_')) {
-        SORT_AUTOIMPORT_PRIVATE
+        CompletionSource::AutoimportPrivate
     } else {
-        SORT_AUTOIMPORT_PUBLIC
+        CompletionSource::AutoimportPublic
     }
 }
 
@@ -155,7 +155,7 @@ impl Transaction<'_> {
         module_info: &Module,
         identifier_text: &str,
         supports_completion_item_details: bool,
-        completions: &mut Vec<CompletionItem>,
+        completions: &mut Vec<RankedCompletion>,
     ) -> Option<ModuleName> {
         let module_name_str = common_alias_target_module(identifier_text)?;
         let module_name = ModuleName::from_str(module_name_str);
@@ -170,18 +170,23 @@ impl Transaction<'_> {
             new_text: import_text.clone(),
         };
         let auto_import_label_detail = format!(" (import {module_name_str} as {identifier_text})");
-        completions.push(CompletionItem {
-            label: completion_label.clone(),
-            detail: Some(import_text),
-            kind: Some(CompletionItemKind::MODULE),
-            additional_text_edits: Some(vec![import_text_edit]),
-            label_details: supports_completion_item_details.then_some(CompletionItemLabelDetails {
-                detail: Some(auto_import_label_detail),
-                description: Some(module_name_str.to_owned()),
-            }),
-            insert_text: Some(completion_label),
-            sort_text: Some(autoimport_sort_text(module_name_str).to_owned()),
-            ..Default::default()
+        completions.push(RankedCompletion {
+            item: CompletionItem {
+                label: completion_label.clone(),
+                detail: Some(import_text),
+                kind: Some(CompletionItemKind::MODULE),
+                additional_text_edits: Some(vec![import_text_edit]),
+                label_details: supports_completion_item_details.then_some(
+                    CompletionItemLabelDetails {
+                        detail: Some(auto_import_label_detail),
+                        description: Some(module_name_str.to_owned()),
+                    },
+                ),
+                insert_text: Some(completion_label),
+                ..Default::default()
+            },
+            source: autoimport_source(module_name_str),
+            is_incompatible: false,
         });
         Some(module_name)
     }
@@ -552,13 +557,6 @@ impl Transaction<'_> {
         if let Some(ast) = self.get_ast(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
-            let autoimport_source = |module_name: &str| {
-                if module_name.split('.').any(|part| part.starts_with('_')) {
-                    CompletionSource::AutoimportPrivate
-                } else {
-                    CompletionSource::AutoimportPublic
-                }
-            };
             let identifier_text = identifier.as_str();
             let mut aliased_modules = SmallSet::new();
             if let Some(module_name) = self.add_common_alias_autoimport_completion(
@@ -655,7 +653,7 @@ impl Transaction<'_> {
                     completions.push(RankedCompletion {
                         item: CompletionItem {
                             label: module_name_str.clone(),
-                            detail: Some(insert_text),
+                            detail: Some(import_text),
                             kind: Some(CompletionItemKind::MODULE),
                             additional_text_edits,
                             label_details: supports_completion_item_details.then_some(
