@@ -152,6 +152,21 @@ def f(b: bool) -> int:  # E: Function declared to return `int`, but one or more 
 );
 
 testcase!(
+    test_return_constrained_typevar_isinstance,
+    r#"
+from typing import TypeVar
+
+T = TypeVar("T", int, str)
+
+def f(x: T) -> T:
+    if isinstance(x, int):
+        return x
+    elif isinstance(x, str):
+        return x
+"#,
+);
+
+testcase!(
     test_return_if_no_else_none,
     r#"
 def f(b: bool) -> None:
