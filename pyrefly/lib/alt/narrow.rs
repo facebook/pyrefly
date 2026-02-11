@@ -262,10 +262,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !annotation.annotation.is_final() {
             return None;
         }
-        let Binding::NameAssign { expr, .. } = self.bindings().get(binding_idx) else {
+        let Binding::NameAssign(name_assign) = self.bindings().get(binding_idx) else {
             return None;
         };
-        Some(self.expr_infer(expr.as_ref(), &self.error_swallower()))
+        Some(self.expr_infer(name_assign.expr.as_ref(), &self.error_swallower()))
     }
 
     fn resolve_narrowing_call(

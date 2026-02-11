@@ -271,6 +271,7 @@ impl AtomicNarrowOp {
         match self {
             Self::Is(expr) => Some(format!("{subject} is {}", snippet(expr.range())?)),
             Self::IsNot(expr) => Some(format!("{subject} is not {}", snippet(expr.range())?)),
+            Self::IsSentinel(_, _) | Self::IsNotSentinel(_, _) => None,
             Self::Eq(expr) => Some(format!("{subject} == {}", snippet(expr.range())?)),
             Self::NotEq(expr) => Some(format!("{subject} != {}", snippet(expr.range())?)),
             Self::IsInstance(expr, _) => {
@@ -1059,11 +1060,10 @@ impl NarrowOps {
             return None;
         }
         let (binding_idx, binding) = Self::get_original_binding(builder, &name.id)?;
-        let Binding::NameAssign {
-            annotation: Some((_, annot_idx)),
-            ..
-        } = binding?
-        else {
+        let Binding::NameAssign(name_assign) = binding? else {
+            return None;
+        };
+        let Some((_, annot_idx)) = &name_assign.annotation else {
             return None;
         };
         Some(if is_not {
