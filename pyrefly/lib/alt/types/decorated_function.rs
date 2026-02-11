@@ -14,6 +14,7 @@ use std::sync::Arc;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_graph::index::Idx;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -38,7 +39,6 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
-use crate::graph::index::Idx;
 use crate::types::callable::FuncMetadata;
 use crate::types::types::Type;
 

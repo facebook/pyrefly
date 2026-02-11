@@ -5,12 +5,14 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use lsp_types::Url;
 use lsp_types::WorkspaceFoldersChangeEvent;
+use pyrefly_build::SourceDatabase;
 use pyrefly_config::config::FallbackSearchPath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::arc_id::WeakArcId;
@@ -123,6 +125,15 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
         }
         let config = ArcId::new(config);
 
+        if let Some(source_db) = &config.source_db {
+            self.0
+                .source_db_config_map
+                .lock()
+                .entry(source_db.downgrade())
+                .or_default()
+                .insert(config.downgrade());
+        }
+
         self.0.loaded_configs.insert(config.downgrade());
 
         (config, errors)
@@ -166,6 +177,9 @@ struct PyreflyClientConfig {
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
     disabled_language_services: Option<DisabledLanguageServices>,
+    // This is a global config that's read separately
+    #[allow(dead_code)]
+    stream_diagnostics: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -244,6 +258,7 @@ pub struct LspAnalysisConfig {
     #[allow(dead_code)]
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub import_format: Option<ImportFormat>,
+    pub complete_function_parens: Option<bool>,
     pub inlay_hints: Option<InlayHintConfig>,
     // TODO: this is not a pylance setting. it should be in pyrefly settings
     #[serde(default)]
@@ -267,7 +282,7 @@ where
 #[serde(rename_all = "camelCase")]
 struct LspConfig {
     /// Settings we share with the Pylance extension for backwards compatibility
-    /// See LspAnalysisConfig's docstring for mroe details
+    /// See LspAnalysisConfig's docstring for more details
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
     python_path: Option<String>,
@@ -280,6 +295,9 @@ pub struct Workspaces {
     default: RwLock<Workspace>,
     pub workspaces: RwLock<SmallMap<PathBuf, Workspace>>,
     pub loaded_configs: Arc<WeakConfigCache>,
+    source_db_config_map: Mutex<
+        HashMap<WeakArcId<Box<dyn SourceDatabase + 'static>>, HashSet<WeakArcId<ConfigFile>>>,
+    >,
 }
 
 impl Workspaces {
@@ -293,6 +311,7 @@ impl Workspaces {
                     .collect(),
             ),
             loaded_configs: Arc::new(WeakConfigCache::new()),
+            source_db_config_map: Mutex::new(HashMap::new()),
         }
     }
 
@@ -325,10 +344,14 @@ impl Workspaces {
     pub fn changed(&self, event: WorkspaceFoldersChangeEvent) {
         let mut workspaces = self.workspaces.write();
         for x in event.removed {
-            workspaces.shift_remove(&x.uri.to_file_path().unwrap());
+            if let Ok(path) = x.uri.to_file_path() {
+                workspaces.shift_remove(&path);
+            }
         }
         for x in event.added {
-            workspaces.insert(x.uri.to_file_path().unwrap(), Workspace::new());
+            if let Ok(path) = x.uri.to_file_path() {
+                workspaces.insert(path, Workspace::new());
+            }
         }
     }
 
@@ -387,7 +410,9 @@ impl Workspaces {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
-                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
                     workspace.disable_language_services = disable_language_services;
                 }
             }
@@ -404,7 +429,9 @@ impl Workspaces {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
-                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
                     workspace.disabled_language_services = Some(disabled_language_services);
                 }
             }
@@ -424,7 +451,9 @@ impl Workspaces {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
-                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
                     *modified = true;
                     workspace.display_type_errors = display_type_errors;
                 }
@@ -445,7 +474,9 @@ impl Workspaces {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
-                if let Some(workspace) = workspaces.get_mut(&scope_uri.to_file_path().unwrap()) {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
                     *modified = true;
                     workspace.lsp_analysis_config = Some(lsp_analysis_config);
                 }
@@ -465,8 +496,9 @@ impl Workspaces {
         let python_info = Some(PythonInfo::new(interpreter));
         match scope_uri {
             Some(scope_uri) => {
-                let workspace_path = scope_uri.to_file_path().unwrap();
-                if let Some(workspace) = workspaces.get_mut(&workspace_path) {
+                if let Ok(workspace_path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&workspace_path)
+                {
                     *modified = true;
                     workspace.python_info = python_info;
                 }
@@ -488,8 +520,9 @@ impl Workspaces {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
-                let workspace_path = scope_uri.to_file_path().unwrap();
-                if let Some(workspace) = workspaces.get_mut(&workspace_path) {
+                if let Ok(workspace_path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&workspace_path)
+                {
                     *modified = true;
                     workspace.search_path = Some(search_paths);
                 }
@@ -499,6 +532,36 @@ impl Workspaces {
                 self.default.write().search_path = Some(search_paths);
             }
         }
+    }
+
+    pub fn get_configs_for_source_db(
+        &self,
+        source_db: ArcId<Box<dyn SourceDatabase + 'static>>,
+    ) -> SmallSet<ArcId<ConfigFile>> {
+        let mut map = self.source_db_config_map.lock();
+        let mut result = SmallSet::new();
+        let weak_source_db = source_db.downgrade();
+        let Some(sourcedb_configs) = map.get_mut(&weak_source_db) else {
+            return result;
+        };
+
+        sourcedb_configs.retain(|config| {
+            if let Some(c) = config.upgrade() {
+                result.insert(c);
+                true
+            } else {
+                false
+            }
+        });
+        if sourcedb_configs.is_empty() {
+            map.remove(&weak_source_db);
+        }
+
+        result
+    }
+
+    pub fn sourcedb_available(&self) -> bool {
+        !self.source_db_config_map.lock().is_empty()
     }
 }
 

@@ -207,15 +207,38 @@ impl PythonPlatform {
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, Hash, Default)]
 pub struct SysInfo(Arc<WithHash<SysInfoInner>>);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct SysInfoInner {
     version: PythonVersion,
     platform: PythonPlatform,
+    type_checking: bool,
+}
+
+impl Default for SysInfoInner {
+    fn default() -> Self {
+        Self {
+            version: PythonVersion::default(),
+            platform: PythonPlatform::default(),
+            type_checking: true,
+        }
+    }
 }
 
 impl SysInfo {
     pub fn new(version: PythonVersion, platform: PythonPlatform) -> Self {
-        Self(Arc::new(WithHash::new(SysInfoInner { version, platform })))
+        Self(Arc::new(WithHash::new(SysInfoInner {
+            version,
+            platform,
+            type_checking: true,
+        })))
+    }
+
+    pub fn new_without_type_checking(version: PythonVersion, platform: PythonPlatform) -> Self {
+        Self(Arc::new(WithHash::new(SysInfoInner {
+            version,
+            platform,
+            type_checking: false,
+        })))
     }
 
     pub fn version(&self) -> PythonVersion {
@@ -224,6 +247,10 @@ impl SysInfo {
 
     pub fn platform(&self) -> &PythonPlatform {
         &self.0.key().platform
+    }
+
+    pub fn type_checking(&self) -> bool {
+        self.0.key().type_checking
     }
 }
 
@@ -362,7 +389,7 @@ impl SysInfo {
                 }
             }
             Expr::Name(name) if Self::is_type_checking_constant_name(name.id()) => {
-                Some(Value::Bool(true))
+                Some(Value::Bool(self.type_checking()))
             }
             Expr::Attribute(ExprAttribute {
                 // We support TYPE_CHECKING regardless of which import (or reimport) it is from.
@@ -370,7 +397,7 @@ impl SysInfo {
                 attr,
                 ..
             }) if value.is_name_expr() && Self::is_type_checking_constant_name(attr.as_str()) => {
-                Some(Value::Bool(true))
+                Some(Value::Bool(self.type_checking()))
             }
             Expr::Call(ExprCall {
                 func, arguments, ..

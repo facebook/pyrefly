@@ -175,7 +175,6 @@ reveal_type(Model10.__init__)  # E: revealed type: (self: Model10, *, u: LaxUUID
 );
 
 pydantic_testcase!(
-    bug = "An error should be raised here",
     test_lax_mode_coercion_literals,
     r#"
 from typing import Literal
@@ -184,7 +183,12 @@ from pydantic import BaseModel
 class Model1(BaseModel):
     status: Literal[1]
 
-m = Model1(status="1")
+m = Model1(status="1")  # E: Argument `Literal['1']` is not assignable to parameter `status`
+
+class Model2(BaseModel):
+    value: Literal["MyLiteral"]
+
+Model2(value=2)  # E: Argument `Literal[2]` is not assignable to parameter `value`
     "#,
 );
 
@@ -314,5 +318,37 @@ b = TestModel(items=my_list)
 
 my_set = {"a", "b"}
 c = TestModel(items=my_set)
+    "#,
+);
+
+pydantic_testcase!(
+    test_lax_mode_other,
+    r#"
+from pydantic import BaseModel
+from typing import Any, reveal_type
+
+class Model1(BaseModel):
+    x: None
+
+reveal_type(Model1.__init__)  # E: revealed type: (self: Model1, *, x: None, **Unknown) -> None
+
+class Model2(BaseModel):
+    y: Any
+
+reveal_type(Model2.__init__)  # E: revealed type: (self: Model2, *, y: Any, **Unknown) -> None
+    "#,
+);
+
+pydantic_testcase!(
+    test_lax_mode_type_expansion,
+    r#"
+from pydantic import BaseModel
+from typing import reveal_type
+
+class Model1(BaseModel):
+    t: type[int]
+
+reveal_type(Model1.__init__)  # E: revealed type: (self: Model1, *, t: type[LaxInt], **Unknown) -> None
+
     "#,
 );

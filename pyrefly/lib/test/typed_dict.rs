@@ -523,7 +523,7 @@ x |= y
 
 assert_type((x["a"]), int | str)
 
-x |= {} # E: Augmented assignment produces a value of type `dict[str, object]`, which is not assignable to `TD`
+x |= {} # E: Augmented assignment result `dict[str, object]` is not assignable to `TD`
 
 x: TD = {"a": 1, "b": 2}
 x.__ior__(y)
@@ -1421,7 +1421,7 @@ class Parent(TypedDict, extra_items=int):
 class GoodChild(Parent):
     x: NotRequired[int]
 class BadChild1(Parent):
-    x: Required[int]  # E: cannot be extended with required extra item `x`
+    x: Required[int]  # E: Cannot add required field `x`
 class BadChild2(Parent):
     x: NotRequired[bool]  # E: `bool` is not consistent with `extra_items` type `int`
     "#,
@@ -1541,9 +1541,9 @@ testcase!(
     test_functional_form_unexpected_keyword,
     r#"
 from typing import TypedDict
-X = TypedDict('X', {}, nonsense=True)  # E: Unrecognized argument `nonsense` for typed dictionary definition
+X = TypedDict('X', {}, nonsense=True)  # E: Unrecognized keyword argument `nonsense` in typed dictionary definition
 def f(kwargs):
-    Y = TypedDict('Y', {}, **kwargs)  # E: Unrecognized argument for typed dictionary definition
+    Y = TypedDict('Y', {}, **kwargs)  # E: Unpacking is not supported in typed dictionary definition
     "#,
 );
 
@@ -2090,4 +2090,139 @@ x: TD = TD({"x": 1, "y": "2"})
 x = TD({"x": 1}, y="2")
 x = TD({"x": 1})
 "#,
+);
+
+testcase!(
+    test_generic_typed_dict_inheritance_with_unpack,
+    r#"
+from typing import TypedDict, Type, Generic
+from typing_extensions import TypeVar, Unpack
+
+_T = TypeVar("_T", default=str)
+
+class Base(TypedDict, Generic[_T], total=False):
+    default: _T | None
+
+T = TypeVar('T')
+
+class Child(Base[T], total=False):
+    other: Type[T]
+
+def test(**kwargs: Unpack[Child[int]]) -> None:
+    pass
+
+# Should accept default=5 because Child[int] should have default: int | None
+test(other=int, default=5)
+test(other=int, default="") # E: Argument `Literal['']` is not assignable to parameter `default` with type `int | None`
+"#,
+);
+
+testcase!(
+    test_typed_dict_contains_narrowing,
+    r#"
+from typing import TypedDict, Literal, reveal_type
+
+class AClient: ...
+class BClient: ...
+class GenericClient: ...
+
+class Clients(TypedDict):
+    a: AClient
+    b: BClient
+
+def test_in(clients: Clients, name: str):
+    if name in clients:
+        reveal_type(name)  # E: revealed type: Literal['a', 'b']
+        client = clients[name]
+    else:
+        client = GenericClient()
+    return client
+
+def test_not_in(clients: Clients, name: str):
+    if name not in clients:
+        reveal_type(name)  # E: revealed type: str
+        return GenericClient()
+    # name is narrowed in the else branch
+    reveal_type(name)  # E: revealed type: Literal['a', 'b']
+    client = clients[name]
+
+def test_literal_union_in(clients: Clients, name: Literal['a', 'b', 'c']):
+    # Test narrowing a literal union with 'in'
+    if name in clients:
+        reveal_type(name)  # E: revealed type: Literal['a', 'b']
+        client = clients[name]
+    else:
+        # Only 'c' remains outside the TypedDict
+        reveal_type(name)  # E: revealed type: Literal['c']
+        client = GenericClient()
+    return client
+
+def test_literal_union_not_in(clients: Clients, name: Literal['a', 'b', 'c']):
+    # Test narrowing a literal union with 'not in'
+    if name not in clients:
+        # Only 'c' is not in the TypedDict
+        reveal_type(name)  # E: revealed type: Literal['c']
+        return GenericClient()
+    # 'a' and 'b' remain
+    reveal_type(name)  # E: revealed type: Literal['a', 'b']
+    client = clients[name]
+    return client
+"#,
+);
+
+testcase!(
+    test_typed_dict_contains_narrowing_inheritance,
+    r#"
+from typing import TypedDict, Literal, reveal_type
+
+class Base(TypedDict):
+    a: int
+
+class Extended(Base):
+    b: str
+
+def test_inherited_in(e: Extended, k: str):
+    # Should narrow to all keys including inherited ones
+    if k in e:
+        reveal_type(k)  # E: revealed type: Literal['a', 'b']
+
+def test_inherited_not_in(e: Extended, k: Literal['a', 'b', 'c']):
+    if k not in e:
+        reveal_type(k)  # E: revealed type: Literal['c']
+    else:
+        reveal_type(k)  # E: revealed type: Literal['a', 'b']
+"#,
+);
+
+testcase!(
+    test_typed_dict_contains_narrowing_empty,
+    r#"
+from typing import TypedDict, Literal, reveal_type
+
+class Empty(TypedDict):
+    pass
+
+def test_empty_in(e: Empty, k: str):
+    # Empty TypedDict - `in` check is always false, so type narrows to Never
+    if k in e:
+        reveal_type(k)  # E: revealed type: Never
+    else:
+        reveal_type(k)  # E: revealed type: str
+
+def test_empty_not_in(e: Empty, k: str):
+    # Empty TypedDict - `not in` check is always true, type is unchanged
+    if k not in e:
+        reveal_type(k)  # E: revealed type: str
+    else:
+        reveal_type(k)  # E: revealed type: Never
+"#,
+);
+
+testcase!(
+    test_illegal_unpacking_in_def,
+    r#"
+from typing import TypedDict
+def f() -> dict: ...
+X = TypedDict("X", {"k1": int, **f()})  # E: Unpacking is not supported
+    "#,
 );

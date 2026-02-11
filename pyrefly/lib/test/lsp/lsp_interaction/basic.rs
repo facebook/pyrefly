@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_server::Message;
-use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
@@ -14,6 +12,8 @@ use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::request::DocumentDiagnosticRequest;
 use serde_json::json;
 
+use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Request;
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
 use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -36,7 +36,7 @@ fn test_initialize_basic() {
             "definitionProvider": true,
             "typeDefinitionProvider": true,
             "codeActionProvider": {
-                "codeActionKinds": ["quickfix"]
+                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.rewrite", "refactor.move", "refactor.inline", "source.fixAll"]
             },
             "completionProvider": {
                 "triggerCharacters": [".", "'", "\""]
@@ -72,9 +72,6 @@ fn test_initialize_basic() {
                     }
                 }
             }
-        }, "serverInfo": {
-            "name":"pyrefly-lsp",
-            "version":"pyrefly-lsp-test-version"
         }}))
         .unwrap();
     interaction.client.send_initialized();
@@ -104,27 +101,19 @@ fn test_shutdown_with_messages_in_between() {
     // nvim sometimes sends messages in between shutdown and exit. The server should
     // handle this gracefully and not hang.
     // Per LSP spec, requests after shutdown should be rejected with InvalidRequest.
-    let root = get_test_files_root();
+    let test_files_root = get_test_files_root();
+    let root = test_files_root.path().join("basic");
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().to_path_buf());
+    interaction.set_root(root.clone());
     interaction
         .initialize(InitializeSettings::default())
         .unwrap();
 
-    let test_file = root.path().join("basic.py");
+    let test_file = root.join("foo.py");
     let uri = Url::from_file_path(&test_file).unwrap();
 
     // Open a file
-    interaction
-        .client
-        .send_notification::<DidOpenTextDocument>(json!({
-            "textDocument": {
-                "uri": uri.to_string(),
-                "languageId": "python",
-                "version": 1,
-                "text": "def foo():\n    pass\n",
-            }
-        }));
+    interaction.client.did_open("foo.py");
 
     // Expect initial diagnostics
     interaction.client.expect_any_message().unwrap();
@@ -144,8 +133,15 @@ fn test_shutdown_with_messages_in_between() {
             "textDocument": {
                 "uri": uri.to_string()
             },
-        }));
+        }))
+        .expect_response_error(json!({
+            "code": -32600,
+            "message": "Shutdown already requested",
+            "data": null,
+        }))
+        .unwrap();
 
+    interaction.client.send_exit();
     interaction.client.expect_stop();
 }
 
@@ -248,6 +244,7 @@ fn test_unknown_request() {
         id: RequestId::from(1),
         method: "fake-method".to_owned(),
         params: json!(null),
+        activity_key: None,
     }));
     interaction
         .client
@@ -272,8 +269,86 @@ fn test_connection_closed_server_stops() {
     // Close the connection by dropping both the receiver and sender
     // This simulates the client disconnecting unexpectedly
     interaction.client.drop_connection();
-    interaction.client.drop_connection();
 
     // The server should stop when the connection is closed
+    interaction.client.expect_stop();
+}
+
+#[test]
+fn test_shutdown_exit_before_initialize() {
+    let interaction = LspInteraction::new();
+    interaction
+        .client
+        .send_shutdown()
+        .expect_response(json!(null))
+        .unwrap();
+    interaction.client.send_exit();
+    interaction.client.expect_stop();
+}
+
+#[test]
+fn test_exit_without_shutdown_before_initialize() {
+    let interaction = LspInteraction::new();
+    interaction.client.send_exit();
+    interaction.client.expect_stop();
+}
+
+#[test]
+fn test_drop_connection_before_initialize() {
+    let mut interaction = LspInteraction::new();
+    interaction.client.drop_connection();
+    interaction.client.expect_stop();
+}
+
+#[test]
+fn test_shutdown_exit_before_initialized() {
+    let interaction = LspInteraction::new();
+    interaction
+        .client
+        .send_initialize(
+            interaction
+                .client
+                .get_initialize_params(&InitializeSettings::default()),
+        )
+        .expect_response_with(|_| true)
+        .unwrap();
+    interaction
+        .client
+        .send_shutdown()
+        .expect_response(json!(null))
+        .unwrap();
+    interaction.client.send_exit();
+    interaction.client.expect_stop();
+}
+
+#[test]
+fn test_exit_without_shutdown_before_initialized() {
+    let interaction = LspInteraction::new();
+    interaction
+        .client
+        .send_initialize(
+            interaction
+                .client
+                .get_initialize_params(&InitializeSettings::default()),
+        )
+        .expect_response_with(|_| true)
+        .unwrap();
+    interaction.client.send_exit();
+    interaction.client.expect_stop();
+}
+
+#[test]
+fn test_drop_connection_before_initialized() {
+    let mut interaction = LspInteraction::new();
+    interaction
+        .client
+        .send_initialize(
+            interaction
+                .client
+                .get_initialize_params(&InitializeSettings::default()),
+        )
+        .expect_response_with(|_| true)
+        .unwrap();
+    interaction.client.drop_connection();
     interaction.client.expect_stop();
 }

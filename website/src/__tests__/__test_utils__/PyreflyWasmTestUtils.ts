@@ -13,14 +13,34 @@ import { PyreflyState } from '../../sandbox/Sandbox';
 import { PyreflyErrorMessage } from '../../sandbox/SandboxResults';
 
 /**
- * Create and initialize the pyrefly_wasm module
+ * Check if the pyrefly_wasm module is available (built and copied to test directory)
  */
-export async function createPyreflyWasmModule() {
+export async function isPyreflyWasmAvailable(): Promise<boolean> {
     try {
-        // Import the pyrefly_wasm module for testing
         const pyreflyWasmModule = await import(
             '../wasm/pyrefly_wasm_for_testing'
         );
+        // Check if State constructor exists (not just a stub)
+        return typeof (pyreflyWasmModule as { State?: unknown }).State === 'function';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Create and initialize the pyrefly_wasm module
+ * Note: The wasm module must be built and copied to the test directory for tests to work.
+ * See src/__tests__/wasm/pyrefly_wasm_for_testing.js for details.
+ */
+export async function createPyreflyWasmModule(): Promise<{
+    State: new (pythonVersion: string) => PyreflyState;
+}> {
+    try {
+        // Import the pyrefly_wasm module for testing
+        // Use type assertion since the stub file doesn't have proper types
+        const pyreflyWasmModule = (await import(
+            '../wasm/pyrefly_wasm_for_testing'
+        )) as unknown as { State: new (pythonVersion: string) => PyreflyState };
         return pyreflyWasmModule;
     } catch (error) {
         console.error('Error initializing pyrefly_wasm:', error);

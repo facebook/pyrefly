@@ -355,6 +355,28 @@ def test2(match: float) -> float:  # E: Function declared to return `float` but 
 );
 
 testcase!(
+    test_for_else_return_in_body_else_reachable,
+    r#"
+def foo(x: list[int]) -> int:
+    for _ in x:
+        return 1
+    else:
+        return 2  # No error - reachable when x is empty
+"#,
+);
+
+testcase!(
+    test_for_definitely_runs_return_else_unreachable,
+    r#"
+def foo() -> int:
+    for _ in range(3):
+        return 1
+    else:
+        return 2  # E: This `return` statement is unreachable
+"#,
+);
+
+testcase!(
     test_for_with_reassign,
     r#"
 from typing import assert_type, Literal
@@ -593,7 +615,7 @@ class Query:
 
 def test(q: Query) -> None:
     cursor = None
-    while not cursor or not cursor.finished():  # E: `Cursor | None` is not assignable to `None` (caused by inconsistent types when breaking cycles)
+    while not cursor or not cursor.finished():  # E: Pyrefly detected conflicting types while breaking a dependency cycle: `Cursor | None` is not assignable to `None`.
         cursor = q.send(cursor)
 "#,
 );
@@ -650,9 +672,9 @@ while condition():
 assert_type(good, list[int])
 
 bad = [1]
-while condition():  # E: `list[int] | list[str]` is not assignable to `list[int]` (caused by inconsistent types when breaking cycles)
+while condition():  # E: Pyrefly detected conflicting types while breaking a dependency cycle: `list[int] | list[str]` is not assignable to `list[int]`.
     if condition():
-        bad = [f(bad)]  # E:  Argument `list[int] | list[str]` is not assignable to parameter `x` with type `list[int]` in function `f`
+        bad = [f(bad)]
     else:
         bad = [""]
 "#,
@@ -719,5 +741,146 @@ testcase!(
 def test():
     break # E: `break` outside loop
     continue # E: `continue` outside loop
+    "#,
+);
+
+testcase!(
+    test_for_range_nonzero_literal_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in range(3):
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_range_one_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in range(1):
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_list_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in [1, 2, 3]:
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_tuple_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in (1, 2, 3):
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_set_defines_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in {1, 2, 3}:
+        x = "a"
+    assert_type(x, Literal["a"])
+    "#,
+);
+
+// These should still produce errors because the loop may not execute
+testcase!(
+    test_for_range_zero_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in range(0):
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_empty_list_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo():
+    for _ in []:
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_dynamic_range_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo(n: int):
+    for _ in range(n):
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_dynamic_list_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo(xs: list[int]):
+    for _ in xs:
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_with_break_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo(cond: bool):
+    for _ in range(3):
+        if cond:
+            break
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_while_true_with_break_may_not_define_variable,
+    r#"
+from typing import assert_type, Literal
+def foo(cond: bool):
+    while True:
+        if cond:
+            break
+        x = "a"
+    assert_type(x, Literal["a"])  # E: `x` is uninitialized
+    "#,
+);
+
+testcase!(
+    test_for_nonempty_narrow_unbound_variable,
+    r#"
+from typing import assert_type
+def foo(cond: bool):
+    for _ in range(3):
+        if cond:
+            if x is not None:  # E: `x` is uninitialized
+                pass
+    print(x)  # (Note there's no error here, but that's probably ok since we error above)
+    x: int | None = None
+    assert_type(x, int | None)
     "#,
 );

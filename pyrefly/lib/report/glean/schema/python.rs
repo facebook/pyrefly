@@ -16,6 +16,7 @@ use serde_json::Value;
 use serde_repr::*;
 
 use crate::report::glean::schema::*;
+use crate::report::glean::facts::GleanPredicate;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct XRefsViaNameByTarget {
@@ -24,10 +25,6 @@ pub struct XRefsViaNameByTarget {
 }
 
 impl XRefsViaNameByTarget {
-    pub fn GLEAN_name() -> String {
-        String::from("python.XRefsViaNameByTarget.4")
-    }
-
     pub fn new(target: Name, file: src::File, spans: Vec<src::ByteSpan>) -> Self {
         XRefsViaNameByTarget {
             id: 0,
@@ -40,6 +37,13 @@ impl XRefsViaNameByTarget {
     }
 }
 
+impl GleanPredicate for XRefsViaNameByTarget {
+    fn GLEAN_name() -> String {
+        String::from("python.XRefsViaNameByTarget.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct XRefsViaNameByFile {
     pub id: u64,
@@ -47,10 +51,6 @@ pub struct XRefsViaNameByFile {
 }
 
 impl XRefsViaNameByFile {
-    pub fn GLEAN_name() -> String {
-        String::from("python.XRefsViaNameByFile.4")
-    }
-
     pub fn new(file: src::File, xrefs: Vec<XRefViaName>) -> Self {
         XRefsViaNameByFile {
             id: 0,
@@ -62,6 +62,13 @@ impl XRefsViaNameByFile {
     }
 }
 
+impl GleanPredicate for XRefsViaNameByFile {
+    fn GLEAN_name() -> String {
+        String::from("python.XRefsViaNameByFile.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct VariableDeclaration {
     pub id: u64,
@@ -69,10 +76,6 @@ pub struct VariableDeclaration {
 }
 
 impl VariableDeclaration {
-    pub fn GLEAN_name() -> String {
-        String::from("python.VariableDeclaration.4")
-    }
-
     pub fn new(name: Name) -> Self {
         VariableDeclaration {
             id: 0,
@@ -83,6 +86,13 @@ impl VariableDeclaration {
     }
 }
 
+impl GleanPredicate for VariableDeclaration {
+    fn GLEAN_name() -> String {
+        String::from("python.VariableDeclaration.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct VariableBySName {
     pub id: u64,
@@ -91,10 +101,6 @@ pub struct VariableBySName {
 }
 
 impl VariableBySName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.VariableBySName.4")
-    }
-
     pub fn new(key: SName, value: VariableBySName_value) -> Self {
         VariableBySName {
             id: 0,
@@ -104,6 +110,13 @@ impl VariableBySName {
     }
 }
 
+impl GleanPredicate for VariableBySName {
+    fn GLEAN_name() -> String {
+        String::from("python.VariableBySName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Type {
     pub id: u64,
@@ -111,16 +124,19 @@ pub struct Type {
 }
 
 impl Type {
-    pub fn GLEAN_name() -> String {
-        String::from("python.Type.4")
-    }
-
     pub fn new(key: String) -> Self {
         Type {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for Type {
+    fn GLEAN_name() -> String {
+        String::from("python.Type.4")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -130,16 +146,19 @@ pub struct StringLiteral {
 }
 
 impl StringLiteral {
-    pub fn GLEAN_name() -> String {
-        String::from("python.StringLiteral.4")
-    }
-
     pub fn new(key: String) -> Self {
         StringLiteral {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for StringLiteral {
+    fn GLEAN_name() -> String {
+        String::from("python.StringLiteral.4")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -149,10 +168,6 @@ pub struct SearchVariableByName {
 }
 
 impl SearchVariableByName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchVariableByName.4")
-    }
-
     pub fn new(name: String, parent: Option<SName>, decl: VariableDeclaration) -> Self {
         SearchVariableByName {
             id: 0,
@@ -165,6 +180,13 @@ impl SearchVariableByName {
     }
 }
 
+impl GleanPredicate for SearchVariableByName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchVariableByName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchVariableByLowerCaseName {
     pub id: u64,
@@ -172,10 +194,6 @@ pub struct SearchVariableByLowerCaseName {
 }
 
 impl SearchVariableByLowerCaseName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchVariableByLowerCaseName.4")
-    }
-
     pub fn new(name_lowercase: String, name: String) -> Self {
         SearchVariableByLowerCaseName {
             id: 0,
@@ -187,6 +205,13 @@ impl SearchVariableByLowerCaseName {
     }
 }
 
+impl GleanPredicate for SearchVariableByLowerCaseName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchVariableByLowerCaseName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchModuleByName {
     pub id: u64,
@@ -194,10 +219,6 @@ pub struct SearchModuleByName {
 }
 
 impl SearchModuleByName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchModuleByName.4")
-    }
-
     pub fn new(name: String, parent: Option<SName>, decl: Module) -> Self {
         SearchModuleByName {
             id: 0,
@@ -210,6 +231,13 @@ impl SearchModuleByName {
     }
 }
 
+impl GleanPredicate for SearchModuleByName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchModuleByName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchModuleByLowerCaseName {
     pub id: u64,
@@ -217,10 +245,6 @@ pub struct SearchModuleByLowerCaseName {
 }
 
 impl SearchModuleByLowerCaseName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchModuleByLowerCaseName.4")
-    }
-
     pub fn new(name_lowercase: String, name: String) -> Self {
         SearchModuleByLowerCaseName {
             id: 0,
@@ -232,6 +256,13 @@ impl SearchModuleByLowerCaseName {
     }
 }
 
+impl GleanPredicate for SearchModuleByLowerCaseName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchModuleByLowerCaseName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchMethodByName {
     pub id: u64,
@@ -239,10 +270,6 @@ pub struct SearchMethodByName {
 }
 
 impl SearchMethodByName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchMethodByName.4")
-    }
-
     pub fn new(name: String, parent: Option<SName>, decl: FunctionDeclaration) -> Self {
         SearchMethodByName {
             id: 0,
@@ -255,6 +282,13 @@ impl SearchMethodByName {
     }
 }
 
+impl GleanPredicate for SearchMethodByName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchMethodByName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchMethodByLowerCaseName {
     pub id: u64,
@@ -262,10 +296,6 @@ pub struct SearchMethodByLowerCaseName {
 }
 
 impl SearchMethodByLowerCaseName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchMethodByLowerCaseName.4")
-    }
-
     pub fn new(name_lowercase: String, name: String) -> Self {
         SearchMethodByLowerCaseName {
             id: 0,
@@ -277,6 +307,13 @@ impl SearchMethodByLowerCaseName {
     }
 }
 
+impl GleanPredicate for SearchMethodByLowerCaseName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchMethodByLowerCaseName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchFunctionByName {
     pub id: u64,
@@ -284,10 +321,6 @@ pub struct SearchFunctionByName {
 }
 
 impl SearchFunctionByName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchFunctionByName.4")
-    }
-
     pub fn new(name: String, parent: Option<SName>, decl: FunctionDeclaration) -> Self {
         SearchFunctionByName {
             id: 0,
@@ -300,6 +333,13 @@ impl SearchFunctionByName {
     }
 }
 
+impl GleanPredicate for SearchFunctionByName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchFunctionByName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchFunctionByLowerCaseName {
     pub id: u64,
@@ -307,10 +347,6 @@ pub struct SearchFunctionByLowerCaseName {
 }
 
 impl SearchFunctionByLowerCaseName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchFunctionByLowerCaseName.4")
-    }
-
     pub fn new(name_lowercase: String, name: String) -> Self {
         SearchFunctionByLowerCaseName {
             id: 0,
@@ -322,6 +358,13 @@ impl SearchFunctionByLowerCaseName {
     }
 }
 
+impl GleanPredicate for SearchFunctionByLowerCaseName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchFunctionByLowerCaseName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchFieldByName {
     pub id: u64,
@@ -329,10 +372,6 @@ pub struct SearchFieldByName {
 }
 
 impl SearchFieldByName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchFieldByName.4")
-    }
-
     pub fn new(name: String, parent: Option<SName>, decl: VariableDeclaration) -> Self {
         SearchFieldByName {
             id: 0,
@@ -345,6 +384,13 @@ impl SearchFieldByName {
     }
 }
 
+impl GleanPredicate for SearchFieldByName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchFieldByName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchFieldByLowerCaseName {
     pub id: u64,
@@ -352,10 +398,6 @@ pub struct SearchFieldByLowerCaseName {
 }
 
 impl SearchFieldByLowerCaseName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchFieldByLowerCaseName.4")
-    }
-
     pub fn new(name_lowercase: String, name: String) -> Self {
         SearchFieldByLowerCaseName {
             id: 0,
@@ -367,6 +409,13 @@ impl SearchFieldByLowerCaseName {
     }
 }
 
+impl GleanPredicate for SearchFieldByLowerCaseName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchFieldByLowerCaseName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchClassByName {
     pub id: u64,
@@ -374,10 +423,6 @@ pub struct SearchClassByName {
 }
 
 impl SearchClassByName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchClassByName.4")
-    }
-
     pub fn new(name: String, parent: Option<SName>, decl: ClassDeclaration) -> Self {
         SearchClassByName {
             id: 0,
@@ -390,6 +435,13 @@ impl SearchClassByName {
     }
 }
 
+impl GleanPredicate for SearchClassByName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchClassByName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SearchClassByLowerCaseName {
     pub id: u64,
@@ -397,10 +449,6 @@ pub struct SearchClassByLowerCaseName {
 }
 
 impl SearchClassByLowerCaseName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SearchClassByLowerCaseName.4")
-    }
-
     pub fn new(name_lowercase: String, name: String) -> Self {
         SearchClassByLowerCaseName {
             id: 0,
@@ -412,6 +460,13 @@ impl SearchClassByLowerCaseName {
     }
 }
 
+impl GleanPredicate for SearchClassByLowerCaseName {
+    fn GLEAN_name() -> String {
+        String::from("python.SearchClassByLowerCaseName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SNameToName {
     pub id: u64,
@@ -420,10 +475,6 @@ pub struct SNameToName {
 }
 
 impl SNameToName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SNameToName.4")
-    }
-
     pub fn new(key: SName, value: SNameToName_value) -> Self {
         SNameToName {
             id: 0,
@@ -433,6 +484,13 @@ impl SNameToName {
     }
 }
 
+impl GleanPredicate for SNameToName {
+    fn GLEAN_name() -> String {
+        String::from("python.SNameToName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct SName {
     pub id: u64,
@@ -440,10 +498,6 @@ pub struct SName {
 }
 
 impl SName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SName.4")
-    }
-
     pub fn new(local_name: Name, parent: Option<SName>) -> Self {
         SName {
             id: 0,
@@ -455,6 +509,13 @@ impl SName {
     }
 }
 
+impl GleanPredicate for SName {
+    fn GLEAN_name() -> String {
+        String::from("python.SName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ResolveOriginalName {
     pub id: u64,
@@ -462,10 +523,6 @@ pub struct ResolveOriginalName {
 }
 
 impl ResolveOriginalName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ResolveOriginalName.4")
-    }
-
     pub fn new(name: Name, original_name: Name) -> Self {
         ResolveOriginalName {
             id: 0,
@@ -477,6 +534,13 @@ impl ResolveOriginalName {
     }
 }
 
+impl GleanPredicate for ResolveOriginalName {
+    fn GLEAN_name() -> String {
+        String::from("python.ResolveOriginalName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct NameToSName {
     pub id: u64,
@@ -485,10 +549,6 @@ pub struct NameToSName {
 }
 
 impl NameToSName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.NameToSName.4")
-    }
-
     pub fn new(key: Name, value: NameToSName_value) -> Self {
         NameToSName {
             id: 0,
@@ -498,6 +558,13 @@ impl NameToSName {
     }
 }
 
+impl GleanPredicate for NameToSName {
+    fn GLEAN_name() -> String {
+        String::from("python.NameToSName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Name {
     pub id: u64,
@@ -505,16 +572,19 @@ pub struct Name {
 }
 
 impl Name {
-    pub fn GLEAN_name() -> String {
-        String::from("python.Name.4")
-    }
-
     pub fn new(key: String) -> Self {
         Name {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for Name {
+    fn GLEAN_name() -> String {
+        String::from("python.Name.4")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -524,10 +594,6 @@ pub struct ModuleDefinition {
 }
 
 impl ModuleDefinition {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ModuleDefinition.4")
-    }
-
     pub fn new(module: Module) -> Self {
         ModuleDefinition {
             id: 0,
@@ -538,6 +604,13 @@ impl ModuleDefinition {
     }
 }
 
+impl GleanPredicate for ModuleDefinition {
+    fn GLEAN_name() -> String {
+        String::from("python.ModuleDefinition.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ModuleBySName {
     pub id: u64,
@@ -546,10 +619,6 @@ pub struct ModuleBySName {
 }
 
 impl ModuleBySName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ModuleBySName.4")
-    }
-
     pub fn new(key: SName, value: ModuleBySName_value) -> Self {
         ModuleBySName {
             id: 0,
@@ -559,6 +628,13 @@ impl ModuleBySName {
     }
 }
 
+impl GleanPredicate for ModuleBySName {
+    fn GLEAN_name() -> String {
+        String::from("python.ModuleBySName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Module {
     pub id: u64,
@@ -566,10 +642,6 @@ pub struct Module {
 }
 
 impl Module {
-    pub fn GLEAN_name() -> String {
-        String::from("python.Module.4")
-    }
-
     pub fn new(name: Name) -> Self {
         Module {
             id: 0,
@@ -580,6 +652,13 @@ impl Module {
     }
 }
 
+impl GleanPredicate for Module {
+    fn GLEAN_name() -> String {
+        String::from("python.Module.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct MethodOverrides {
     pub id: u64,
@@ -587,10 +666,6 @@ pub struct MethodOverrides {
 }
 
 impl MethodOverrides {
-    pub fn GLEAN_name() -> String {
-        String::from("python.MethodOverrides.4")
-    }
-
     pub fn new(derived: FunctionDeclaration, base: FunctionDeclaration) -> Self {
         MethodOverrides {
             id: 0,
@@ -602,6 +677,13 @@ impl MethodOverrides {
     }
 }
 
+impl GleanPredicate for MethodOverrides {
+    fn GLEAN_name() -> String {
+        String::from("python.MethodOverrides.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct MethodOverriden {
     pub id: u64,
@@ -609,10 +691,6 @@ pub struct MethodOverriden {
 }
 
 impl MethodOverriden {
-    pub fn GLEAN_name() -> String {
-        String::from("python.MethodOverriden.4")
-    }
-
     pub fn new(base: FunctionDeclaration, derived: FunctionDeclaration) -> Self {
         MethodOverriden {
             id: 0,
@@ -624,6 +702,13 @@ impl MethodOverriden {
     }
 }
 
+impl GleanPredicate for MethodOverriden {
+    fn GLEAN_name() -> String {
+        String::from("python.MethodOverriden.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct MethodByLocalNameStr {
     pub id: u64,
@@ -631,10 +716,6 @@ pub struct MethodByLocalNameStr {
 }
 
 impl MethodByLocalNameStr {
-    pub fn GLEAN_name() -> String {
-        String::from("python.MethodByLocalNameStr.4")
-    }
-
     pub fn new(cls: ClassDeclaration, method_local_name: String, method: FunctionDeclaration) -> Self {
         MethodByLocalNameStr {
             id: 0,
@@ -647,6 +728,13 @@ impl MethodByLocalNameStr {
     }
 }
 
+impl GleanPredicate for MethodByLocalNameStr {
+    fn GLEAN_name() -> String {
+        String::from("python.MethodByLocalNameStr.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ImportStatementByAsSName {
     pub id: u64,
@@ -654,10 +742,6 @@ pub struct ImportStatementByAsSName {
 }
 
 impl ImportStatementByAsSName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ImportStatementByAsSName.4")
-    }
-
     pub fn new(sname: SName, import_: ImportStatement) -> Self {
         ImportStatementByAsSName {
             id: 0,
@@ -669,6 +753,13 @@ impl ImportStatementByAsSName {
     }
 }
 
+impl GleanPredicate for ImportStatementByAsSName {
+    fn GLEAN_name() -> String {
+        String::from("python.ImportStatementByAsSName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ImportStatementByAsName {
     pub id: u64,
@@ -676,10 +767,6 @@ pub struct ImportStatementByAsName {
 }
 
 impl ImportStatementByAsName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ImportStatementByAsName.4")
-    }
-
     pub fn new(name: Name, import_: ImportStatement) -> Self {
         ImportStatementByAsName {
             id: 0,
@@ -691,6 +778,13 @@ impl ImportStatementByAsName {
     }
 }
 
+impl GleanPredicate for ImportStatementByAsName {
+    fn GLEAN_name() -> String {
+        String::from("python.ImportStatementByAsName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ImportStatement {
     pub id: u64,
@@ -698,10 +792,6 @@ pub struct ImportStatement {
 }
 
 impl ImportStatement {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ImportStatement.4")
-    }
-
     pub fn new(from_name: Name, as_name: Name) -> Self {
         ImportStatement {
             id: 0,
@@ -713,6 +803,13 @@ impl ImportStatement {
     }
 }
 
+impl GleanPredicate for ImportStatement {
+    fn GLEAN_name() -> String {
+        String::from("python.ImportStatement.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ImportStarsByFile {
     pub id: u64,
@@ -720,10 +817,6 @@ pub struct ImportStarsByFile {
 }
 
 impl ImportStarsByFile {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ImportStarsByFile.4")
-    }
-
     pub fn new(file: src::File, span: src::ByteSpan, declaration: ImportStarStatement) -> Self {
         ImportStarsByFile {
             id: 0,
@@ -736,6 +829,13 @@ impl ImportStarsByFile {
     }
 }
 
+impl GleanPredicate for ImportStarsByFile {
+    fn GLEAN_name() -> String {
+        String::from("python.ImportStarsByFile.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ImportStarStatement {
     pub id: u64,
@@ -743,10 +843,6 @@ pub struct ImportStarStatement {
 }
 
 impl ImportStarStatement {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ImportStarStatement.4")
-    }
-
     pub fn new(from_name: Name, into_module: Module) -> Self {
         ImportStarStatement {
             id: 0,
@@ -758,6 +854,13 @@ impl ImportStarStatement {
     }
 }
 
+impl GleanPredicate for ImportStarStatement {
+    fn GLEAN_name() -> String {
+        String::from("python.ImportStarStatement.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ImportStarLocation {
     pub id: u64,
@@ -765,10 +868,6 @@ pub struct ImportStarLocation {
 }
 
 impl ImportStarLocation {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ImportStarLocation.4")
-    }
-
     pub fn new(import_star: ImportStarStatement, file: src::File, span: src::ByteSpan) -> Self {
         ImportStarLocation {
             id: 0,
@@ -781,6 +880,13 @@ impl ImportStarLocation {
     }
 }
 
+impl GleanPredicate for ImportStarLocation {
+    fn GLEAN_name() -> String {
+        String::from("python.ImportStarLocation.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct FunctionDeclaration {
     pub id: u64,
@@ -788,10 +894,6 @@ pub struct FunctionDeclaration {
 }
 
 impl FunctionDeclaration {
-    pub fn GLEAN_name() -> String {
-        String::from("python.FunctionDeclaration.4")
-    }
-
     pub fn new(name: Name) -> Self {
         FunctionDeclaration {
             id: 0,
@@ -802,6 +904,13 @@ impl FunctionDeclaration {
     }
 }
 
+impl GleanPredicate for FunctionDeclaration {
+    fn GLEAN_name() -> String {
+        String::from("python.FunctionDeclaration.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct FunctionBySName {
     pub id: u64,
@@ -810,10 +919,6 @@ pub struct FunctionBySName {
 }
 
 impl FunctionBySName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.FunctionBySName.4")
-    }
-
     pub fn new(key: SName, value: FunctionBySName_value) -> Self {
         FunctionBySName {
             id: 0,
@@ -823,6 +928,13 @@ impl FunctionBySName {
     }
 }
 
+impl GleanPredicate for FunctionBySName {
+    fn GLEAN_name() -> String {
+        String::from("python.FunctionBySName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DerivedClassToBase {
     pub id: u64,
@@ -830,10 +942,6 @@ pub struct DerivedClassToBase {
 }
 
 impl DerivedClassToBase {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DerivedClassToBase.4")
-    }
-
     pub fn new(derived: ClassDeclaration, base: ClassDeclaration) -> Self {
         DerivedClassToBase {
             id: 0,
@@ -845,6 +953,13 @@ impl DerivedClassToBase {
     }
 }
 
+impl GleanPredicate for DerivedClassToBase {
+    fn GLEAN_name() -> String {
+        String::from("python.DerivedClassToBase.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DefinitionLocation {
     pub id: u64,
@@ -852,10 +967,6 @@ pub struct DefinitionLocation {
 }
 
 impl DefinitionLocation {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DefinitionLocation.4")
-    }
-
     pub fn new(definition: Definition, file: src::File, span: src::ByteSpan) -> Self {
         DefinitionLocation {
             id: 0,
@@ -868,6 +979,13 @@ impl DefinitionLocation {
     }
 }
 
+impl GleanPredicate for DefinitionLocation {
+    fn GLEAN_name() -> String {
+        String::from("python.DefinitionLocation.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DefinitionsByFile {
     pub id: u64,
@@ -875,10 +993,6 @@ pub struct DefinitionsByFile {
 }
 
 impl DefinitionsByFile {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DefinitionsByFile.4")
-    }
-
     pub fn new(file: src::File, span: src::ByteSpan, definition: Definition) -> Self {
         DefinitionsByFile {
             id: 0,
@@ -891,6 +1005,13 @@ impl DefinitionsByFile {
     }
 }
 
+impl GleanPredicate for DefinitionsByFile {
+    fn GLEAN_name() -> String {
+        String::from("python.DefinitionsByFile.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct IsTopLevelDefinition {
     pub id: u64,
@@ -898,16 +1019,19 @@ pub struct IsTopLevelDefinition {
 }
 
 impl IsTopLevelDefinition {
-    pub fn GLEAN_name() -> String {
-        String::from("python.IsTopLevelDefinition.4")
-    }
-
     pub fn new(key: Definition) -> Self {
         IsTopLevelDefinition {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for IsTopLevelDefinition {
+    fn GLEAN_name() -> String {
+        String::from("python.IsTopLevelDefinition.4")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -917,10 +1041,6 @@ pub struct FunctionDefinition {
 }
 
 impl FunctionDefinition {
-    pub fn GLEAN_name() -> String {
-        String::from("python.FunctionDefinition.4")
-    }
-
     pub fn new(declaration: FunctionDeclaration, is_async: bool, returnsInfo: Option<TypeInfo>, params: Vec<Parameter>, posonly_params: Option<Vec<Parameter>>, kwonly_params: Option<Vec<Parameter>>, star_arg: Option<Parameter>, star_kwarg: Option<Parameter>, decorators: Option<Vec<Decorator>>, container: Option<DeclarationContainer>) -> Self {
         FunctionDefinition {
             id: 0,
@@ -940,6 +1060,13 @@ impl FunctionDefinition {
     }
 }
 
+impl GleanPredicate for FunctionDefinition {
+    fn GLEAN_name() -> String {
+        String::from("python.FunctionDefinition.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct VariableDefinition {
     pub id: u64,
@@ -947,10 +1074,6 @@ pub struct VariableDefinition {
 }
 
 impl VariableDefinition {
-    pub fn GLEAN_name() -> String {
-        String::from("python.VariableDefinition.4")
-    }
-
     pub fn new(declaration: VariableDeclaration, typeInfo: Option<TypeInfo>, container: Option<DeclarationContainer>) -> Self {
         VariableDefinition {
             id: 0,
@@ -963,6 +1086,13 @@ impl VariableDefinition {
     }
 }
 
+impl GleanPredicate for VariableDefinition {
+    fn GLEAN_name() -> String {
+        String::from("python.VariableDefinition.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DeclarationDefinition {
     pub id: u64,
@@ -970,10 +1100,6 @@ pub struct DeclarationDefinition {
 }
 
 impl DeclarationDefinition {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DeclarationDefinition.4")
-    }
-
     pub fn new(declaration: Declaration, definition: Definition) -> Self {
         DeclarationDefinition {
             id: 0,
@@ -985,6 +1111,13 @@ impl DeclarationDefinition {
     }
 }
 
+impl GleanPredicate for DeclarationDefinition {
+    fn GLEAN_name() -> String {
+        String::from("python.DeclarationDefinition.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DeclarationDocstring {
     pub id: u64,
@@ -992,10 +1125,6 @@ pub struct DeclarationDocstring {
 }
 
 impl DeclarationDocstring {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DeclarationDocstring.4")
-    }
-
     pub fn new(declaration: Declaration, location: src::ByteSpan, pretty_text: String) -> Self {
         DeclarationDocstring {
             id: 0,
@@ -1008,6 +1137,13 @@ impl DeclarationDocstring {
     }
 }
 
+impl GleanPredicate for DeclarationDocstring {
+    fn GLEAN_name() -> String {
+        String::from("python.DeclarationDocstring.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DeclarationLocation {
     pub id: u64,
@@ -1015,10 +1151,6 @@ pub struct DeclarationLocation {
 }
 
 impl DeclarationLocation {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DeclarationLocation.4")
-    }
-
     pub fn new(declaration: Declaration, file: src::File, span: src::ByteSpan) -> Self {
         DeclarationLocation {
             id: 0,
@@ -1031,6 +1163,13 @@ impl DeclarationLocation {
     }
 }
 
+impl GleanPredicate for DeclarationLocation {
+    fn GLEAN_name() -> String {
+        String::from("python.DeclarationLocation.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DeclarationReference {
     pub id: u64,
@@ -1038,10 +1177,6 @@ pub struct DeclarationReference {
 }
 
 impl DeclarationReference {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DeclarationReference.4")
-    }
-
     pub fn new(target: Declaration, source: Declaration) -> Self {
         DeclarationReference {
             id: 0,
@@ -1053,6 +1188,13 @@ impl DeclarationReference {
     }
 }
 
+impl GleanPredicate for DeclarationReference {
+    fn GLEAN_name() -> String {
+        String::from("python.DeclarationReference.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DeclarationToName {
     pub id: u64,
@@ -1061,10 +1203,6 @@ pub struct DeclarationToName {
 }
 
 impl DeclarationToName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DeclarationToName.4")
-    }
-
     pub fn new(key: Declaration, value: DeclarationToName_value) -> Self {
         DeclarationToName {
             id: 0,
@@ -1074,6 +1212,13 @@ impl DeclarationToName {
     }
 }
 
+impl GleanPredicate for DeclarationToName {
+    fn GLEAN_name() -> String {
+        String::from("python.DeclarationToName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DeclarationUses {
     pub id: u64,
@@ -1081,10 +1226,6 @@ pub struct DeclarationUses {
 }
 
 impl DeclarationUses {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DeclarationUses.4")
-    }
-
     pub fn new(declaration: Declaration, file: src::File, span: src::ByteSpan) -> Self {
         DeclarationUses {
             id: 0,
@@ -1097,6 +1238,13 @@ impl DeclarationUses {
     }
 }
 
+impl GleanPredicate for DeclarationUses {
+    fn GLEAN_name() -> String {
+        String::from("python.DeclarationUses.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DeclarationWithLocalName {
     pub id: u64,
@@ -1104,10 +1252,6 @@ pub struct DeclarationWithLocalName {
 }
 
 impl DeclarationWithLocalName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DeclarationWithLocalName.4")
-    }
-
     pub fn new(local_name: Name, declaration: Declaration) -> Self {
         DeclarationWithLocalName {
             id: 0,
@@ -1119,6 +1263,13 @@ impl DeclarationWithLocalName {
     }
 }
 
+impl GleanPredicate for DeclarationWithLocalName {
+    fn GLEAN_name() -> String {
+        String::from("python.DeclarationWithLocalName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DeclarationWithName {
     pub id: u64,
@@ -1126,10 +1277,6 @@ pub struct DeclarationWithName {
 }
 
 impl DeclarationWithName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DeclarationWithName.4")
-    }
-
     pub fn new(name: Name, declaration: Declaration) -> Self {
         DeclarationWithName {
             id: 0,
@@ -1141,6 +1288,13 @@ impl DeclarationWithName {
     }
 }
 
+impl GleanPredicate for DeclarationWithName {
+    fn GLEAN_name() -> String {
+        String::from("python.DeclarationWithName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DeclarationWithSName {
     pub id: u64,
@@ -1148,10 +1302,6 @@ pub struct DeclarationWithSName {
 }
 
 impl DeclarationWithSName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DeclarationWithSName.4")
-    }
-
     pub fn new(sname: SName, declaration: Declaration) -> Self {
         DeclarationWithSName {
             id: 0,
@@ -1163,6 +1313,13 @@ impl DeclarationWithSName {
     }
 }
 
+impl GleanPredicate for DeclarationWithSName {
+    fn GLEAN_name() -> String {
+        String::from("python.DeclarationWithSName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DeclarationsByFile {
     pub id: u64,
@@ -1170,10 +1327,6 @@ pub struct DeclarationsByFile {
 }
 
 impl DeclarationsByFile {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DeclarationsByFile.4")
-    }
-
     pub fn new(file: src::File, span: src::ByteSpan, declaration: Declaration) -> Self {
         DeclarationsByFile {
             id: 0,
@@ -1186,6 +1339,13 @@ impl DeclarationsByFile {
     }
 }
 
+impl GleanPredicate for DeclarationsByFile {
+    fn GLEAN_name() -> String {
+        String::from("python.DeclarationsByFile.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DefinitionDeclaration {
     pub id: u64,
@@ -1193,10 +1353,6 @@ pub struct DefinitionDeclaration {
 }
 
 impl DefinitionDeclaration {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DefinitionDeclaration.4")
-    }
-
     pub fn new(definition: Definition, declaration: Declaration) -> Self {
         DefinitionDeclaration {
             id: 0,
@@ -1208,6 +1364,13 @@ impl DefinitionDeclaration {
     }
 }
 
+impl GleanPredicate for DefinitionDeclaration {
+    fn GLEAN_name() -> String {
+        String::from("python.DefinitionDeclaration.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct DirectXRefsByFile {
     pub id: u64,
@@ -1215,10 +1378,6 @@ pub struct DirectXRefsByFile {
 }
 
 impl DirectXRefsByFile {
-    pub fn GLEAN_name() -> String {
-        String::from("python.DirectXRefsByFile.4")
-    }
-
     pub fn new(file: src::File, xref: DirectXRef) -> Self {
         DirectXRefsByFile {
             id: 0,
@@ -1230,6 +1389,13 @@ impl DirectXRefsByFile {
     }
 }
 
+impl GleanPredicate for DirectXRefsByFile {
+    fn GLEAN_name() -> String {
+        String::from("python.DirectXRefsByFile.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct IsAbstract {
     pub id: u64,
@@ -1237,16 +1403,19 @@ pub struct IsAbstract {
 }
 
 impl IsAbstract {
-    pub fn GLEAN_name() -> String {
-        String::from("python.IsAbstract.4")
-    }
-
     pub fn new(key: Declaration) -> Self {
         IsAbstract {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for IsAbstract {
+    fn GLEAN_name() -> String {
+        String::from("python.IsAbstract.4")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -1256,16 +1425,19 @@ pub struct IsTopLevelDeclaration {
 }
 
 impl IsTopLevelDeclaration {
-    pub fn GLEAN_name() -> String {
-        String::from("python.IsTopLevelDeclaration.4")
-    }
-
     pub fn new(key: Declaration) -> Self {
         IsTopLevelDeclaration {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for IsTopLevelDeclaration {
+    fn GLEAN_name() -> String {
+        String::from("python.IsTopLevelDeclaration.4")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -1275,16 +1447,19 @@ pub struct NonImportDeclaration {
 }
 
 impl NonImportDeclaration {
-    pub fn GLEAN_name() -> String {
-        String::from("python.NonImportDeclaration.4")
-    }
-
     pub fn new(key: Declaration) -> Self {
         NonImportDeclaration {
             id: 0,
             key: Box::new(key),
         }
     }
+}
+
+impl GleanPredicate for NonImportDeclaration {
+    fn GLEAN_name() -> String {
+        String::from("python.NonImportDeclaration.4")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -1294,10 +1469,6 @@ pub struct SNameWithDeclaration {
 }
 
 impl SNameWithDeclaration {
-    pub fn GLEAN_name() -> String {
-        String::from("python.SNameWithDeclaration.4")
-    }
-
     pub fn new(declaration: Declaration, sname: SName) -> Self {
         SNameWithDeclaration {
             id: 0,
@@ -1309,6 +1480,13 @@ impl SNameWithDeclaration {
     }
 }
 
+impl GleanPredicate for SNameWithDeclaration {
+    fn GLEAN_name() -> String {
+        String::from("python.SNameWithDeclaration.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Contains {
     pub id: u64,
@@ -1316,10 +1494,6 @@ pub struct Contains {
 }
 
 impl Contains {
-    pub fn GLEAN_name() -> String {
-        String::from("python.Contains.4")
-    }
-
     pub fn new(container: Declaration, containee: Declaration) -> Self {
         Contains {
             id: 0,
@@ -1331,6 +1505,13 @@ impl Contains {
     }
 }
 
+impl GleanPredicate for Contains {
+    fn GLEAN_name() -> String {
+        String::from("python.Contains.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ContainingTopLevelDeclaration {
     pub id: u64,
@@ -1338,10 +1519,6 @@ pub struct ContainingTopLevelDeclaration {
 }
 
 impl ContainingTopLevelDeclaration {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ContainingTopLevelDeclaration.4")
-    }
-
     pub fn new(declaration: Declaration, container: Declaration) -> Self {
         ContainingTopLevelDeclaration {
             id: 0,
@@ -1353,6 +1530,13 @@ impl ContainingTopLevelDeclaration {
     }
 }
 
+impl GleanPredicate for ContainingTopLevelDeclaration {
+    fn GLEAN_name() -> String {
+        String::from("python.ContainingTopLevelDeclaration.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ContainedByTopLevelDeclaration {
     pub id: u64,
@@ -1360,10 +1544,6 @@ pub struct ContainedByTopLevelDeclaration {
 }
 
 impl ContainedByTopLevelDeclaration {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ContainedByTopLevelDeclaration.4")
-    }
-
     pub fn new(container: Declaration, declaration: Declaration) -> Self {
         ContainedByTopLevelDeclaration {
             id: 0,
@@ -1375,6 +1555,13 @@ impl ContainedByTopLevelDeclaration {
     }
 }
 
+impl GleanPredicate for ContainedByTopLevelDeclaration {
+    fn GLEAN_name() -> String {
+        String::from("python.ContainedByTopLevelDeclaration.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ContainedBy {
     pub id: u64,
@@ -1382,10 +1569,6 @@ pub struct ContainedBy {
 }
 
 impl ContainedBy {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ContainedBy.4")
-    }
-
     pub fn new(containee: Declaration, container: Declaration) -> Self {
         ContainedBy {
             id: 0,
@@ -1397,6 +1580,13 @@ impl ContainedBy {
     }
 }
 
+impl GleanPredicate for ContainedBy {
+    fn GLEAN_name() -> String {
+        String::from("python.ContainedBy.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ClassDefinition {
     pub id: u64,
@@ -1404,10 +1594,6 @@ pub struct ClassDefinition {
 }
 
 impl ClassDefinition {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ClassDefinition.4")
-    }
-
     pub fn new(declaration: ClassDeclaration, bases: Option<Vec<ClassDeclaration>>, keywords: Option<Vec<Parameter>>, decorators: Option<Vec<Decorator>>, container: Option<DeclarationContainer>) -> Self {
         ClassDefinition {
             id: 0,
@@ -1422,6 +1608,13 @@ impl ClassDefinition {
     }
 }
 
+impl GleanPredicate for ClassDefinition {
+    fn GLEAN_name() -> String {
+        String::from("python.ClassDefinition.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ClassDeclaration {
     pub id: u64,
@@ -1429,10 +1622,6 @@ pub struct ClassDeclaration {
 }
 
 impl ClassDeclaration {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ClassDeclaration.4")
-    }
-
     pub fn new(name: Name, bases: Option<Vec<Name>>) -> Self {
         ClassDeclaration {
             id: 0,
@@ -1444,6 +1633,13 @@ impl ClassDeclaration {
     }
 }
 
+impl GleanPredicate for ClassDeclaration {
+    fn GLEAN_name() -> String {
+        String::from("python.ClassDeclaration.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ClassBySName {
     pub id: u64,
@@ -1452,10 +1648,6 @@ pub struct ClassBySName {
 }
 
 impl ClassBySName {
-    pub fn GLEAN_name() -> String {
-        String::from("python.ClassBySName.4")
-    }
-
     pub fn new(key: SName, value: ClassBySName_value) -> Self {
         ClassBySName {
             id: 0,
@@ -1465,6 +1657,13 @@ impl ClassBySName {
     }
 }
 
+impl GleanPredicate for ClassBySName {
+    fn GLEAN_name() -> String {
+        String::from("python.ClassBySName.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct CalleeToCaller {
     pub id: u64,
@@ -1472,10 +1671,6 @@ pub struct CalleeToCaller {
 }
 
 impl CalleeToCaller {
-    pub fn GLEAN_name() -> String {
-        String::from("python.CalleeToCaller.4")
-    }
-
     pub fn new(callee: Name, caller: Name) -> Self {
         CalleeToCaller {
             id: 0,
@@ -1487,6 +1682,13 @@ impl CalleeToCaller {
     }
 }
 
+impl GleanPredicate for CalleeToCaller {
+    fn GLEAN_name() -> String {
+        String::from("python.CalleeToCaller.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct BaseClassToDerived {
     pub id: u64,
@@ -1494,10 +1696,6 @@ pub struct BaseClassToDerived {
 }
 
 impl BaseClassToDerived {
-    pub fn GLEAN_name() -> String {
-        String::from("python.BaseClassToDerived.4")
-    }
-
     pub fn new(base: ClassDeclaration, derived: ClassDeclaration) -> Self {
         BaseClassToDerived {
             id: 0,
@@ -1509,6 +1707,13 @@ impl BaseClassToDerived {
     }
 }
 
+impl GleanPredicate for BaseClassToDerived {
+    fn GLEAN_name() -> String {
+        String::from("python.BaseClassToDerived.4")
+    }
+
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct FileCall {
     pub id: u64,
@@ -1516,10 +1721,6 @@ pub struct FileCall {
 }
 
 impl FileCall {
-    pub fn GLEAN_name() -> String {
-        String::from("python.FileCall.4")
-    }
-
     pub fn new(file: src::File, callee_span: src::ByteSpan, call_args: Vec<CallArgument>) -> Self {
         FileCall {
             id: 0,
@@ -1530,6 +1731,13 @@ impl FileCall {
             }),
         }
     }
+}
+
+impl GleanPredicate for FileCall {
+    fn GLEAN_name() -> String {
+        String::from("python.FileCall.4")
+    }
+
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]

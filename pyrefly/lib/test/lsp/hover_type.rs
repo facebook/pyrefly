@@ -130,7 +130,7 @@ async def test(vals: dict[int, str]) -> None:
 
     for k in vals.keys(): # 2
         k
-        
+
     for v in vals.values(): # 3
         v
 "#;
@@ -444,7 +444,10 @@ Hover Result: `(a: int, b: bool) -> str`
 
 15 | overloaded_func(False)
        ^
-Hover Result: `Overload[(a: str) -> bool, (a: int, b: bool) -> str]`
+Hover Result: `Overload[
+  (a: str) -> bool
+  (a: int, b: bool) -> str
+]`
 "#
         .trim(),
         report.trim(),
@@ -486,7 +489,10 @@ Hover Result: `(self: Foo, a: int, b: bool) -> str`
 
 17 | foo.overloaded_meth(False)
              ^
-Hover Result: `BoundMethod[Foo, Overload[(self: Foo, a: str) -> bool, (self: Foo, a: int, b: bool) -> str]]`
+Hover Result: `Overload[
+  (self: Foo, a: str) -> bool
+  (self: Foo, a: int, b: bool) -> str
+]`
 "#
         .trim(),
         report.trim(),

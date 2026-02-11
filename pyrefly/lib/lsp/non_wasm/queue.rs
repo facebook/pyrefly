@@ -14,19 +14,22 @@ use crossbeam_channel::RecvError;
 use crossbeam_channel::Select;
 use crossbeam_channel::SendError;
 use crossbeam_channel::Sender;
-use lsp_server::Request;
 use lsp_server::RequestId;
-use lsp_server::Response;
 use lsp_types::DidChangeConfigurationParams;
 use lsp_types::DidChangeTextDocumentParams;
-use lsp_types::DidChangeWatchedFilesParams;
 use lsp_types::DidChangeWorkspaceFoldersParams;
 use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
 use lsp_types::DidSaveTextDocumentParams;
+use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::telemetry::TelemetryEventKind;
+use pyrefly_util::telemetry::TelemetryTaskId;
 use tracing::debug;
 use tracing::info;
 
+use crate::lsp::non_wasm::protocol::Request;
+use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Server;
 use crate::lsp::wasm::notebook::DidChangeNotebookDocumentParams;
 use crate::lsp::wasm::notebook::DidCloseNotebookDocumentParams;
@@ -42,21 +45,21 @@ pub enum LspEvent {
     /// Inform the server that a request is cancelled.
     /// Server should know about this ASAP to avoid wasting time on cancelled requests.
     CancelRequest(RequestId),
-    /// Inform the server that the given configs' find caches are now invalid, and
-    /// that a new type check must occur.
-    InvalidateConfigFind,
     // Part 2: Events that can be queued in FIFO order and handled at a later time.
     DidOpenTextDocument(DidOpenTextDocumentParams),
     DidChangeTextDocument(DidChangeTextDocumentParams),
     DidCloseTextDocument(DidCloseTextDocumentParams),
     DidSaveTextDocument(DidSaveTextDocumentParams),
-    DidChangeWatchedFiles(DidChangeWatchedFilesParams),
+    DrainWatchedFileChanges,
     DidChangeWorkspaceFolders(DidChangeWorkspaceFoldersParams),
     DidChangeConfiguration(DidChangeConfigurationParams),
     DidOpenNotebookDocument(DidOpenNotebookDocumentParams),
     DidCloseNotebookDocument(DidCloseNotebookDocumentParams),
     DidChangeNotebookDocument(DidChangeNotebookDocumentParams),
     DidSaveNotebookDocument(DidSaveNotebookDocumentParams),
+    /// Inform the server that some configs' find caches are now invalid (stored in
+    /// `server.invalidated_configs`), and that a new type check must occur.
+    InvalidateConfigFind,
     LspResponse(Response),
     LspRequest(Request),
     Exit,
@@ -72,7 +75,7 @@ impl LspEvent {
             Self::DidChangeTextDocument(_) => "DidChangeTextDocument".to_owned(),
             Self::DidCloseTextDocument(_) => "DidCloseTextDocument".to_owned(),
             Self::DidSaveTextDocument(_) => "DidSaveTextDocument".to_owned(),
-            Self::DidChangeWatchedFiles(_) => "DidChangeWatchedFiles".to_owned(),
+            Self::DrainWatchedFileChanges => "DidChangeWatchedFiles".to_owned(),
             Self::DidChangeWorkspaceFolders(_) => "DidChangeWorkspaceFolders".to_owned(),
             Self::DidChangeConfiguration(_) => "DidChangeConfiguration".to_owned(),
             Self::DidOpenNotebookDocument(_) => "DidOpenNotebookDocument".to_owned(),
@@ -96,14 +99,12 @@ enum LspEventKind {
 impl LspEvent {
     fn kind(&self) -> LspEventKind {
         match self {
-            Self::RecheckFinished | Self::CancelRequest(_) | Self::InvalidateConfigFind => {
-                LspEventKind::Priority
-            }
+            Self::RecheckFinished | Self::CancelRequest(_) => LspEventKind::Priority,
             Self::DidOpenTextDocument(_)
             | Self::DidChangeTextDocument(_)
             | Self::DidCloseTextDocument(_)
             | Self::DidSaveTextDocument(_)
-            | Self::DidChangeWatchedFiles(_)
+            | Self::DrainWatchedFileChanges
             | Self::DidChangeWorkspaceFolders(_)
             | Self::DidChangeConfiguration(_)
             | Self::LspResponse(_)
@@ -111,6 +112,7 @@ impl LspEvent {
             | Self::DidCloseNotebookDocument(_)
             | Self::DidSaveNotebookDocument(_)
             | Self::DidChangeNotebookDocument(_)
+            | Self::InvalidateConfigFind
             | Self::Exit => LspEventKind::Mutation,
             Self::LspRequest(_) => LspEventKind::Query,
         }
@@ -191,30 +193,39 @@ impl LspQueue {
     }
 }
 
-pub struct HeavyTask(Box<dyn FnOnce(&Server) + Send + Sync + 'static>);
+pub struct HeavyTask(
+    Box<
+        dyn FnOnce(&Server, &dyn Telemetry, &mut TelemetryEvent, Option<&TelemetryTaskId>)
+            + Send
+            + Sync
+            + 'static,
+    >,
+);
 
 impl HeavyTask {
-    pub fn new(f: impl FnOnce(&Server) + Send + Sync + 'static) -> Self {
-        Self(Box::new(f))
-    }
-
-    pub fn run(self, server: &Server) {
-        self.0(server)
+    fn run(
+        self,
+        server: &Server,
+        telemetry: &impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
+        task_stats: Option<&TelemetryTaskId>,
+    ) {
+        self.0(server, telemetry, telemetry_event, task_stats);
     }
 }
 
 /// A queue for heavy tasks that should be run in the background thread.
-pub struct HeavyTaskQueue<T> {
-    task_sender: Sender<(T, Instant)>,
-    task_receiver: Receiver<(T, Instant)>,
+pub struct HeavyTaskQueue {
+    task_sender: Sender<(HeavyTask, TelemetryEventKind, Instant)>,
+    task_receiver: Receiver<(HeavyTask, TelemetryEventKind, Instant)>,
     stop_sender: Sender<()>,
     stop_receiver: Receiver<()>,
-    queue_name: String,
+    queue_name: &'static str,
+    next_task_id: AtomicUsize,
 }
 
-impl<T> HeavyTaskQueue<T> {
-    pub fn new(queue_name: &str) -> Self {
-        let queue_name = queue_name.to_owned();
+impl HeavyTaskQueue {
+    pub fn new(queue_name: &'static str) -> Self {
         let (task_sender, task_receiver) = crossbeam_channel::unbounded();
         let (stop_sender, stop_receiver) = crossbeam_channel::unbounded();
         Self {
@@ -223,17 +234,27 @@ impl<T> HeavyTaskQueue<T> {
             stop_sender,
             stop_receiver,
             queue_name,
+            next_task_id: AtomicUsize::new(1),
         }
     }
 
-    pub fn queue_task(&self, task: T) {
+    pub fn queue_task(
+        &self,
+        kind: TelemetryEventKind,
+        f: Box<
+            dyn FnOnce(&Server, &dyn Telemetry, &mut TelemetryEvent, Option<&TelemetryTaskId>)
+                + Send
+                + Sync
+                + 'static,
+        >,
+    ) {
         self.task_sender
-            .send((task, Instant::now()))
+            .send((HeavyTask(f), kind, Instant::now()))
             .expect("Failed to queue heavy task");
         debug!("Enqueued task on {} heavy task queue", self.queue_name);
     }
 
-    pub fn run_until_stopped(&self, f: impl Fn(T)) {
+    pub fn run_until_stopped(&self, server: &Server, telemetry: &impl Telemetry) {
         let mut receiver_selector = Select::new_biased();
         // Biased selector will pick the receiver with lower index over higher ones,
         // so we register priority_events_receiver first.
@@ -249,18 +270,24 @@ impl<T> HeavyTaskQueue<T> {
                     return;
                 }
                 i if i == task_receiver_index => {
-                    let (task, enqueued) = selected
+                    let (task, kind, enqueued) = selected
                         .recv(&self.task_receiver)
                         .expect("Failed to receive heavy task");
                     debug!("Dequeued task on {} heavy task queue", self.queue_name);
-                    let task_start = Instant::now();
-                    f(task);
-                    let task_end = Instant::now();
+                    let (mut telemetry_event, queue_duration) =
+                        TelemetryEvent::new_dequeued(kind, enqueued, server.telemetry_state());
+                    let task_stats = TelemetryTaskId::new(
+                        self.queue_name,
+                        Some(self.next_task_id.fetch_add(1, Ordering::Relaxed)),
+                    );
+                    task.run(server, telemetry, &mut telemetry_event, Some(&task_stats));
+                    telemetry_event.set_task_stats(task_stats);
+                    let process_duration = telemetry_event.finish_and_record(telemetry, None);
                     info!(
                         "Ran task on {} heavy task queue. Queue time: {:.2}, task time: {:.2}",
                         self.queue_name,
-                        (task_start - enqueued).as_secs_f32(),
-                        (task_end - task_start).as_secs_f32()
+                        queue_duration.as_secs_f32(),
+                        process_duration.as_secs_f32()
                     );
                 }
                 _ => unreachable!(),

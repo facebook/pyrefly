@@ -68,7 +68,7 @@ reproduction.
 Once you have a minimal reproducible example of the bug, create a failing test
 for it, so you can easily run it and verify that the bug still exists while you
 work on tracking down the root cause and fix the issue. See the section above on
-testing and place yout reproducible examples in the appropriate test file or
+testing and place your reproducible examples in the appropriate test file or
 create a new one.
 
 ### Print debugging
@@ -138,7 +138,7 @@ Here's an overview of some important directories:
   edit these manually. Instead, run `test.py` and include any generated changes
   with your PR.
 - `test` - Markdown end-to-end tests for our IDE features
-- `website` - Source code for [pyrefly.org](pyrefly.org)
+- `website` - Source code for [pyrefly.org](https://pyrefly.org)
 
 ## License
 

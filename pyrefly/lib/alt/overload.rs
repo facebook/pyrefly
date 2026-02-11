@@ -151,22 +151,24 @@ impl<'a> ArgsExpander<'a> {
     fn expand_type<Ans: LookupAnswer>(ty: Type, solver: &AnswersSolver<Ans>) -> Vec<Type> {
         match ty {
             Type::Union(box Union { members: ts, .. }) => ts,
-            Type::ClassType(cls) if cls.is_builtin("bool") => vec![
-                Type::Literal(Lit::Bool(true)),
-                Type::Literal(Lit::Bool(false)),
-            ],
+            Type::ClassType(cls) if cls.is_builtin("bool") => {
+                vec![
+                    Lit::Bool(true).to_implicit_type(),
+                    Lit::Bool(false).to_implicit_type(),
+                ]
+            }
             Type::ClassType(cls) if solver.get_metadata_for_class(cls.class_object()).is_enum() => {
                 solver
                     .get_enum_members(cls.class_object())
                     .into_iter()
-                    .map(Type::Literal)
+                    .map(Lit::to_implicit_type)
                     .collect()
             }
             Type::Type(box Type::Union(box Union { members: ts, .. })) => {
-                ts.into_map(Type::type_form)
+                ts.into_map(|t| solver.heap.mk_type_form(t))
             }
             Type::Tuple(Tuple::Concrete(elements)) => {
-                let mut count = 1;
+                let mut count: usize = 1;
                 let mut changed = false;
                 let mut element_expansions = Vec::new();
                 for e in elements {
@@ -174,7 +176,11 @@ impl<'a> ArgsExpander<'a> {
                     if element_expansion.is_empty() {
                         element_expansions.push(vec![e].into_iter());
                     } else {
-                        count *= element_expansion.len();
+                        let len = element_expansion.len();
+                        count = count.saturating_mul(len);
+                        if count > Self::GAS {
+                            return Vec::new();
+                        }
                         changed = true;
                         element_expansions.push(element_expansion.into_iter());
                     }
@@ -184,7 +190,7 @@ impl<'a> ArgsExpander<'a> {
                     element_expansions
                         .into_iter()
                         .multi_cartesian_product()
-                        .map(Type::concrete_tuple)
+                        .map(|x| solver.heap.mk_concrete_tuple(x))
                         .collect()
                 } else {
                     Vec::new()
@@ -204,7 +210,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self_obj: Option<Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
@@ -242,7 +248,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Err(_) => (
                 CalledOverload {
                     func: arity_closest_overload.unwrap().0.clone(),
-                    res: Type::any_error(),
+                    res: self.heap.mk_any_error(),
                     ctor_targs: None,
                     call_errors: self.error_collector(),
                 },
@@ -257,7 +263,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self_obj.as_ref(),
                     &args,
                     &keywords,
-                    range,
+                    arguments_range,
                     errors,
                     hint,
                     &ctor_targs,
@@ -282,7 +288,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self_obj.as_ref(),
                             cur_args,
                             cur_keywords,
-                            range,
+                            arguments_range,
                             errors,
                             hint,
                             &ctor_targs,
@@ -315,7 +321,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         // Record the closest overload to power IDE services.
         self.record_overload_trace(
-            range,
+            arguments_range,
             overloads.map(|TargetWithTParams(_, Function { signature, .. })| signature),
             &closest_overload.func.1.signature,
             matched,
@@ -332,7 +338,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .kind
                         .format(self.module().name())
                 ));
-                errors.add(range, ErrorInfo::new(ErrorKind::Deprecated, context), msg);
+                errors.add(
+                    arguments_range,
+                    ErrorInfo::new(ErrorKind::Deprecated, context),
+                    msg,
+                );
             }
             (closest_overload.res, closest_overload.func.1.signature)
         } else {
@@ -382,18 +392,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 let signature = self
                     .solver()
-                    .for_display(Type::Callable(Box::new(signature)));
+                    .for_display(self.heap.mk_callable_from(signature));
                 msg.push(format!("{signature}{suffix}"));
             }
             // We intentionally discard closest_overload.call_errors. When no overload matches,
             // there's a high likelihood that the "closest" one by our heuristic isn't the right
             // one, in which case the call errors are just noise.
             errors.add(
-                range,
+                arguments_range,
                 ErrorInfo::new(ErrorKind::NoMatchingOverload, context),
                 msg,
             );
-            (Type::any_error(), closest_overload.func.1.signature)
+            (self.heap.mk_any_error(), closest_overload.func.1.signature)
         }
     }
 
@@ -439,7 +449,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self_obj: Option<&Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         errors: &ErrorCollector,
         hint: Option<HintRef>,
         ctor_targs: &Option<&mut TArgs>,
@@ -448,7 +458,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut closest_unmatched_overload: Option<CalledOverload> = None;
         for callable in overloads {
             let called_overload = self.try_call_overload(
-                callable, metadata, self_obj, args, keywords, range, errors, hint, ctor_targs,
+                callable,
+                metadata,
+                self_obj,
+                args,
+                keywords,
+                arguments_range,
+                errors,
+                hint,
+                ctor_targs,
             );
             if called_overload.call_errors.is_empty() {
                 matched_overloads.push(called_overload);
@@ -532,7 +550,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 self_obj,
                                 &materialized_args,
                                 &materialized_keywords,
-                                range,
+                                arguments_range,
                                 errors,
                                 hint,
                                 &None,
@@ -552,7 +570,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if matched_overloads.any(|o| !self.is_equal(&first_overload.res, &o.res)) {
                 return (
                     CalledOverload {
-                        res: Type::any_implicit(),
+                        res: self.heap.mk_any_implicit(),
                         ..first_overload
                     },
                     true,
@@ -570,7 +588,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self_obj: Option<&Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
-        range: TextRange,
+        arguments_range: TextRange,
         errors: &ErrorCollector,
         hint: Option<HintRef>,
         ctor_targs: &Option<&mut TArgs>,
@@ -591,7 +609,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self_obj.cloned(),
                 args,
                 keywords,
-                range,
+                arguments_range,
                 errors,
                 &call_errors,
                 // We intentionally drop the context here, as arg errors don't need it,

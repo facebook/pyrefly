@@ -82,8 +82,11 @@ impl BundledStub for BundledTypeshedStdlib {
                 // The stdlib is full of deliberately incorrect overrides, so ignore them
                 (ErrorKind::BadOverride, Severity::Ignore),
                 (ErrorKind::BadParamNameOverride, Severity::Ignore),
+                // The stdlib has variance violations in typing.pyi, so ignore them
+                (ErrorKind::InvalidVariance, Severity::Ignore),
             ]);
-            let config_file = create_bundled_stub_config(Some(search_paths), Some(error_overrides));
+            let config_file =
+                create_bundled_stub_config(Some(search_paths), Some(error_overrides), Some(true));
             ArcId::new(config_file)
         });
         CONFIG.dupe()

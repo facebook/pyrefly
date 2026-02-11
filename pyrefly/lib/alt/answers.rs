@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_graph::calculation::Calculation;
+use pyrefly_graph::index::Idx;
+use pyrefly_graph::index_map::IndexMap;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::DisplayWith;
@@ -31,6 +33,7 @@ use crate::alt::answers_solver::ThreadState;
 use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::alt::traits::Solve;
+use crate::binding::binding::ChangedExport;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
 use crate::binding::binding::Keyed;
@@ -38,12 +41,10 @@ use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
+use crate::config::base::RecursionLimitConfig;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
-use crate::graph::calculation::Calculation;
-use crate::graph::index::Idx;
-use crate::graph::index_map::IndexMap;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::Solver;
 use crate::solver::solver::VarRecurser;
@@ -56,6 +57,7 @@ use crate::table_try_for_each;
 use crate::types::callable::Callable;
 use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
+use crate::types::heap::TypeHeap;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -262,6 +264,40 @@ impl Solutions {
         })
     }
 
+    /// Helper to create a difference for a key only in rhs.
+    #[inline]
+    fn make_only_in_rhs<'a, K: Keyed>(k: &'a K, v: &'a Arc<K::Answer>) -> SolutionsDifference<'a> {
+        SolutionsDifference {
+            key: (k, k),
+            lhs: None,
+            rhs: Some((v, v)),
+        }
+    }
+
+    /// Helper to create a difference for a key only in lhs.
+    #[inline]
+    fn make_only_in_lhs<'a, K: Keyed>(k: &'a K, v: &'a Arc<K::Answer>) -> SolutionsDifference<'a> {
+        SolutionsDifference {
+            key: (k, k),
+            lhs: Some((v, v)),
+            rhs: None,
+        }
+    }
+
+    /// Helper to create a difference for differing values.
+    #[inline]
+    fn make_value_differs<'a, K: Keyed>(
+        k: &'a K,
+        v1: &'a Arc<K::Answer>,
+        v2: &'a Arc<K::Answer>,
+    ) -> SolutionsDifference<'a> {
+        SolutionsDifference {
+            key: (k, k),
+            lhs: Some((v1, v1)),
+            rhs: Some((v2, v2)),
+        }
+    }
+
     /// Find the first key that differs between two solutions, with the two values.
     ///
     /// Don't love that we always allocate String's for the result, but it's rare that
@@ -280,34 +316,22 @@ impl Solutions {
                 return None;
             }
 
-            let y = y.table.get::<K>();
-            if y.len() > x.len() {
-                for (k, v) in y {
+            let y_table = y.table.get::<K>();
+            if y_table.len() > x.len() {
+                for (k, v) in y_table {
                     if !x.contains_key(k) {
-                        return Some(SolutionsDifference {
-                            key: (k, k),
-                            lhs: None,
-                            rhs: Some((v, v)),
-                        });
+                        return Some(Solutions::make_only_in_rhs(k, v));
                     }
                 }
                 unreachable!();
             }
             for (k, v) in x {
-                match y.get(k) {
+                match y_table.get(k) {
                     Some(v2) if !v.type_eq(v2, ctx) => {
-                        return Some(SolutionsDifference {
-                            key: (k, k),
-                            lhs: Some((v, v)),
-                            rhs: Some((v2, v2)),
-                        });
+                        return Some(Solutions::make_value_differs(k, v, v2));
                     }
                     None => {
-                        return Some(SolutionsDifference {
-                            key: (k, k),
-                            lhs: Some((v, v)),
-                            rhs: None,
-                        });
+                        return Some(Solutions::make_only_in_lhs(k, v));
                     }
                     _ => {}
                 }
@@ -325,6 +349,71 @@ impl Solutions {
             }
         });
         difference
+    }
+
+    /// Compute the set of exports that have changed between two solutions.
+    /// Returns a set of `ChangedExport` values: either `Name` (for `KeyExport`) or
+    /// `ClassDefIndex` (for class-related keys).
+    pub fn changed_exports(
+        &self,
+        other: &Self,
+    ) -> starlark_map::small_set::SmallSet<ChangedExport> {
+        use starlark_map::small_set::SmallSet;
+
+        fn check_table<K: Keyed>(
+            x: &SolutionsEntry<K>,
+            y: &Solutions,
+            ctx: &mut TypeEqCtx,
+            changed: &mut SmallSet<ChangedExport>,
+        ) where
+            SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+        {
+            if !K::EXPORTED {
+                return;
+            }
+
+            let y_table = y.table.get::<K>();
+
+            // Check for items only in y (added keys)
+            for (k, _v) in y_table {
+                if !x.contains_key(k)
+                    && let Some(anykey) = k.try_to_anykey()
+                {
+                    changed.insert(anykey.to_changed_export());
+                }
+            }
+
+            // Check for differences in x
+            for (k, v) in x {
+                match y_table.get(k) {
+                    Some(v2) if !v.type_eq(v2, ctx) => {
+                        // Value changed
+                        if let Some(anykey) = k.try_to_anykey() {
+                            changed.insert(anykey.to_changed_export());
+                        }
+                    }
+                    None => {
+                        // Key removed
+                        if let Some(anykey) = k.try_to_anykey() {
+                            changed.insert(anykey.to_changed_export());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let mut changed = SmallSet::new();
+        // Important we have a single TypeEqCtx, so that we don't have
+        // types used in different ways.
+        let mut ctx = TypeEqCtx::default();
+
+        // Check all tables
+        table_for_each!(self.table, |x| {
+            check_table(x, other, &mut ctx, &mut changed);
+        });
+
+        changed
     }
 
     pub fn get_index(&self) -> Option<Arc<Mutex<Index>>> {
@@ -392,6 +481,10 @@ impl Answers {
         &self.table
     }
 
+    pub fn heap(&self) -> &TypeHeap {
+        &self.solver.heap
+    }
+
     #[expect(dead_code)]
     fn len(&self) -> usize {
         let mut res = 0;
@@ -408,6 +501,7 @@ impl Answers {
         stdlib: &Stdlib,
         uniques: &UniqueFactory,
         compute_everything: bool,
+        recursion_limit_config: Option<RecursionLimitConfig>,
     ) -> Solutions {
         let mut res = SolutionsTable::default();
 
@@ -438,7 +532,7 @@ impl Answers {
             }
         }
         let recurser = &VarRecurser::new();
-        let thread_state = &ThreadState::new();
+        let thread_state = &ThreadState::new(recursion_limit_config);
         let answers_solver = AnswersSolver::new(
             answers,
             self,
@@ -449,6 +543,7 @@ impl Answers {
             recurser,
             stdlib,
             thread_state,
+            self.heap(),
         );
         table_mut_for_each!(&mut res, |items| pre_solve(
             items,
@@ -464,7 +559,7 @@ impl Answers {
                     match key_to_intermediate_definition(bindings, key) {
                         None => continue,
                         Some(IntermediateDefinition::Local(_)) => continue,
-                        Some(IntermediateDefinition::Module(_)) => continue,
+                        Some(IntermediateDefinition::Module(..)) => continue,
                         Some(IntermediateDefinition::NamedImport(
                             _import_key,
                             module_name,
@@ -540,6 +635,7 @@ impl Answers {
             recurser,
             stdlib,
             thread_state,
+            self.heap(),
         );
         let v = solver.get_hashed_opt(key)?;
         let mut vv = (*v).clone();
@@ -580,14 +676,14 @@ impl Answers {
         let lock = self.trace.as_ref()?.lock();
         match lock.overloaded_callees.get(&range)? {
             OverloadedCallee::Resolved { callable } => {
-                Some(self.deep_force(Type::Callable(Box::new(callable.clone()))))
+                Some(self.deep_force(self.heap().mk_callable_from(callable.clone())))
             }
             OverloadedCallee::Candidates {
                 closest,
                 is_closest_chosen,
                 ..
             } if *is_closest_chosen => {
-                Some(self.deep_force(Type::Callable(Box::new(closest.clone()))))
+                Some(self.deep_force(self.heap().mk_callable_from(closest.clone())))
             }
             _ => None,
         }
@@ -691,24 +787,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ty: _,
                 is_deprecated: _,
                 definition,
-                docstring_range: _,
                 is_reexport: _,
             } in self.completions(base.clone(), Some(attribute_name), false)
             {
                 match definition {
-                    Some(AttrDefinition::FullyResolved(TextRangeWithModule { module, range })) => {
-                        if module.path() != self.bindings().module().path() {
+                    AttrDefinition::FullyResolved {
+                        cls,
+                        range,
+                        docstring_range: _,
+                    } => {
+                        if cls.module_path() != self.bindings().module().path() {
                             index
                                 .lock()
                                 .externally_defined_attribute_references
-                                .entry(module.path().dupe())
+                                .entry(cls.module_path().dupe())
                                 .or_default()
                                 .push((range, attribute_reference_range))
                         }
                     }
-                    Some(AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                        module_name,
-                    }) => {
+                    AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                         index
                             .lock()
                             .externally_defined_variable_references
@@ -716,7 +813,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .or_default()
                             .push(attribute_reference_range);
                     }
-                    None => {}
+                    AttrDefinition::Submodule { module_name } => {
+                        // For submodule access (e.g., `b` in `a.b`), record as a reference to
+                        // the submodule. The last component of module_name is the attribute name.
+                        if let Some(parent) = module_name.parent() {
+                            index
+                                .lock()
+                                .externally_defined_variable_references
+                                .entry((parent, attribute_name.clone()))
+                                .or_default()
+                                .push(attribute_reference_range);
+                        }
+                    }
                 }
             }
         }

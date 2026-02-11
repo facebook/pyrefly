@@ -100,6 +100,8 @@ pub enum ErrorKind {
     BadClassDefinition,
     /// Attempting to use a type that cannot be used as a contextmanager in a `with` statement.
     BadContextManager,
+    /// An entry in user-defined `__all__` does not exist in the module.
+    BadDunderAll,
     /// A function definition has some typing-related error.
     /// e.g. putting a non-default argument after a default argument.
     BadFunctionDefinition,
@@ -172,6 +174,8 @@ pub enum ErrorKind {
     InvalidOverload,
     /// An error related to ParamSpec definition or usage.
     InvalidParamSpec,
+    /// An error caused by an invalid match pattern.
+    InvalidPattern,
     /// A use of `typing.Self` in a context where Pyrefly does not recognize it as
     /// mapping to a valid class type.
     InvalidSelfType,
@@ -187,6 +191,8 @@ pub enum ErrorKind {
     InvalidTypeVar,
     /// An error caused by incorrect usage or definition of a TypeVarTuple.
     InvalidTypeVarTuple,
+    /// An error caused by a type variable being used in a position incompatible with its declared variance,
+    InvalidVariance,
     /// Attempting to use `yield` in a way that is not allowed.
     /// e.g. `yield from` with something that's not an iterable.
     InvalidYield,
@@ -199,6 +205,8 @@ pub enum ErrorKind {
     MissingImport,
     /// Accessing an attribute that does not exist on a module.
     MissingModuleAttribute,
+    /// A method overrides a parent class method but does not have the `@override` decorator.
+    MissingOverrideDecorator,
     /// The source code for an imported package is missing.
     MissingSource,
     /// We are using bundled stubs for a package but the source code is missing.
@@ -207,6 +215,8 @@ pub enum ErrorKind {
     NoAccess,
     /// Attempting to call an overloaded function, but none of the signatures match.
     NoMatchingOverload,
+    /// Matching on an enum without covering all possible cases.
+    NonExhaustiveMatch,
     /// Attempting to use something that isn't a type where a type is expected.
     /// This is a very general error and should be used sparingly.
     NotAType,
@@ -216,6 +226,8 @@ pub enum ErrorKind {
     NotCallable,
     /// Attempting to use a non-iterable value as an iterable.
     NotIterable,
+    /// Accessing a `NotRequired` TypedDict key without first proving it exists.
+    NotRequiredKeyAccess,
     /// Unpacking an open TypedDict that may contain a bad key via inheritance.
     OpenUnpacking,
     /// An error related to parsing or syntax.
@@ -249,6 +261,14 @@ pub enum ErrorKind {
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
     /// or between literals whose comparison result is statically known.
     UnnecessaryComparison,
+    /// A return or yield that can never be reached.
+    /// This occurs when a return/yield follows a statement that always exits,
+    /// such as return, raise, break, or continue.
+    Unreachable,
+    /// Protocols decorated with `@runtime_checkable` can be used in `isinstance` checks
+    /// The runtime only checks that an attribute with that name is present, so the
+    /// type checker must warn if the types are not compatible.
+    UnsafeOverlap,
     /// Attempting to use a feature that is not yet supported.
     Unsupported,
     /// Attempting to `del` something that cannot be deleted
@@ -259,6 +279,11 @@ pub enum ErrorKind {
     UntypedImport,
     /// Result of async function call is never used or awaited
     UnusedCoroutine,
+    /// A suppression comment is unused (no error to suppress, or specific codes are unused)
+    UnusedIgnore,
+    /// The inferred variance of a type variable does not match its declared variance.
+    /// For example, a type variable used only in covariant positions in a protocol should be declared covariant.
+    VarianceMismatch,
 }
 
 impl std::str::FromStr for ErrorKind {
@@ -300,8 +325,9 @@ impl ErrorKind {
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::RedundantCast => Severity::Warn,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
-            // TODO(rechen): re-enable this once we figure out how to make it less noisy.
+            // TODO: up severity to Warn when https://github.com/facebook/pyrefly/issues/1950 is fixed
             ErrorKind::UntypedImport => Severity::Ignore,
+            ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
@@ -309,7 +335,11 @@ impl ErrorKind {
             ErrorKind::UnannotatedReturn => Severity::Ignore,
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
+            ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::NonExhaustiveMatch => Severity::Warn,
+            ErrorKind::UnusedIgnore => Severity::Ignore,
+            ErrorKind::VarianceMismatch => Severity::Warn,
             _ => Severity::Error,
         }
     }
@@ -331,6 +361,7 @@ mod tests {
     use pulldown_cmark::HeadingLevel;
     use pulldown_cmark::Parser;
     use pulldown_cmark::Tag;
+    use pulldown_cmark::TagEnd;
 
     use super::*;
     #[test]
@@ -353,14 +384,17 @@ mod tests {
         let mut last_error_kind = None;
         for event in Parser::new(&doc_contents) {
             match event {
-                Event::End(Tag::Heading(HeadingLevel::H1, ..)) => {
+                Event::End(TagEnd::Heading(HeadingLevel::H1)) => {
                     // Don't start checking for error kinds until we get past the document title
                     start = true;
                 }
-                Event::Start(Tag::Heading(HeadingLevel::H2, ..)) => {
+                Event::Start(Tag::Heading {
+                    level: HeadingLevel::H2,
+                    ..
+                }) => {
                     in_header = true;
                 }
-                Event::End(Tag::Heading(HeadingLevel::H2, ..)) => {
+                Event::End(TagEnd::Heading(HeadingLevel::H2)) => {
                     in_header = false;
                 }
                 Event::Text(doc_error_kind) if start && in_header => {

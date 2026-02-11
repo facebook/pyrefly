@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -719,7 +720,7 @@ class A:
     def f(self, x: TA1):
         pass
 class B(A):
-    def f(self, x: TA2):  # E: `B.f` has type `BoundMethod[B, (self: B, x: TA2) -> None]`, which is not assignable to `BoundMethod[B, (self: B, x: TA1) -> None]`, the type of `A.f`
+    def f(self, x: TA2):  # E: `B.f` has type `(self: B, x: TA2) -> None`, which is not assignable to `(self: B, x: TA1) -> None`, the type of `A.f`
         pass
     "#,
 );
@@ -906,5 +907,139 @@ class D(C):
 
 def f(d: D):
     assert_type(d.x, list[A])
+    "#,
+);
+
+// Tests for MissingOverrideDecorator (strict override enforcement)
+testcase!(
+    test_missing_override_decorator,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    def foo(self, x: int) -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_with_override,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override
+
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    @override
+    def foo(self, x: int) -> None: ...  # OK - has @override
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_no_parent_method,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    def bar(self, x: int) -> None: ...  # OK - not overriding anything
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_classmethod,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    @classmethod
+    def foo(cls) -> None: ...
+
+class Derived(Base):
+    @classmethod
+    def foo(cls) -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_staticmethod,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    @staticmethod
+    def foo() -> None: ...
+
+class Derived(Base):
+    @staticmethod
+    def foo() -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_property,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    @property
+    def foo(self) -> int: ...
+
+class Derived(Base):
+    @property
+    def foo(self) -> int: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_field,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    x: int
+
+class Derived(Base):
+    x: int  # E: Class member `Derived.x` overrides a member in a parent class but is missing an `@override` decorator
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_disabled_by_default,
+    r#"
+class Base:
+    def foo(self, x: int) -> None: ...
+
+class Derived(Base):
+    def foo(self, x: int) -> None: ...  # OK when error is disabled by default
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_multiple_inheritance,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base1:
+    def foo(self) -> None: ...
+
+class Base2:
+    def bar(self) -> None: ...
+
+class Derived(Base1, Base2):
+    def foo(self) -> None: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
+    def bar(self) -> None: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
+    def baz(self) -> None: ...  # OK - not overriding anything
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_dunder_method,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    def __str__(self) -> str: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
+
+class Derived(Base):
+    def __str__(self) -> str: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
     "#,
 );

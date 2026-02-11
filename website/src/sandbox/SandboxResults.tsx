@@ -45,6 +45,7 @@ interface SandboxResultsProps {
     pyodideStatus: PyodideStatus;
     activeTab: string;
     setActiveTab: (tab: string) => void;
+    height?: number; // Dynamic height in pixels (from resizable splitter)
 }
 
 function ErrorMessage({
@@ -133,16 +134,21 @@ export default function SandboxResults({
     pyodideStatus,
     activeTab,
     setActiveTab = () => {},
+    height,
 }: SandboxResultsProps): React.ReactElement {
     const activeToolbarTab = activeTab;
 
     const hasTypecheckErrors =
         errors !== undefined && errors !== null && errors.length > 0;
 
+    // Use dynamic height if provided, otherwise fall back to default CSS
+    const containerStyle = height ? { height: `${height}px` } : undefined;
+
     return (
         <div
             id="sandbox-results-container"
             {...stylex.props(styles.resultsContainer)}
+            style={containerStyle}
         >
             <div {...stylex.props(styles.resultsToolbar)}>
                 <ul {...stylex.props(styles.tabs, styles.tabsEnabled)}>

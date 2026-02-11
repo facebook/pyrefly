@@ -19,6 +19,7 @@ use crate::report::pysa::module::ModuleIds;
 use crate::report::pysa::types::PysaType;
 use crate::test::pysa::utils::create_location;
 use crate::test::pysa::utils::create_state;
+use crate::test::pysa::utils::get_class;
 use crate::test::pysa::utils::get_handle_for_module_name;
 
 fn create_global_variable(type_: Option<PysaType>, location: PysaLocation) -> GlobalVariable {
@@ -227,4 +228,29 @@ import typing
 T = typing.TypeVar("T")
 "#,
     &|_: &ModuleContext| { HashMap::new() },
+);
+
+exported_global_variables_testcase!(
+    test_callables_not_exported,
+    r#"
+class A:
+    def __init__(self) -> None:
+        pass
+    def foo(self) -> None:
+        pass
+a = A()
+foo = a.foo
+"#,
+    &|context: &ModuleContext| {
+        HashMap::from([(
+            "a".into(),
+            create_global_variable(
+                Some(PysaType::from_class(
+                    &get_class("test", "A", context),
+                    context,
+                )),
+                create_location(7, 1, 7, 2),
+            ),
+        )])
+    },
 );

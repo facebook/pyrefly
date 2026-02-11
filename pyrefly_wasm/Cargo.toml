@@ -15,6 +15,7 @@ tar = "0.4.44"
 zstd = { version = "0.13" }
 
 [dependencies]
+console_error_panic_hook = "0.1.2"
 dupe = "0.9.1"
 pyrefly = { path = "../pyrefly" }
 serde = { version = "1.0", features = ["derive"] }

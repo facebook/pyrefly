@@ -7,6 +7,7 @@
 
 //! Tests of the `State` object.
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::sleep;
@@ -23,6 +24,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
+use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
@@ -30,6 +32,7 @@ use crate::error::error::print_errors;
 use crate::module::finder::find_import;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
+use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
 
@@ -58,7 +61,9 @@ else:
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None).finding().unwrap();
+        let path = find_import(&config_file, name, None, None)
+            .finding()
+            .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -136,7 +141,7 @@ fn test_change_require() {
     let mut t = state.new_committable_transaction(Require::Exports, None);
     t.as_mut().set_memory(env.get_memory());
     t.as_mut().run(&[handle.dupe()], Require::Exports);
-    state.commit_transaction(t);
+    state.commit_transaction(t, None);
 
     assert_eq!(
         state
@@ -148,7 +153,15 @@ fn test_change_require() {
         0
     );
     assert!(state.transaction().get_bindings(&handle).is_none());
-    state.run(&[handle.dupe()], Require::Errors, Require::Exports, None);
+    state.run(
+        &[handle.dupe()],
+        RequireLevels {
+            specified: Require::Errors,
+            default: Require::Exports,
+        },
+        None,
+        None,
+    );
     assert_eq!(
         state
             .transaction()
@@ -161,8 +174,11 @@ fn test_change_require() {
     assert!(state.transaction().get_bindings(&handle).is_none());
     state.run(
         &[handle.dupe()],
-        Require::Everything,
-        Require::Exports,
+        RequireLevels {
+            specified: Require::Everything,
+            default: Require::Exports,
+        },
+        None,
         None,
     );
     assert_eq!(
@@ -192,12 +208,12 @@ fn test_crash_on_search() {
         Some(Arc::new(FileContents::from_source("x = 3".to_owned()))),
     )]);
     t.as_mut().run(&[], Require::Everything); // This run breaks reproduction (but is now required)
-    state.commit_transaction(t);
+    state.commit_transaction(t, None);
 
     // Now we need to increment the step counter.
     let mut t = state.new_committable_transaction(REQUIRE, None);
     t.as_mut().run(&[], Require::Everything);
-    state.commit_transaction(t);
+    state.commit_transaction(t, None);
 
     // Now we run two searches, this used to crash
     let t = state.new_transaction(REQUIRE, None);
@@ -205,6 +221,102 @@ fn test_crash_on_search() {
     t.search_exports_exact("x");
     eprintln!("Second search");
     t.search_exports_exact("x");
+}
+
+#[test]
+fn test_compute_stdlib_uses_bundled_typeshed_even_with_custom_path() {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let typeshed_path = temp_dir.path().join("custom_typeshed");
+    let stdlib_path = typeshed_path.join("stdlib");
+    fs::create_dir_all(&stdlib_path).unwrap();
+
+    // Create a minimal builtins.pyi that defines int as a class, but very minimally.
+    // The key insight: Stdlib object loads built-in types (int, str, etc.) and their
+    // class definitions for type-checking. Since our custom typeshed's int is used
+    // for imports but bundled typeshed's int is used for Stdlib, we get a type mismatch.
+    let builtins_content = r#"
+class object: ...
+class type: ...
+class int:
+    # This is a minimal int that doesn't have many methods
+    # The bundled typeshed has a full implementation
+    pass
+class str: ...
+class bool(int): ...
+class float: ...
+class list: ...
+class dict: ...
+class tuple: ...
+class None: ...
+"#;
+    fs::write(stdlib_path.join("builtins.pyi"), builtins_content).unwrap();
+
+    fs::write(stdlib_path.join("VERSIONS"), "builtins: 3.0-\n").unwrap();
+
+    let mut config = ConfigFile::default();
+    config.python_environment.set_empty_to_default();
+    config.typeshed_path = Some(typeshed_path.clone());
+    let sys_info = config.get_sys_info();
+
+    // Create a test module. The bug manifests as follows:
+    // - The `int` annotation is resolved from the custom typeshed
+    // - The Stdlib's int (used for Literal[1]) comes from bundled typeshed
+    // - These are different types, causing "Literal[1] is not assignable to int"
+    let test_code = r#"
+# This simple assignment demonstrates the bug:
+# - The `int` type annotation is resolved from custom typeshed (builtins.int@4:7-10)
+# - The Literal[1] type comes from bundled Stdlib (builtins.int@420:7-10)
+# - Since these are different types, we get a type error
+x: int = 1
+"#;
+    let module_name = ModuleName::from_str("test_module");
+    let module_path = ModulePath::memory(PathBuf::from("test_module.py"));
+
+    let mut sourcedb = MapDatabase::new(sys_info.dupe());
+    sourcedb.insert(module_name, module_path.dupe());
+    config.source_db = Some(ArcId::new(Box::new(sourcedb)));
+    config.configure();
+    let config = ArcId::new(config);
+
+    let state = State::new(ConfigFinder::new_constant(config.clone()));
+    let handle = Handle::new(module_name, module_path, sys_info);
+
+    let mut transaction = state.new_transaction(Require::Everything, None);
+    transaction.set_memory(vec![(
+        PathBuf::from("test_module.py"),
+        Some(Arc::new(FileContents::from_source(test_code.to_owned()))),
+    )]);
+    transaction.run(&[handle.dupe()], Require::Everything);
+
+    let errors = transaction.get_errors([&handle]).collect_errors();
+
+    assert!(
+        config.typeshed_path.is_some(),
+        "Test setup error: typeshed_path should be set in config"
+    );
+    assert_eq!(
+        config.typeshed_path.as_ref().unwrap(),
+        &typeshed_path,
+        "Test setup error: typeshed_path should match the custom path"
+    );
+
+    // Verify the specific error is the expected type mismatch. This is specific
+    // error is an indication that we are not using the typeshed bundled with Pyrefly
+    // and not the typeshed provided through the config.
+    let error_messages: Vec<String> = errors.shown.iter().map(|e| e.msg().to_string()).collect();
+    let has_literal_int_error = error_messages
+        .iter()
+        .any(|msg| msg.contains("Literal[1]") && msg.contains("int"));
+    assert!(
+        has_literal_int_error,
+        "Expected error about Literal[1] not being assignable to int, but got: {:?}. \
+         This error demonstrates the mismatch between bundled Stdlib int and custom typeshed int.",
+        error_messages
+    );
 }
 
 const SEQUENTIAL_COMMITTABLE_TRANSACTIONS_SLEEP_TIME_MS: u64 = 100;
@@ -251,7 +363,7 @@ fn test_sequential_committable_transactions() {
             assert_eq!(initial_value + 1, v);
             v
         };
-        state.commit_transaction(t);
+        state.commit_transaction(t, None);
     }
 
     // We rapidly spin up 5 threads, each of which will increment the counter twice.
@@ -280,4 +392,66 @@ fn test_sequential_committable_transactions() {
     // When we are here, we are sure that there is no deadlock.
     let lock = counter.lock();
     assert_eq!(10, *lock);
+}
+
+/// Test that fixing a previously malformed notebook triggers a rebuild.
+/// Regression test for a bug where the reload logic returned `false` when
+/// old_load.module_info.notebook() was None, preventing rebuilds.
+#[test]
+fn test_notebook_reload_after_parse_failure() {
+    let temp_dir = TempDir::new().unwrap();
+    let notebook_path = temp_dir.path().join("test.ipynb");
+
+    // Start with invalid JSON
+    fs::write(&notebook_path, "{ invalid json }").unwrap();
+
+    let mut config = ConfigFile::default();
+    config.python_environment.set_empty_to_default();
+    config.configure();
+    let config = ArcId::new(config);
+    let sys_info = config.get_sys_info();
+    let state = State::new(ConfigFinder::new_constant(config));
+    let module_name = ModuleName::from_str("test");
+    let module_path = ModulePath::filesystem(notebook_path.clone());
+    let handle = Handle::new(module_name, module_path, sys_info);
+
+    // First run: malformed notebook produces load error
+    let mut t = state.new_committable_transaction(Require::Exports, None);
+    t.as_mut().run(&[handle.dupe()], Require::Errors);
+    state.commit_transaction(t, None);
+    assert_eq!(
+        1,
+        state
+            .transaction()
+            .get_errors([&handle])
+            .collect_errors()
+            .shown
+            .len()
+    );
+
+    // Fix the notebook with valid JSON
+    let valid_notebook = r#"{
+        "cells": [],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 4
+    }"#;
+    fs::write(&notebook_path, valid_notebook).unwrap();
+
+    // Invalidate and re-run - should now have no errors
+    let mut t = state.new_committable_transaction(Require::Exports, None);
+    t.as_mut()
+        .invalidate_disk(std::slice::from_ref(&notebook_path));
+    t.as_mut().run(&[handle.dupe()], Require::Errors);
+    state.commit_transaction(t, None);
+
+    assert_eq!(
+        0,
+        state
+            .transaction()
+            .get_errors([&handle])
+            .collect_errors()
+            .shown
+            .len()
+    );
 }

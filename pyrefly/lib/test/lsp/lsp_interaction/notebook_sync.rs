@@ -43,6 +43,48 @@ fn test_notebook_publish_diagnostics() {
 }
 
 #[test]
+fn test_notebook_ignores_did_close_text_document() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.open_notebook("notebook.ipynb", vec!["z: str = ''\nz = 1"]);
+    // Since this file is opened as a notebook, textDocument/didClose should be ignored
+    interaction.client.did_close("notebook.ipynb");
+    let cell_uri = interaction.cell_uri("notebook.ipynb", "cell1");
+    interaction.change_notebook(
+        "notebook.ipynb",
+        2,
+        json!({
+            "cells": {
+                "textContent": [{
+                    "document": {
+                        "uri": cell_uri,
+                        "version": 2
+                    },
+                    "changes": [{
+                        "text": "z: str = ''\nz = 'fixed'"
+                    }]
+                }]
+            }
+        }),
+    );
+    interaction
+        .diagnostic_for_cell("notebook.ipynb", "cell1")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_notebook_did_open() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();

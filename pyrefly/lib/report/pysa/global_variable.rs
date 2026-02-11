@@ -32,6 +32,7 @@ use crate::report::pysa::module::ModuleKey;
 use crate::report::pysa::slow_fun_monitor::slow_fun_monitor_scope;
 use crate::report::pysa::step_logger::StepLogger;
 use crate::report::pysa::types::PysaType;
+use crate::report::pysa::types::is_bound_method_like;
 use crate::report::pysa::types::preprocess_type;
 use crate::state::state::Transaction;
 
@@ -94,7 +95,7 @@ impl GlobalVariable {
                 .type_
                 .as_ref()
                 .map(|type_| PysaType::from_type(type_, context)),
-            location: PysaLocation::new(context.module_info.display_range(identifier.range())),
+            location: PysaLocation::from_text_range(identifier.range(), &context.module_info),
         }
     }
 }
@@ -111,9 +112,11 @@ fn visit_assign_target(
             .key_to_idx_hashed_opt(Hashed::new(&Key::Definition(short_identifier)))
             .and_then(|idx| context.answers.get_idx(idx));
         if let Some(type_) = type_.as_ref()
-            && type_.ty().is_type_variable()
+            && (type_.ty().is_raw_legacy_type_variable() || is_bound_method_like(type_.ty()))
         {
-            // Don't export type variable globals.
+            // Don't export:
+            // - Type variable, such as `T = TypeVar("T")`
+            // - Aliases to bound method, such as `inst = Random(); random = inst.random`
             return;
         }
         global_variables

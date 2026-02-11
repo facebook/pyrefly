@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -247,6 +248,34 @@ assert_type(x[3:], tuple[()])
 );
 
 testcase!(
+    test_slice_negative,
+    r#"
+from typing import assert_type, Literal
+
+x = (5, 6, 7)
+
+# Negative end index
+assert_type(x[:-1], tuple[Literal[5], Literal[6]])
+assert_type(x[:-2], tuple[Literal[5]])
+assert_type(x[:-3], tuple[()])
+
+# Negative start index
+assert_type(x[-1:], tuple[Literal[7]])
+assert_type(x[-2:], tuple[Literal[6], Literal[7]])
+assert_type(x[-3:], tuple[Literal[5], Literal[6], Literal[7]])
+
+# Both negative
+assert_type(x[-3:-1], tuple[Literal[5], Literal[6]])
+assert_type(x[-2:-1], tuple[Literal[6]])
+
+# Mixed positive and negative
+assert_type(x[0:-1], tuple[Literal[5], Literal[6]])
+assert_type(x[1:-1], tuple[Literal[6]])
+assert_type(x[-2:3], tuple[Literal[6], Literal[7]])
+"#,
+);
+
+testcase!(
     test_unbounded_tuple_hint,
     r#"
 x1: tuple[str, ...] = ("ok",)
@@ -367,7 +396,7 @@ def test() -> None:
     x: tuple[object, ...] = (1,)
     x += (2, "y")
     y: tuple[int, ...] = (1,)
-    y += (2, "y")  # E: Augmented assignment produces a value of type `tuple[*tuple[int, ...], Literal[2], Literal['y']]`, which is not assignable to `tuple[int, ...]`
+    y += (2, "y")  # E: Augmented assignment result `tuple[*tuple[int, ...], Literal[2], Literal['y']]` is not assignable to `tuple[int, ...]`
 "#,
 );
 
@@ -422,6 +451,18 @@ def g(x):
         assert_type(x, tuple)
 "#,
 );
+
+#[test]
+fn test_tuple_concat_large_union_no_crash() -> anyhow::Result<()> {
+    let code = r#"
+a: int | list[int] | tuple[int, ...] | bool
+a + (a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a)
+"#;
+    let (state, handle_fn) = TestEnv::one("main", code).to_state();
+    let handle = handle_fn("main");
+    state.transaction().get_errors(&[handle]);
+    Ok(())
+}
 
 testcase!(
     test_tuple_class_type,
@@ -478,4 +519,15 @@ def test(eq0: Eq0, eq1: Eq1, ge0: Ge0, ge1: Ge1) -> None:
     eq0_ge1__ge0: Eq0 | Ge1 = ge0
     eq0_ge1__ge1: Eq0 | Ge1 = ge1
     "#,
+);
+
+testcase!(
+    test_giant_tuple_literal,
+    r#"
+# literal tuples with >256 elements get inferred as `tuple[Any, ...]`
+
+from typing import assert_type, Any
+x = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256)
+assert_type(x, tuple[Any, ...])
+"#,
 );
