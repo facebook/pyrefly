@@ -1164,9 +1164,9 @@ impl ConfigFile {
 
         if let ConfigSource::File(path) = &self.source {
             configure_errors
-                .into_map(|e| ConfigError::warn(e.context(format!("{}", path.display()))))
+                .into_map(|e| ConfigError::warn(e.context(format!("{}", path.display())), None))
         } else {
-            configure_errors.into_map(ConfigError::warn)
+            configure_errors.into_map(|e| ConfigError::warn(e, None))
         }
     }
 
@@ -1231,7 +1231,7 @@ impl ConfigFile {
                 Ok(Some(config)) => (Some(config), ConfigSource::File(config_path.to_path_buf())),
                 Ok(None) => (None, ConfigSource::Marker(config_path.to_path_buf())),
                 Err(e) => {
-                    errors.push(ConfigError::error_with_path(e, config_path.to_path_buf()));
+                    errors.push(ConfigError::error(e, Some(config_path.to_path_buf())));
                     (None, ConfigSource::File(config_path.to_path_buf()))
                 }
             };
@@ -1247,9 +1247,9 @@ impl ConfigFile {
                     }
                 }
                 None => {
-                    errors.push(ConfigError::error_with_path(
+                    errors.push(ConfigError::error(
                         anyhow!("Could not find parent of path `{}`", config_path.display()),
-                        config_path.to_path_buf(),
+                        Some(config_path.to_path_buf()),
                     ));
                     maybe_config.unwrap_or_else(ConfigFile::default)
                 }
@@ -1258,20 +1258,20 @@ impl ConfigFile {
 
             if !config.root.extras.0.is_empty() {
                 let extra_keys = config.root.extras.0.keys().join(", ");
-                errors.push(ConfigError::warn_with_path(
+                errors.push(ConfigError::warn(
                     anyhow!("Extra keys found in config: {extra_keys}"),
-                    config_path.to_path_buf(),
+                    Some(config_path.to_path_buf()),
                 ));
             }
             for sub_config in &config.sub_configs {
                 if !sub_config.settings.extras.0.is_empty() {
                     let extra_keys = sub_config.settings.extras.0.keys().join(", ");
-                    errors.push(ConfigError::warn_with_path(
+                    errors.push(ConfigError::warn(
                         anyhow!(
                             "Extra keys found in sub config matching {}: {extra_keys}",
                             sub_config.matches
                         ),
-                        config_path.to_path_buf(),
+                        Some(config_path.to_path_buf()),
                     ));
                 }
             }

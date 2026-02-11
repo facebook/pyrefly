@@ -1977,13 +1977,13 @@ impl Server {
     }
 
     /// Publish diagnostics for config files (pyrefly.toml or pyproject.toml)
-    fn publish_config_diagnostics(&self, transaction: &Transaction) {
+    fn publish_config_diagnostics(&self, transaction: &Transaction, source: DiagnosticSource) {
         let mut config_errors = transaction.get_config_errors();
 
         // If we got fresh errors, deduplicate and update the cache
         if !config_errors.is_empty() {
             // Deduplicate by (file_path, message) since the same error can be added multiple times
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = SmallSet::new();
             config_errors.retain(|err| {
                 let key = (err.file_path().map(|p| p.to_path_buf()), err.get_message());
                 seen.insert(key)
@@ -2017,12 +2017,8 @@ impl Server {
             if !current_error_files.contains(previously_erroring_file) {
                 // File no longer has errors, publish empty diagnostics to clear
                 if let Ok(uri) = Url::from_file_path(previously_erroring_file) {
-                    self.connection.publish_diagnostics_for_uri(
-                        uri,
-                        Vec::new(),
-                        None,
-                        DiagnosticSource::DidClose,
-                    );
+                    self.connection
+                        .publish_diagnostics_for_uri(uri, Vec::new(), None, source);
                 }
             }
         }
@@ -2030,12 +2026,8 @@ impl Server {
         // Publish diagnostics for files with errors
         for (path, diagnostics) in config_diags {
             if let Ok(uri) = Url::from_file_path(&path) {
-                self.connection.publish_diagnostics_for_uri(
-                    uri,
-                    diagnostics,
-                    None,
-                    DiagnosticSource::CommittingTransaction,
-                );
+                self.connection
+                    .publish_diagnostics_for_uri(uri, diagnostics, None, source);
             }
         }
 
@@ -2195,7 +2187,7 @@ impl Server {
         );
 
         // Publish config file diagnostics
-        self.publish_config_diagnostics(transaction);
+        self.publish_config_diagnostics(transaction, source);
 
         if self
             .initialize_params

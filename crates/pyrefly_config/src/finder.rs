@@ -41,37 +41,19 @@ pub struct ConfigError {
 }
 
 impl ConfigError {
-    pub fn error(msg: anyhow::Error) -> Self {
+    pub fn error(msg: anyhow::Error, file_path: Option<PathBuf>) -> Self {
         Self {
             severity: Severity::Error,
             msg: format!("{:#}", msg),
-            file_path: None,
+            file_path,
         }
     }
 
-    pub fn warn(msg: anyhow::Error) -> Self {
+    pub fn warn(msg: anyhow::Error, file_path: Option<PathBuf>) -> Self {
         Self {
             severity: Severity::Warn,
             msg: format!("{:#}", msg),
-            file_path: None,
-        }
-    }
-
-    /// Create an error with an associated file path
-    pub fn error_with_path(msg: anyhow::Error, file_path: PathBuf) -> Self {
-        Self {
-            severity: Severity::Error,
-            msg: format!("{:#}", msg),
-            file_path: Some(file_path),
-        }
-    }
-
-    /// Create a warning with an associated file path
-    pub fn warn_with_path(msg: anyhow::Error, file_path: PathBuf) -> Self {
-        Self {
-            severity: Severity::Warn,
-            msg: format!("{:#}", msg),
-            file_path: Some(file_path),
+            file_path,
         }
     }
 
@@ -262,7 +244,7 @@ impl ConfigFinder {
             Ok(Some(x)) => return x,
             Ok(None) => {}
             Err(e) => {
-                self.errors.lock().push(ConfigError::error(e));
+                self.errors.lock().push(ConfigError::error(e, None));
             }
         }
 
