@@ -22,11 +22,12 @@ use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Union;
-use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
+use crate::overload_expansion::OVERLOAD_PARAM_EXPANSION_GAS;
+use crate::overload_expansion::expand_type_for_overload;
 use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetError;
@@ -92,8 +93,6 @@ fn any<T>(
     Err(err.unwrap_or(SubsetError::Other))
 }
 
-const OVERLOAD_PARAM_EXPANSION_GAS: usize = 100;
-
 #[derive(Clone)]
 enum ParamTemplate {
     PosOnly(Option<Name>, Required),
@@ -133,53 +132,6 @@ impl ParamTemplate {
     }
 }
 
-fn expand_type_for_overload<Ans: LookupAnswer>(ty: Type, type_order: TypeOrder<Ans>) -> Vec<Type> {
-    match ty {
-        Type::Union(box Union { members: ts, .. }) => ts,
-        Type::ClassType(cls) if cls.is_builtin("bool") => vec![
-            Lit::Bool(true).to_implicit_type(),
-            Lit::Bool(false).to_implicit_type(),
-        ],
-        Type::ClassType(cls) => type_order
-            .get_enum_members(cls.class_object())
-            .into_iter()
-            .map(Lit::to_implicit_type)
-            .collect(),
-        Type::Type(box Type::Union(box Union { members: ts, .. })) => {
-            ts.into_map(|t| Type::Type(Box::new(t)))
-        }
-        Type::Tuple(Tuple::Concrete(elements)) => {
-            let mut count: usize = 1;
-            let mut changed = false;
-            let mut element_expansions = Vec::new();
-            for element in elements {
-                let element_expansion = expand_type_for_overload(element.clone(), type_order);
-                if element_expansion.is_empty() {
-                    element_expansions.push(vec![element].into_iter());
-                } else {
-                    let len = element_expansion.len();
-                    count = count.saturating_mul(len);
-                    if count > OVERLOAD_PARAM_EXPANSION_GAS {
-                        return Vec::new();
-                    }
-                    changed = true;
-                    element_expansions.push(element_expansion.into_iter());
-                }
-            }
-            if count <= OVERLOAD_PARAM_EXPANSION_GAS && changed {
-                element_expansions
-                    .into_iter()
-                    .multi_cartesian_product()
-                    .map(|elements| Type::Tuple(Tuple::Concrete(elements)))
-                    .collect()
-            } else {
-                Vec::new()
-            }
-        }
-        _ => Vec::new(),
-    }
-}
-
 fn expand_param_list_for_overload<Ans: LookupAnswer>(
     params: &ParamList,
     type_order: TypeOrder<Ans>,
@@ -188,10 +140,24 @@ fn expand_param_list_for_overload<Ans: LookupAnswer>(
     let mut expansions = Vec::with_capacity(params.len());
     let mut count: usize = 1;
     let mut changed = false;
+    let enum_members = |cls| {
+        type_order
+            .get_enum_members(&cls)
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
+    let make_type_form = |t| Type::Type(Box::new(t));
+    let make_tuple = |elements| Type::Tuple(Tuple::Concrete(elements));
 
     for param in params.items() {
         templates.push(ParamTemplate::from_param(param));
-        let expanded = expand_type_for_overload(param.as_type().clone(), type_order);
+        let expanded = expand_type_for_overload(
+            param.as_type().clone(),
+            &enum_members,
+            &make_type_form,
+            &make_tuple,
+            OVERLOAD_PARAM_EXPANSION_GAS,
+        );
         if expanded.is_empty() {
             expansions.push(vec![param.as_type().clone()]);
         } else {
@@ -1318,7 +1284,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 };
 
                 if self
-                    .is_subset_eq(&unions(overload_returns), &sig.ret)
+                    .is_subset_eq(&unions(overload_returns, &self.solver.heap), &sig.ret)
                     .is_err()
                 {
                     return direct;
