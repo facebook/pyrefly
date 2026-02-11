@@ -724,6 +724,8 @@ impl<'a> BindingsBuilder<'a> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         self.table.get_mut::<K>().1.get_mut(idx)
+    }
+
     pub fn key_to_idx_hashed_opt<K>(&self, k: Hashed<&K>) -> Option<Idx<K>>
     where
         K: Keyed,
