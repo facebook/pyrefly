@@ -542,7 +542,7 @@ impl Transaction<'_> {
                 completions.push(RankedCompletion {
                     item: CompletionItem {
                         label: name,
-                        detail: Some(insert_text),
+                        detail: Some(detail_text),
                         kind: export
                             .symbol_kind
                             .map_or(Some(CompletionItemKind::VARIABLE), |k| {
