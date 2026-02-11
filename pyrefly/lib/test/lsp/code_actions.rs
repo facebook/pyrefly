@@ -2998,8 +2998,8 @@ def square(p):
 my_var = square(3)
 "#;
     let expected_mod2 = r#"
-import mod1
-another_var = mod1.square(4)
+from mod1 import square
+another_var = square(4)
 "#;
     assert_eq!(expected_mod1.trim(), updated_mod1.trim());
     assert_eq!(expected_mod2.trim(), updated_mod2.trim());
@@ -3041,13 +3041,13 @@ value = m.square(5)
 }
 
 #[test]
-fn use_function_skips_shadowed_module_name() {
+fn use_function_skips_shadowed_function_name() {
     let mod1 = r#"
 def square(p):
     return p ** 2
 "#;
     let mod2 = r#"
-mod1 = 10
+square = 10
 value = 5 ** 2
 "#;
     let mod3 = r#"
@@ -3063,12 +3063,12 @@ another_var = 4 ** 2
     let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
     let updated_mod3 = apply_refactor_edits_for_module(module_infos.get("mod3").unwrap(), edits);
     let expected_mod2 = r#"
-mod1 = 10
+square = 10
 value = 5 ** 2
 "#;
     let expected_mod3 = r#"
-import mod1
-another_var = mod1.square(4)
+from mod1 import square
+another_var = square(4)
 "#;
     assert_eq!(expected_mod2.trim(), updated_mod2.trim());
     assert_eq!(expected_mod3.trim(), updated_mod3.trim());
@@ -3099,8 +3099,8 @@ total = a + a
     let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
     let updated_mod3 = apply_refactor_edits_for_module(module_infos.get("mod3").unwrap(), edits);
     let expected_mod2 = r#"
-import mod1
-value = mod1.double(3)
+from mod1 import double
+value = double(3)
 other = 3 + 4
 "#;
     let expected_mod3 = r#"
@@ -3128,9 +3128,9 @@ second = 3 ** 2
     let edits = &actions[0].edits;
     let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
     let expected_mod2 = r#"
-import mod1
-first = mod1.square(2)
-second = mod1.square(3)
+from mod1 import square
+first = square(2)
+second = square(3)
 "#;
     assert_eq!(expected_mod2.trim(), updated_mod2.trim());
 }
@@ -3159,8 +3159,8 @@ def one():
 local = one()
 "#;
     let expected_mod2 = r#"
-import mod1
-other = mod1.one()
+from mod1 import one
+other = one()
 "#;
     assert_eq!(expected_mod1.trim(), updated_mod1.trim());
     assert_eq!(expected_mod2.trim(), updated_mod2.trim());
@@ -3181,8 +3181,8 @@ value = 3 ** 2
     let edits = &actions[0].edits;
     let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
     let expected_mod2 = r#"
-import mod1
-value = mod1.square(3)
+from mod1 import square
+value = square(3)
 "#;
     assert_eq!(expected_mod2.trim(), updated_mod2.trim());
 }
@@ -3202,8 +3202,8 @@ value = (2 + 1) + 1
     let edits = &actions[0].edits;
     let updated_mod2 = apply_refactor_edits_for_module(module_infos.get("mod2").unwrap(), edits);
     let expected_mod2 = r#"
-import mod1
-value = mod1.inc(2 + 1)
+from mod1 import inc
+value = inc(2 + 1)
 "#;
     assert_eq!(expected_mod2.trim(), updated_mod2.trim());
 }
