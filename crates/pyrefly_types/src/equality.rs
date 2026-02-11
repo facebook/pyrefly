@@ -6,6 +6,7 @@
  */
 
 use std::hash::Hash;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use compact_str::CompactString;
@@ -146,6 +147,8 @@ impl TypeEq for usize {}
 impl TypeEq for String {}
 impl TypeEq for CompactString {}
 impl TypeEq for str {}
+
+impl<T> TypeEq for PhantomData<T> {}
 
 impl TypeEq for Name {}
 impl TypeEq for ModuleName {}
@@ -319,6 +322,12 @@ mod tests {
     #[derive(TypeEq, PartialEq, Eq, Debug)]
     struct Generic<T>(T);
 
+    #[derive(TypeEq, PartialEq, Eq, Debug)]
+    enum WithLifetime<'t> {
+        Unused(std::marker::PhantomData<&'t ()>),
+        Value(i32),
+    }
+
     #[test]
     fn test_type_eq() {
         let mut ctx = TypeEqCtx::default();
@@ -363,6 +372,13 @@ mod tests {
         );
         assert!(Generic(1).type_eq(&Generic(1), &mut ctx));
         assert!(!Generic(1).type_eq(&Generic(2), &mut ctx));
+
+        assert!(WithLifetime::Value(1).type_eq(&WithLifetime::Value(1), &mut ctx));
+        assert!(!WithLifetime::Value(1).type_eq(&WithLifetime::Value(2), &mut ctx));
+        assert!(
+            !WithLifetime::Value(1)
+                .type_eq(&WithLifetime::Unused(std::marker::PhantomData), &mut ctx)
+        );
     }
 
     #[test]

@@ -473,6 +473,97 @@ impl<'a> BindingsBuilder<'a> {
         expr.recurse(&mut |e| Self::collect_ranges_from_expr(e, ranges));
     }
 
+    /// Parse fields for `collections.namedtuple`: string splitting, list/tuple of strings.
+    /// `members` is a slice of the positional arguments after the name string.
+    /// `error_range` is used for the fallback error.
+    fn parse_collections_namedtuple_fields(
+        &mut self,
+        members: &[Expr],
+        error_range: TextRange,
+    ) -> Vec<(String, TextRange, Option<Expr>)> {
+        match members {
+            // namedtuple('Point', 'x y')
+            // namedtuple('Point', 'x, y')
+            [Expr::StringLiteral(x)] => {
+                let s = x.value.to_str();
+                if s.contains(',') {
+                    s.split(',')
+                        .map(str::trim)
+                        .map(|s| (s.to_owned(), x.range(), None))
+                        .collect()
+                } else {
+                    s.split_whitespace()
+                        .map(|s| (s.to_owned(), x.range(), None))
+                        .collect()
+                }
+            }
+            // namedtuple('Point', []), namedtuple('Point', ())
+            [Expr::List(ExprList { elts, .. }) | Expr::Tuple(ExprTuple { elts, .. })]
+                if elts.is_empty() =>
+            {
+                Vec::new()
+            }
+            // namedtuple('Point', ['x', 'y'])
+            [Expr::List(ExprList { elts, .. })]
+                if matches!(elts.as_slice(), [Expr::StringLiteral(_), ..]) =>
+            {
+                self.extract_string_literals(elts)
+            }
+            // namedtuple('Point', ('x', 'y'))
+            [Expr::Tuple(ExprTuple { elts, .. })]
+                if matches!(elts.as_slice(), [Expr::StringLiteral(_), ..]) =>
+            {
+                self.extract_string_literals(elts)
+            }
+            _ => {
+                self.error(
+                    error_range,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    "Expected valid functional named tuple definition".to_owned(),
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    /// Parse fields for `typing.NamedTuple`: list/tuple of (name, type) pairs.
+    /// `members` is a slice of the positional arguments after the name string.
+    /// `error_range` is used for the fallback error.
+    fn parse_typing_namedtuple_fields(
+        &mut self,
+        members: &[Expr],
+        error_range: TextRange,
+    ) -> Vec<(String, TextRange, Option<Expr>)> {
+        match members {
+            // NamedTuple('Point', []), NamedTuple('Point', ())
+            [Expr::List(ExprList { elts, .. }) | Expr::Tuple(ExprTuple { elts, .. })]
+                if elts.is_empty() =>
+            {
+                Vec::new()
+            }
+            // NamedTuple('Point', [('x', int), ('y', int)])
+            [Expr::List(ExprList { elts, .. })]
+                if matches!(elts.as_slice(), [Expr::Tuple(_), ..]) =>
+            {
+                self.decompose_key_value_pairs(elts)
+            }
+            // NamedTuple('Point', (('x', int), ('y', int)))
+            [Expr::Tuple(ExprTuple { elts, .. })]
+                if matches!(elts.as_slice(), [Expr::Tuple(_), ..]) =>
+            {
+                self.decompose_key_value_pairs(elts)
+            }
+            _ => {
+                self.error(
+                    error_range,
+                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    "Expected valid functional named tuple definition".to_owned(),
+                );
+                Vec::new()
+            }
+        }
+    }
+
     fn extract_string_literals(
         &mut self,
         items: &[Expr],
@@ -533,59 +624,18 @@ impl<'a> BindingsBuilder<'a> {
             .collect()
     }
 
-    fn synthesize_class_def(
+    /// Validate and insert synthesized field definitions into a class.
+    /// Handles identifier validation, duplicate detection, annotation bindings,
+    /// and field definition bindings.
+    fn insert_synthesized_fields(
         &mut self,
-        class_name: Identifier,
-        class_object: CurrentIdx,
-        class_indices: ClassIndices,
-        parent: &NestingContext,
-        base: Option<Expr>,
-        keywords: Box<[(Name, Expr)]>,
-        // name, position, annotation, value
         member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)>,
+        fields: &mut SmallMap<Name, ClassFieldProperties>,
+        class_indices: &ClassIndices,
         illegal_identifier_handling: IllegalIdentifierHandling,
         force_class_initialization: bool,
         class_kind: SynthesizedClassKind,
-        special_base: Option<BaseClass>,
     ) {
-        let base_classes = base
-            .into_iter()
-            .map(|base| self.base_class_of(base))
-            .chain(special_base)
-            .collect::<Vec<_>>();
-        let is_new_type = class_kind == SynthesizedClassKind::NewType;
-        self.insert_binding_idx(
-            class_indices.base_type_idx,
-            BindingClassBaseType {
-                class_idx: class_indices.class_idx,
-                is_new_type,
-                bases: base_classes.clone().into_boxed_slice(),
-            },
-        );
-        self.insert_binding_idx(
-            class_indices.metadata_idx,
-            BindingClassMetadata {
-                class_idx: class_indices.class_idx,
-                bases: base_classes.into_boxed_slice(),
-                keywords,
-                decorators: Box::new([]),
-                is_new_type,
-                pydantic_config_dict: PydanticConfigDict::default(),
-                django_field_info: Box::default(),
-            },
-        );
-        self.insert_binding_idx(
-            class_indices.mro_idx,
-            BindingClassMro {
-                class_idx: class_indices.class_idx,
-            },
-        );
-        self.insert_binding_idx(
-            class_indices.synthesized_fields_idx,
-            BindingClassSynthesizedFields(class_indices.class_idx),
-        );
-
-        let mut fields = SmallMap::new();
         for (idx, (member_name, range, member_annotation, member_value)) in
             member_definitions.into_iter().enumerate()
         {
@@ -679,6 +729,69 @@ impl<'a> BindingsBuilder<'a> {
                 },
             );
         }
+    }
+
+    fn synthesize_class_def(
+        &mut self,
+        class_name: Identifier,
+        class_object: CurrentIdx,
+        class_indices: ClassIndices,
+        parent: &NestingContext,
+        base: Option<Expr>,
+        keywords: Box<[(Name, Expr)]>,
+        // name, position, annotation, value
+        member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)>,
+        illegal_identifier_handling: IllegalIdentifierHandling,
+        force_class_initialization: bool,
+        class_kind: SynthesizedClassKind,
+        special_base: Option<BaseClass>,
+    ) {
+        let base_classes = base
+            .into_iter()
+            .map(|base| self.base_class_of(base))
+            .chain(special_base)
+            .collect::<Vec<_>>();
+        let is_new_type = class_kind == SynthesizedClassKind::NewType;
+        self.insert_binding_idx(
+            class_indices.base_type_idx,
+            BindingClassBaseType {
+                class_idx: class_indices.class_idx,
+                is_new_type,
+                bases: base_classes.clone().into_boxed_slice(),
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.metadata_idx,
+            BindingClassMetadata {
+                class_idx: class_indices.class_idx,
+                bases: base_classes.into_boxed_slice(),
+                keywords,
+                decorators: Box::new([]),
+                is_new_type,
+                pydantic_config_dict: PydanticConfigDict::default(),
+                django_field_info: Box::default(),
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.mro_idx,
+            BindingClassMro {
+                class_idx: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.synthesized_fields_idx,
+            BindingClassSynthesizedFields(class_indices.class_idx),
+        );
+
+        let mut fields = SmallMap::new();
+        self.insert_synthesized_fields(
+            member_definitions,
+            &mut fields,
+            &class_indices,
+            illegal_identifier_handling,
+            force_class_initialization,
+            class_kind,
+        );
         self.bind_current_as(
             &class_name,
             class_object,
@@ -853,49 +966,8 @@ impl<'a> BindingsBuilder<'a> {
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
         self.ensure_expr(func, class_object.usage());
         self.check_functional_definition_name(&name.id, arg_name);
-        let member_definitions: Vec<(String, TextRange, Option<Expr>)> = match members {
-            // namedtuple('Point', 'x y')
-            // namedtuple('Point', 'x, y')
-            [Expr::StringLiteral(x)] => {
-                let s = x.value.to_str();
-                if s.contains(',') {
-                    s.split(',')
-                        .map(str::trim)
-                        .map(|s| (s.to_owned(), x.range(), None))
-                        .collect()
-                } else {
-                    s.split_whitespace()
-                        .map(|s| (s.to_owned(), x.range(), None))
-                        .collect()
-                }
-            }
-            // namedtuple('Point', []), namedtuple('Point', ())
-            [Expr::List(ExprList { elts, .. }) | Expr::Tuple(ExprTuple { elts, .. })]
-                if elts.is_empty() =>
-            {
-                Vec::new()
-            }
-            // namedtuple('Point', ['x', 'y'])
-            [Expr::List(ExprList { elts, .. })]
-                if matches!(elts.as_slice(), [Expr::StringLiteral(_), ..]) =>
-            {
-                self.extract_string_literals(elts)
-            }
-            // namedtuple('Point', ('x', 'y'))
-            [Expr::Tuple(ExprTuple { elts, .. })]
-                if matches!(elts.as_slice(), [Expr::StringLiteral(_), ..]) =>
-            {
-                self.extract_string_literals(elts)
-            }
-            _ => {
-                self.error(
-                    class_name.range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                    "Expected valid functional named tuple definition".to_owned(),
-                );
-                Vec::new()
-            }
-        };
+        let member_definitions =
+            self.parse_collections_namedtuple_fields(members, class_name.range);
         let n_members = member_definitions.len();
         let mut illegal_identifier_handling = IllegalIdentifierHandling::Error;
         let mut defaults: Vec<Option<Expr>> = vec![None; n_members];
@@ -975,35 +1047,8 @@ impl<'a> BindingsBuilder<'a> {
         let (mut class_object, class_indices) = self.class_object_and_indices(&class_name);
         self.ensure_expr(func, class_object.usage());
         self.check_functional_definition_name(&name.id, arg_name);
-        let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> =
-            match members {
-                // NamedTuple('Point', []), NamedTuple('Point', ())
-                [Expr::List(ExprList { elts, .. }) | Expr::Tuple(ExprTuple { elts, .. })]
-                    if elts.is_empty() =>
-                {
-                    Vec::new()
-                }
-                // NamedTuple('Point', [('x', int), ('y', int)])
-                [Expr::List(ExprList { elts, .. })]
-                    if matches!(elts.as_slice(), [Expr::Tuple(_), ..]) =>
-                {
-                    self.decompose_key_value_pairs(elts)
-                }
-                // NamedTuple('Point', (('x', int), ('y', int)))
-                [Expr::Tuple(ExprTuple { elts, .. })]
-                    if matches!(elts.as_slice(), [Expr::Tuple(_), ..]) =>
-                {
-                    self.decompose_key_value_pairs(elts)
-                }
-                _ => {
-                    self.error(
-                        class_name.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                        "Expected valid functional named tuple definition".to_owned(),
-                    );
-                    Vec::new()
-                }
-            }
+        let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<Expr>)> = self
+            .parse_typing_namedtuple_fields(members, class_name.range)
             .into_iter()
             .map(|(name, range, annotation)| {
                 if let Some(mut ann) = annotation {

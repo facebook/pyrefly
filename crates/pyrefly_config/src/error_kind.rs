@@ -357,6 +357,7 @@ mod tests {
     use pulldown_cmark::HeadingLevel;
     use pulldown_cmark::Parser;
     use pulldown_cmark::Tag;
+    use pulldown_cmark::TagEnd;
 
     use super::*;
     #[test]
@@ -379,14 +380,17 @@ mod tests {
         let mut last_error_kind = None;
         for event in Parser::new(&doc_contents) {
             match event {
-                Event::End(Tag::Heading(HeadingLevel::H1, ..)) => {
+                Event::End(TagEnd::Heading(HeadingLevel::H1)) => {
                     // Don't start checking for error kinds until we get past the document title
                     start = true;
                 }
-                Event::Start(Tag::Heading(HeadingLevel::H2, ..)) => {
+                Event::Start(Tag::Heading {
+                    level: HeadingLevel::H2,
+                    ..
+                }) => {
                     in_header = true;
                 }
-                Event::End(Tag::Heading(HeadingLevel::H2, ..)) => {
+                Event::End(TagEnd::Heading(HeadingLevel::H2)) => {
                     in_header = false;
                 }
                 Event::Text(doc_error_kind) if start && in_header => {

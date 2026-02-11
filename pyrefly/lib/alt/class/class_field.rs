@@ -32,7 +32,6 @@ use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::TParam;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::Union;
-use pyrefly_util::display::pluralize;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::ResultExt;
 use pyrefly_util::visit::Visit;
@@ -383,26 +382,26 @@ impl ClassField {
         )
     }
 
-    pub fn for_variance_inference(&self) -> Option<(&Type, Option<&Annotation>, bool)> {
+    pub fn for_variance_inference(&self) -> (&Type, Option<&Annotation>, bool) {
         match &self.0 {
             ClassFieldInner::Property { ty, .. } => {
                 // Properties don't have annotations (defined by decorator)
-                Some((ty, None, self.is_read_only()))
+                (ty, None, self.is_read_only())
             }
             ClassFieldInner::Descriptor { ty, annotation, .. } => {
                 // Descriptors may have annotations
-                Some((ty, annotation.as_ref(), self.is_read_only()))
+                (ty, annotation.as_ref(), self.is_read_only())
             }
             ClassFieldInner::Method { ty, .. } => {
                 // Methods don't have annotations and are always read-only
-                Some((ty, None, self.is_read_only()))
+                (ty, None, self.is_read_only())
             }
-            ClassFieldInner::NestedClass { ty, .. } => Some((ty, None, self.is_read_only())),
+            ClassFieldInner::NestedClass { ty, .. } => (ty, None, self.is_read_only()),
             ClassFieldInner::ClassAttribute { ty, annotation, .. } => {
-                Some((ty, annotation.as_ref(), self.is_read_only()))
+                (ty, annotation.as_ref(), self.is_read_only())
             }
             ClassFieldInner::InstanceAttribute { ty, annotation, .. } => {
-                Some((ty, annotation.as_ref(), self.is_read_only()))
+                (ty, annotation.as_ref(), self.is_read_only())
             }
         }
     }
@@ -690,7 +689,7 @@ impl ClassField {
         if values.is_empty() {
             heap.mk_any_implicit()
         } else {
-            unions(values)
+            unions(values, heap)
         }
     }
 
@@ -1248,7 +1247,7 @@ fn make_bound_method_helper(
                     Err(_) => return Err(attr),
                 }
             }
-            return Ok(unions(bound_methods));
+            return Ok(unions(bound_methods, heap));
         }
         _ => return Err(attr),
     };
@@ -1573,48 +1572,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let binding = Binding::Forward(*definition);
                 let value_ty =
                     Arc::unwrap_or_clone(self.solve_binding(&binding, range, errors)).into_ty();
-
-                // Validate __init__ self type for non-stub files.
-                // Skip this check for stub files
-                if name == &dunder::INIT && !class.module_path().is_interface() {
-                    // Ensure that self annotation does not contain class-scoped type variables.
-                    // Per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method
-                    // "Class-scoped type variables should not be used in the self annotation"
-                    value_ty.visit_toplevel_callable(|callable| {
-                        if let Params::List(param_list) = &callable.params
-                            && let Some(Param::Pos(_, self_ty, _)) = param_list.items().first()
-                            && let Type::ClassType(cls_ty) = self_ty
-                            && cls_ty.name() == class.name()
-                        {
-                            let tparams_names = cls_ty
-                                .tparams()
-                                .as_vec()
-                                .iter()
-                                .map(|tp| &tp.quantified)
-                                .collect::<SmallSet<_>>();
-                            let mut class_scoped_tvars = SmallSet::new();
-                            for (_, ty) in cls_ty.targs().iter_paired() {
-                                ty.collect_quantifieds(&mut class_scoped_tvars);
-                            }
-                            class_scoped_tvars.retain(|q| tparams_names.contains(q));
-                            if !class_scoped_tvars.is_empty() {
-                                let targs = class_scoped_tvars
-                                    .iter()
-                                    .map(|q| format!("`{}`", q.name()))
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                errors.add(
-                                    range,
-                                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
-                                    vec1![format!(
-                                        "`__init__` method self type cannot reference class {} {targs}",
-                                        pluralize(class_scoped_tvars.len(), "type parameter")
-                                    )]
-                                );
-                            }
-                        }
-                    });
-                }
                 (
                     initialization,
                     !has_return_annotation,

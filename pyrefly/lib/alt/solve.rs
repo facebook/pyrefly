@@ -883,12 +883,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn tvars_to_tparams_for_type_alias_type(
         &self,
         exprs: &Vec<Expr>,
+        legacy_params: &[Idx<KeyLegacyTypeParam>],
         seen_type_vars: &mut SmallMap<TypeVar, Quantified>,
         seen_type_var_tuples: &mut SmallMap<TypeVarTuple, Quantified>,
         seen_param_specs: &mut SmallMap<ParamSpec, Quantified>,
-        tparams: &mut Vec<TParam>,
+        range: TextRange,
         errors: &ErrorCollector,
-    ) {
+    ) -> Vec<TParam> {
+        let mut tparams = Vec::new();
         for expr in exprs {
             let ty = self.expr_infer(expr, errors);
             let ty = self.untype(ty, expr.range(), errors);
@@ -971,6 +973,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
+        let mut legacy_params = self
+            .create_legacy_type_params(legacy_params)
+            .into_iter()
+            .map(|param| (param.name().clone(), param))
+            .collect::<SmallMap<_, _>>();
+        // `legacy_params` contains the tparams (with the correct `Unique` ids) actually used in
+        // the alias. If we find a tparam in `tparams` but not in `legacy_tparams`, that means it's
+        // declared and not used, which is pointless but legal.
+        let tparams =
+            tparams.into_map(|param| legacy_params.shift_remove(param.name()).unwrap_or(param));
+        // Conversely, if we find a tparam in `legacy_tparams` but not `tparams`, that means it's
+        // used and not declared, which is illegal.
+        for (_, extra_tparam) in legacy_params.iter() {
+            errors.add(
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                vec1![
+                    format!(
+                        "Type variable `{}` is out of scope for this `TypeAliasType`",
+                        extra_tparam.name()
+                    ),
+                    format!(
+                        "Type parameters must be passed as a tuple literal to the `type_params` argument",
+                    )
+                ],
+            );
+        }
+        tparams
     }
 
     fn tvars_to_tparams_for_type_alias(
@@ -1181,8 +1211,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut contains_cyclic_ref = false;
         // We only check for the name of the current alias to avoid reporting duplicate errors
         // for a cycle involving multiple aliases.
-        let is_self_ref =
-            |ty: &Type| matches!(ty, Type::TypeAlias(box TypeAliasData::Ref(r)) if r.name == *name);
+        let is_self_ref = |ty: &Type| matches!(ty, Type::UntypedAlias(ta) if ta.name() == name);
         self.map_over_union(ty, |ty| {
             contains_cyclic_ref |= is_self_ref(ty);
         });
@@ -1219,7 +1248,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut seen_type_vars = SmallMap::new();
         let mut seen_type_var_tuples = SmallMap::new();
         let mut seen_param_specs = SmallMap::new();
-        let mut tparams = Vec::new();
 
         let tvars_to_tparams_for_type_alias =
             |ty, seen_type_vars, seen_type_var_tuples, seen_param_specs| {
@@ -1238,57 +1266,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 tparams_with_ranges
             };
 
-        match params {
-            TypeAliasParams::TypeAliasType(type_params) => {
+        let tparams = match params {
+            TypeAliasParams::TypeAliasType {
+                declared_params: type_params,
+                legacy_params,
+            } => {
                 // Handle type params from `TypeAliasType(type_params=...)`.
                 self.tvars_to_tparams_for_type_alias_type(
                     type_params,
+                    legacy_params,
                     &mut seen_type_vars,
                     &mut seen_type_var_tuples,
                     &mut seen_param_specs,
-                    &mut tparams,
-                    errors,
-                );
-                let extra_tparams = tvars_to_tparams_for_type_alias(
-                    ta.as_type_mut(),
-                    &mut seen_type_vars,
-                    &mut seen_type_var_tuples,
-                    &mut seen_param_specs,
-                );
-                for (_, extra_tparam) in extra_tparams {
-                    errors.add(
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                    vec1![
-                        format!(
-                            "Type variable `{}` is out of scope for this `TypeAliasType`",
-                            extra_tparam.name()
-                        ),
-                        format!(
-                            "Type parameters must be passed as a tuple literal to the `type_params` argument",
-                        )
-                    ],
-                );
-                }
+                    errors,
+                )
             }
             TypeAliasParams::Legacy(Some(legacy_tparams)) => {
                 // Collect type params that appear in a legacy type alias that we were able to detect
                 // syntactically in the bindings phase.
-                tparams = legacy_tparams
-                    .iter()
-                    .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
-                    .collect();
+                self.create_legacy_type_params(legacy_tparams)
             }
             TypeAliasParams::Legacy(None) => {
                 // Collect type params that appear in a legacy type alias that we needed type
                 // information to detect.
-                tparams = tvars_to_tparams_for_type_alias(
+                tvars_to_tparams_for_type_alias(
                     ta.as_type_mut(),
                     &mut seen_type_vars,
                     &mut seen_type_var_tuples,
                     &mut seen_param_specs,
                 )
-                .into_map(|(_, tp)| tp);
+                .into_map(|(_, tp)| tp)
             }
             TypeAliasParams::Scoped(scoped_tparams) => {
                 // Scoped type alias: error on undeclared type params and collect declared ones.
@@ -1306,15 +1314,68 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         format!("Type parameters used in `{name}` but not declared"),
                     );
                 }
-                tparams = self.scoped_type_params(scoped_tparams.as_ref(), errors);
+                self.scoped_type_params(scoped_tparams.as_ref(), errors)
             }
-        }
+        };
         Forallable::TypeAlias(TypeAliasData::Value(ta)).forall(self.validated_tparams(
             range,
             tparams,
             TParamsSource::TypeAlias,
             errors,
         ))
+    }
+
+    /// Create TParams for a recursive reference to a type alias. This is essentially a
+    /// slimmed-down version of `wrap_type_alias` that skips most validation (because the
+    /// validation will be done by `wrap_type_alias`).
+    pub fn create_type_alias_params_recursive(&self, tparams: &TypeAliasParams) -> Arc<TParams> {
+        let mut seen_type_vars = SmallMap::new();
+        let mut seen_type_var_tuples = SmallMap::new();
+        let mut seen_param_specs = SmallMap::new();
+        let range = TextRange::default();
+        let errors = self.error_swallower();
+        let params = match tparams {
+            TypeAliasParams::TypeAliasType {
+                declared_params: tparams,
+                legacy_params,
+            } => self.tvars_to_tparams_for_type_alias_type(
+                tparams,
+                legacy_params,
+                &mut seen_type_vars,
+                &mut seen_type_var_tuples,
+                &mut seen_param_specs,
+                range,
+                &errors,
+            ),
+            TypeAliasParams::Legacy(Some(tparams)) => self.create_legacy_type_params(tparams),
+            TypeAliasParams::Legacy(None) => Vec::new(),
+            TypeAliasParams::Scoped(tparams) => self.scoped_type_params(tparams.as_ref(), &errors),
+        };
+        self.validated_tparams(range, params, TParamsSource::TypeAlias, &errors)
+    }
+
+    fn create_legacy_type_params(&self, keys: &[Idx<KeyLegacyTypeParam>]) -> Vec<TParam> {
+        keys.iter()
+            .filter_map(|key| {
+                if let BindingLegacyTypeParam::ParamKeyed(def_key) = self.bindings().get(*key)
+                    && matches!(self.bindings().get(*def_key), Binding::TypeAlias { .. })
+                {
+                    // In the bindings phase, we were unable to determine whether this key
+                    // pointed to a legacy type parameter, so we created a
+                    // BindingLegacyTypeParam to defer the decision until the answers
+                    // phase. We now know that this is a type alias, so we can immediately
+                    // return None to indicate that this isn't a type param. Importantly,
+                    // we skip solving the binding to avoid a cycle in a recursive alias:
+                    //     Json = <blah> | list["Json"]
+                    //                           ^^^^
+                    //                           skip solving this binding so we don't try
+                    //                           to solve for Json while solving for Json
+                    None
+                } else {
+                    self.get_idx(*key).deref().parameter().cloned()
+                }
+            })
+            .collect()
     }
 
     fn context_value_enter(
@@ -2470,8 +2531,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Per PEP 696: when default is a TypeVar, "T1's bound must be a subtype of T2's bound"
             Restriction::Bound(bound_ty) => {
                 let default_for_check = match default {
-                    Type::TypeVar(tv) => tv.restriction().as_type(self.stdlib),
-                    Type::Quantified(q) if q.is_type_var() => q.restriction().as_type(self.stdlib),
+                    Type::TypeVar(tv) => tv.restriction().as_type(self.stdlib, self.heap),
+                    Type::Quantified(q) if q.is_type_var() => {
+                        q.restriction().as_type(self.stdlib, self.heap)
+                    }
                     _ => default.clone(),
                 };
                 if !self.is_subset_eq(&default_for_check, bound_ty) {
@@ -4391,7 +4454,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .get_from_export(*m, None, &KeyExport(dunder::GETATTR.clone()))
                     .arc_clone();
                 getattr_ty
-                    .callable_return_type()
+                    .callable_return_type(self.heap)
                     .unwrap_or_else(|| self.heap.mk_any_implicit())
             }
             Binding::ClassDef(x, _decorators) => match &self.get_idx(*x).0 {
@@ -4676,7 +4739,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Type> {
         if let Type::Forall(forall) = ty {
-            ty = self.promote_forall(*forall, range);
+            ty = self.promote_forall(*forall, range, errors);
         };
         match self.canonicalize_all_class_types(ty, range, errors) {
             Type::Union(box Union { members: xs, .. }) if !xs.is_empty() => {
@@ -4706,13 +4769,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(aliased_type)
             }
+            // `as_type_alias` untypes a type alias in order to validate that it is a legal type.
+            // If we hit a recursive reference to the alias while untyping it, delay the untyping
+            // to avoid a cycle.
+            Type::TypeAlias(ta @ box TypeAliasData::Ref(_)) => Some(Type::UntypedAlias(ta)),
             t @ Type::Unpack(
                 box Type::Tuple(_) | box Type::TypeVarTuple(_) | box Type::Quantified(_),
             ) => Some(t),
-            // `as_type_alias` untypes a type alias in order to validate that it is a legal type.
-            // If we hit a recursive reference to the alias while untyping it, return the ref
-            // unchanged to avoid a cycle.
-            t @ Type::TypeAlias(box TypeAliasData::Ref(_)) => Some(t),
             Type::Unpack(box Type::Var(v)) if let Some(_guard) = self.recurse(v) => self
                 .untype_opt(
                     self.heap.mk_unpack(self.solver().force_var(v)),
@@ -4724,6 +4787,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::KwargsValue(q) => Some(self.heap.mk_kwargs(*q)),
             _ => None,
         }
+    }
+
+    pub fn untype_alias(&self, ta: &TypeAliasData) -> Type {
+        let ty = self.get_type_alias(ta).as_type();
+        // We already validated the type when creating the type alias.
+        self.untype(ty, TextRange::default(), &self.error_swallower())
     }
 
     // Approximate the result of calling `type()` on something of type T

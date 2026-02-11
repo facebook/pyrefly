@@ -1871,7 +1871,13 @@ pub struct BranchInfo {
 pub enum TypeAliasParams {
     Legacy(Option<Box<[Idx<KeyLegacyTypeParam>]>>),
     Scoped(Option<TypeParams>),
-    TypeAliasType(Vec<Expr>),
+    /// Type parameters for a type alias created via a `TypeAliasType` call
+    /// `declared_params` are the params declared via the `type_params` keyword.
+    /// `legacy_params` are all of the legacy type param usages in the alias.
+    TypeAliasType {
+        declared_params: Vec<Expr>,
+        legacy_params: Box<[Idx<KeyLegacyTypeParam>]>,
+    },
 }
 
 #[derive(Clone, Debug)]

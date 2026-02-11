@@ -15,7 +15,6 @@ use dupe::Dupe;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::index::Idx;
 use pyrefly_graph::index_map::IndexMap;
-use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::DisplayWith;
@@ -788,24 +787,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ty: _,
                 is_deprecated: _,
                 definition,
-                docstring_range: _,
                 is_reexport: _,
             } in self.completions(base.clone(), Some(attribute_name), false)
             {
                 match definition {
-                    Some(AttrDefinition::FullyResolved(TextRangeWithModule { module, range })) => {
-                        if module.path() != self.bindings().module().path() {
+                    AttrDefinition::FullyResolved {
+                        cls,
+                        range,
+                        docstring_range: _,
+                    } => {
+                        if cls.module_path() != self.bindings().module().path() {
                             index
                                 .lock()
                                 .externally_defined_attribute_references
-                                .entry(module.path().dupe())
+                                .entry(cls.module_path().dupe())
                                 .or_default()
                                 .push((range, attribute_reference_range))
                         }
                     }
-                    Some(AttrDefinition::PartiallyResolvedImportedModuleAttribute {
-                        module_name,
-                    }) => {
+                    AttrDefinition::PartiallyResolvedImportedModuleAttribute { module_name } => {
                         index
                             .lock()
                             .externally_defined_variable_references
@@ -813,7 +813,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .or_default()
                             .push(attribute_reference_range);
                     }
-                    Some(AttrDefinition::Submodule { module_name }) => {
+                    AttrDefinition::Submodule { module_name } => {
                         // For submodule access (e.g., `b` in `a.b`), record as a reference to
                         // the submodule. The last component of module_name is the attribute name.
                         if let Some(parent) = module_name.parent() {
@@ -825,7 +825,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .push(attribute_reference_range);
                         }
                     }
-                    None => {}
                 }
             }
         }

@@ -9,7 +9,9 @@ hide_table_of_contents: false
 
 ![Hero image](./blog_imgs/18x_faster.png)
 
-As we move closer to a stable release of Pyrefly, our efforts have moved from expanding the language server’s capabilities to tackling performance edge cases. Recently, our friends at Astral [alerted us to a specific edge case](https://astral.sh/blog/ty) that is a great example of the kind of issues we’ve been aiming to uncover. The specific examples Astral highlighted showed that Pyrefly was taking multiple seconds to recheck files after saving a load-bearing file. This is much slower than normal (when tested across Meta’s codebases, Pyrefly usually takes less than 10 milliseconds to recheck files after saving them) and prompted us to investigate further. Now we’d like to share the story of how that edge case brought to light a performance bottleneck which led us to rethink our underlying approach to diagnostics and dependency tracking, improving Pyrefly’s the speed at which type errors appear by 18x in the process.
+As we move closer to a stable release of Pyrefly, our efforts have moved from expanding the language server’s capabilities to tackling performance edge cases. Recently, our friends at Astral [alerted us to a specific edge case](https://astral.sh/blog/ty) that is a great example of the kind of issues we’ve been aiming to uncover. The specific example Astral highlighted showed that in some edge cases Pyrefly could take multiple seconds to update diagnostics after editing. This is much slower than expected (used across Meta’s codebases, Pyrefly usually takes less than 10 milliseconds to recheck files after saving them) and prompted us to investigate further.
+
+Now we’d like to share the story of how that edge case led us to rethink our underlying approach to diagnostics and dependency tracking, improving the speed at which Pyrefly's type errors update by 18x in the process.
 
 <!-- truncate -->
 
@@ -35,7 +37,7 @@ When file A is edited & saved, we recheck A to see if any of its exported types 
 
 There are two key observations here:
 
-1. Our dependency tracking rechecks a module when *any* export changes, even if the module does not depend on the export that changed. This can lead to modules being re-checked unnecessarily.
+1. Our dependency tracking rechecks a module when *any* export changes, even if the module does not depend on the export that changed. This can lead to modules being rechecked unnecessarily.
 2. We are waiting until the update has completely propagated to every affected file before sending any updated diagnostics, when in practice we mostly care about the files the user has open.
 
 ## Solution 1: Fine-grained dependency tracking
@@ -70,9 +72,9 @@ Since Pyrefly v0.51.1, we no longer invalidate a module any time a dependency ch
 
 ## Solution 2: Streaming diagnostics
 
-The other key insight from earlier is that we’re waiting for the update to finish entirely before refreshing the errors in the IDE, leaving the user waiting multiple seconds in the worst edge cases. To improve this, we could stream updated diagnostics to the IDE as soon as an open file has been rechecked, without waiting for other modules to be rechecked.
+The other key insight from earlier is that we’re waiting for the update to finish completely before refreshing the errors in the IDE. To improve this, we could stream updated diagnostics to the IDE as soon as an open file has been rechecked, without waiting for other modules to be rechecked.
 
-Let’s imagine a project with a dependency structure that looks like this. A is the file that we are editing, and B is another file that we have open, which is affected by edits to the types in A. As a user, what we want is for changes we make in B to immediately update A, with minimal lagging.
+Let’s imagine a project with a dependency structure that looks like this. A is the file that we are editing, and B is another file that we have open, which is affected by edits to the types in A. As a user, what we want is for changes we make in A to be reflected in B with minimal delay.
 
 
 ![nodes diagram](./blog_imgs/a_b_nodes_1.png)
@@ -85,17 +87,17 @@ Highlighted in blue are the transitive dependencies of B. Only changes to those 
 
 ![nodes diagram blue](./blog_imgs/a_b_nodes_3.png)
 
-The image below shows the intersection of A’s reverse dependencies and B’s dependencies in purple. Once those modules are checked, we can show updated diagnostics for open files to the user, while continuing to check the remaining modules in the background.
+The image below shows the intersection of A’s reverse dependencies and B’s dependencies in purple. Once those modules are checked, we can show updated diagnostics for open files to the user, while continuing to check the remaining modules (red) in the background.
 
 ![nodes diagram purple](./blog_imgs/a_b_nodes_4.png)
 
-In order to provide a smooth IDE experience, Pyrefly runs language server operations (e.g. hover, autocomplete, go-to-def) on one thread and rechecks on another thread,  that way users can still use language server features while a recheck is happening in the background. Previously, the main language server thread would send updated diagnostics to the IDE, and only did so once it received a signal from the recheck thread that a recheck had finished. Now with streaming diagnostics in Pyyrefly v0.52.0, the recheck thread can emit the diagnostics to the frontend directly.
+In order to provide a smooth IDE experience, Pyrefly runs language server operations (e.g. hover, autocomplete, go-to-def) on one thread and rechecks on another thread,  that way users can still use language server features while a recheck is happening in the background. Previously, the main language server thread would send updated diagnostics to the IDE, and only did so once it received a signal from the recheck thread that a recheck had finished. Now with streaming diagnostics in Pyrefly v0.52.0, the recheck thread can emit the diagnostics to the frontend directly.
 
-However, making this change means that there can be potential race conditions between diagnostics emitted from the main language server thread and the recheck thread. To prevent this, while a recheck is ongoing we do not allow the main language server thread to send diagnostics for files that might need diagnostic streaming. In other words, only one thread may send diagnostics for a given file at a given time.
+This change means that diagnostics can now be emitted from both the main thread and the recheck thread. To prevent conflicts between diagnostics sent from different threads, we add a restriction so that only one thread may send diagnostics for a given file at a given time. When a recheck is ongoing, the main thread cannot send diagnostics for any files eligible for streaming diagnostics.
 
 ## Results
 
-Combined, these two optimizations enable Pyrefly to provide diagnostics 18x faster than before. Going back to the example from the introduction, that specific edge case which was previously taking ~3.6 seconds, now typically takes less than 200ms on an M4 Macbook Pro. For users, this means type errors appear instantly after saving a file, a noticeable improvement:
+Combined, these two optimizations enable Pyrefly to provide updated diagnostics 18x faster than before. Going back to the example from the introduction, these changes reduce the diagnostic update time from ~3.6 seconds to under 200ms on an M4 Macbook Pro. For users, this means type errors refresh instantly after saving a file, a dramatic improvement:
 
 <video
     src="/videos/18x_faster.mp4"
@@ -107,7 +109,7 @@ Combined, these two optimizations enable Pyrefly to provide diagnostics 18x fast
     preload="auto"
   ></video>
 
-To see how we benchmarked this, you can check out testing instructions GitHub [here](https://github.com/facebook/pyrefly/pull/2344)
+To see how we benchmarked this, you can check out testing instructions on GitHub [here](https://github.com/facebook/pyrefly/pull/2344)
 
 ## What’s Next?
 
@@ -115,6 +117,6 @@ This was a tricky case to fix and we’ve made significant progress, but how fas
 
 Speed continues to be a top priority for us on the Pyrefly team. While we’ve addressed the core problem, we’re always on the lookout for opportunities to further optimize performance, so stay tuned for further updates and make sure to regularly update your Pyrefly version. As we move toward v1, we’re carefully weighing additional speed improvements alongside other critical priorities like memory efficiency, bug fixes, and enhanced inference capabilities. Our goal is to deliver the fastest experience possible without compromising on overall functionality.
 
-As always if you’ve found a problem, please let us know by [opening a GitHub issue](https://github.com/facebook/pyrefly/issues).
+As always, if you’ve found a problem, please let us know by [opening a GitHub issue](https://github.com/facebook/pyrefly/issues).
 
 And if you’ve made it this far, thanks for journeying down this rabbit hole with us\! We hope you give Pyrefly a try if you haven’t already, see you for the next update\!

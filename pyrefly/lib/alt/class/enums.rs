@@ -292,6 +292,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }))
                 .to_implicit_type(),
             )
+        } else if let Type::ClassType(cls) = &ty
+            && cls.has_qname("enum", "nonmember")
+            && let [targ] = cls.targs().as_slice()
+        {
+            Some(targ.clone())
         } else {
             None
         }

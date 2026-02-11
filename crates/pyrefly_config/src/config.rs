@@ -1148,9 +1148,9 @@ impl ConfigFile {
                     ]),
                     true,
                     vec![
-                        "python/typeshed_experimental".into(),
-                        "python/typeshed_internal".into(),
-                        "python/pyre_temporary_stubs".into(),
+                        "../python/typeshed_experimental".into(),
+                        "../python/typeshed_internal".into(),
+                        "../python/pyre_temporary_stubs".into(),
                     ],
                 ));
             }

@@ -21,6 +21,7 @@ use crate::display::TypeDisplayContext;
 use crate::stdlib::Stdlib;
 use crate::type_output::DisplayOutput;
 use crate::type_output::TypeOutput;
+use crate::types::TArgs;
 use crate::types::TParams;
 use crate::types::Type;
 
@@ -163,6 +164,17 @@ impl TypeAliasData {
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct TypeAliasRef {
     pub name: Name,
+    /// Type arguments that this alias has been specialized with.
+    /// For `TypeAliasValue`, we immediately substitute the arguments into the value, but for a
+    /// `TypeAliasRef`, we don't have access to the value, so we store the targs in order to do the
+    /// substitution when the value is later looked up.
+    ///
+    /// As an example, suppose we have `type X[K, V] = K | list[X[str, V]]`. When we resolve the
+    /// `X` reference on the rhs, we represent it as
+    /// `Type::Forall(tparams=[K, V], body=TypeAliasData::Ref(name=X, args=None))`. Then, after we
+    /// specialize this `Forall` with `[str, V]`, we end up with
+    /// `Type::TypeAlias(TypeAliasData::Ref(name=X, args=[str, V]))`.
+    pub args: Option<TArgs>,
     pub module: ModuleName,
     pub index: TypeAliasIndex,
 }

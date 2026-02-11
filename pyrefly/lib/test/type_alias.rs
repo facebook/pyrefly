@@ -1086,7 +1086,7 @@ T = TypeVar("T")
 BadAlias4 = TypeAliasType("BadAlias4", "BadAlias4")  # E: cyclic self-reference in `BadAlias4`
 
 # Self-reference in union with type param
-BadAlias5 = TypeAliasType("BadAlias5", T | "BadAlias5[str]", type_params=(T,))  # should error: circular dependency
+BadAlias5 = TypeAliasType("BadAlias5", T | "BadAlias5[str]", type_params=(T,))  # E: cyclic self-reference in `BadAlias5`
 
 # Mutual circular reference
 BadAlias6 = TypeAliasType("BadAlias6", "BadAlias7")
@@ -1098,7 +1098,31 @@ BadAlias21 = TypeAliasType("BadAlias21", list[BadAlias21])  # should error: circ
 );
 
 testcase!(
-    bug = "conformance: Should detect circular definitions and redeclarations in type statements",
+    test_forward_ref_in_typealiastype_value_by_kw,
+    r#"
+from typing import TypeAliasType
+X = TypeAliasType("X", value="C")
+class C: ...
+def f(x: X): ...
+f(C())
+f(0)  # E: not assignable
+    "#,
+);
+
+testcase!(
+    test_unused_and_out_of_order_tparams_in_typealiastype,
+    r#"
+from typing import TypeAliasType, TypeVar, assert_type
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+X = TypeAliasType("X", dict[T2, T1], type_params=(T1, T2, T3))
+def f(x: X[int, str, bytes]):
+    assert_type(x, dict[str, int])
+    "#,
+);
+
+testcase!(
     test_type_statement_circular_conformance,
     r#"
 from typing import Callable
@@ -1106,7 +1130,7 @@ from typing import Callable
 # Direct self-reference (not through generic param)
 type RecursiveTypeAlias3 = RecursiveTypeAlias3  # E: cyclic self-reference in `RecursiveTypeAlias3`
 
-type RecursiveTypeAlias4[T] = T | RecursiveTypeAlias4[str]  # should error: circular definition
+type RecursiveTypeAlias4[T] = T | RecursiveTypeAlias4[str]  # E: cyclic self-reference in `RecursiveTypeAlias4`
 
 type RecursiveTypeAlias6 = RecursiveTypeAlias7
 type RecursiveTypeAlias7 = RecursiveTypeAlias6  # E: cyclic self-reference in `RecursiveTypeAlias7`
@@ -1123,4 +1147,20 @@ class C:
     type T = int
     type T = int # E: Cannot redefine existing name `T` as a type alias
 "#,
+);
+
+testcase!(
+    test_display_instance_vs_type,
+    r#"
+from typing import reveal_type, TypeVar
+
+X = int | str
+reveal_type([X])  # E: list[type[X]]
+def f(x: X):
+    reveal_type([x])  # E: list[X]
+
+T = TypeVar("T")
+X = list[T]
+reveal_type([X])  # E: list[type[X[T]]]
+    "#,
 );

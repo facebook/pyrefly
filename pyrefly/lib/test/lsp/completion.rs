@@ -2617,6 +2617,87 @@ x = sys.version
 }
 
 #[test]
+fn completion_sorts_incompatible_call_argument_last() {
+    let code = r#"
+class Base:
+    pass
+
+class Derived(Base):
+    pass
+
+class Other:
+    pass
+
+def needs_base(x: Base) -> None:
+    pass
+
+val_exact = Base()
+val_compatible = Derived()
+val_incompatible = Other()
+val = val_exact
+
+needs_base(val)
+#           ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true);
+
+    let exact_index = completions
+        .iter()
+        .position(|item| item.label == "val_exact");
+    let compatible_index = completions
+        .iter()
+        .position(|item| item.label == "val_compatible");
+    let incompatible_index = completions
+        .iter()
+        .position(|item| item.label == "val_incompatible");
+
+    let exact = exact_index.and_then(|idx| completions.get(idx));
+    let compatible = compatible_index.and_then(|idx| completions.get(idx));
+    let incompatible = incompatible_index.and_then(|idx| completions.get(idx));
+
+    assert!(
+        exact.is_some() && compatible.is_some() && incompatible.is_some(),
+        "Expected completions for exact_val, compatible_val, and incompatible_val."
+    );
+
+    let exact_sort = exact
+        .and_then(|item| item.sort_text.as_deref())
+        .unwrap_or("");
+    let compatible_sort = compatible
+        .and_then(|item| item.sort_text.as_deref())
+        .unwrap_or("");
+    let incompatible_sort = incompatible
+        .and_then(|item| item.sort_text.as_deref())
+        .unwrap_or("");
+
+    assert!(
+        !exact_sort.ends_with('z'),
+        "Exact type should not be demoted (sort_text={exact_sort:?})."
+    );
+    assert!(
+        !compatible_sort.ends_with('z'),
+        "Compatible type should not be demoted (sort_text={compatible_sort:?})."
+    );
+    assert!(
+        incompatible_sort.ends_with('z'),
+        "Incompatible type should be demoted (sort_text={incompatible_sort:?})."
+    );
+
+    assert!(
+        exact_index.unwrap() < incompatible_index.unwrap(),
+        "Exact type should sort ahead of incompatible type."
+    );
+    assert!(
+        compatible_index.unwrap() < incompatible_index.unwrap(),
+        "Compatible type should sort ahead of incompatible type."
+    );
+}
+
+#[test]
 fn bound_method_completions_include_descriptor_attributes() {
     // Make sure completions work for bound methods from custom descriptors.
     // See: https://github.com/facebook/pyrefly/issues/821

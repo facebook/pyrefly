@@ -239,7 +239,7 @@ dependencies = [
  "miniz_oxide",
  "object",
  "rustc-demangle",
- "windows-link 0.2.1",
+ "windows-link",
 ]
 
 [[package]]
@@ -364,7 +364,7 @@ dependencies = [
  "iana-time-zone",
  "num-traits",
  "serde",
- "windows-link 0.2.1",
+ "windows-link",
 ]
 
 [[package]]
@@ -1898,7 +1898,7 @@ dependencies = [
  "libc",
  "redox_syscall 0.5.6",
  "smallvec",
- "windows-link 0.2.1",
+ "windows-link",
 ]
 
 [[package]]
@@ -2104,19 +2104,26 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.9.6"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57206b407293d2bcd3af849ce869d52068623f19e1b5ff8e8778e3309439682b"
+checksum = "1e8bbe1a966bd2f362681a44f6edce3c2310ac21e4d5067a6e7ec396297a6ea0"
 dependencies = [
  "bitflags 2.10.0",
  "getopts",
  "memchr",
+ "pulldown-cmark-escape",
  "unicase",
 ]
 
 [[package]]
+name = "pulldown-cmark-escape"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
+
+[[package]]
 name = "pyrefly"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -2174,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_build"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anyhow",
  "dupe",
@@ -2194,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anyhow",
  "sha2",
@@ -2205,7 +2212,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2240,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2249,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_graph"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "dupe",
  "itertools 0.14.0",
@@ -2259,7 +2266,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2286,7 +2293,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_types"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "compact_str 0.8.0",
  "dupe",
@@ -2306,7 +2313,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -3494,7 +3501,7 @@ dependencies = [
 
 [[package]]
 name = "tsp_types"
-version = "0.51.2"
+version = "0.52.0"
 dependencies = [
  "lsp-server",
  "serde",
@@ -3811,22 +3818,22 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-core"
-version = "0.61.2"
+version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0fdd3ddb90610c7638aa2b3a3ab2904fb9e5cdbecc643ddb3647212781c4ae3"
+checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
 dependencies = [
  "windows-implement",
  "windows-interface",
- "windows-link 0.1.1",
+ "windows-link",
  "windows-result",
  "windows-strings",
 ]
 
 [[package]]
 name = "windows-implement"
-version = "0.60.0"
+version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a47fddd13af08290e67f4acabf4b459f647552718f683a7b415d290ac744a836"
+checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3835,20 +3842,14 @@ dependencies = [
 
 [[package]]
 name = "windows-interface"
-version = "0.59.1"
+version = "0.59.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd9211b69f8dcdfa817bfd14bf1c97c9188afa36f4750130fcdf3f400eca9fa8"
+checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
 ]
-
-[[package]]
-name = "windows-link"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76840935b766e1b0a05c0066835fb9ec80071d4c09a16f6bd5f7e655e3c14c38"
 
 [[package]]
 name = "windows-link"
@@ -3858,20 +3859,20 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-result"
-version = "0.3.4"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56f42bd332cc6c8eac5af113fc0c1fd6a8fd2aa08a0119358686e5160d0586c6"
+checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
 dependencies = [
- "windows-link 0.1.1",
+ "windows-link",
 ]
 
 [[package]]
 name = "windows-strings"
-version = "0.4.2"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56e6c93f3a0c3b36176cb1327a4958a0353d5d166c2a35cb268ace15e91d3b57"
+checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
 dependencies = [
- "windows-link 0.1.1",
+ "windows-link",
 ]
 
 [[package]]
@@ -3916,7 +3917,7 @@ version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
- "windows-link 0.2.1",
+ "windows-link",
 ]
 
 [[package]]

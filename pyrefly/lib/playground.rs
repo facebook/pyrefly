@@ -415,30 +415,29 @@ impl Playground {
         let transaction = self.state.transaction();
 
         for (filename, handle) in &self.handles {
-            let file_errors = transaction
-                .get_errors([handle])
-                .collect_errors()
-                .shown
-                .into_map(|e| {
-                    let range = e.display_range();
-                    Diagnostic {
-                        start_line: range.start.line_within_file().get() as i32,
-                        start_col: range.start.column().get() as i32,
-                        end_line: range.end.line_within_file().get() as i32,
-                        end_col: range.end.column().get() as i32,
-                        message_header: e.msg_header().to_owned(),
-                        message_details: e.msg_details().unwrap_or("").to_owned(),
-                        kind: e.error_kind().to_name().to_owned(),
-                        // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
-                        severity: match e.severity() {
-                            Severity::Error => 8,
-                            Severity::Warn => 4,
-                            Severity::Info => 2,
-                            Severity::Ignore => 1,
-                        },
-                        filename: filename.clone(),
-                    }
-                });
+            let errors = transaction.get_errors([handle]);
+            let mut shown = errors.collect_errors().shown;
+            shown.extend(errors.collect_unused_ignore_errors_for_display().shown);
+            let file_errors = shown.into_map(|e| {
+                let range = e.display_range();
+                Diagnostic {
+                    start_line: range.start.line_within_file().get() as i32,
+                    start_col: range.start.column().get() as i32,
+                    end_line: range.end.line_within_file().get() as i32,
+                    end_col: range.end.column().get() as i32,
+                    message_header: e.msg_header().to_owned(),
+                    message_details: e.msg_details().unwrap_or("").to_owned(),
+                    kind: e.error_kind().to_name().to_owned(),
+                    // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
+                    severity: match e.severity() {
+                        Severity::Error => 8,
+                        Severity::Warn => 4,
+                        Severity::Info => 2,
+                        Severity::Ignore => 1,
+                    },
+                    filename: filename.clone(),
+                }
+            });
             all_diagnostics.extend(file_errors);
 
             // Add unused diagnostics
