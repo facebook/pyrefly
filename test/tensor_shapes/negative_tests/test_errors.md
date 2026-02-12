@@ -5,7 +5,7 @@ These tests verify that the type checker correctly catches Dim type errors.
 ## Dim type variable unification (test_symint_unification)
 
 ```scrut
-$ $PYREFLY check "$TEST_ROOT/negative_tests/test_symint_unification.py"
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_symint_unification.py"
  INFO revealed type: Dim[(A * B)] [reveal-type]
   --> *test_symint_unification.py:23:16 (glob)
    |
@@ -43,7 +43,7 @@ ERROR Argument `Dim[((A * B) // 2)]` is not assignable to parameter `x` with typ
 ## Dim with bare type annotation (test_symint_any)
 
 ```scrut
-$ $PYREFLY check "$TEST_ROOT/negative_tests/test_symint_any.py"
+$ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_symint_any.py"
  INFO revealed type: Dim [reveal-type]
   --> *test_symint_any.py:18:12 (glob)
    |
