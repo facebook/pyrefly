@@ -40,7 +40,7 @@ fn test_initialize_basic() {
             },
             "codeLensProvider": {
                 "resolveProvider": false,
-            }
+            },
             "completionProvider": {
                 "triggerCharacters": [".", "'", "\""]
             },
