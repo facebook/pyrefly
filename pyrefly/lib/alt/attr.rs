@@ -1110,7 +1110,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             protocol.name().clone(),
                             self.for_display(got.clone()),
                             attr_name.clone(),
-                            err,
+                            *err,
                         )))
                     })?;
                 }
@@ -1134,7 +1134,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         got: &Attribute,
         want: &ClassAttribute,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-    ) -> Result<(), AttrSubsetError> {
+    ) -> Result<(), Box<AttrSubsetError>> {
         match got {
             Attribute::ClassAttribute(got_class_attr) => {
                 self.is_class_attribute_subset(got_class_attr, want, is_subset)
@@ -1149,9 +1149,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Attribute::GetAttr(..) => {
                 // NOTE(grievejia): `__getattr__` does not participate in structural subtyping
                 // check for now. We may revisit this in the future if the need comes.
-                Err(AttrSubsetError::Getattr)
+                Err(Box::new(AttrSubsetError::Getattr))
             }
-            Attribute::ModuleFallback(..) => Err(AttrSubsetError::ModuleFallback),
+            Attribute::ModuleFallback(..) => Err(Box::new(AttrSubsetError::ModuleFallback)),
         }
     }
 
