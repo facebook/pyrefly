@@ -47,11 +47,13 @@ fn test_inlay_hint_default_config() {
                     (" -> ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -72,11 +74,13 @@ fn test_inlay_hint_default_config() {
                     (": ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -95,6 +99,7 @@ fn test_inlay_hint_default_config() {
                 hint2,
                 &[
                     (" -> ", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("0", false),
@@ -214,11 +219,13 @@ fn test_inlay_hint_disable_variables() {
                     (" -> ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -237,6 +244,7 @@ fn test_inlay_hint_disable_variables() {
                 hint1,
                 &[
                     (" -> ", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("0", false),
@@ -291,11 +299,13 @@ fn test_inlay_hint_disable_returns() {
                     (": ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -396,11 +406,13 @@ fn test_inlay_hint_tuple_type_has_location() {
                     (" -> ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -418,11 +430,13 @@ fn test_inlay_hint_tuple_type_has_location() {
                     (": ", false),
                     ("tuple", true),
                     ("[", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("1", false),
                     ("]", false),
                     (", ", false),
+                    ("typing.", false),
                     ("Literal", true),
                     ("[", false),
                     ("2", false),
@@ -466,7 +480,10 @@ fn test_inlay_hint_typevar_has_location() {
             if hint.position.line != 10 || hint.position.character != 14 {
                 return false;
             }
-            check_inlay_hint_label_values(hint, &[(" -> ", false), ("TypeVar", true)])
+            check_inlay_hint_label_values(
+                hint,
+                &[(" -> ", false), ("typing.", false), ("TypeVar", true)],
+            )
         })
         .unwrap();
 
@@ -505,7 +522,14 @@ fn test_inlay_hint_typevartuple_has_location() {
             if hint.position.line != 10 || hint.position.character != 14 {
                 return false;
             }
-            check_inlay_hint_label_values(hint, &[(" -> ", false), ("TypeVarTuple", true)])
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (" -> ", false),
+                    ("typing_extensions.", false),
+                    ("TypeVarTuple", true),
+                ],
+            )
         })
         .unwrap();
 
@@ -542,7 +566,14 @@ fn test_inlay_hint_paramspec_has_location() {
             if hint.position.line != 10 || hint.position.character != 14 {
                 return false;
             }
-            check_inlay_hint_label_values(hint, &[(" -> ", false), ("ParamSpec", true)])
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (" -> ", false),
+                    ("typing_extensions.", false),
+                    ("ParamSpec", true),
+                ],
+            )
         })
         .unwrap();
 
@@ -668,7 +699,10 @@ fn test_inlay_hint_never_has_location() {
             if hint.position.line != 6 || hint.position.character != 19 {
                 return false;
             }
-            check_inlay_hint_label_values(hint, &[(" -> ", false), ("Never", true)])
+            check_inlay_hint_label_values(
+                hint,
+                &[(" -> ", false), ("typing.", false), ("Never", true)],
+            )
         })
         .unwrap();
 
@@ -707,7 +741,14 @@ fn test_inlay_hint_literal_string_has_location() {
             if hint.position.line != 8 || hint.position.character != 40 {
                 return false;
             }
-            check_inlay_hint_label_values(hint, &[(" -> ", false), ("LiteralString", true)])
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (" -> ", false),
+                    ("typing_extensions.", false),
+                    ("LiteralString", true),
+                ],
+            )
         })
         .unwrap();
 

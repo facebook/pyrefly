@@ -3809,10 +3809,23 @@ impl Server {
                     );
 
                     let text_edits = if hint_data.insertable {
-                        Some(vec![TextEdit {
+                        let label_text = label_parts
+                            .iter()
+                            .map(|(text, _)| text.as_str())
+                            .collect::<String>();
+                        let mut edits = Vec::with_capacity(1 + hint_data.import_edits.len());
+                        edits.push(TextEdit {
                             range: Range::new(position, position),
-                            new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
-                        }])
+                            new_text: label_text,
+                        });
+                        for (import_pos, import_text) in hint_data.import_edits {
+                            let import_position = info.to_lsp_position(import_pos);
+                            edits.push(TextEdit {
+                                range: Range::new(import_position, import_position),
+                                new_text: import_text,
+                            });
+                        }
+                        Some(edits)
                     } else {
                         None
                     };

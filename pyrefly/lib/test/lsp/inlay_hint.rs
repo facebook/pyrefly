@@ -109,7 +109,7 @@ imported = ssl.VerifyMode.CERT_NONE
         r#"
 # main.py
 9 | xa2 = xa
-       ^ inlay-hint: `: Literal[X.A]`
+       ^ inlay-hint: `: typing.Literal[X.A]`
 "#
         .trim(),
         generate_inlay_hint_report(code, Default::default()).trim()
@@ -130,13 +130,13 @@ z = a
         r#"
 # main.py
 5 | x, y = (a, b)
-     ^ inlay-hint: `: Literal[1]`
+     ^ inlay-hint: `: typing.Literal[1]`
 
 5 | x, y = (a, b)
-        ^ inlay-hint: `: Literal[1]`
+        ^ inlay-hint: `: typing.Literal[1]`
 
 6 | z = a
-     ^ inlay-hint: `: Literal[1]`
+     ^ inlay-hint: `: typing.Literal[1]`
 "#
         .trim(),
         generate_inlay_hint_report(code, Default::default()).trim()
