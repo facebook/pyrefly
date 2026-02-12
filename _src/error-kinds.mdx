@@ -1353,6 +1353,6 @@ from typing import Protocol, TypeVar
 
 T = TypeVar("T")
 
-class A(Protocol[T]):  # variance-mismatch: Type variable `T` is declared as invariant, but could be covariant based on its usage
+class A(Protocol[T]):  # variance-mismatch: Type variable `T` in class `A` is declared as invariant, but could be covariant based on its usage
     def f(self) -> T: ...
 ```
