@@ -36,6 +36,7 @@ let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
 let traceOutputChannel: vscode.OutputChannel;
 let runTerminal: vscode.Terminal | undefined;
+let runTerminalCwd: string | undefined;
 
 /// Get a setting at the path, or throw an error if it's not set.
 function requireSetting<T>(path: string): T {
@@ -104,11 +105,17 @@ function shellQuote(value: string): string {
 }
 
 function getRunTerminal(cwd?: string): vscode.Terminal {
+  if (runTerminal && cwd && runTerminalCwd && runTerminalCwd !== cwd) {
+    runTerminal.dispose();
+    runTerminal = undefined;
+    runTerminalCwd = undefined;
+  }
   if (!runTerminal) {
     runTerminal = vscode.window.createTerminal({
       name: 'Pyrefly Run',
       cwd,
     });
+    runTerminalCwd = cwd;
   }
   return runTerminal;
 }
@@ -418,6 +425,15 @@ export async function activate(context: ExtensionContext) {
   if (statusBarItem) {
     context.subscriptions.push(statusBarItem);
   }
+
+  context.subscriptions.push(
+    vscode.window.onDidCloseTerminal(terminal => {
+      if (terminal === runTerminal) {
+        runTerminal = undefined;
+        runTerminalCwd = undefined;
+      }
+    }),
+  );
 }
 
 export function deactivate(): Thenable<void> | undefined {
@@ -434,6 +450,7 @@ export function deactivate(): Thenable<void> | undefined {
   if (runTerminal) {
     runTerminal.dispose();
     runTerminal = undefined;
+    runTerminalCwd = undefined;
   }
   return client.stop();
 }
