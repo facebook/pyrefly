@@ -22,6 +22,7 @@ use ruff_text_size::Ranged;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
+use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::NarrowUseLocation;
@@ -206,6 +207,23 @@ impl<'a> BindingsBuilder<'a> {
             }
             Pattern::MatchMapping(x) => {
                 let mut narrow_ops = NarrowOps::new();
+                let mut subject_idx = subject_idx;
+                if let Some(subject) = &match_subject {
+                    let narrow_op = AtomicNarrowOp::IsMapping;
+                    subject_idx = self.insert_binding(
+                        Key::PatternNarrow(x.range()),
+                        Binding::Narrow(
+                            subject_idx,
+                            Box::new(NarrowOp::Atomic(None, narrow_op.clone())),
+                            NarrowUseLocation::Span(x.range()),
+                        ),
+                    );
+                    narrow_ops.and_all(NarrowOps::from_single_narrow_op_for_subject(
+                        subject.clone(),
+                        narrow_op,
+                        x.range,
+                    ));
+                }
                 x.keys
                     .into_iter()
                     .zip(x.patterns)
@@ -419,8 +437,26 @@ impl<'a> BindingsBuilder<'a> {
                 NarrowUseLocation::Start(case_range),
                 &Usage::Narrowing(None),
             );
+            // Create a narrowed subject_idx for this case by applying negated_prev_ops.
+            // This ensures that patterns like MatchMapping use the narrowed type
+            // (e.g., after matching `None`, the type excludes `None`).
+            let case_subject_idx = if let Some(ref narrowing_subject) = match_narrowing_subject
+                && let Some((narrow_op, op_range)) =
+                    negated_prev_ops.0.get(narrowing_subject.name())
+            {
+                self.insert_binding(
+                    Key::PatternNarrow(case_range),
+                    Binding::Narrow(
+                        subject_idx,
+                        Box::new(narrow_op.clone()),
+                        NarrowUseLocation::Start(*op_range),
+                    ),
+                )
+            } else {
+                subject_idx
+            };
             let mut new_narrow_ops =
-                self.bind_pattern(match_narrowing_subject.clone(), pattern, subject_idx);
+                self.bind_pattern(match_narrowing_subject.clone(), pattern, case_subject_idx);
             self.bind_narrow_ops(
                 &new_narrow_ops,
                 NarrowUseLocation::Span(case_range),
@@ -467,12 +503,13 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
             }
-            // Always create Key::MatchExhaustive binding for return analysis.
+            // Always create Key::Exhaustive binding for return analysis.
             // When exhaustiveness_info is None, the solver will conservatively
             // assume the match is not exhaustive (resolves to Type::None).
             self.insert_binding(
-                Key::MatchExhaustive(x.range),
-                Binding::MatchExhaustive {
+                Key::Exhaustive(ExhaustivenessKind::Match, x.range),
+                Binding::Exhaustive {
+                    kind: ExhaustivenessKind::Match,
                     subject_idx,
                     subject_range: x.subject.range(),
                     exhaustiveness_info,

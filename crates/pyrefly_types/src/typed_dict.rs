@@ -15,6 +15,7 @@ use ruff_python_ast::name::Name;
 
 use crate::annotation::Qualifier;
 use crate::class::Class;
+use crate::heap::TypeHeap;
 use crate::read_only::ReadOnlyReason;
 use crate::stdlib::Stdlib;
 use crate::types::Substitution;
@@ -75,8 +76,8 @@ impl TypedDictInner {
         &mut self.args
     }
 
-    pub fn to_type(self) -> Type {
-        Type::TypedDict(TypedDict::TypedDict(self))
+    pub fn to_type(self, heap: &TypeHeap) -> Type {
+        heap.mk_typed_dict(TypedDict::TypedDict(self))
     }
 }
 
@@ -106,8 +107,8 @@ impl TypedDict {
         Self::TypedDict(TypedDictInner { class, args })
     }
 
-    pub fn to_type(self) -> Type {
-        Type::TypedDict(self)
+    pub fn to_type(self, heap: &TypeHeap) -> Type {
+        heap.mk_typed_dict(self)
     }
 
     // This is just a placeholder to reduce refactoring for existing code

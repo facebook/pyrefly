@@ -12,7 +12,9 @@ use dupe::Dupe;
 use pyrefly_types::class::Class;
 #[cfg(test)]
 use pyrefly_types::class::ClassType;
+use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Type;
@@ -154,10 +156,10 @@ pub fn string_for_type(type_: &Type) -> String {
     ctx.display(type_).to_string()
 }
 
-fn strip_self_type(mut ty: Type) -> Type {
+fn strip_self_type(heap: &TypeHeap, mut ty: Type) -> Type {
     ty.transform_mut(&mut |t| {
         if let Type::SelfType(cls) = t {
-            *t = Type::ClassType(cls.clone());
+            *t = heap.mk_class_type(cls.clone());
         }
     });
     ty
@@ -167,10 +169,10 @@ fn strip_optional(type_: &Type) -> Option<&Type> {
     match type_ {
         Type::Union(box Union {
             members: elements, ..
-        }) if elements.len() == 2 && elements[0] == Type::None => Some(&elements[1]),
+        }) if elements.len() == 2 && elements[0].is_none() => Some(&elements[1]),
         Type::Union(box Union {
             members: elements, ..
-        }) if elements.len() == 2 && elements[1] == Type::None => Some(&elements[0]),
+        }) if elements.len() == 2 && elements[1].is_none() => Some(&elements[0]),
         _ => None,
     }
 }
@@ -248,7 +250,9 @@ fn is_scalar_type(get: &Type, want: &Class, context: &ModuleContext) -> bool {
     }
     match get {
         Type::ClassType(class_type) => has_superclass(class_type.class_object(), want, context),
-        Type::TypeAlias(alias) => is_scalar_type(&alias.as_type(), want, context),
+        Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+            is_scalar_type(&alias.as_type(), want, context)
+        }
         _ => false,
     }
 }
@@ -303,7 +307,9 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
             .reduce(|acc, next| acc.join_with(next))
             .unwrap()
             .sort_and_dedup(),
-        Type::TypeAlias(alias) => get_classes_of_type(&alias.as_type(), context),
+        Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+            get_classes_of_type(&alias.as_type(), context)
+        }
         _ => ClassNamesFromType::not_a_class(),
     }
 }
@@ -312,7 +318,7 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
 pub fn preprocess_type(type_: &Type, context: &ModuleContext) -> Type {
     // Promote `Literal[..]` into `str` or `int`.
     let type_ = type_.clone().promote_implicit_literals(&context.stdlib);
-    strip_self_type(type_)
+    strip_self_type(context.answers.heap(), type_)
 }
 
 impl PysaType {

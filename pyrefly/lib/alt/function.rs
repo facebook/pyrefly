@@ -20,10 +20,10 @@ use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::types::BoundMethod;
-use pyrefly_types::types::TParam;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::TParamsSource;
 use pyrefly_types::types::Union;
+use pyrefly_util::display::pluralize;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
@@ -199,7 +199,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<DecoratorParamHints> {
         decorators.iter().rev().find_map(|(decorator_ty, _)| {
             decorator_ty
-                .callable_first_param()
+                .callable_first_param(self.heap)
                 .and_then(|param_ty| param_ty.callable_signatures().into_iter().next().cloned())
                 .and_then(DecoratorParamHints::from_callable)
         })
@@ -381,7 +381,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_top_level_function = defining_cls.is_none();
         let mut self_type = defining_cls
             .as_ref()
-            .map(|cls| Type::SelfType(self.as_class_type_unchecked(cls)));
+            .map(|cls| self.heap.mk_self_type(self.as_class_type_unchecked(cls)));
 
         // __new__ is an implicit staticmethod, __init_subclass__ is an implicit classmethod
         // __new__, unlike decorated staticmethods, uses Self
@@ -449,7 +449,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // accordingly. This is not totally correct, since it doesn't account for chaining
         // decorators, or weird cases like both decorators existing at the same time.
         if flags.is_classmethod || found_class_property || is_dunder_new {
-            self_type = self_type.map(Type::type_form);
+            self_type = self_type.map(|t| self.heap.mk_type_form(t));
         } else if flags.is_staticmethod {
             self_type = None;
         }
@@ -519,9 +519,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("`{}` is missing a return annotation", stmt.name),
             );
         }
-        for p in stmt.parameters.iter() {
-            let name = p.name().as_str();
-            if p.annotation().is_none() && name != "cls" && name != "self" {
+        // The first parameter of a non-static method is the implicit self/cls
+        // parameter and does not require an annotation, regardless of its name.
+        // __new__ is an implicit staticmethod but still takes cls as its first parameter.
+        // If the first parameter is variadic (e.g. *args), self is passed inside it,
+        // so there is no separate implicit parameter to skip.
+        let is_dunder_new = def.defining_cls.is_some() && stmt.name.id == dunder::NEW;
+        let has_implicit_self_or_cls_param =
+            def.defining_cls.is_some() && (!def.metadata.flags.is_staticmethod || is_dunder_new);
+        for (i, p) in stmt.parameters.iter().enumerate() {
+            // Skip first param if it's implicit self/cls and not variadic
+            if i == 0 && has_implicit_self_or_cls_param && !p.is_variadic() {
+                continue;
+            }
+            if p.annotation().is_none() {
+                let name = p.name().as_str();
                 self.error(
                     errors,
                     p.name().range(),
@@ -569,12 +581,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         _ => None,
                     })
                     .collect(),
-                Type::Quantified(Box::new(q.clone())),
+                self.heap.mk_quantified(q.clone()),
                 ret,
             )
         } else {
             Callable::list(ParamList::new(def.params.clone()), ret)
         };
+        if let Some(cls) = &def.defining_cls
+            && stmt.name.id == dunder::INIT
+        {
+            self.validate_init_self_annotation(cls.name(), &callable, def.id_range(), errors);
+        }
         let mut ty = Forallable::Function(Function {
             signature: callable,
             metadata: def.metadata.clone(),
@@ -662,7 +679,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SpecialDecorator::Property(_) => {
                 flags.property_metadata = Some(PropertyMetadata {
                     role: PropertyRole::Getter,
-                    getter: Type::any_error(),
+                    getter: self.heap.mk_any_error(),
                     setter: None,
                     has_deleter: false,
                 });
@@ -671,7 +688,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SpecialDecorator::CachedProperty(_) => {
                 flags.property_metadata = Some(PropertyMetadata {
                     role: PropertyRole::Getter,
-                    getter: Type::any_error(),
+                    getter: self.heap.mk_any_error(),
                     setter: None,
                     has_deleter: false,
                 });
@@ -784,7 +801,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.solver().solve_parameter(
                         *var,
                         self.union(
-                            Type::any_implicit(),
+                            self.heap.mk_any_implicit(),
                             default_ty.clone().promote_implicit_literals(self.stdlib),
                         ),
                     );
@@ -992,8 +1009,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             params = params
                 .into_iter()
                 .map(|p| match p {
-                    Param::Kwargs(name, Type::Kwargs(_)) => Param::Kwargs(name, Type::any_error()),
-                    Param::VarArg(name, Type::Args(_)) => Param::VarArg(name, Type::any_error()),
+                    Param::Kwargs(name, Type::Kwargs(_)) => {
+                        Param::Kwargs(name, self.heap.mk_any_error())
+                    }
+                    Param::VarArg(name, Type::Args(_)) => {
+                        Param::VarArg(name, self.heap.mk_any_error())
+                    }
                     _ => p,
                 })
                 .collect();
@@ -1088,7 +1109,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if ret_tparams.is_empty() {
             (tparams, signature)
         } else {
-            let make_tparams = |tparams: Vec<&TParam>| {
+            let make_tparams = |tparams: Vec<&Quantified>| {
                 Arc::new(TParams::new(tparams.into_iter().cloned().collect()))
             };
             // Recursively move type parameters in the return type so that
@@ -1106,14 +1127,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         tparams: &'b TParams,
         params: &Params,
-    ) -> (Vec<&'b TParam>, Vec<&'b TParam>) {
+    ) -> (Vec<&'b Quantified>, Vec<&'b Quantified>) {
         let mut param_qs = SmallSet::new();
         params.visit(&mut |ty| {
             ty.collect_quantifieds(&mut param_qs);
         });
-        tparams
-            .iter()
-            .partition(|tparam| param_qs.contains(&tparam.quantified))
+        tparams.iter().partition(|tparam| param_qs.contains(tparam))
     }
 
     /// Turn any top-level Type::Callable(callable) in `ret` into Forall[tparams, callable].
@@ -1154,10 +1173,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Compute the raw return type - this may need tweaks to handle Forall well.
         let inferred_ty =
             match self.call_infer(call_target, &[arg], &[], range, errors, None, None, None) {
-                Type::Callable(c) => Type::Function(Box::new(Function {
+                Type::Callable(c) => self.heap.mk_function(Function {
                     signature: *c,
                     metadata: metadata.clone(),
-                })),
+                }),
                 Type::Forall(box Forall {
                     tparams,
                     body: Forallable::Callable(c),
@@ -1191,7 +1210,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         });
                         call_attr
                     } else {
-                        cls.to_type()
+                        self.heap.mk_class_type(cls)
                     }
                 }
                 Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped") => decoratee.clone(),
@@ -1211,12 +1230,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(tparams) = tparams_opt {
             // Identify which original tparams are actually used in the result
             // We scope this in a block to drop the borrow on inferred_ty immediately after scanning
-            let relevant_tparams_vec: Vec<TParam> = {
+            let relevant_tparams_vec: Vec<Quantified> = {
                 let mut used_quantifieds = SmallSet::new();
                 inferred_ty.collect_quantifieds(&mut used_quantifieds);
                 tparams
                     .iter()
-                    .filter(|p| used_quantifieds.contains(&p.quantified))
+                    .filter(|p| used_quantifieds.contains(p))
                     .cloned()
                     .collect()
             };
@@ -1236,7 +1255,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ty => {
                         let substitution_map: SmallMap<_, _> = new_tparams
                             .iter()
-                            .map(|p| (&p.quantified, p.quantified.as_gradual_type()))
+                            .map(|p| (p, p.as_gradual_type()))
                             .collect();
                         ty.subst(&substitution_map.iter().map(|(k, v)| (*k, v)).collect())
                     }
@@ -1386,7 +1405,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 );
                         OverloadType::Function(Function {
-                            signature: Callable::ellipsis(Type::any_error()),
+                            signature: Callable::ellipsis(self.heap.mk_any_error()),
                             metadata,
                         })
                     }
@@ -1435,8 +1454,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn subst_function(&self, tparams: &TParams, func: Function) -> Function {
         let mp = tparams
             .as_vec()
-            .map(|p| (&p.quantified, p.restriction().as_type(self.stdlib)));
-        match Type::Function(Box::new(func)).subst(&mp.iter().map(|(k, v)| (*k, v)).collect()) {
+            .map(|p| (p, p.restriction().as_type(self.stdlib, self.heap)));
+        match self
+            .heap
+            .mk_function(func)
+            .subst(&mp.iter().map(|(k, v)| (*k, v)).collect())
+        {
             Type::Function(func) => *func,
             // We passed a Function in, we must get a Function out
             _ => unreachable!(),
@@ -1475,7 +1498,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let sig_for_input_check = |sig: &Callable| {
             let mut sig = sig.clone();
             // Set the return type to `Any` so that we check just the input signature.
-            sig.ret = Type::any_implicit();
+            sig.ret = self.heap.mk_any_implicit();
             sig
         };
         for (range, overload) in overloads.iter() {
@@ -1507,8 +1530,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // to the return type of the implementation. (Note that the two assignability checks
             // are in opposite directions.)
             self.check_type(
-                &Type::Callable(Box::new(sig_for_input_check(&impl_func.signature))),
-                &Type::Callable(Box::new(sig_for_input_check(&overload_func.signature))),
+                &self
+                    .heap
+                    .mk_callable_from(sig_for_input_check(&impl_func.signature)),
+                &self
+                    .heap
+                    .mk_callable_from(sig_for_input_check(&overload_func.signature)),
                 *range,
                 errors,
                 &|| {
@@ -1528,10 +1555,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let Err(specialization_errors) = self.solver().finish_quantified(vs, false) {
                 let mut msg = vec1![format!(
                     "Overload signature `{}` is not consistent with implementation signature `{}`",
-                    self.for_display(Type::Callable(Box::new(
-                        original_overload_func.signature.clone()
-                    ))),
-                    self.for_display(Type::Callable(Box::new(impl_sig.clone()))),
+                    self.for_display(
+                        self.heap
+                            .mk_callable_from(original_overload_func.signature.clone())
+                    ),
+                    self.for_display(self.heap.mk_callable_from(impl_sig.clone())),
                 )];
                 for e in specialization_errors {
                     msg.push(e.to_error_msg(self));
@@ -1663,7 +1691,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn bind_dunder_new(&self, t: &Type, cls: ClassType) -> Option<Type> {
         self.bind_function(
             t,
-            &Type::Type(Box::new(Type::SelfType(cls))),
+            &self.heap.mk_type_form(self.heap.mk_self_type(cls)),
             &mut |a, b| self.is_subset_eq(a, b),
         )
     }
@@ -1682,10 +1710,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Forallable::Callable(c) => c.split_first_param(&mut owner).map(|(param, c)| {
                     let c =
                         self.instantiate_callable_self(&forall.tparams, obj, param, c, is_subset);
-                    Type::Forall(Box::new(Forall {
+                    self.heap.mk_forall(Forall {
                         tparams: forall.tparams.clone(),
                         body: Forallable::Callable(c),
-                    }))
+                    })
                 }),
                 Forallable::Function(f) => {
                     f.signature.split_first_param(&mut owner).map(|(param, c)| {
@@ -1696,25 +1724,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             c,
                             is_subset,
                         );
-                        Type::Forall(Box::new(Forall {
+                        self.heap.mk_forall(Forall {
                             tparams: forall.tparams.clone(),
                             body: Forallable::Function(Function {
                                 signature: c,
                                 metadata: f.metadata.clone(),
                             }),
-                        }))
+                        })
                     })
                 }
                 Forallable::TypeAlias(_) => None,
             },
             Type::Callable(callable) => callable
                 .split_first_param(&mut owner)
-                .map(|(_, c)| Type::Callable(Box::new(c))),
+                .map(|(_, c)| self.heap.mk_callable_from(c)),
             Type::Function(func) => func.signature.split_first_param(&mut owner).map(|(_, c)| {
-                Type::Function(Box::new(Function {
+                self.heap.mk_function(Function {
                     signature: c,
                     metadata: func.metadata.clone(),
-                }))
+                })
             }),
             Type::Overload(overload) => overload
                 .signatures
@@ -1778,5 +1806,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.uniques,
             is_subset,
         )
+    }
+
+    /// Ensure that self annotation does not contain class-scoped type variables.
+    /// Per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method
+    /// "Class-scoped type variables should not be used in the self annotation"
+    fn validate_init_self_annotation(
+        &self,
+        cls_name: &Name,
+        callable: &Callable,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if let Params::List(param_list) = &callable.params
+            && let Some(Param::Pos(_, self_ty, _)) = param_list.items().first()
+            && let Type::ClassType(cls_ty) = self_ty
+            && cls_ty.name() == cls_name
+        {
+            let tparams_names = cls_ty.tparams().iter().collect::<SmallSet<_>>();
+            let mut class_scoped_tvars = SmallSet::new();
+            for (_, ty) in cls_ty.targs().iter_paired() {
+                ty.collect_quantifieds(&mut class_scoped_tvars);
+            }
+            class_scoped_tvars.retain(|q| tparams_names.contains(q));
+            if !class_scoped_tvars.is_empty() {
+                let targs = class_scoped_tvars
+                    .iter()
+                    .map(|q| format!("`{}`", q.name()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                errors.add(
+                    range,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    vec1![format!(
+                        "`__init__` method self type cannot reference class {} {targs}",
+                        pluralize(class_scoped_tvars.len(), "type parameter")
+                    )],
+                );
+            }
+        }
     }
 }

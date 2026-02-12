@@ -7,6 +7,12 @@
 
 use dupe::Dupe;
 
+#[derive(Debug, Clone, Dupe, Copy)]
+pub struct RequireLevels {
+    pub specified: Require,
+    pub default: Require,
+}
+
 /// How much information do we require about a module?
 #[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Require {

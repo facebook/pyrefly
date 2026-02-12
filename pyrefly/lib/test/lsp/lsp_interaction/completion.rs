@@ -8,6 +8,7 @@
 use itertools::Itertools;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionResponse;
+use lsp_types::InsertTextFormat;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::request::Completion;
@@ -51,6 +52,128 @@ fn test_completion_basic() {
         .client
         .completion("foo.py", 11, 1)
         .expect_completion_response_with(|list| list.items.iter().any(|item| item.label == "Bar"))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_function_parens_snippet() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "analysis": {
+                    "completeFunctionParens": true
+                }
+            }]))),
+            capabilities: Some(json!({
+                "textDocument": {
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": true
+                        }
+                    }
+                }
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 0}
+                },
+                "text": "def spam(x: int) -> None:\n    pass\n\nsp\n"
+            }],
+        }));
+
+    interaction
+        .client
+        .completion("foo.py", 3, 2)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "spam"
+                    && item.insert_text.as_deref() == Some("spam($0)")
+                    && item.insert_text_format == Some(InsertTextFormat::SNIPPET)
+            })
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_function_parens_disabled() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("basic"));
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "analysis": {
+                    "completeFunctionParens": false
+                }
+            }]))),
+            capabilities: Some(json!({
+                "textDocument": {
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": true
+                        }
+                    }
+                }
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("foo.py");
+
+    let root_path = root.path().join("basic");
+    let foo_path = root_path.join("foo.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 0}
+                },
+                "text": "def spam(x: int) -> None:\n    pass\n\nsp\n"
+            }],
+        }));
+
+    interaction
+        .client
+        .completion("foo.py", 3, 2)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "spam"
+                    && item.insert_text.is_none()
+                    && item.insert_text_format != Some(InsertTextFormat::SNIPPET)
+            })
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();

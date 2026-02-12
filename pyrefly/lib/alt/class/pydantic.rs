@@ -144,14 +144,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else if has_strict {
                 (Required::Required, root_model_type)
             } else {
-                (Required::Required, Type::any_explicit())
+                (Required::Required, self.heap.mk_any_explicit())
             };
         let root_param = Param::Pos(ROOT, root_model_type, root_requiredness);
         let params = vec![self.class_self_param(cls, false), root_param];
-        let ty = Type::Function(Box::new(Function {
-            signature: Callable::list(ParamList::new(params), Type::None),
+        let ty = self.heap.mk_function(Function {
+            signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
             metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
-        }));
+        });
         ClassSynthesizedField::new(ty)
     }
 
@@ -169,7 +169,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // `RootModel` should always have a type parameter unless we're working with a broken copy
         // of Pydantic.
         let tparam = tparams.iter().next()?;
-        let root_model_type = Type::Quantified(Box::new(tparam.quantified.clone()));
+        let root_model_type = self.heap.mk_quantified(tparam.clone());
         Some(
             self.get_pydantic_root_model_init(cls, root_model_type, false)
                 .inner
@@ -216,7 +216,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassType(cls) => {
                 if cls.has_qname(ModuleName::pydantic_root_model().as_str(), "RootModel") {
                     let targs = cls.targs().as_slice();
-                    let root_type = targs.last().cloned().unwrap_or_else(Type::any_implicit);
+                    let root_type = targs
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| self.heap.mk_any_implicit());
                     if let Some(nested_root_type) = self.extract_root_model_inner_type(&root_type) {
                         return Some(self.union(root_type.clone(), nested_root_type));
                     }

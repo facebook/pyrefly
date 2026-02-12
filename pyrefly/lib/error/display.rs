@@ -211,7 +211,7 @@ impl TypeCheckKind {
                 ctx.display(want)
             ),
             Self::CycleBreaking => format!(
-                "`{}` is not assignable to `{}` (caused by inconsistent types when breaking cycles)",
+                "Pyrefly detected conflicting types while breaking a dependency cycle: `{}` is not assignable to `{}`. Adding explicit type annotations might possibly help.",
                 ctx.display(got),
                 ctx.display(want)
             ),

@@ -95,7 +95,7 @@ impl GlobalVariable {
                 .type_
                 .as_ref()
                 .map(|type_| PysaType::from_type(type_, context)),
-            location: PysaLocation::new(context.module_info.display_range(identifier.range())),
+            location: PysaLocation::from_text_range(identifier.range(), &context.module_info),
         }
     }
 }

@@ -222,7 +222,7 @@ class MyEnum(Enum):
     def D(self) -> None: pass
 
 reveal_type(MyEnum.A)  # E: revealed type: Literal[MyEnum.A]
-reveal_type(MyEnum.B)  # E: revealed type: nonmember[int]
+reveal_type(MyEnum.B)  # E: revealed type: int
 reveal_type(MyEnum.C)  # E: revealed type: Literal[MyEnum.C]
 reveal_type(MyEnum.D)  # E: revealed type: (self: MyEnum) -> None
 "#,
@@ -476,6 +476,24 @@ class A(enum.IntEnum):
         return member
 
 assert_type(A.B, Literal[A.B])
+    "#,
+);
+
+testcase!(
+    test_intenum_numeric_tower,
+    r#"
+import enum
+from typing import assert_type
+
+class Period(enum.IntEnum):
+    DAY = 24
+
+def takes_float(x: float) -> float:
+    return x
+
+assert_type(takes_float(Period.DAY), float)
+assert_type(takes_float(24), float)
+assert_type(takes_float(24.0), float)
     "#,
 );
 

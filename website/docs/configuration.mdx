@@ -1199,3 +1199,12 @@ assert-type = false
 # other non-Pyrefly configs
 ...
 ```
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0    | Success - command completed without issues |
+| 1    | User error - command completed but problems (e.g., type errors) were found |
+| 3    | Infrastructure error - an error in the environment prevented the command from completing |
+| 101  | Panic - Pyrefly encountered an internal error and crashed |

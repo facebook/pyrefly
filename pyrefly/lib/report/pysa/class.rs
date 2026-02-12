@@ -387,9 +387,7 @@ pub fn export_class_fields(
                     PysaClassField {
                         type_: PysaType::from_type(&field.ty(), context),
                         explicit_annotation,
-                        location: Some(PysaLocation::new(
-                            context.module_info.display_range(*range),
-                        )),
+                        location: Some(PysaLocation::from_text_range(*range, &context.module_info)),
                         declaration_kind: PysaClassFieldDeclaration::from(definition),
                     },
                 )),
@@ -454,7 +452,6 @@ pub fn export_all_classes(
             .0
             .dupe()
             .unwrap();
-        let display_range = context.module_info.display_range(class.qname().range());
         let class_index = class.index();
         let parent = get_scope_parent(&context.ast, &context.module_info, class.qname().range());
         let metadata = context
@@ -504,7 +501,10 @@ pub fn export_all_classes(
 
         assert!(
             class_definitions
-                .insert(PysaLocation::new(display_range), class_definition)
+                .insert(
+                    PysaLocation::from_text_range(class.qname().range(), &context.module_info),
+                    class_definition
+                )
                 .is_none(),
             "Found class definitions with the same location"
         );

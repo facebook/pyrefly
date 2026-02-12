@@ -489,10 +489,10 @@ Hover Result: `(self: Foo, a: int, b: bool) -> str`
 
 17 | foo.overloaded_meth(False)
              ^
-Hover Result: `BoundMethod[Foo, Overload[
+Hover Result: `Overload[
   (self: Foo, a: str) -> bool
   (self: Foo, a: int, b: bool) -> str
-]]`
+]`
 "#
         .trim(),
         report.trim(),

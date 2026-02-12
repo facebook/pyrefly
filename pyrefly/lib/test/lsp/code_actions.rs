@@ -18,6 +18,7 @@ use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
+use crate::test::util::mk_multi_file_state;
 use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn apply_patch(info: &ModuleInfo, range: TextRange, patch: String) -> (String, String) {
@@ -100,6 +101,32 @@ fn find_marked_range_with(source: &str, start_marker: &str, end_marker: &str) ->
     )
 }
 
+/// Finds the text range for the Nth occurrence of `needle` in `source`.
+///
+/// This is used by tests that need to select a specific repeated token without
+/// adding extra inline markers.
+fn find_nth_range(source: &str, needle: &str, occurrence: usize) -> TextRange {
+    assert!(occurrence > 0, "occurrence is 1-based");
+    let mut start = 0;
+    let mut seen = 0;
+    while let Some(found) = source[start..].find(needle) {
+        let abs = start + found;
+        seen += 1;
+        if seen == occurrence {
+            let end = abs + needle.len();
+            return TextRange::new(
+                TextSize::try_from(abs).unwrap(),
+                TextSize::try_from(end).unwrap(),
+            );
+        }
+        start = abs + needle.len();
+    }
+    panic!(
+        "could not find occurrence {} of '{}' in source",
+        occurrence, needle
+    );
+}
+
 fn compute_extract_actions(
     code: &str,
 ) -> (
@@ -156,6 +183,73 @@ fn apply_first_extract_variable_action(code: &str) -> Option<String> {
     Some(apply_refactor_edits_for_module(&module_info, edits))
 }
 
+fn compute_invert_boolean_actions(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .invert_boolean_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_first_invert_boolean_action(code: &str, selection: TextRange) -> Option<String> {
+    let (module_info, actions, _) = compute_invert_boolean_actions(code, selection);
+    let edits = actions.first()?;
+    Some(apply_refactor_edits_for_module(&module_info, edits))
+}
+
+fn assert_no_invert_boolean_action(code: &str, selection: TextRange) {
+    let (_, actions, _) = compute_invert_boolean_actions(code, selection);
+    assert!(
+        actions.is_empty(),
+        "expected no invert-boolean actions, found {}",
+        actions.len()
+    );
+}
+
+fn compute_invert_boolean_actions_allow_errors(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Everything, false);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .invert_boolean_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn assert_no_invert_boolean_action_allow_errors(code: &str, selection: TextRange) {
+    let (_, actions, _) = compute_invert_boolean_actions_allow_errors(code, selection);
+    assert!(
+        actions.is_empty(),
+        "expected no invert-boolean actions, found {}",
+        actions.len()
+    );
+}
+
 fn cursor_selection(code: &str) -> TextRange {
     let position = extract_cursors_for_test(code)
         .first()
@@ -181,6 +275,19 @@ fn apply_first_inline_variable_action(code: &str) -> Option<String> {
 fn apply_first_inline_method_action(code: &str) -> Option<String> {
     let (handles, state) =
         mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .inline_method_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
+fn apply_first_inline_method_action_allow_errors(code: &str) -> Option<String> {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Everything, false);
     let handle = handles.get("main").unwrap();
     let transaction = state.transaction();
     let module_info = transaction.get_module_info(handle).unwrap();
@@ -340,6 +447,29 @@ fn compute_make_top_level_actions(
     (module_info, edit_sets, titles)
 }
 
+fn compute_convert_star_import_actions(
+    code_by_module: &[(&'static str, &str)],
+    module_name: &'static str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(code_by_module, Require::Everything);
+    let handle = handles.get(module_name).unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .convert_star_import_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
 fn compute_pull_up_actions(
     code: &str,
 ) -> (
@@ -363,6 +493,19 @@ fn compute_push_down_actions(
     let selection = find_marked_range_with(code, "# MOVE-START", "# MOVE-END");
     compute_move_actions(code, selection, |transaction, handle, selection| {
         transaction.push_members_down_code_actions(handle, selection)
+    })
+}
+
+fn compute_extract_superclass_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let selection = find_marked_range_with(code, "# SUPER-START", "# SUPER-END");
+    compute_move_actions(code, selection, |transaction, handle, selection| {
+        transaction.extract_superclass_code_actions(handle, selection)
     })
 }
 
@@ -584,6 +727,130 @@ my_export
 "#
         .trim(),
         report.trim()
+    );
+}
+
+#[test]
+fn redundant_cast_quickfix() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "from typing import cast\nx: int = 0\nx = cast(int, x)\n#   ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | x = cast(int, x)
+        ^
+Code Actions Results:
+# Title: Remove redundant cast
+
+## Before:
+from typing import cast
+x: int = 0
+x = cast(int, x)
+#   ^
+## After:
+from typing import cast
+x: int = 0
+x = x
+#   ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn redundant_cast_fix_all() {
+    let (handles, state) = mk_multi_file_state(
+        &[(
+            "main",
+            "from typing import cast\nx: int = 0\nx = cast(int, x)\ny = cast(int, x)\n",
+        )],
+        Require::Exports,
+        false,
+    );
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let edits = transaction
+        .redundant_cast_fix_all_edits(handle)
+        .unwrap_or_default();
+    let updated = apply_refactor_edits_for_module(&module_info, &edits);
+    assert_eq!(
+        "from typing import cast\nx: int = 0\nx = x\ny = x\n",
+        updated
+    );
+}
+
+fn redundant_cast_action_after(code: &str, cursor_offset: usize) -> Option<String> {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main")?;
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle)?;
+    let position = TextSize::try_from(cursor_offset).ok()?;
+    let actions = transaction
+        .local_quickfix_code_actions_sorted(
+            handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+        )
+        .unwrap_or_default();
+    let (_, module, range, patch) = actions
+        .into_iter()
+        .find(|(title, _, _, _)| title == "Remove redundant cast")?;
+    if module.path() != module_info.path() {
+        return None;
+    }
+    let (_before, after) = apply_patch(&module_info, range, patch);
+    Some(after)
+}
+
+#[test]
+fn redundant_cast_parenthesized_expr() {
+    let code = "from typing import cast\na: int = 1\nb: int = 2\ncast(int, a + b)\n";
+    let cursor_offset = code.find("cast(").unwrap();
+    let after = redundant_cast_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import cast\na: int = 1\nb: int = 2\n(a + b)\n",
+        after
+    );
+}
+
+#[test]
+fn redundant_cast_nested_call() {
+    let code = "from typing import cast\na: int = 1\nb: int = 2\nprint(cast(int, a + b))\n";
+    let cursor_offset = code.find("cast(").unwrap();
+    let after = redundant_cast_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import cast\na: int = 1\nb: int = 2\nprint((a + b))\n",
+        after
+    );
+}
+
+#[test]
+fn redundant_cast_cursor_inside_args() {
+    let code = "from typing import cast\na: int = 1\nb: int = 2\ncast(int, a + b)\n";
+    let cursor_offset = code.find("a + b").unwrap();
+    let after = redundant_cast_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import cast\na: int = 1\nb: int = 2\n(a + b)\n",
+        after
+    );
+}
+
+#[test]
+fn redundant_cast_preserves_multiplication_precedence() {
+    let code =
+        "from typing import cast\nx: int = 1\ny: int = 2\nz: int = 3\nx * cast(int, y + z)\n";
+    let cursor_offset = code.find("cast(").unwrap();
+    let after = redundant_cast_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import cast\nx: int = 1\ny: int = 2\nz: int = 3\nx * (y + z)\n",
+        after
     );
 }
 
@@ -947,6 +1214,145 @@ def process(data):
 }
 
 #[test]
+fn invert_boolean_basic_refactor() {
+    let code = r#"
+def foo():
+    abc = True
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = False
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_removes_not() {
+    let code = r#"
+def foo():
+    abc = False
+    if not abc:
+        return 1
+    return 0
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = True
+    if abc:
+        return 1
+    return 0
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_rejects_multi_target_assignment() {
+    let code = r#"
+def foo():
+    abc = other = True
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    assert_no_invert_boolean_action(code, selection);
+}
+
+#[test]
+fn invert_boolean_annotated_assignment() {
+    let code = r#"
+def foo():
+    abc: bool = True
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc: bool = False
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_rejects_deleted_variable() {
+    let code = r#"
+def foo():
+    abc = True
+    del abc
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 3);
+    assert_no_invert_boolean_action_allow_errors(code, selection);
+}
+
+#[test]
+fn invert_boolean_multiple_assignments() {
+    let code = r#"
+def foo():
+    abc = True
+    abc = False
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 3);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = True
+    abc = True
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_nested_expression_keeps_outer_not() {
+    let code = r#"
+def foo():
+    abc = True
+    other = True
+    return not (abc and other)
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo():
+    abc = False
+    other = True
+    return not ((not abc) and other)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn invert_boolean_inverts_unary_not_assignment_value() {
+    let code = r#"
+def foo(other_var):
+    abc = not other_var
+    return abc
+"#;
+    let selection = find_nth_range(code, "abc", 2);
+    let updated =
+        apply_first_invert_boolean_action(code, selection).expect("expected invert-boolean action");
+    let expected = r#"
+def foo(other_var):
+    abc = other_var
+    return (not abc)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn pull_member_up_basic() {
     let code = r#"
 class Super:
@@ -998,6 +1404,182 @@ class Base:
 class Child(Base):
     def foo(self):
         pass
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_basic() {
+    let code = r#"
+class Foo:
+    def a(self):
+        return 1
+    # SUPER-START
+    def b(self):
+        return 2
+    def c(self):
+        return 3
+    # SUPER-END
+    def d(self):
+        return 4
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class BaseFoo:
+    def b(self):
+        return 2
+    def c(self):
+        return 3
+
+class Foo(BaseFoo):
+    def a(self):
+        return 1
+    # SUPER-START
+    # SUPER-END
+    def d(self):
+        return 4
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_with_metaclass_inserts_pass() {
+    let code = r#"
+class Base:
+    pass
+
+class Meta(type):
+    pass
+
+class Foo(Base, metaclass=Meta):
+    # SUPER-START
+    def only(self):
+        pass
+    # SUPER-END
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class Base:
+    pass
+
+class Meta(type):
+    pass
+
+class BaseFoo:
+    def only(self):
+        pass
+
+class Foo(Base, BaseFoo, metaclass=Meta):
+    # SUPER-START
+    pass
+    # SUPER-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_with_decorator() {
+    let code = r#"
+class Foo:
+    # SUPER-START
+    @property
+    def bar(self) -> int:
+        return 1
+    # SUPER-END
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class BaseFoo:
+    @property
+    def bar(self) -> int:
+        return 1
+
+class Foo(BaseFoo):
+    # SUPER-START
+    pass
+    # SUPER-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_multiline_method() {
+    let code = r#"
+class Foo:
+    # SUPER-START
+    def complex(self):
+        x = 1
+        y = 2
+        if x > 0:
+            return x + y
+        else:
+            return y
+    # SUPER-END
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class BaseFoo:
+    def complex(self):
+        x = 1
+        y = 2
+        if x > 0:
+            return x + y
+        else:
+            return y
+
+class Foo(BaseFoo):
+    # SUPER-START
+    pass
+    # SUPER-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn extract_superclass_docstring_only_no_action() {
+    let code = r#"
+class Foo:
+    # SUPER-START
+    """This class has only a docstring."""
+    # SUPER-END
+"#;
+    let (_, actions, titles) = compute_extract_superclass_actions(code);
+    // No action should be offered when there are no extractable members
+    assert!(actions.is_empty());
+    assert!(titles.is_empty());
+}
+
+#[test]
+fn extract_superclass_preserves_docstring() {
+    let code = r#"
+class Foo:
+    """Foo's docstring."""
+    # SUPER-START
+    def method(self):
+        pass
+    # SUPER-END
+"#;
+    let (module_info, actions, titles) = compute_extract_superclass_actions(code);
+    assert_eq!(vec!["Extract superclass `BaseFoo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+class BaseFoo:
+    def method(self):
+        pass
+
+class Foo(BaseFoo):
+    """Foo's docstring."""
+    # SUPER-START
+    pass
+    # SUPER-END
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -1406,6 +1988,190 @@ class C:
     # MOVE-START
     baz = classmethod(baz)
     # MOVE-END
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_basic() {
+    let code_main = r#"
+# CONVERT-START
+from foo import *  # noqa: F401
+# CONVERT-END
+a = A
+b = B
+"#;
+    let code_foo = r#"
+A = 1
+B = 2
+C = 3
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo)],
+        "main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+# CONVERT-START
+from foo import A, B # noqa: F401
+# CONVERT-END
+a = A
+b = B
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_relative() {
+    let code_main = r#"
+# CONVERT-START
+from .foo import *
+# CONVERT-END
+x = A
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("pkg.main", code_main), ("pkg.foo", code_foo)],
+        "pkg.main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `pkg.foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+# CONVERT-START
+from .foo import A
+# CONVERT-END
+x = A
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_selects_correct_import() {
+    let code_main = r#"
+# CONVERT-START
+from foo import *
+# CONVERT-END
+from bar import *
+a = A
+b = B
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let code_bar = r#"
+B = 2
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo), ("bar", code_bar)],
+        "main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected = r#"
+# CONVERT-START
+from foo import A
+# CONVERT-END
+from bar import *
+a = A
+b = B
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_no_action_when_unused() {
+    let code_main = r#"
+# CONVERT-START
+from foo import *
+# CONVERT-END
+x = 1
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (_module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo)],
+        "main",
+        selection,
+    );
+    assert!(actions.is_empty());
+    assert!(titles.is_empty());
+}
+
+#[test]
+fn convert_star_import_multiline() {
+    // Multi-line star imports with parentheses should be handled correctly.
+    let code_main = r#"
+# MULTILINE-START
+from foo import (
+    *,
+)
+# MULTILINE-END
+x = A
+"#;
+    let code_foo = r#"
+A = 1
+"#;
+    let selection = find_marked_range_with(code_main, "# MULTILINE-START", "# MULTILINE-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo)],
+        "main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    // The replacement should produce a valid single-line import.
+    let expected = r#"
+# MULTILINE-START
+from foo import A
+# MULTILINE-END
+x = A
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn convert_star_import_shadowed_name() {
+    // When a name from the star import is shadowed by a local assignment,
+    // it should not appear in the explicit import list.
+    let code_main = r#"
+# CONVERT-START
+from foo import *
+# CONVERT-END
+A = 42
+print(A)
+print(B)
+"#;
+    let code_foo = r#"
+A = 1
+B = 2
+"#;
+    let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
+    let (module_info, actions, titles) = compute_convert_star_import_actions(
+        &[("main", code_main), ("foo", code_foo)],
+        "main",
+        selection,
+    );
+    assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
+    let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    // Only B should be imported since A is shadowed by a local assignment.
+    let expected = r#"
+# CONVERT-START
+from foo import B
+# CONVERT-END
+A = 42
+print(A)
+print(B)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -2115,6 +2881,115 @@ def compute():
     result = ((1 + 2) * 3)
 #            ^
     return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_method_for_class() {
+    let code = r#"
+class A:
+    def foo(self):
+        return 1
+
+    def bar(self):
+        self.foo()
+#        ^
+"#;
+    let updated = apply_first_inline_method_action(code).expect("expected inline method action");
+    let expected = r#"
+class A:
+    def foo(self):
+        return 1
+
+    def bar(self):
+        1
+#        ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_method_for_class_no_action_staticmethod() {
+    // @staticmethod methods cannot use self.foo() pattern
+    let code = r#"
+class A:
+    @staticmethod
+    def foo():
+        return 1
+
+    def bar(self):
+        self.foo()
+#        ^
+"#;
+    assert!(apply_first_inline_method_action(code).is_none());
+}
+
+#[test]
+fn inline_method_for_class_no_action_classmethod() {
+    // @classmethod methods cannot use self.foo() pattern
+    let code = r#"
+class A:
+    @classmethod
+    def foo(cls):
+        return 1
+
+    def bar(self):
+        self.foo()
+#        ^
+"#;
+    assert!(apply_first_inline_method_action(code).is_none());
+}
+
+#[test]
+fn inline_method_for_class_no_action_method_not_found() {
+    // Cannot inline a method that doesn't exist in the class
+    let code = r#"
+class A:
+    def bar(self):
+        self.foo()
+#        ^
+"#;
+    assert!(apply_first_inline_method_action_allow_errors(code).is_none());
+}
+
+#[test]
+fn inline_method_for_class_no_action_different_receiver() {
+    // Cannot inline when receiver name doesn't match the self parameter
+    let code = r#"
+class A:
+    def foo(self):
+        return 1
+
+    def bar(self):
+        this.foo()
+#        ^
+"#;
+    assert!(apply_first_inline_method_action_allow_errors(code).is_none());
+}
+
+#[test]
+fn inline_method_for_nested_class() {
+    let code = r#"
+class Outer:
+    class Inner:
+        def foo(self):
+            return 1
+
+        def bar(self):
+            self.foo()
+#            ^
+"#;
+    let updated = apply_first_inline_method_action(code).expect("expected inline method action");
+    let expected = r#"
+class Outer:
+    class Inner:
+        def foo(self):
+            return 1
+
+        def bar(self):
+            1
+#            ^
 "#;
     assert_eq!(expected, updated);
 }

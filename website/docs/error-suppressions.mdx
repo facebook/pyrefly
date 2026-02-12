@@ -68,11 +68,13 @@ def bar() -> int:
   />
 </pre>
 
-Pyrefly can automatically suppress all type errors in your project if you run:
+Pyrefly can automatically suppress all type errors in your project by running:
 
 ```
-pyrefly check --suppress-errors
+pyrefly suppress
 ```
+
+This is equivalent to `pyrefly check --suppress-errors`.
 
 ## Baseline Files (Experimental)
 
@@ -119,7 +121,7 @@ Upgrading the version of Pyrefly you're using, or a third party library you depe
 
 ```
 # step 1
-pyrefly check --suppress-errors
+pyrefly suppress
 ```
 
 ```
@@ -129,8 +131,12 @@ pyrefly check --suppress-errors
 
 ```
 # step 3
-pyrefly check --remove-unused-ignores
+pyrefly suppress --remove-unused
 ```
 Repeat the steps above until you get a clean formatting run and a clean type check.
 
 This will add ` # pyrefly: ignore` comments to your code that will enable you to silence errors, and come back and fix them at a later date. This can make the process of upgrading a large codebase much more manageable.
+
+:::note
+`pyrefly suppress` is equivalent to `pyrefly check --suppress-errors`, and `pyrefly suppress --remove-unused` is equivalent to `pyrefly check --remove-unused-ignores`.
+:::

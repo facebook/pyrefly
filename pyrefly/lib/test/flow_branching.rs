@@ -1562,3 +1562,121 @@ def f(x: int) -> str:
     return y
 "#,
 );
+
+testcase!(
+    test_if_elif_enum_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    elif c == Color.BLUE:
+        return "cool"
+"#,
+);
+
+testcase!(
+    bug = "isinstance exhaustiveness not yet working for all union patterns",
+    test_if_elif_isinstance_exhaustive,
+    r#"
+def f(x: int | str) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if isinstance(x, int):
+        return "int"
+    elif isinstance(x, str):
+        return "str"
+"#,
+);
+
+testcase!(
+    test_if_elif_non_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    # Missing Color.BLUE case - should always error
+"#,
+);
+
+testcase!(
+    test_if_elif_with_else_trivially_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    else:
+        return "cool"
+"#,
+);
+
+testcase!(
+    test_if_elif_literal_union_exhaustive,
+    r#"
+from typing import Literal
+
+def f(x: Literal["a", "b", "c"]) -> str:
+    if x == "a":
+        return "first"
+    elif x == "b":
+        return "second"
+    elif x == "c":
+        return "third"
+"#,
+);
+
+testcase!(
+    bug = "mixed is/isinstance narrowing exhaustiveness not yet working",
+    test_if_elif_mixed_narrowing,
+    r#"
+def f(x: int | None) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if x is None:
+        return "none"
+    elif isinstance(x, int):
+        return "int"
+"#,
+);
+
+testcase!(
+    test_if_elif_bool_exhaustive,
+    r#"
+def f(x: bool) -> str:
+    if x:
+        return "true"
+    elif not x:
+        return "false"
+"#,
+);
+
+testcase!(
+    test_if_elif_multiple_subjects,
+    r#"
+def f(x: int | str, y: int | str) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if isinstance(x, int):
+        return "x is int"
+    elif isinstance(y, str):
+        return "y is str"
+    # Different subjects in different branches - cannot determine exhaustiveness
+"#,
+);

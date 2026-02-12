@@ -17,6 +17,7 @@ use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use starlark_map::ordered_set::OrderedSet;
 
+use crate::heap::TypeHeap;
 use crate::types::Type;
 
 /// In Python if you do `import foo.bar` and `import foo.baz` then what you are really
@@ -70,8 +71,8 @@ impl ModuleType {
         }
     }
 
-    pub fn to_type(self) -> Type {
-        Type::Module(self)
+    pub fn to_type(self, heap: &TypeHeap) -> Type {
+        heap.mk_module(self)
     }
 
     pub fn push_part(&self, component: Name) -> Self {

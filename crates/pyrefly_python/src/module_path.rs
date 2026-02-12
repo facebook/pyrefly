@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 use dupe::Dupe;
 use pyrefly_util::interned_path::InternedPath;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use serde::Serialize;
 use serde::Serializer;
 
@@ -43,6 +45,16 @@ impl ModuleStyle {
 /// Store information about where a module is sourced from.
 #[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash)]
 pub struct ModulePath(ModulePathDetails);
+
+impl<To: 'static> Visit<To> for ModulePath {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
+}
+
+impl<To: 'static> VisitMut<To> for ModulePath {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
+}
 
 #[derive(Debug, Clone, Dupe, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize)]
 pub enum ModulePathDetails {

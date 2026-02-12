@@ -20,6 +20,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::class::Class;
 use crate::class::ClassType;
+use crate::heap::TypeHeap;
 use crate::types::TArgs;
 use crate::types::TParams;
 use crate::types::Type;
@@ -552,14 +553,14 @@ impl Stdlib {
         Self::primitive(&self.param_spec_kwargs)
     }
 
-    pub fn param_spec_args_as_tuple(&self) -> ClassType {
-        self.tuple(self.object().clone().to_type())
+    pub fn param_spec_args_as_tuple(&self, heap: &TypeHeap) -> ClassType {
+        self.tuple(heap.mk_class_type(self.object().clone()))
     }
 
-    pub fn param_spec_kwargs_as_dict(&self) -> ClassType {
+    pub fn param_spec_kwargs_as_dict(&self, heap: &TypeHeap) -> ClassType {
         self.dict(
-            self.str().clone().to_type(),
-            self.object().clone().to_type(),
+            heap.mk_class_type(self.str().clone()),
+            heap.mk_class_type(self.object().clone()),
         )
     }
 

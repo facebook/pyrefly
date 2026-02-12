@@ -15,11 +15,13 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_util::display::Fmt;
 use pyrefly_util::uniques::Unique;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
 
 use crate::class::ClassType;
+use crate::heap::TypeHeap;
 use crate::stdlib::Stdlib;
 use crate::type_var::PreInferenceVariance;
 use crate::type_var::Restriction;
@@ -197,8 +199,8 @@ impl Quantified {
         )
     }
 
-    pub fn to_type(self) -> Type {
-        Type::Quantified(Box::new(self))
+    pub fn to_type(self, heap: &TypeHeap) -> Type {
+        heap.mk_quantified(self)
     }
 
     pub fn to_value(self) -> Type {
@@ -223,6 +225,32 @@ impl Quantified {
 
     pub fn restriction(&self) -> &Restriction {
         &self.restriction
+    }
+
+    /// Display this type parameter with its bounds/constraints and default,
+    /// in the format used for type parameter lists (e.g. `T: int = str`).
+    pub fn display_with_bounds(&self) -> impl Display + '_ {
+        Fmt(move |f| {
+            write!(f, "{}", self.name)?;
+            match self.restriction() {
+                Restriction::Bound(t) => write!(f, ": {}", t)?,
+                Restriction::Constraints(ts) => {
+                    write!(f, ": (")?;
+                    for (i, t) in ts.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", t)?;
+                    }
+                    write!(f, ")")?;
+                }
+                Restriction::Unrestricted => {}
+            }
+            if let Some(default) = self.default() {
+                write!(f, " = {}", default)?;
+            }
+            Ok(())
+        })
     }
 
     pub fn variance(&self) -> PreInferenceVariance {

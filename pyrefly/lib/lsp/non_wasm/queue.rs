@@ -17,7 +17,6 @@ use crossbeam_channel::Sender;
 use lsp_server::RequestId;
 use lsp_types::DidChangeConfigurationParams;
 use lsp_types::DidChangeTextDocumentParams;
-use lsp_types::DidChangeWatchedFilesParams;
 use lsp_types::DidChangeWorkspaceFoldersParams;
 use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
@@ -51,7 +50,7 @@ pub enum LspEvent {
     DidChangeTextDocument(DidChangeTextDocumentParams),
     DidCloseTextDocument(DidCloseTextDocumentParams),
     DidSaveTextDocument(DidSaveTextDocumentParams),
-    DidChangeWatchedFiles(DidChangeWatchedFilesParams),
+    DrainWatchedFileChanges,
     DidChangeWorkspaceFolders(DidChangeWorkspaceFoldersParams),
     DidChangeConfiguration(DidChangeConfigurationParams),
     DidOpenNotebookDocument(DidOpenNotebookDocumentParams),
@@ -76,7 +75,7 @@ impl LspEvent {
             Self::DidChangeTextDocument(_) => "DidChangeTextDocument".to_owned(),
             Self::DidCloseTextDocument(_) => "DidCloseTextDocument".to_owned(),
             Self::DidSaveTextDocument(_) => "DidSaveTextDocument".to_owned(),
-            Self::DidChangeWatchedFiles(_) => "DidChangeWatchedFiles".to_owned(),
+            Self::DrainWatchedFileChanges => "DidChangeWatchedFiles".to_owned(),
             Self::DidChangeWorkspaceFolders(_) => "DidChangeWorkspaceFolders".to_owned(),
             Self::DidChangeConfiguration(_) => "DidChangeConfiguration".to_owned(),
             Self::DidOpenNotebookDocument(_) => "DidOpenNotebookDocument".to_owned(),
@@ -105,7 +104,7 @@ impl LspEvent {
             | Self::DidChangeTextDocument(_)
             | Self::DidCloseTextDocument(_)
             | Self::DidSaveTextDocument(_)
-            | Self::DidChangeWatchedFiles(_)
+            | Self::DrainWatchedFileChanges
             | Self::DidChangeWorkspaceFolders(_)
             | Self::DidChangeConfiguration(_)
             | Self::LspResponse(_)
