@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::min;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -2762,12 +2763,24 @@ impl Server {
                 // Do not remove the cells from `open_notebook_cells`, since
                 // incoming requests could still reference them.
                 if delete_count > 0 {
-                    notebook_document.cells.drain(start..start + delete_count);
+                    let end = min(start + delete_count, notebook_document.cells.len());
+                    notebook_document.cells.drain(start..end);
                 }
                 // Insert new cells
                 if let Some(new_cells) = &structure.array.cells {
+                    let cells = &mut notebook_document.cells;
                     for (i, cell) in new_cells.iter().enumerate() {
-                        notebook_document.cells.insert(start + i, cell.clone());
+                        let next_index = start + i;
+                        if next_index == cells.len() {
+                            cells.push(cell.clone());
+                        } else if next_index > cells.len() {
+                            return Err(anyhow::anyhow!(
+                                "Attempted to update notebook document, but cells are missing. Tried to add cell at index {next_index} but only {} cells exist.",
+                                cells.len()
+                            ));
+                        } else {
+                            cells.insert(next_index, cell.clone());
+                        }
                     }
                 }
                 // Set contents for new cells
