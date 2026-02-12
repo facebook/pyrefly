@@ -100,6 +100,11 @@ pub enum LspDisplayMode {
     Hover,
     /// Signature help mode: Single-line for LSP compatibility
     SignatureHelp,
+    /// Query mode: Used by programmatic consumers (e.g. type query endpoints).
+    /// Formats types with explicit wrappers (e.g. BoundMethod[...]) so that
+    /// consumers can unambiguously parse the type without relying on parameter
+    /// name heuristics.
+    Query,
 }
 
 #[derive(Debug, Default)]
@@ -527,8 +532,15 @@ impl<'a> TypeDisplayContext<'a> {
                 x.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))?;
                 output.write_str("]")
             }
-            Type::BoundMethod(box BoundMethod { obj: _, func }) => {
+            Type::BoundMethod(box BoundMethod { obj, func }) => {
                 match self.lsp_display_mode {
+                    LspDisplayMode::Query => {
+                        output.write_str("BoundMethod[")?;
+                        self.fmt_helper_generic(obj, false, output)?;
+                        output.write_str(", ")?;
+                        self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output)?;
+                        output.write_str("]")
+                    }
                     LspDisplayMode::Hover | LspDisplayMode::SignatureHelp if is_toplevel => {
                         match func {
                             BoundMethodType::Function(Function {
@@ -550,7 +562,7 @@ impl<'a> TypeDisplayContext<'a> {
                                             self.fmt_helper_generic(t, false, o)
                                         })?;
                                     }
-                                    LspDisplayMode::Standard => unreachable!(),
+                                    _ => unreachable!(),
                                 }
                                 output.write_str(": ...")
                             }
@@ -584,7 +596,7 @@ impl<'a> TypeDisplayContext<'a> {
                                             self.fmt_helper_generic(t, false, o)
                                         })?;
                                     }
-                                    LspDisplayMode::Standard => unreachable!(),
+                                    _ => unreachable!(),
                                 }
                                 output.write_str(": ...")
                             }
@@ -1755,6 +1767,11 @@ pub mod tests {
     y: Any
 ) -> None: ..."#
         );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&bound_method).to_string(),
+            "BoundMethod[type[MyClass], (self: Any, x: Any, y: Any) -> None]"
+        );
     }
 
     #[test]
@@ -1779,6 +1796,11 @@ pub mod tests {
     x: Any,
     y: Any
 ) -> None: ..."#
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&bound_method).to_string(),
+            "BoundMethod[type[MyClass], [T](self: Any, x: Any, y: Any) -> None]"
         );
     }
 
