@@ -30,55 +30,101 @@ fn test_inlay_hints() {
         ],
     );
 
-    interaction.inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([{
-            "label": " -> tuple[Literal[1], Literal[2]]",
-            "position": {"character": 21, "line": 0},
-            "textEdits": [{
-                "newText": " -> tuple[Literal[1], Literal[2]]",
-                "range": {"end": {"character": 21, "line": 0}, "start": {"character": 21, "line": 0}}
-            }, {
-                "newText": "import typing\n",
-                "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
-            }]
-        }])),
-        error: None,
-    });
+    interaction
+        .inlay_hint_cell("notebook.ipynb", "cell1", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+            let hint = &hints[0];
+            if hint.position.line != 0 || hint.position.character != 21 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (" -> ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
 
-    interaction.inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([{
-            "label": ": tuple[Literal[1], Literal[2]]",
-            "position": {"character": 6, "line": 0},
-            "textEdits": [{
-                "newText": ": tuple[Literal[1], Literal[2]]",
-                "range": {"end": {"character": 6, "line": 0}, "start": {"character": 6, "line": 0}}
-            }, {
-                "newText": "import typing\n",
-                "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
-            }]
-        }])),
-        error: None,
-    });
+    interaction
+        .inlay_hint_cell("notebook.ipynb", "cell2", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+            let hint = &hints[0];
+            if hint.position.line != 0 || hint.position.character != 6 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (": ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
 
-    interaction.inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0);
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([{
-            "label": " -> Literal[0]",
-            "position": {"character": 15, "line": 0},
-            "textEdits": [{
-                "newText": " -> Literal[0]",
-                "range": {"end": {"character": 15, "line": 0}, "start": {"character": 15, "line": 0}}
-            }, {
-                "newText": "import typing\n",
-                "range": {"end": {"character": 0, "line": 0}, "start": {"character": 0, "line": 0}}
-            }]
-        }])),
-        error: None,
-    });
-    interaction.shutdown();
+    interaction
+        .inlay_hint_cell("notebook.ipynb", "cell3", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+            let hint = &hints[0];
+            if hint.position.line != 0 || hint.position.character != 15 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (" -> ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("0", false),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
+    interaction.shutdown().unwrap();
 }
