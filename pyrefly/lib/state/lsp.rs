@@ -1924,7 +1924,6 @@ impl<'a> Transaction<'a> {
         let errors = self.get_errors(vec![handle]).collect_errors().shown;
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
-        let mut code_actions = Vec::new();
         let mut other_actions = Vec::new();
         for error in errors {
             match error.error_kind() {
