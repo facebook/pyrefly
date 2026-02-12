@@ -157,6 +157,21 @@ async function runTestAtLocation(
   const testName = args.testName;
   const isUnittest = args.isUnittest === true;
 
+  if (args.position && !testName && !className) {
+    const document = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(document, {
+      preview: false,
+    });
+    const position = new vscode.Position(
+      args.position.line,
+      args.position.character,
+    );
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position));
+    await vscode.commands.executeCommand('testing.runAtCursor');
+    return;
+  }
+
   let command: string | undefined;
   if (isUnittest) {
     const moduleName = moduleNameFromPath(uri);
@@ -181,21 +196,6 @@ async function runTestAtLocation(
       nodeId = `${nodeId}::${testName}`;
     }
     command = `${shellQuote(interpreter)} -m pytest ${shellQuote(nodeId)}`;
-  }
-
-  if (!command && args.position) {
-    const document = await vscode.workspace.openTextDocument(uri);
-    const editor = await vscode.window.showTextDocument(document, {
-      preview: false,
-    });
-    const position = new vscode.Position(
-      args.position.line,
-      args.position.character,
-    );
-    editor.selection = new vscode.Selection(position, position);
-    editor.revealRange(new vscode.Range(position, position));
-    await vscode.commands.executeCommand('testing.runAtCursor');
-    return;
   }
 
   terminal.show(true);
