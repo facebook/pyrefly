@@ -718,6 +718,18 @@ impl ClassField {
         matches!(&self.0, ClassFieldInner::InstanceAttribute { .. })
     }
 
+    /// Returns true if this field can have the `@override` decorator applied to it.
+    pub fn can_have_override_decorator(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::InstanceAttribute { .. }
+            | ClassFieldInner::NestedClass { .. }
+            | ClassFieldInner::ClassAttribute { .. } => false,
+            ClassFieldInner::Property { .. }
+            | ClassFieldInner::Descriptor { .. }
+            | ClassFieldInner::Method { .. } => true,
+        }
+    }
+
     pub fn ty(&self) -> Type {
         match &self.0 {
             ClassFieldInner::Property { ty, .. } => ty.clone(),
@@ -862,7 +874,7 @@ impl ClassField {
         }
     }
 
-    fn is_class_var(&self) -> bool {
+    pub fn is_class_var(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { .. } => false,
             ClassFieldInner::Descriptor { annotation, .. } => {
@@ -3067,7 +3079,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Check for missing @override decorator when overriding a parent attribute.
         // This error is emitted when a method overrides a parent but doesn't have @override.
         // Since this error has Severity::Ignore by default, it won't be shown unless enabled.
-        if !is_override && parent_attr_found && !parent_has_any {
+        if !is_override
+            && parent_attr_found
+            && !parent_has_any
+            && class_field.can_have_override_decorator()
+        {
             self.error(
                 errors,
                 range,
