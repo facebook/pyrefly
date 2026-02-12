@@ -18,7 +18,6 @@ use num_traits::ToPrimitive;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
-use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::types::Union;
 use pyrefly_util::visit::Visit;
@@ -28,7 +27,6 @@ use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
-use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
@@ -71,7 +69,7 @@ impl<T: Default> UnwrapOrDefaultAndLog<T> for Option<T> {
 
 const TYPE_SEPARATORS: [char; 12] = [',', '|', '[', ']', '{', '}', '(', ')', '=', ':', '\'', '"'];
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DefinitionLocation {
     pub name: String,
     pub file: Option<src::File>,
@@ -85,27 +83,27 @@ fn hash(x: &[u8]) -> String {
 fn join_names(base_name: &str, name: &str) -> String {
     if base_name.is_empty() {
         name.to_owned()
+    } else if name.is_empty() {
+        base_name.to_owned()
     } else {
         base_name.to_owned() + "." + name
     }
 }
 
-fn all_modules(module_name: ModuleName) -> impl Iterator<Item = String> {
-    module_name
-        .components()
-        .into_iter()
-        .scan("".to_owned(), |module, component| {
-            *module = join_names(module, component.as_str());
-            Some(module.to_owned())
-        })
-}
-
-fn all_modules_with_range(module_id: &Identifier) -> impl Iterator<Item = (String, TextRange)> {
-    let offset = module_id.range().start();
-    all_modules(ModuleName::from_name(module_id.id())).map(move |name| {
-        let range = TextRange::at(offset, TextSize::try_from(name.len()).unwrap());
-        (name, range)
-    })
+fn all_modules_with_range(
+    module_name: ModuleName,
+    position: TextSize,
+) -> impl Iterator<Item = (String, TextRange)> {
+    module_name.components().into_iter().scan(
+        ("".to_owned(), position),
+        |(module, start), component| {
+            let name = component.as_str();
+            let range = TextRange::at(*start, TextSize::try_from(name.len()).unwrap());
+            *module = join_names(module, name);
+            *start = range.end() + TextSize::from(1);
+            Some((module.to_owned(), range))
+        },
+    )
 }
 
 fn range_without_decorators(range: TextRange, decorators: &[Decorator]) -> TextRange {
@@ -210,13 +208,12 @@ struct GleanState<'a> {
     facts: Facts,
     names: HashSet<Arc<String>>,
     locations_fqnames: HashMap<TextSize, Arc<String>>,
-    import_names: HashMap<Arc<String>, Arc<String>>,
+    import_names: HashMap<Arc<String>, (Arc<String>, Option<Arc<String>>)>,
 }
 
 struct AssignInfo<'a> {
     range: TextRange,
     annotation: Option<&'a Expr>,
-    value: Option<&'a Expr>,
 }
 
 impl Facts {
@@ -340,7 +337,7 @@ impl GleanState<'_> {
     fn module_facts(&mut self, range: TextRange) {
         let module_docstring_range = self.transaction.get_module_docstring_range(self.handle);
 
-        for name in all_modules(self.module_name) {
+        for (name, _) in all_modules_with_range(self.module_name, TextSize::ZERO) {
             self.record_name(name.clone());
             self.facts
                 .modules
@@ -430,10 +427,18 @@ impl GleanState<'_> {
         python::Name::new(name)
     }
 
-    fn record_name_for_import(&mut self, name: String, import_name: &str) {
-        let arc_name = self.record_name(name);
-        let arc_import_name = Arc::new(import_name.to_owned());
-        self.import_names.insert(arc_name.dupe(), arc_import_name);
+    fn record_name_for_import(&mut self, as_name: String, resolved_name: &str, from_name: &str) {
+        let arc_name = self.record_name(as_name);
+        let arc_resolved_name = self.record_name(resolved_name.to_owned());
+        let arc_from_name = if from_name != resolved_name {
+            Some(self.record_name(from_name.to_owned()))
+        } else {
+            None
+        };
+        self.import_names.insert(
+            arc_name.dupe(),
+            (arc_resolved_name.dupe(), arc_from_name.dupe()),
+        );
     }
 
     fn make_fq_name_for_declaration(
@@ -473,155 +478,246 @@ impl GleanState<'_> {
         &self,
         def_range: TextRange,
         module: &ModuleInfo,
-    ) -> Option<DefinitionLocation> {
-        let file = file_fact(module);
+        base_type: Option<&Type>,
+        additional_definitions: Vec<DefinitionLocation>,
+    ) -> Vec<DefinitionLocation> {
+        let file = Some(file_fact(module));
+        let type_name = base_type.and_then(|ty| ty.qname());
         let local_name = module.code_at(def_range);
         let module_name = module.name();
 
-        let fqname = if module_name == ModuleName::builtins() {
-            Some(local_name.to_owned())
-        } else if module_name == self.module_name {
-            self.locations_fqnames
-                .get(&def_range.start())
-                .map(|x| (**x).clone())
-        } else {
-            let local_name = module.code_at(def_range);
-            let fq_name = if local_name.is_empty() {
-                module_name.to_string()
-            } else {
-                join_names(module_name.as_str(), local_name)
-            };
-            Some(fq_name)
-        };
+        if module_name == self.module_name {
+            let fqname_type =
+                type_name.and_then(|qname| self.locations_fqnames.get(&qname.range().start()));
 
-        fqname.map(|name| DefinitionLocation {
-            name,
-            file: Some(file),
-        })
+            let fqname = if let Some(ty) = fqname_type {
+                Some(join_names(ty, local_name))
+            } else {
+                self.locations_fqnames
+                    .get(&def_range.start())
+                    .map(|name| (**name).clone())
+            };
+
+            if let Some(name) = fqname {
+                vec![DefinitionLocation { name, file }]
+            } else {
+                additional_definitions
+            }
+        } else {
+            let fqname_type = type_name.map(|name| name.id().as_str()).unwrap_or_default();
+            let fqname = join_names(fqname_type, local_name);
+            if module_name == ModuleName::builtins() {
+                vec![DefinitionLocation { name: fqname, file }]
+            } else {
+                let name = join_names(module_name.as_str(), &fqname);
+                let mut definitions = vec![DefinitionLocation {
+                    name: name.clone(),
+                    file,
+                }];
+
+                definitions.extend(
+                    additional_definitions
+                        .into_iter()
+                        .filter(|def| def.name != name),
+                );
+
+                definitions
+            }
+        }
     }
 
     fn find_definition_for_expr(&self, expr: &Expr) -> Vec<DefinitionLocation> {
         match expr {
             Expr::Subscript(expr_subscript) => self.find_definition_for_expr(&expr_subscript.value),
             Expr::Attribute(attr) => self.find_definition_for_attribute(attr),
-            Expr::Name(name) => self
-                .find_definition_for_expr_name(name)
-                .map_or(vec![], |x| vec![x]),
+            Expr::Name(name) => self.find_definition_for_expr_name(name),
             _ => vec![],
         }
     }
 
-    fn find_definition_for_expr_name(&self, expr_name: &ExprName) -> Option<DefinitionLocation> {
+    fn find_definition_for_expr_name(&self, expr_name: &ExprName) -> Vec<DefinitionLocation> {
         let identifier = Ast::expr_name_identifier(expr_name.clone());
         self.find_definition_for_name_use(identifier)
     }
 
-    fn find_definition_for_name_use(&self, identifier: Identifier) -> Option<DefinitionLocation> {
+    fn get_additional_definitions(&self, range: TextRange) -> Vec<DefinitionLocation> {
+        let as_name = join_names(self.module_name.as_str(), self.module.code_at(range));
+
+        let mut definitions = vec![DefinitionLocation {
+            name: as_name.clone(),
+            file: Some(self.file_fact()),
+        }];
+
+        if let Some((resolved_name, from_name)) = self.import_names.get(&as_name) {
+            definitions.push(DefinitionLocation {
+                name: resolved_name.to_string(),
+                file: None,
+            });
+            if let Some(name) = from_name.as_ref() {
+                definitions.push(DefinitionLocation {
+                    name: name.to_string(),
+                    file: None,
+                })
+            }
+        };
+
+        definitions
+    }
+
+    fn find_definition_for_name_use(&self, identifier: Identifier) -> Vec<DefinitionLocation> {
         let definition = self.transaction.find_definition_for_name_use(
             self.handle,
             &identifier,
             FindPreference::default(),
         );
 
-        definition.and_then(|def| self.get_definition_location(def.definition_range, &def.module))
+        let additional_definitions = self.get_additional_definitions(identifier.range());
+
+        definition.map_or(additional_definitions.clone(), |def| {
+            self.get_definition_location(
+                def.definition_range,
+                &def.module,
+                None,
+                additional_definitions,
+            )
+        })
     }
 
-    fn find_definition_for_type(&self, ty: Type, range: TextRange) -> Option<DefinitionLocation> {
-        match ty {
-            Type::Module(module) => Some(DefinitionLocation {
-                name: module.to_string(),
-                file: None, // TODO find file for module
-            }),
-            Type::None => Some(DefinitionLocation {
-                name: "None".to_owned(),
-                file: None,
-            }),
-            Type::Type(inner_ty) => self.find_definition_for_type(*inner_ty, range),
-            Type::SpecialForm(x) => {
-                let identifier = Identifier::new(x.to_string(), range);
-                self.find_definition_for_name_use(identifier)
-            }
-            _ => ty
-                .qname()
-                .and_then(|qname| self.get_definition_location(qname.range(), qname.module())),
-        }
+    fn find_definition_for_str_literal(&self, range: TextRange) -> Vec<DefinitionLocation> {
+        let name = self.module.code_at(range);
+        let fqname = join_names(self.module_name.as_str(), name);
+        let identifier = Identifier::new(name, range);
+        let definition = self.transaction.find_definition_for_name_use(
+            self.handle,
+            &identifier,
+            FindPreference::default(),
+        );
+        let additional_definitions = if definition.is_some() || self.names.contains(&fqname) {
+            self.get_additional_definitions(range)
+        } else {
+            vec![]
+        };
+
+        definition.map_or(additional_definitions.clone(), |def| {
+            self.get_definition_location(
+                def.definition_range,
+                &def.module,
+                None,
+                additional_definitions,
+            )
+        })
     }
 
-    fn get_xrefs_types_for_str_lit(
+    fn get_xrefs_for_str_lit(
         &self,
         expr: &ExprStringLiteral,
     ) -> Vec<(DefinitionLocation, TextRange)> {
-        let sep_indexes: Vec<usize> = self
+        let separators: Vec<(usize, usize)> = self
             .module
             .code_at(expr.range())
             .match_indices(|x: char| x.is_whitespace() || TYPE_SEPARATORS.contains(&x))
-            .map(|m| m.0)
+            .map(|(idx, matched)| (idx, matched.len()))
             .collect();
 
-        let ranges = (1..sep_indexes.len())
+        let ranges = (1..separators.len())
             .map(|i| {
-                let start = TextSize::try_from(sep_indexes[i - 1] + 1).ok().unwrap();
-                let end = TextSize::try_from(sep_indexes[i]).ok().unwrap();
+                let (prev_idx, prev_len) = separators[i - 1];
+                let (curr_idx, _) = separators[i];
+                let start = TextSize::try_from(prev_idx + prev_len).ok().unwrap();
+                let end = TextSize::try_from(curr_idx).ok().unwrap();
                 TextRange::new(start, end) + expr.range().start()
             })
             .filter(|range| !range.is_empty());
 
-        self.transaction
-            .get_answers(self.handle)
-            .map_or(vec![], |answers| {
-                ranges
-                    .filter_map(|range| {
-                        answers
-                            .get_type_trace(range)
-                            .and_then(|ty| self.find_definition_for_type(ty, range))
-                            .map(|definition_location| (definition_location, range))
-                    })
-                    .collect()
+        ranges
+            .flat_map(|range| {
+                let name = self.module.code_at(range);
+                let definitions = if name == "None" {
+                    vec![DefinitionLocation {
+                        name: "None".to_owned(),
+                        file: None,
+                    }]
+                } else {
+                    self.find_definition_for_str_literal(range)
+                };
+                definitions.into_iter().map(move |def| (def, range))
             })
+            .collect()
     }
 
     fn find_definition_for_attribute(&self, expr_attr: &ExprAttribute) -> Vec<DefinitionLocation> {
         let attr_name = &expr_attr.attr;
         let base_expr = expr_attr.value.as_ref();
 
-        let base_types = if let Some(answers) = self.transaction.get_answers(self.handle)
+        let definitions_with_type = if let Some(answers) = self.transaction.get_answers(self.handle)
             && let Some(base_type) = answers.get_type_trace(base_expr.range())
         {
             self.transaction
-                .ad_hoc_solve(self.handle, |solver| match base_type {
-                    Type::Union(box Union { members: tys, .. }) | Type::Intersect(box (tys, _)) => {
-                        tys.into_iter()
-                            .filter(|ty: &Type| {
-                                solver
-                                    .completions(ty.clone(), Some(attr_name.id()), false)
-                                    .into_iter()
-                                    .any(|attr| &attr.name == attr_name.id())
-                            })
-                            .collect()
-                    }
-                    ty => vec![ty],
+                .ad_hoc_solve(self.handle, |solver| {
+                    let name = attr_name.id();
+                    let completions = |ty| solver.completions(ty, Some(name), false);
+
+                    let tys = match base_type.clone() {
+                        Type::Union(box Union { members: tys, .. })
+                        | Type::Intersect(box (tys, _)) => tys,
+                        ty => vec![ty],
+                    };
+
+                    tys.into_iter()
+                        .filter_map(|ty| {
+                            self.transaction
+                                .find_definition_for_base_type(
+                                    self.handle,
+                                    FindPreference::default(),
+                                    completions(ty.clone()),
+                                    name,
+                                )
+                                .map(|def| (ty, def))
+                        })
+                        .collect()
                 })
                 .unwrap_or_default()
         } else {
             vec![]
         };
 
-        let base_expr_definitions = if base_types.is_empty() {
+        if definitions_with_type.is_empty() {
             self.find_definition_for_expr(base_expr)
-        } else {
-            base_types
                 .into_iter()
-                .filter_map(|ty| self.find_definition_for_type(ty, base_expr.range()))
+                .map(|base_expr| DefinitionLocation {
+                    name: join_names(&base_expr.name, attr_name),
+                    file: base_expr.file,
+                })
                 .collect()
-        };
+        } else {
+            let base_expr_name = join_names(
+                self.module_name.as_str(),
+                self.module.code_at(base_expr.range()),
+            );
+            let additional_definitions = if self.names.contains(&base_expr_name) {
+                self.get_additional_definitions(base_expr.range())
+                    .into_iter()
+                    .map(|ty| DefinitionLocation {
+                        name: join_names(&ty.name, attr_name),
+                        file: ty.file,
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
 
-        base_expr_definitions
-            .into_iter()
-            .map(|base_expr| DefinitionLocation {
-                name: join_names(&base_expr.name, attr_name),
-                file: base_expr.file,
-            })
-            .collect()
+            definitions_with_type
+                .into_iter()
+                .flat_map(|(ty, def)| {
+                    self.get_definition_location(
+                        def.definition_range,
+                        &def.module,
+                        Some(&ty),
+                        additional_definitions.clone(),
+                    )
+                })
+                .collect()
+        }
     }
 
     fn make_decorators(&self, decorators: &[Decorator]) -> Option<Vec<String>> {
@@ -694,12 +790,14 @@ impl GleanState<'_> {
             Expr::Name(name) => {
                 if name.ctx.is_load() {
                     self.find_definition_for_expr_name(name)
-                        .map_or(vec![], |x| vec![(x, name.range())])
+                        .into_iter()
+                        .map(|x| (x, name.range()))
+                        .collect()
                 } else {
                     vec![]
                 }
             }
-            Expr::StringLiteral(str_lit) => self.get_xrefs_types_for_str_lit(str_lit),
+            Expr::StringLiteral(str_lit) => self.get_xrefs_for_str_lit(str_lit),
             Expr::BooleanLiteral(bool_lit) => {
                 let name = if bool_lit.value { "True" } else { "False" };
                 vec![(
@@ -947,32 +1045,6 @@ impl GleanState<'_> {
         decl_infos
     }
 
-    fn add_xrefs_for_explicit_exports(&mut self, exprs_list: &[Expr]) {
-        let exports = exprs_list
-            .iter()
-            .filter_map(|e| e.as_string_literal_expr())
-            .map(|str_lit| (str_lit.value.to_str(), str_lit.range()));
-
-        for (local_name, source) in exports {
-            let name = join_names(self.module_name.as_str(), local_name);
-            if self.names.contains(&name) {
-                let fqname = self
-                    .import_names
-                    .get(&name)
-                    .map(|n| (**n).clone())
-                    .unwrap_or(name);
-
-                self.add_xref(
-                    DefinitionLocation {
-                        name: fqname,
-                        file: None,
-                    },
-                    source,
-                );
-            }
-        }
-    }
-
     fn variable_facts(
         &mut self,
         expr: &Expr,
@@ -1001,13 +1073,6 @@ impl GleanState<'_> {
                 docstring_range,
                 ctx,
             ));
-
-            if name.id() == &dunder::ALL
-                && let Some(value) = info.value
-                && let Expr::List(ExprList { elts, .. }) = value
-            {
-                self.add_xrefs_for_explicit_exports(elts);
-            }
         }
         expr.recurse(&mut |expr| self.variable_facts(expr, info, ctx, next, def_infos));
     }
@@ -1019,7 +1084,9 @@ impl GleanState<'_> {
 
         definitions
             .into_iter()
-            .filter_map(|def| self.get_definition_location(def.definition_range, &def.module))
+            .flat_map(|def| {
+                self.get_definition_location(def.definition_range, &def.module, None, vec![])
+            })
             .collect()
     }
 
@@ -1034,8 +1101,11 @@ impl GleanState<'_> {
         let from_name_fact = python::Name::new(from_name.id().to_string());
         let as_name_fact = python::Name::new(as_name_fqname.clone());
 
-        self.record_name_with_position(from_name.id().to_string(), as_name.range.start());
-        self.record_name_for_import(as_name_fqname, resolved_name.unwrap_or(from_name));
+        self.record_name_for_import(
+            as_name_fqname,
+            resolved_name.unwrap_or(from_name),
+            from_name,
+        );
         let import_fact = python::ImportStatement::new(from_name_fact, as_name_fact);
 
         DeclarationInfo {
@@ -1058,13 +1128,16 @@ impl GleanState<'_> {
             .iter()
             .flat_map(|import| {
                 let from_name = &import.name;
+                let module_name = ModuleName::from_name(from_name.id());
+                let position = from_name.range.start();
 
-                for (module, range) in all_modules_with_range(from_name) {
+                for (module, range) in all_modules_with_range(module_name, position) {
+                    let defs = self.find_definition(range.start());
                     self.record_name(module.clone());
                     self.add_xref(
                         DefinitionLocation {
                             name: module,
-                            file: None,
+                            file: defs.first().and_then(|x| x.file.clone()),
                         },
                         range,
                     );
@@ -1073,9 +1146,10 @@ impl GleanState<'_> {
                 if let Some(as_name) = &import.asname {
                     vec![self.make_import_fact(from_name, as_name, None, top_level_declaration)]
                 } else {
-                    all_modules_with_range(from_name)
+                    all_modules_with_range(module_name, position)
                         .map(|(module, range)| {
-                            let mod_id = Identifier::new(Name::new(module), range);
+                            let mod_range = TextRange::new(position, range.end());
+                            let mod_id = Identifier::new(Name::new(module), mod_range);
                             self.make_import_fact(&mod_id, &mod_id, None, top_level_declaration)
                         })
                         .collect()
@@ -1165,7 +1239,7 @@ impl GleanState<'_> {
                     .first()
                     .cloned()
                     .unwrap_or(DefinitionLocation {
-                        name: from_name.to_string(),
+                        name: from_name_string.clone(),
                         file: None,
                     });
 
@@ -1342,7 +1416,6 @@ impl GleanState<'_> {
                 let info = AssignInfo {
                     range: assign.range(),
                     annotation: None,
-                    value: Some(assign.value.as_ref()),
                 };
                 assign.targets.visit(&mut |target| {
                     self.variable_facts(target, &info, context, next, &mut decl_infos)
@@ -1353,7 +1426,6 @@ impl GleanState<'_> {
                 let info = AssignInfo {
                     range: assign.range(),
                     annotation: Some(&assign.annotation),
-                    value: assign.value.as_ref().map(|v| v.as_ref()),
                 };
                 self.variable_facts(&assign.target, &info, context, next, &mut decl_infos);
                 self.visit_exprs(&assign.annotation, container);
@@ -1363,7 +1435,6 @@ impl GleanState<'_> {
                 let info = AssignInfo {
                     range: assign.range(),
                     annotation: None,
-                    value: Some(assign.value.as_ref()),
                 };
                 self.variable_facts(&assign.target, &info, context, next, &mut decl_infos);
                 self.visit_exprs(&assign.value, container);
@@ -1381,7 +1452,6 @@ impl GleanState<'_> {
                     let info = AssignInfo {
                         range: target.range(),
                         annotation: None,
-                        value: None,
                     };
                     self.variable_facts(target, &info, context, next, &mut decl_infos)
                 });
@@ -1401,7 +1471,6 @@ impl GleanState<'_> {
                         let info = AssignInfo {
                             range: target.range(),
                             annotation: None,
-                            value: None,
                         };
                         self.variable_facts(target, &info, context, next, &mut decl_infos)
                     });

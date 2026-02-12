@@ -1,0 +1,172 @@
+name: Release binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name to upload assets to (e.g., 0.51.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+  # Use release tag if triggered by release, otherwise use manual input
+  TAG_NAME: ${{ github.event.release.tag_name || inputs.tag_name }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: pyrefly-linux-x86_64
+            github_env: $GITHUB_ENV
+          - os: ubuntu-latest
+            target: i686-unknown-linux-gnu
+            artifact_name: pyrefly-linux-i686
+            cross: true
+            github_env: $GITHUB_ENV
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact_name: pyrefly-linux-arm64
+            container: ubuntu:20.04
+            github_env: $GITHUB_ENV
+          # macOS
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact_name: pyrefly-macos-x86_64
+            github_env: $GITHUB_ENV
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: pyrefly-macos-arm64
+            github_env: $GITHUB_ENV
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: pyrefly-windows-x86_64
+            github_env: $env:GITHUB_ENV
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            artifact_name: pyrefly-windows-i686
+            cross: true
+            github_env: $env:GITHUB_ENV
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: pyrefly-windows-arm64
+            cross: true
+            github_env: $env:GITHUB_ENV
+
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name || inputs.tag_name }}
+
+      - name: Install container dependencies
+        if: matrix.container == 'ubuntu:20.04'
+        run: |
+          apt-get update && apt-get -y install curl build-essential git
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          apt-get update && apt-get -y install gh
+          # Fix git safe.directory for container builds (checkout creates repo with different owner)
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Read rust-toolchain file
+        run: echo "toolchain=$(cat pyrefly/rust-toolchain)" && echo "toolchain=$(cat pyrefly/rust-toolchain)" >> ${{ matrix.github_env }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.toolchain }}
+          targets: ${{ matrix.target }}
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-release
+
+      - name: Set Windows cargo home
+        if: runner.os == 'Windows'
+        run: echo "CARGO_HOME=C:\cargo" >> ${{ matrix.github_env }}
+
+      - name: Set jemalloc page size for ARM64 Linux
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> ${{ matrix.github_env }}
+
+      - name: Build binary (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --manifest-path pyrefly/Cargo.toml -p pyrefly --target ${{ matrix.target }}
+
+      - name: Build binary (cross-compile)
+        if: ${{ matrix.cross }}
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          args: "--release --manifest-path pyrefly/Cargo.toml -p pyrefly"
+          toolchain: ${{ env.toolchain }}
+
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/pyrefly staging/
+          cd staging
+          tar -czvf ../${{ matrix.artifact_name }}.tar.gz pyrefly
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staging
+          Copy-Item "target/${{ matrix.target }}/release/pyrefly.exe" -Destination staging/
+          Compress-Archive -Path staging/pyrefly.exe -DestinationPath "${{ matrix.artifact_name }}.zip"
+
+      - name: Generate checksum (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum ${{ matrix.artifact_name }}.tar.gz > ${{ matrix.artifact_name }}.tar.gz.sha256
+          else
+            shasum -a 256 ${{ matrix.artifact_name }}.tar.gz > ${{ matrix.artifact_name }}.tar.gz.sha256
+          fi
+
+      - name: Generate checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.artifact_name }}.zip").Hash.ToLower()
+          "$hash  ${{ matrix.artifact_name }}.zip" | Out-File -Encoding ASCII "${{ matrix.artifact_name }}.zip.sha256"
+
+      - name: Upload to release (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          gh release upload ${{ env.TAG_NAME }} \
+            ${{ matrix.artifact_name }}.tar.gz \
+            ${{ matrix.artifact_name }}.tar.gz.sha256 \
+            --clobber
+
+      - name: Upload to release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          gh release upload ${{ env.TAG_NAME }} `
+            "${{ matrix.artifact_name }}.zip" `
+            "${{ matrix.artifact_name }}.zip.sha256" `
+            --clobber

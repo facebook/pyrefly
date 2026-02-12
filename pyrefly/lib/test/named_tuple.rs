@@ -163,8 +163,8 @@ class Pair2[T](NamedTuple):
     y: T
 
 def test(p: Pair, p2: Pair2[bytes]):
-    reveal_type(p.__iter__)  # E: BoundMethod[Pair, (self: Pair) -> Iterable[int | str]]
-    reveal_type(p2.__iter__)  # E: BoundMethod[Pair2[bytes], (self: Pair2[bytes]) -> Iterable[bytes | int]]
+    reveal_type(p.__iter__)  # E: (self: Pair) -> Iterable[int | str]
+    reveal_type(p2.__iter__)  # E: (self: Pair2[bytes]) -> Iterable[bytes | int]
     "#,
 );
 
@@ -207,6 +207,23 @@ class Pair(NamedTuple):
     y: str = "y"
 Pair(x=5)
 Pair(y="foo")  # E: Missing argument `x` in function `Pair.__new__`
+    "#,
+);
+
+testcase!(
+    test_named_tuple_custom_new_default,
+    r#"
+from typing import NamedTuple, Self
+
+class A(NamedTuple):
+    x: int
+
+class B(A):
+    def __new__(cls, x: int = 0) -> Self:
+        return super().__new__(cls, x)
+
+B()
+B(1)
     "#,
 );
 
@@ -392,5 +409,154 @@ testcase!(
     r#"
 from typing import NamedTuple
 N = NamedTuple('N', [('x', int, 'oops')])  # E: Expected (name, type) pair, got 3-tuple
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_collections_namedtuple,
+    r#"
+from collections import namedtuple
+from typing import Any, assert_type
+
+class Point(namedtuple("Point", ["x", "y"])):
+    pass
+
+p = Point(1, 2)
+assert_type(p.x, Any)
+assert_type(p.y, Any)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_typing_namedtuple,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Point(NamedTuple("Point", [("x", int), ("y", str)])):
+    pass
+
+p = Point(1, "hello")
+assert_type(p.x, int)
+assert_type(p.y, str)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_with_extra_methods,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Point(NamedTuple("Point", [("x", int), ("y", int)])):
+    def length_squared(self) -> int:
+        return self.x ** 2 + self.y ** 2
+
+p = Point(3, 4)
+assert_type(p.length_squared(), int)
+assert_type(p.x, int)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_string_fields,
+    r#"
+from collections import namedtuple
+from typing import Any, assert_type
+
+class Pair(namedtuple("Pair", "a b")):
+    pass
+
+p = Pair(1, 2)
+assert_type(p.a, Any)
+assert_type(p.b, Any)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_name_mismatch,
+    r#"
+from collections import namedtuple
+
+class Foo(namedtuple("Bar", ["x", "y"])):
+    pass
+
+f = Foo(1, 2)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_malformed,
+    r#"
+from collections import namedtuple
+from typing import NamedTuple
+
+class A(namedtuple()):  # E: Invalid expression form for base class
+    pass
+
+class B(namedtuple(42, ["x", "y"])):  # E: Invalid expression form for base class
+    pass
+
+class C(NamedTuple(42, [("x", int)])):  # E: Invalid expression form for base class
+    pass
+
+class D(namedtuple("D", 42)):  # E: Expected valid functional named tuple definition
+    pass
+
+class E(NamedTuple("E", 42)):  # E: Expected valid functional named tuple definition
+    pass
+    "#,
+);
+
+testcase!(
+    bug = "namedtuple + mixin is valid in CPython but we reject it",
+    test_named_tuple_base_class_call_with_mixin,
+    r#"
+from typing import assert_type, Any
+from collections import namedtuple
+
+class Mixin:
+    def greet(self) -> str:
+        return "hi"
+
+class B(namedtuple("B", ["x"]), Mixin):  # E: Named tuples do not support multiple inheritance
+    pass
+
+b = B(1)
+assert_type(b.x, Any)
+assert_type(b.greet(), str)
+    "#,
+);
+
+testcase!(
+    bug = "only the first namedtuple base's fields should be used",
+    test_named_tuple_base_class_call_two_namedtuples,
+    r#"
+from typing import assert_type, Any
+from collections import namedtuple
+
+class C(namedtuple("C1", ["x"]), namedtuple("C2", ["y"])):  # E: Named tuples do not support multiple inheritance
+    pass
+
+c = C(1)
+assert_type(c.x, Any)
+    "#,
+);
+
+testcase!(
+    bug = "only the first namedtuple base's fields should be used",
+    test_named_tuple_base_class_call_namedtuple_mixin_namedtuple,
+    r#"
+from typing import assert_type, Any
+from collections import namedtuple
+
+class Mixin:
+    def greet(self) -> str:
+        return "hi"
+
+class D(namedtuple("D1", ["x"]), Mixin, namedtuple("D2", ["y"])):  # E: Named tuples do not support multiple inheritance
+    pass
+
+d = D(1)
+assert_type(d.x, Any)
+assert_type(d.greet(), str)
     "#,
 );

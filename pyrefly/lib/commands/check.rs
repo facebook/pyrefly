@@ -62,11 +62,12 @@ use crate::error::legacy::LegacyErrors;
 use crate::error::legacy::severity_to_str;
 use crate::error::summarize::print_error_summary;
 use crate::error::suppress;
-use crate::error::suppress::SuppressableError;
+use crate::error::suppress::SerializedError;
 use crate::module::typeshed::stdlib_search_path;
 use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
+use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::ProgressBarSubscriber;
@@ -433,13 +434,6 @@ impl OutputFormat {
     }
 }
 
-fn should_emit_github_errors() -> bool {
-    matches!(
-        std::env::var("GITHUB_ACTIONS"),
-        Ok(value) if value.eq_ignore_ascii_case("true")
-    )
-}
-
 fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
     let normalized = severity_to_str(severity);
     match normalized.as_str() {
@@ -560,11 +554,6 @@ impl Handles {
                 .remove(&ModulePath::filesystem(file.to_path_buf()));
         }
     }
-}
-
-struct RequireLevels {
-    specified: Require,
-    default: Require,
 }
 
 async fn get_watcher_events(watcher: &mut Watcher) -> anyhow::Result<CategorizedEvents> {
@@ -929,9 +918,6 @@ impl CheckArgs {
                 .output_format
                 .write_errors_to_console(relative_to.as_path(), &shown_errors)?;
         }
-        if should_emit_github_errors() && self.output.output_format != OutputFormat::Github {
-            OutputFormat::Github.write_errors_to_console(relative_to.as_path(), &shown_errors)?;
-        }
         memory_trace.stop();
         if let Some(limit) = self.output.count_errors {
             print_error_counts(&shown_errors, limit);
@@ -1011,12 +997,13 @@ impl CheckArgs {
         }
         if self.behavior.suppress_errors {
             // TODO: Move this into separate command
-            let suppressable_errors: Vec<SuppressableError> = shown_errors
+            let serialized_errors: Vec<SerializedError> = shown_errors
                 .iter()
                 .filter(|e| e.severity() >= Severity::Warn)
-                .filter_map(SuppressableError::from_error)
+                .filter_map(SerializedError::from_error)
+                .filter(|e| !e.is_unused_ignore())
                 .collect();
-            suppress::suppress_errors(suppressable_errors);
+            suppress::suppress_errors(serialized_errors);
         }
         if self.behavior.remove_unused_ignores {
             // TODO: Move this into separate command

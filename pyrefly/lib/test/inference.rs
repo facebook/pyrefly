@@ -82,6 +82,50 @@ class C:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2327
+testcase!(
+    test_unannotated_parameter_first_param_by_position,
+    TestEnv::new().enable_unannotated_parameter_error(),
+    r#"
+class A:
+    def __new__(cls, a: int) -> "A": ...
+
+class B:
+    def __new__(_cls, a: int) -> "B": ...
+
+class C:
+    def method(_self, x: int) -> int:
+        return x
+
+    @classmethod
+    def clsmethod(_cls) -> int:
+        return 1
+
+    @classmethod
+    def clsmethod2(klass) -> int:
+        return 1
+
+    @staticmethod
+    def static_method(x) -> int:  # E: `static_method` is missing an annotation for parameter `x`
+        return x
+
+    def __init_subclass__(klass, **kwargs: int) -> None: ...
+
+    # vararg as first param is NOT an implicit self param
+    def vararg_method(*args, **kwargs) -> None: ...  # E: `vararg_method` is missing an annotation for parameter `args` # E: `vararg_method` is missing an annotation for parameter `kwargs`
+
+    # keyword-only params after variadic first param should also error
+    def vararg_method2(*args, name) -> None: ...  # E: `vararg_method2` is missing an annotation for parameter `args` # E: `vararg_method2` is missing an annotation for parameter `name`
+
+# self/cls in standalone functions should still error
+def f(a: str, self, cls, b: int) -> None: ...  # E: `f` is missing an annotation for parameter `self` # E: `f` is missing an annotation for parameter `cls`
+
+# self/cls as first param of standalone function should error
+def g(self) -> None: ...  # E: `g` is missing an annotation for parameter `self`
+def h(cls) -> None: ...  # E: `h` is missing an annotation for parameter `cls`
+"#,
+);
+
 testcase!(
     test_implicit_any_with_complete_annotations,
     TestEnv::new().enable_implicit_any_error(),

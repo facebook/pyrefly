@@ -11,18 +11,34 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug = "conformance: Should use bounds/constraints of type var to determine callable input type for type[T] constructors",
     test_tyvar_constructor,
     r#"
 def test[T](cls: type[T]) -> T:
-    cls(1)  # should error: no args for object constructor
+    cls(1)  # E: Expected 0 positional arguments, got 1
     return cls()
 class A:
     def __init__(self, x: int) -> None: pass
 def test2[T: A](cls: type[T]) -> T:
-    a1: A = cls()  # should error: missing required arg x
+    a1: A = cls()  # E: Missing argument `x` in function `A.__init__`
     a2: A = cls(1)
-    return cls()
+    return cls(1)
+"#,
+);
+
+testcase!(
+    bug = "When determining callable for type[T] where T is a constrained TypeVar, we should take intersection of constructor of all constraints",
+    test_constrained_typevar_constructor,
+    r#"
+from typing import TypeVar
+class A:
+    def __init__(self, x: int) -> None: pass
+class B:
+    def __init__(self, x: int, y: str = "default") -> None: pass
+T = TypeVar("T", A, B)
+def test(cls: type[T]) -> None:
+    cls(1)
+    cls("hello")  # should error: incorrect type of x
+    cls(1, "hello")  # should error: too many arguments
 "#,
 );
 
@@ -576,7 +592,6 @@ def g(t: type):
 );
 
 testcase!(
-    bug = "conformance: Should error on inconsistent type variable ordering in base classes",
     test_inconsistent_type_var_ordering_in_bases,
     r#"
 from typing import Generic, TypeVar
@@ -586,6 +601,46 @@ T2 = TypeVar("T2")
 
 class Grandparent(Generic[T1, T2]): ...
 class Parent(Grandparent[T1, T2]): ...
-class BadChild(Parent[T1, T2], Grandparent[T2, T1]): ...  # should be an error
+class BadChild(Parent[T1, T2], Grandparent[T2, T1]): ...  # E: Class `BadChild` has inconsistent type arguments for base class `Grandparent`: `Grandparent[T1, T2]` and `Grandparent[T2, T1]`
+"#,
+);
+
+testcase!(
+    test_indirect_diamond_inconsistent_targs,
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+
+class A(Generic[T]): ...
+class B(A[int]): ...
+class C(A[str]): ...
+class D(B, C): ...  # E: Class `D` has inconsistent type arguments for base class `A`: `A[int]` and `A[str]`
+
+class F(Generic[T1, T2]): ...
+class G(F[int, str]): ...
+class H(F[str, int]): ...
+class I(G, H): ...  # E: Class `I` has inconsistent type arguments for base class `F`: `F[int, str]` and `F[str, int]`
+"#,
+);
+
+testcase!(
+    test_generic_alias_fields,
+    r#"
+from typing import assert_type
+
+list.__add__ # This is a method on `list`
+
+# No error for accessing properties on `GenericAlias`
+assert(list[int].__args__, tuple)
+assert(list[int].__parameters__, tuple)
+
+# No error for accessing methods on `list`
+list[int].__add__
+
+# No error for comparing two `GenericAlias`
+list[int] == list[str]
 "#,
 );

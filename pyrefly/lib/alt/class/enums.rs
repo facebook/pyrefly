@@ -172,7 +172,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if enum_value_types.is_empty() {
                             // Assume Any, rather than Never, if there are no members because they may
                             // be created dynamically and we don't want downstream analysis to be incorrect.
-                            Type::any_implicit()
+                            self.heap.mk_any_implicit()
                         } else {
                             self.unions(enum_value_types)
                         }
@@ -204,7 +204,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if self.has_superclass(first_base.class_object(), enum_class.class_object()) {
             self.mixed_in_enum_data_type(first_base.class_object())
         } else {
-            Some(first_base.clone().to_type())
+            Some(self.heap.mk_class_type(first_base.clone()))
         }
     }
 
@@ -213,14 +213,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Tuple(Tuple::Concrete(elements)) if is_django && elements.len() >= 2 => {
                 // The last element is the label.
                 let value_len = elements.len() - 1;
-                Type::concrete_tuple(elements.into_iter().take(value_len).collect())
+                self.heap
+                    .mk_concrete_tuple(elements.into_iter().take(value_len).collect())
             }
             ty => ty,
         };
-        let int_ty = self.stdlib.int();
+        let int_ty = self.heap.mk_class_type(self.stdlib.int().clone());
         ty.transform(&mut |t| {
             if matches!(t, Type::ClassType(cls) if cls.has_qname(ModuleName::enum_().as_str(), "auto")) {
-                *t = int_ty.clone().to_type();
+                *t = int_ty.clone();
             }
         })
     }
@@ -291,6 +292,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }))
                 .to_implicit_type(),
             )
+        } else if let Type::ClassType(cls) = &ty
+            && cls.has_qname("enum", "nonmember")
+            && let [targ] = cls.targs().as_slice()
+        {
+            Some(targ.clone())
         } else {
             None
         }

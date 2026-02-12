@@ -621,6 +621,7 @@ impl Linearization {
             Err(_) => return Linearization::empty(),
         };
         let mut ancestor_chains = Vec::new();
+        let mut seen_ancestors: SmallMap<Class, ClassType> = SmallMap::new();
         for (base, mro) in bases_with_mro {
             match &*mro {
                 ClassMro::Resolved(ancestors) => {
@@ -629,6 +630,44 @@ impl Linearization {
                         .map(|ancestor| ancestor.substitute_with(&base.substitution()))
                         .rev()
                         .collect::<Vec<_>>();
+                    let mut check_conflicting_targs = |ctype: &ClassType| -> bool {
+                        if let Some(prev) = seen_ancestors.get(ctype.class_object())
+                            && (prev.targs().len() != ctype.targs().len()
+                                || prev
+                                    .targs()
+                                    .as_slice()
+                                    .iter()
+                                    .zip(ctype.targs().as_slice())
+                                    .any(|(ta, tb)| ta != tb && !ta.is_any() && !tb.is_any()))
+                        {
+                            let ctx = ClassDisplayContext::new(&[cls, ctype.class_object()]);
+                            // TODO: Extend this error message to say where in the class bases the mismatch comes from
+                            // we will need to wire additional information for this.
+                            errors.add(
+                                cls.range(),
+                                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                                vec1![format!(
+                                    "Class `{}` has inconsistent type arguments for base class `{}`: `{}` and `{}`",
+                                    ctx.display(cls),
+                                    ctx.display(ctype.class_object()),
+                                    Type::ClassType(prev.clone()),
+                                    Type::ClassType(ctype.clone()),
+                                )],
+                            );
+                            true
+                        } else {
+                            seen_ancestors.insert(ctype.class_object().dupe(), ctype.clone());
+                            false
+                        }
+                    };
+
+                    for ancestor in ancestors_through_base.iter() {
+                        if check_conflicting_targs(ancestor) {
+                            break;
+                        }
+                    }
+                    check_conflicting_targs(base);
+
                     ancestor_chains.push(AncestorChain::from_base_and_ancestors(
                         base.clone(),
                         ancestors_through_base,

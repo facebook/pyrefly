@@ -44,6 +44,9 @@ use crate::callable::Required;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
+use crate::dimension;
+use crate::dimension::SizeExpr;
+use crate::heap::TypeHeap;
 use crate::keywords::DataclassTransformMetadata;
 use crate::keywords::KwCall;
 use crate::literal::Lit;
@@ -56,9 +59,7 @@ use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
-use crate::type_output::TypeOutput;
-use crate::type_var::PreInferenceVariance;
-use crate::type_var::Restriction;
+use crate::type_alias::TypeAliasData;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
 use crate::typed_dict::TypedDict;
@@ -81,8 +82,8 @@ impl Var {
         Self(uniques.fresh())
     }
 
-    pub fn to_type(self) -> Type {
-        Type::Var(self)
+    pub fn to_type(self, heap: &TypeHeap) -> Type {
+        heap.mk_var(self)
     }
 }
 
@@ -103,57 +104,10 @@ impl Display for TParamsSource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct TParam {
-    pub quantified: Quantified,
-    pub variance: PreInferenceVariance,
-}
-
-impl Display for TParam {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())?;
-        // Display bounds/constraints
-        match self.restriction() {
-            Restriction::Bound(t) => write!(f, ": {}", t)?,
-            Restriction::Constraints(ts) => {
-                write!(f, ": (")?;
-                for (i, t) in ts.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", t)?;
-                }
-                write!(f, ")")?;
-            }
-            Restriction::Unrestricted => {}
-        }
-        // Display default
-        if let Some(default) = self.default() {
-            write!(f, " = {}", default)?;
-        }
-        Ok(())
-    }
-}
-
-impl TParam {
-    pub fn name(&self) -> &Name {
-        self.quantified.name()
-    }
-
-    pub fn default(&self) -> Option<&Type> {
-        self.quantified.default()
-    }
-
-    pub fn restriction(&self) -> &Restriction {
-        self.quantified.restriction()
-    }
-}
-
 /// Wraps a vector of type parameters.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
-pub struct TParams(Vec<TParam>);
+pub struct TParams(Vec<Quantified>);
 
 /// Implement `VisitMut` for `Arc<TParams>` as a no-op.
 ///
@@ -175,12 +129,16 @@ impl Visit<Type> for Arc<TParams> {
 
 impl Display for TParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}]", commas_iter(|| self.0.iter()))
+        write!(
+            f,
+            "[{}]",
+            commas_iter(|| self.0.iter().map(|q| q.display_with_bounds()))
+        )
     }
 }
 
 impl TParams {
-    pub fn new(tparams: Vec<TParam>) -> TParams {
+    pub fn new(tparams: Vec<Quantified>) -> TParams {
         Self(tparams)
     }
 
@@ -196,15 +154,11 @@ impl TParams {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &TParam> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Quantified> {
         self.0.iter()
     }
 
-    pub fn quantifieds(&self) -> impl ExactSizeIterator<Item = &Quantified> + '_ {
-        self.0.iter().map(|x| &x.quantified)
-    }
-
-    pub fn as_vec(&self) -> &[TParam] {
+    pub fn as_vec(&self) -> &[Quantified] {
         &self.0
     }
 
@@ -229,11 +183,11 @@ impl TArgs {
         &self.0.0
     }
 
-    pub fn iter_paired(&self) -> impl ExactSizeIterator<Item = (&TParam, &Type)> {
+    pub fn iter_paired(&self) -> impl ExactSizeIterator<Item = (&Quantified, &Type)> {
         self.0.0.iter().zip(self.0.1.iter())
     }
 
-    pub fn iter_paired_mut(&mut self) -> impl ExactSizeIterator<Item = (&TParam, &mut Type)> {
+    pub fn iter_paired_mut(&mut self) -> impl ExactSizeIterator<Item = (&Quantified, &mut Type)> {
         self.0.0.iter().zip(self.0.1.iter_mut())
     }
 
@@ -274,7 +228,7 @@ impl TArgs {
     pub fn substitution_map(&self) -> SmallMap<&Quantified, &Type> {
         let tparams = self.tparams();
         let tys = self.as_slice();
-        tparams.quantifieds().zip(tys.iter()).collect()
+        tparams.iter().zip(tys.iter()).collect()
     }
 
     pub fn substitution<'a>(&'a self) -> Substitution<'a> {
@@ -282,7 +236,13 @@ impl TArgs {
     }
 
     pub fn substitute_into_mut(&self, ty: &mut Type) {
-        self.substitution().substitute_into_mut(ty)
+        if let Type::TypeAlias(box TypeAliasData::Ref(r)) = ty {
+            // We don't have the value of the type alias available to do the substitution, so store
+            // the targs so that we can apply them when the value is looked up.
+            r.args = Some(self.clone())
+        } else {
+            self.substitution().substitute_into_mut(ty)
+        }
     }
 
     pub fn substitute_into(&self, mut ty: Type) -> Type {
@@ -329,88 +289,6 @@ impl AnyStyle {
         match self {
             Self::Implicit | Self::Error => Type::Any(self),
             Self::Explicit => Type::Any(Self::Implicit),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub enum TypeAliasStyle {
-    /// A type alias declared with the `type` keyword
-    Scoped,
-    /// A type alias declared with a `: TypeAlias` annotation
-    LegacyExplicit,
-    /// An unannotated assignment that may be either an implicit type alias or an untyped value
-    LegacyImplicit,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
-pub struct TypeAlias {
-    pub name: Box<Name>,
-    ty: Box<Type>,
-    pub style: TypeAliasStyle,
-    annotated_metadata: Box<[Type]>,
-}
-
-impl TypeAlias {
-    pub fn new(name: Name, ty: Type, style: TypeAliasStyle, annotated_metadata: Vec<Type>) -> Self {
-        Self {
-            name: Box::new(name),
-            ty: Box::new(ty),
-            style,
-            annotated_metadata: annotated_metadata.into_boxed_slice(),
-        }
-    }
-
-    pub fn annotated_metadata(&self) -> &[Type] {
-        &self.annotated_metadata
-    }
-
-    /// Gets the type contained within the type alias for use in a value
-    /// position - for example, for a function call or attribute access.
-    pub fn as_value(&self, stdlib: &Stdlib) -> Type {
-        if self.style == TypeAliasStyle::Scoped {
-            stdlib.type_alias_type().clone().to_type()
-        } else {
-            *self.ty.clone()
-        }
-    }
-
-    /// Gets the type contained within the type alias for use in a type
-    /// position - for example, in a variable type annotation. Note that
-    /// the caller is still responsible for untyping the type. That is,
-    /// `type X = int` is represented as `TypeAlias(X, type[int])`, and
-    /// `as_type` returns `type[int]`; the caller must turn it into `int`.
-    pub fn as_type(&self) -> Type {
-        *self.ty.clone()
-    }
-
-    pub fn fmt_with_type<O: TypeOutput>(
-        &self,
-        output: &mut O,
-        write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
-        tparams: Option<&TParams>,
-    ) -> fmt::Result {
-        use pyrefly_util::display::commas_iter;
-        match (&self.style, tparams) {
-            (TypeAliasStyle::LegacyImplicit, _) => write_type(&self.ty, output),
-            (_, None) => {
-                output.write_str("TypeAlias[")?;
-                output.write_str(self.name.as_str())?;
-                output.write_str(", ")?;
-                write_type(&self.ty, output)?;
-                output.write_str("]")
-            }
-            (_, Some(tparams)) => {
-                output.write_str("TypeAlias[")?;
-                output.write_str(self.name.as_str())?;
-                output.write_str("[")?;
-                output.write_str(&format!("{}", commas_iter(|| tparams.iter())))?;
-                output.write_str("], ")?;
-                write_type(&self.ty, output)?;
-                output.write_str("]")
-            }
         }
     }
 }
@@ -574,7 +452,7 @@ impl Forall<Forallable> {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Forallable {
-    TypeAlias(TypeAlias),
+    TypeAlias(TypeAliasData),
     Function(Function),
     Callable(Callable),
 }
@@ -595,7 +473,7 @@ impl Forallable {
         match self {
             Self::Function(func) => func.metadata.kind.function_name(),
             Self::Callable(_) => Cow::Owned(Name::new_static("<callable>")),
-            Self::TypeAlias(ta) => Cow::Borrowed(&ta.name),
+            Self::TypeAlias(ta) => Cow::Borrowed(ta.name()),
         }
     }
 
@@ -637,7 +515,7 @@ pub enum SuperObj {
 #[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
 pub struct Union {
     pub members: Vec<Type>,
-    pub display_name: Option<String>,
+    pub display_name: Option<Box<str>>,
 }
 
 impl PartialEq for Union {
@@ -711,6 +589,23 @@ pub enum Type {
     /// For a TypedDict type `C`, `Partial[C]` represents an object with any subset of read-write
     /// keys from `C`, where each present key has the same value type as in `C`.
     PartialTypedDict(TypedDict),
+    /// Dimension value type - represents values that satisfy Dim bound
+    /// Examples:
+    ///   - Type::Size(SizeExpr::Literal(6)) for concrete dimension 6
+    ///   - Type::Size(SizeExpr::Var(v)) for dimension variables
+    ///
+    /// This is the type-level representation of dimension values, used when
+    /// type variables with Dim bound unify with concrete dimension values.
+    Size(SizeExpr),
+    /// Symbolic integer type - wraps dimension expressions for use in type annotations
+    /// Examples:
+    ///   - Type::Dim(SizeExpr(Literal(3))) for Dim[3]
+    ///   - Type::Dim(Quantified) for Dim[N]
+    ///   - Type::Dim(SizeExpr(Add(...))) for Dim[N+1]
+    ///
+    /// This is the type annotation form of symbolic integers, distinct from
+    /// concrete integer literals which use Type::Literal(Lit::Int(...)).
+    Dim(Box<Type>),
     Tuple(Tuple),
     Module(ModuleType),
     Forall(Box<Forall<Forallable>>),
@@ -749,7 +644,12 @@ pub enum Type {
     Ellipsis,
     Any(AnyStyle),
     Never(NeverStyle),
-    TypeAlias(Box<TypeAlias>),
+    TypeAlias(Box<TypeAliasData>),
+    /// The result of untyping a type alias. For example, if we have `type X = int`, the type alias
+    /// stores `type[int]` as its value, which untypes to `int`. Since recursive references cannot
+    /// be immediately looked up for untyping (see `TypeAliasData::TypeAliasRef`), `UntypedAlias`
+    /// stores a reference that is untyped once we actually look up the value.
+    UntypedAlias(Box<TypeAliasData>),
     /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
     /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
@@ -794,6 +694,8 @@ impl Visit for Type {
             Type::ClassType(x) => x.visit(f),
             Type::TypedDict(x) => x.visit(f),
             Type::PartialTypedDict(x) => x.visit(f),
+            Type::Size(x) => x.visit(f),
+            Type::Dim(x) => x.visit(f),
             Type::Tuple(x) => x.visit(f),
             Type::Module(x) => x.visit(f),
             Type::Forall(x) => x.visit(f),
@@ -819,6 +721,7 @@ impl Visit for Type {
             Type::Any(x) => x.visit(f),
             Type::Never(x) => x.visit(f),
             Type::TypeAlias(x) => x.visit(f),
+            Type::UntypedAlias(x) => x.visit(f),
             Type::SuperInstance(x) => x.visit(f),
             Type::SelfType(x) => x.visit(f),
             Type::KwCall(x) => x.visit(f),
@@ -842,6 +745,8 @@ impl VisitMut for Type {
             Type::ClassType(x) => x.visit_mut(f),
             Type::TypedDict(x) => x.visit_mut(f),
             Type::PartialTypedDict(x) => x.visit_mut(f),
+            Type::Size(x) => x.visit_mut(f),
+            Type::Dim(x) => x.visit_mut(f),
             Type::Tuple(x) => x.visit_mut(f),
             Type::Module(x) => x.visit_mut(f),
             Type::Forall(x) => x.visit_mut(f),
@@ -867,6 +772,7 @@ impl VisitMut for Type {
             Type::Any(x) => x.visit_mut(f),
             Type::Never(x) => x.visit_mut(f),
             Type::TypeAlias(x) => x.visit_mut(f),
+            Type::UntypedAlias(x) => x.visit_mut(f),
             Type::SuperInstance(x) => x.visit_mut(f),
             Type::SelfType(x) => x.visit_mut(f),
             Type::KwCall(x) => x.visit_mut(f),
@@ -1179,6 +1085,10 @@ impl Type {
             } else {
                 ty.recurse_mut(&mut |x| f(x, mp));
             }
+            // After substitution, simplify Size expressions (constant folding).
+            if let Type::Size(_) = ty {
+                *ty = dimension::simplify(ty.clone());
+            }
         }
         f(self, mp);
     }
@@ -1480,7 +1390,7 @@ impl Type {
     }
 
     // This doesn't handle generics currently
-    pub fn callable_return_type(&self) -> Option<Type> {
+    pub fn callable_return_type(&self, heap: &TypeHeap) -> Option<Type> {
         let mut rets = Vec::new();
         let mut get_ret = |callable: &Callable| {
             rets.push(callable.ret.clone());
@@ -1489,7 +1399,7 @@ impl Type {
         if rets.is_empty() {
             None
         } else {
-            Some(unions(rets))
+            Some(unions(rets, heap))
         }
     }
 
@@ -1516,7 +1426,7 @@ impl Type {
         self.transform_toplevel_callable(&mut set_ret);
     }
 
-    pub fn callable_first_param(&self) -> Option<Type> {
+    pub fn callable_first_param(&self, heap: &TypeHeap) -> Option<Type> {
         let mut params = Vec::new();
         let mut get_param = |callable: &Callable| {
             if let Some(p) = callable.get_first_param() {
@@ -1527,7 +1437,7 @@ impl Type {
         if params.is_empty() {
             None
         } else {
-            Some(unions(params))
+            Some(unions(params, heap))
         }
     }
 
@@ -1572,6 +1482,28 @@ impl Type {
         Type::Any(AnyStyle::Error)
     }
 
+    /// Canonicalize a dimension expression to a unique normal form.
+    ///
+    /// This transforms dimension expressions into a canonical form where:
+    /// - Like terms are combined (e.g., 4*N + 2*N = 6*N)
+    /// - Divisions are flattened (e.g., (N // M) // K = N // (M*K))
+    /// - Factors are GCD-reduced (e.g., (4*N) // (6*M) = (2*N) // (3*M))
+    /// - Expressions are ordered consistently
+    /// - Type::Any propagates through the entire expression
+    ///
+    /// This enables structural equality checking after canonicalization.
+    pub fn canonicalize(self) -> Self {
+        dimension::canonicalize(self)
+    }
+
+    /// Extract the literal value from a `SizeExpr::Literal`, if this is one.
+    pub fn as_shape_literal(&self) -> Option<i64> {
+        match self {
+            Type::Size(SizeExpr::Literal(n)) => Some(*n),
+            _ => None,
+        }
+    }
+
     pub fn explicit_any(self) -> Self {
         self.transform(&mut |ty| {
             if let Type::Any(style) = ty {
@@ -1599,10 +1531,10 @@ impl Type {
     }
 
     /// type[a | b] -> type[a] | type[b]
-    pub fn distribute_type_over_union(self) -> Self {
+    pub fn distribute_type_over_union(self, heap: &TypeHeap) -> Self {
         self.transform(&mut |ty| {
             if let Type::Type(box Type::Union(box Union { members, .. })) = ty {
-                *ty = unions(members.drain(..).map(Type::type_form).collect());
+                *ty = unions(members.drain(..).map(Type::type_form).collect(), heap);
             }
         })
     }
@@ -1663,6 +1595,15 @@ impl Type {
             {
                 ts.sort();
                 *display_name = None;
+            }
+        })
+    }
+
+    /// Simplify intersection types to their fallback type.
+    pub fn simplify_intersections(self) -> Self {
+        self.transform(&mut |ty| {
+            if let Type::Intersect(box (_, fallback)) = ty {
+                *ty = fallback.clone();
             }
         })
     }

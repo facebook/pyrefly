@@ -5,7 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use dupe::Dupe as _;
 use lsp_types::Url;
@@ -20,9 +23,24 @@ use crate::lsp::module_helpers::to_real_path;
 use crate::module::module_info::ModuleInfo;
 use crate::state::state::State;
 
-pub fn module_info_to_uri(module_info: &ModuleInfo) -> Option<Url> {
+/// Callback type for remapping paths before converting to URIs.
+/// Used for setups where file paths need to be transformed when converting
+/// to URIs.
+pub type PathRemapper = Arc<dyn Fn(&Path) -> Cow<'_, Path> + Send + Sync>;
+
+/// Convert ModuleInfo to URI with optional path remapping.
+/// When a path remapper is provided, the path is transformed before
+/// being converted to a URI.
+pub fn module_info_to_uri(
+    module_info: &ModuleInfo,
+    remapper: Option<&PathRemapper>,
+) -> Option<Url> {
     let path = to_real_path(module_info.path())?;
-    let abs_path = path.absolutize();
+    let final_path: PathBuf = match remapper {
+        Some(remap_fn) => remap_fn(&path).into_owned(),
+        None => path,
+    };
+    let abs_path = final_path.absolutize();
     Some(Url::from_file_path(abs_path).unwrap())
 }
 

@@ -606,7 +606,7 @@ def f2(c: Callable[[C, int], None]):
 f1(C.f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(int) -> None`
 f1(C().f)
 f2(C.f)
-f2(C().f)  # E: Argument `BoundMethod[C, (self: C, x: int) -> None]` is not assignable to parameter `c` with type `(C, int) -> None`
+f2(C().f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(C, int) -> None`
     "#,
 );
 
@@ -1051,6 +1051,16 @@ class Test(B):
     def m2(cls) -> None:
         assert_type(super().z, Any)
     "#,
+);
+
+testcase!(
+    test_any_as_base_class_suppresses_missing_attribute_in_method,
+    r#"
+from typing import Any
+class MyTest(Any):
+    def foo(self):
+        self.bar()  # should not error: Any is in base-class hierarchy
+"#,
 );
 
 testcase!(
@@ -2000,7 +2010,7 @@ testcase!(
     r#"
 from typing import Never, assert_type, reveal_type
 def f() -> type[Never]: ...
-reveal_type(f().mro) # E: BoundMethod[type, (self: type) -> list[type[Any]]]
+reveal_type(f().mro) # E: (self: type) -> list[type[Any]]
 assert_type(f().wut, Never)
     "#,
 );
@@ -2274,7 +2284,8 @@ class A:
         self.y = {"x": 0} if check else 42
 def f(a: A):
     x: TD = a.x
-    y: TD | int = a.y
+    # anoynmous typed dicts are promoted away when unioned
+    y: dict[str, int] | int = a.y
     "#,
 );
 

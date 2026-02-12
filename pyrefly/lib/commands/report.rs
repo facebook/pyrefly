@@ -28,6 +28,7 @@ use crate::alt::answers::Answers;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingClass;
+use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMro;
@@ -249,12 +250,8 @@ impl ReportArgs {
                             ReturnTypeKind::ShouldValidateAnnotation { range, .. } => {
                                 Some(module.code_at(*range).to_owned())
                             }
-                            ReturnTypeKind::ShouldTrustAnnotation { .. } => {
-                                // For trusted annotations, get from AST
-                                fun.def
-                                    .returns
-                                    .as_ref()
-                                    .map(|ann| module.code_at(ann.range()).to_owned())
+                            ReturnTypeKind::ShouldTrustAnnotation { range, .. } => {
+                                Some(module.code_at(*range).to_owned())
                             }
                             _ => None,
                         }
@@ -292,10 +289,7 @@ impl ReportArgs {
     }
 
     /// Check if a function is completely annotated (has return annotation and all params annotated except self/cls)
-    fn is_function_completely_annotated(
-        bindings: &Bindings,
-        func_def: &ruff_python_ast::StmtFunctionDef,
-    ) -> bool {
+    fn is_function_completely_annotated(bindings: &Bindings, func_def: &FunctionDefData) -> bool {
         // Check return annotation
         let return_key = Key::ReturnType(ShortIdentifier::new(&func_def.name));
         let return_idx = bindings.key_to_idx(&return_key);

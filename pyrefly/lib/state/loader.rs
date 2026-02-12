@@ -6,6 +6,7 @@
  */
 
 use std::fmt::Debug;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -188,7 +189,10 @@ impl<T> FindingOrError<T> {
 #[derive(Debug)]
 pub struct LoaderFindCache {
     config: ArcId<ConfigFile>,
-    cache: LockedMap<(ModuleName, Option<ModulePath>), FindingOrError<ModulePath>>,
+    cache: LockedMap<
+        (ModuleName, Option<ModulePath>),
+        (FindingOrError<ModulePath>, Arc<Vec<PathBuf>>),
+    >,
     // If a python executable module (excludes .pyi) exists and differs from the imported python module, store it here
     executable_cache: LockedMap<(ModuleName, Option<ModulePath>), Option<ModulePath>>,
 }
@@ -239,9 +243,29 @@ impl LoaderFindCache {
     ) -> FindingOrError<ModulePath> {
         self.cache
             .ensure(&(module.dupe(), origin.cloned()), || {
-                find_import(&self.config, module, origin)
+                let phantom_paths = Vec::new();
+                let result = find_import(&self.config, module, origin, None);
+                (result, Arc::new(phantom_paths))
             })
             .0
+            .0
             .dupe()
+    }
+
+    #[allow(unused)] // will be used soon
+    pub fn find_import_with_phantom_paths(
+        &self,
+        module: ModuleName,
+        origin: Option<&ModulePath>,
+    ) -> (FindingOrError<ModulePath>, Arc<Vec<PathBuf>>) {
+        let cached = self
+            .cache
+            .ensure(&(module.dupe(), origin.cloned()), || {
+                let phantom_paths = Vec::new();
+                let result = find_import(&self.config, module, origin, None);
+                (result, Arc::new(phantom_paths))
+            })
+            .0;
+        (cached.0.dupe(), cached.1.dupe())
     }
 }

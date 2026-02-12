@@ -28,6 +28,7 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::Key;
+use crate::lsp::wasm::completion::RankedCompletion;
 use crate::types::types::Type;
 
 #[derive(Clone)]
@@ -302,12 +303,12 @@ impl<'a> super::Transaction<'a> {
         })
     }
 
-    pub(super) fn add_dict_key_completions(
+    pub(crate) fn add_dict_key_completions(
         &self,
         handle: &Handle,
         module: &ModModule,
         position: TextSize,
-        completions: &mut Vec<CompletionItem>,
+        completions: &mut Vec<RankedCompletion>,
     ) {
         let Some(context) = self.dict_key_literal_context(handle, module, position) else {
             return;
@@ -385,12 +386,12 @@ impl<'a> super::Transaction<'a> {
 
         for (label, ty_opt) in suggestions {
             let detail = ty_opt.as_ref().map(|ty| ty.to_string());
-            completions.push(CompletionItem {
+            completions.push(RankedCompletion::new(CompletionItem {
                 label,
                 detail,
                 kind: Some(CompletionItemKind::FIELD),
                 ..Default::default()
-            });
+            }));
         }
     }
 }

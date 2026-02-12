@@ -120,12 +120,11 @@ impl FunctionRef {
         assert_decorated_function_in_context(function, context);
         assert!(should_export_decorated_function(function, context));
         let name = function.metadata().kind.function_name().into_owned();
-        let display_range = context.module_info.display_range(function.id_range());
         FunctionRef {
             module_id: context.module_id,
             module_name: context.module_info.name(),
             function_id: FunctionId::Function {
-                location: PysaLocation::new(display_range),
+                location: PysaLocation::from_text_range(function.id_range(), &context.module_info),
             },
             function_name: name,
         }
@@ -686,15 +685,17 @@ impl FunctionNode {
         match self {
             FunctionNode::DecoratedFunction(function) => match &function.undecorated.defining_cls {
                 Some(cls) => ScopeParent::Class {
-                    location: PysaLocation::new(
-                        context.module_info.display_range(cls.qname().range()),
+                    location: PysaLocation::from_text_range(
+                        cls.qname().range(),
+                        &context.module_info,
                     ),
                 },
                 None => get_scope_parent(&context.ast, &context.module_info, function.id_range()),
             },
             FunctionNode::ClassField { class, .. } => ScopeParent::Class {
-                location: PysaLocation::new(
-                    context.module_info.display_range(class.qname().range()),
+                location: PysaLocation::from_text_range(
+                    class.qname().range(),
+                    &context.module_info,
                 ),
             },
         }

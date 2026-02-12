@@ -906,6 +906,95 @@ def g(x: object, y: type[Any]) -> None:
 );
 
 testcase!(
+    test_isinstance_type_negative_no_narrow,
+    r#"
+from typing import assert_type
+
+def f(cls: type[int], x: int | str) -> None:
+    if isinstance(x, cls):
+        assert_type(x, int)
+    else:
+        # cls might be a subclass of int, so x can still be an int here
+        assert_type(x, int | str)
+"#,
+);
+
+testcase!(
+    test_isinstance_type_negative_partial_narrow,
+    r#"
+from typing import assert_type
+
+def f(cls: type[int], x: int | str | bytes) -> None:
+    if isinstance(x, (cls, str)):
+        assert_type(x, int | str)
+    else:
+        # cls might be a subclass of int, so x can still be an int here
+        assert_type(x, int | bytes)
+
+def g(cls: type[int], x: int | str | bytes) -> None:
+    if isinstance(x, cls | str):
+        assert_type(x, int | str)
+    else:
+        # cls might be a subclass of int, so x can still be an int here
+        assert_type(x, int | bytes)
+"#,
+);
+
+testcase!(
+    test_is_not_instance_no_narrow,
+    r#"
+from typing import assert_type
+
+def f(cls: type[int], x: int | str) -> None:
+    if not isinstance(x, cls):
+        # cls might be a subclass of int, so x can still be an int here
+        assert_type(x, int | str)
+    "#,
+);
+
+testcase!(
+    test_is_not_instance_alias,
+    r#"
+from typing import TypeAlias, assert_type
+
+X1 = int
+def f(x: int | str) -> None:
+    if not isinstance(x, X1):
+        assert_type(x, str)
+
+X2: TypeAlias = int
+def g(x: int | str) -> None:
+    if not isinstance(x, X2):
+        assert_type(x, str)
+    "#,
+);
+
+testcase!(
+    test_is_not_instance_of_final_class,
+    r#"
+from typing import assert_type, final
+@final
+class C: ...
+def f(cls: type[C], x: C | int):
+    if not isinstance(x, cls):
+        # Because `C` is final, we can assume that `cls` is exactly `C` and has been narrowed away
+        assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_not_issubclass_no_narrow,
+    r#"
+from typing import assert_type
+
+def f(cls: type[int], x: type[int] | type[str]):
+    if not issubclass(x, cls):
+        # cls might be a subclass of int, so x can still be int here
+        assert_type(x, type[int] | type[str])
+    "#,
+);
+
+testcase!(
     test_issubclass_union,
     r#"
 from typing import assert_type
@@ -1699,6 +1788,32 @@ def test(x: Literal["foo", 1] | Color | bool | None, y: object, z: Literal["f", 
         assert_type(y, Literal[1, Color.RED, True])
     else:
         assert_type(y, object)
+
+def test_type_objects(x: type[object]) -> None:
+    if x in (int, float):
+        assert_type(x, type[int] | type[float])
+
+def test_type_objects_not_in(x: type[int] | type[float] | type[str]) -> None:
+    if x not in (int, float):
+        assert_type(x, type[int] | type[float] | type[str])
+    else:
+        assert_type(x, type[int] | type[float])
+
+def test_type_objects_in_union(x: type[int] | type[float] | type[str]) -> None:
+    if x in (int, float):
+        assert_type(x, type[int] | type[float])
+    else:
+        assert_type(x, type[int] | type[float] | type[str])
+
+def test_type_objects_mixed_with_literals(x: type[int] | type[float] | None, y: Literal[1] | type[int] | type[str]) -> None:
+    if x in (int, None):
+        assert_type(x, type[int] | None)
+    else:
+        assert_type(x, type[int] | type[float])
+    if y in (1, int):
+        assert_type(y, Literal[1] | type[int])
+    else:
+        assert_type(y, type[int] | type[str])
 "#,
 );
 
@@ -2574,6 +2689,20 @@ assert_type(is_str("hello"), bool)
 );
 
 testcase!(
+    test_typeguard_bad_specialization_no_duplicate,
+    r#"
+from typing import TypeGuard
+
+def f[T: str](x: T) -> TypeGuard[T]:
+    return True
+
+def g(x: int | str):
+    if f(x):  # E: `int | str` is not assignable to upper bound `str` of type variable `T`
+        pass
+    "#,
+);
+
+testcase!(
     test_isinstance_invalid_special_form,
     r#"
 from typing import Final
@@ -2624,5 +2753,17 @@ def test2(arg: Mapping[str, int] | Iterable[tuple[str, int]]) -> None:
         assert_type(arg, Iterable[tuple[str, int]])
     else:
         assert_type(arg, Mapping[str, int] | Mapping[tuple[str, int], Any])
+    "#,
+);
+
+testcase!(
+    test_narrow_sequence_to_tuple,
+    r#"
+from typing import Any, Sequence, assert_type
+
+def f(inputs: Sequence[int]):
+    assert isinstance(inputs, tuple)
+    for x in inputs:
+        assert_type(x, int)
     "#,
 );
