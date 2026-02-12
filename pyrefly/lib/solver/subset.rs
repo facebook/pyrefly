@@ -946,17 +946,18 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
     }
 
-    fn can_be_recursive(&self, ty: &Type) -> bool {
-        match ty {
-            Type::ClassType(cls) => self.type_order.is_protocol(cls.class_object()),
-            Type::UntypedAlias(_) => true,
+    fn can_be_recursive(&self, t1: &Type, t2: &Type) -> bool {
+        match (t1, t2) {
+            // We only care if the RHS is a protocol
+            (_, Type::ClassType(cls)) => self.type_order.is_protocol(cls.class_object()),
+            (Type::UntypedAlias(_), _) | (_, Type::UntypedAlias(_)) => true,
             _ => false,
         }
     }
 
     /// Implementation of subset equality for Type, other than Var.
     pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
-        let recursive_check = if self.can_be_recursive(got) || self.can_be_recursive(want) {
+        let recursive_check = if self.can_be_recursive(got, want) {
             Some((got.clone(), want.clone()))
         } else {
             None
