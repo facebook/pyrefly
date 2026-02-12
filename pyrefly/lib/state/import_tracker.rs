@@ -118,6 +118,12 @@ impl ImportTracker {
         self.alias_for(module).is_some() || self.has_canonical(module)
     }
 
+    /// Returns the alias for a module if it was imported as `import module as alias`.
+    /// If a parent module was aliased, returns the alias with the remaining suffix.
+    pub fn alias_for_module(&self, module: ModuleName) -> Option<String> {
+        self.alias_for(module)
+    }
+
     fn alias_for(&self, module: ModuleName) -> Option<String> {
         let target = module.as_str();
         for (alias_module, alias_name) in &self.alias_modules {
