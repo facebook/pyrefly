@@ -636,10 +636,12 @@ impl Playground {
             .map(|(info, hints)| {
                 hints.into_map(|hint| {
                     let position = Position::from_display_pos(info.display_pos(hint.position));
-                    InlayHint {
-                        label: hint.label,
-                        position,
-                    }
+                    let label = hint
+                        .label_parts
+                        .iter()
+                        .map(|(text, _)| text.as_str())
+                        .collect::<String>();
+                    InlayHint { label, position }
                 })
             })
             .unwrap_or_default()

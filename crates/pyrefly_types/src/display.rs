@@ -190,6 +190,15 @@ impl<'a> TypeDisplayContext<'a> {
         self.stdlib = Some(stdlib);
     }
 
+    /// Modules referenced while formatting types with module-qualified names.
+    pub fn referenced_modules(&self) -> SmallSet<ModuleName> {
+        let mut modules = SmallSet::new();
+        for module in self.modules.borrow().iter() {
+            modules.insert(module.dupe());
+        }
+        modules
+    }
+
     /// Get the QName for a special form, enabling go-to-definition functionality.
     fn get_special_form_qname(&self, name: &str) -> Option<&QName> {
         self.stdlib.and_then(|s| s.special_form_qname(name))

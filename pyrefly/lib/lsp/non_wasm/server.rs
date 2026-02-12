@@ -3782,13 +3782,12 @@ impl Server {
         let res = t
             .into_iter()
             .filter_map(|hint_data| {
-                let text_size = hint_data.position;
                 let label_parts = hint_data.label_parts;
                 // If the url is a notebook cell, filter out inlay hints for other cells
-                if info.to_cell_for_lsp(hint.position) != maybe_cell_idx {
+                if info.to_cell_for_lsp(hint_data.position) != maybe_cell_idx {
                     return None;
                 }
-                let position = info.to_lsp_position(hint.position);
+                let position = info.to_lsp_position(hint_data.position);
                 // The range is half-open, so the end position is exclusive according to the spec.
                 if position >= range.start && position < range.end {
                     let label = InlayHintLabel::LabelParts(
