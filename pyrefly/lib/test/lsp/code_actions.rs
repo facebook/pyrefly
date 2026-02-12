@@ -463,6 +463,13 @@ fn compute_convert_star_import_actions(
     let module_info = transaction.get_module_info(handle).unwrap();
     let actions = transaction
         .convert_star_import_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
 fn compute_convert_import_actions(
     code_by_module: &[(&'static str, &str)],
     module_name: &'static str,
