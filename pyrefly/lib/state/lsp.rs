@@ -2044,6 +2044,7 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(|(title, module, range, insert_text, _, _)| (title, module, range, insert_text))
             .collect();
+        actions.extend(generate_actions);
         actions.extend(other_actions);
         (!actions.is_empty()).then_some(actions)
     }

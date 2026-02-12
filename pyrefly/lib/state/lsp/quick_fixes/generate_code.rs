@@ -26,9 +26,12 @@ pub(crate) fn generate_code_actions(
     if name.is_empty() {
         return None;
     }
-    let statement_range = find_enclosing_statement_range(ast, selection)?;
-    let (statement_indent, insert_position) =
-        line_indent_and_start(module_info.contents(), statement_range.start())?;
+    let (statement_indent, insert_position) = match find_enclosing_statement_range(ast, selection)
+        .and_then(|range| line_indent_and_start(module_info.contents(), range.start()))
+    {
+        Some(result) => result,
+        None => line_indent_and_start(module_info.contents(), selection.start())?,
+    };
     let insert_range = TextRange::at(insert_position, TextSize::new(0));
 
     let variable_text = format!("{statement_indent}{name} = None\n");
