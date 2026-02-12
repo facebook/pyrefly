@@ -8,6 +8,7 @@
  */
 
 import {ExtensionContext, workspace} from 'vscode';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   CancellationToken,
@@ -112,23 +113,93 @@ function getRunTerminal(cwd?: string): vscode.Terminal {
   return runTerminal;
 }
 
-async function runTestAtLocation(args: {
-  uri?: string;
-  position?: {line: number; character: number};
-}) {
-  if (!args.uri || !args.position) {
+function moduleNameFromPath(uri: vscode.Uri): string | undefined {
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+  if (!workspaceFolder) {
+    return undefined;
+  }
+  let relativePath = path.relative(workspaceFolder.uri.fsPath, uri.fsPath);
+  if (relativePath.startsWith('..')) {
+    return undefined;
+  }
+  if (relativePath.endsWith('.py')) {
+    relativePath = relativePath.slice(0, -3);
+  }
+  return relativePath
+    .split(path.sep)
+    .filter(part => part.length > 0)
+    .join('.');
+}
+
+async function runTestAtLocation(
+  args: {
+    uri?: string;
+    position?: {line: number; character: number};
+    testName?: string;
+    className?: string;
+    isUnittest?: boolean;
+  },
+  pythonExtension: PythonExtension,
+) {
+  if (!args.uri) {
     return;
   }
   const uri = vscode.Uri.parse(args.uri);
-  const document = await vscode.workspace.openTextDocument(uri);
-  const editor = await vscode.window.showTextDocument(document, {preview: false});
-  const position = new vscode.Position(
-    args.position.line,
-    args.position.character,
+  const envPath = await pythonExtension.environments.getActiveEnvironmentPath(
+    uri,
   );
-  editor.selection = new vscode.Selection(position, position);
-  editor.revealRange(new vscode.Range(position, position));
-  await vscode.commands.executeCommand('testing.runAtCursor');
+  const pythonPath = envPath.path;
+  const interpreter = pythonPath.length > 0 ? pythonPath : 'python';
+  const cwd = vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath;
+  const terminal = getRunTerminal(cwd);
+
+  const className = args.className;
+  const testName = args.testName;
+  const isUnittest = args.isUnittest === true;
+
+  let command: string | undefined;
+  if (isUnittest) {
+    const moduleName = moduleNameFromPath(uri);
+    if (moduleName) {
+      let target = moduleName;
+      if (className) {
+        target = `${target}.${className}`;
+      }
+      if (testName) {
+        target = `${target}.${testName}`;
+      }
+      command = `${shellQuote(interpreter)} -m unittest ${shellQuote(target)}`;
+    } else {
+      command = `${shellQuote(interpreter)} -m unittest ${shellQuote(uri.fsPath)}`;
+    }
+  } else {
+    let nodeId = uri.fsPath;
+    if (className) {
+      nodeId = `${nodeId}::${className}`;
+    }
+    if (testName) {
+      nodeId = `${nodeId}::${testName}`;
+    }
+    command = `${shellQuote(interpreter)} -m pytest ${shellQuote(nodeId)}`;
+  }
+
+  if (!command && args.position) {
+    const document = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(document, {
+      preview: false,
+    });
+    const position = new vscode.Position(
+      args.position.line,
+      args.position.character,
+    );
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position));
+    await vscode.commands.executeCommand('testing.runAtCursor');
+    return;
+  }
+
+  terminal.show(true);
+  terminal.sendText(command ?? `${shellQuote(interpreter)} -m pytest`);
 }
 
 async function runMainFile(
@@ -295,7 +366,16 @@ export async function activate(context: ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('pyrefly.runTest', async args => {
-      await runTestAtLocation(args as {uri?: string; position?: {line: number; character: number}});
+      await runTestAtLocation(
+        args as {
+          uri?: string;
+          position?: {line: number; character: number};
+          testName?: string;
+          className?: string;
+          isUnittest?: boolean;
+        },
+        pythonExtension,
+      );
     }),
   );
 

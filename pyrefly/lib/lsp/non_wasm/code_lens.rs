@@ -23,10 +23,13 @@ pub enum CodeLensKind {
     Test,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct CodeLensEntry {
     pub range: TextRange,
     pub kind: CodeLensKind,
+    pub test_name: Option<String>,
+    pub class_name: Option<String>,
+    pub is_unittest: bool,
 }
 
 impl<'a> Transaction<'a> {
@@ -42,22 +45,34 @@ fn collect_module_entries(stmts: &[Stmt], entries: &mut Vec<CodeLensEntry>) {
     for stmt in stmts {
         match stmt {
             Stmt::FunctionDef(func) => {
-                maybe_push_test(entries, func.name.as_str(), func.name.range);
+                maybe_push_test(entries, func.name.as_str(), func.name.range, None, false);
             }
             Stmt::ClassDef(class_def) => {
-                if is_test_class(class_def) {
+                let is_unittest = is_unittest_class(class_def);
+                if is_test_class(class_def, is_unittest) {
                     entries.push(CodeLensEntry {
                         range: class_def.name.range,
                         kind: CodeLensKind::Test,
+                        test_name: None,
+                        class_name: Some(class_def.name.as_str().to_owned()),
+                        is_unittest,
                     });
                 }
-                collect_class_entries(&class_def.body, entries);
+                collect_class_entries(
+                    &class_def.body,
+                    entries,
+                    class_def.name.as_str(),
+                    is_unittest,
+                );
             }
             Stmt::If(stmt_if) => {
                 if is_main_guard(&stmt_if.test) {
                     entries.push(CodeLensEntry {
                         range: stmt_if.range,
                         kind: CodeLensKind::Run,
+                        test_name: None,
+                        class_name: None,
+                        is_unittest: false,
                     });
                 }
             }
@@ -66,19 +81,39 @@ fn collect_module_entries(stmts: &[Stmt], entries: &mut Vec<CodeLensEntry>) {
     }
 }
 
-fn collect_class_entries(stmts: &[Stmt], entries: &mut Vec<CodeLensEntry>) {
+fn collect_class_entries(
+    stmts: &[Stmt],
+    entries: &mut Vec<CodeLensEntry>,
+    class_name: &str,
+    is_unittest: bool,
+) {
     for stmt in stmts {
         if let Stmt::FunctionDef(func) = stmt {
-            maybe_push_test(entries, func.name.as_str(), func.name.range);
+            maybe_push_test(
+                entries,
+                func.name.as_str(),
+                func.name.range,
+                Some(class_name.to_owned()),
+                is_unittest,
+            );
         }
     }
 }
 
-fn maybe_push_test(entries: &mut Vec<CodeLensEntry>, name: &str, range: TextRange) {
+fn maybe_push_test(
+    entries: &mut Vec<CodeLensEntry>,
+    name: &str,
+    range: TextRange,
+    class_name: Option<String>,
+    is_unittest: bool,
+) {
     if is_test_name(name) {
         entries.push(CodeLensEntry {
             range,
             kind: CodeLensKind::Test,
+            test_name: Some(name.to_owned()),
+            class_name,
+            is_unittest,
         });
     }
 }
@@ -87,10 +122,14 @@ fn is_test_name(name: &str) -> bool {
     name.starts_with("test_")
 }
 
-fn is_test_class(class_def: &StmtClassDef) -> bool {
+fn is_test_class(class_def: &StmtClassDef, is_unittest: bool) -> bool {
     if class_def.name.as_str().starts_with("Test") {
         return true;
     }
+    is_unittest
+}
+
+fn is_unittest_class(class_def: &StmtClassDef) -> bool {
     class_def.bases().iter().any(is_unittest_base)
 }
 

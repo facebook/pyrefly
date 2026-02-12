@@ -8,6 +8,7 @@
 use lsp_types::CodeLens;
 use lsp_types::Url;
 use lsp_types::request::CodeLensRequest;
+use serde_json::Value;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
@@ -42,7 +43,9 @@ fn test_code_lens_for_tests_and_main() {
             };
 
             let mut has_run = false;
-            let mut test_lines = Vec::new();
+            let mut pytest_test = false;
+            let mut unittest_test = false;
+            let mut top_level_test = false;
             for lens in lenses {
                 let Some(command) = lens.command else {
                     continue;
@@ -51,11 +54,26 @@ fn test_code_lens_for_tests_and_main() {
                     has_run |= lens.range.start.line == 17;
                 }
                 if command.command == "pyrefly.runTest" && command.title == "Test" {
-                    test_lines.push(lens.range.start.line);
+                    let args = command.arguments.unwrap_or_default();
+                    let Some(Value::Object(obj)) = args.get(0) else {
+                        continue;
+                    };
+                    let is_unittest = obj
+                        .get("isUnittest")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let test_name = obj.get("testName").and_then(Value::as_str);
+                    let class_name = obj.get("className").and_then(Value::as_str);
+                    match (is_unittest, class_name, test_name) {
+                        (false, Some("TestPytest"), Some("test_method")) => pytest_test = true,
+                        (true, Some("MyTestCase"), Some("test_unittest")) => unittest_test = true,
+                        (false, None, Some("test_top_level")) => top_level_test = true,
+                        _ => {}
+                    }
                 }
             }
 
-            has_run && test_lines.contains(&6) && test_lines.contains(&13)
+            has_run && pytest_test && unittest_test && top_level_test
         })
         .unwrap();
 

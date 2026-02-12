@@ -3867,17 +3867,28 @@ impl Server {
                     "pyrefly.runMain",
                     Some(vec![serde_json::json!({ "uri": uri.to_string() })]),
                 ),
-                CodeLensKind::Test => (
-                    "Test",
-                    "pyrefly.runTest",
-                    Some(vec![serde_json::json!({
-                        "uri": uri.to_string(),
-                        "position": {
+                CodeLensKind::Test => {
+                    let mut args = serde_json::Map::new();
+                    args.insert("uri".to_owned(), serde_json::json!(uri.to_string()));
+                    args.insert(
+                        "position".to_owned(),
+                        serde_json::json!({
                             "line": range.start.line,
                             "character": range.start.character,
-                        },
-                    })]),
-                ),
+                        }),
+                    );
+                    if let Some(test_name) = entry.test_name {
+                        args.insert("testName".to_owned(), serde_json::json!(test_name));
+                    }
+                    if let Some(class_name) = entry.class_name {
+                        args.insert("className".to_owned(), serde_json::json!(class_name));
+                    }
+                    args.insert(
+                        "isUnittest".to_owned(),
+                        serde_json::json!(entry.is_unittest),
+                    );
+                    ("Test", "pyrefly.runTest", Some(vec![Value::Object(args)]))
+                }
             };
             lenses.push(CodeLens {
                 range,
