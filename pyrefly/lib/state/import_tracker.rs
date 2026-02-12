@@ -178,6 +178,7 @@ pub fn format_type_for_annotation(ty: &Type) -> (String, SmallSet<ModuleName>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::literal::LitStyle;
 
     #[test]
     fn aliases_are_applied_at_boundaries_only() {
@@ -204,7 +205,7 @@ mod tests {
 
     #[test]
     fn format_type_collects_modules_but_returns_short_label() {
-        let ty = Type::LiteralString;
+        let ty = Type::LiteralString(LitStyle::Implicit);
         let (text, modules) = format_type_for_annotation(&ty);
         assert_eq!(text, "LiteralString");
         assert!(modules.contains(&ModuleName::from_str("typing")));
