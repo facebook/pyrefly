@@ -174,6 +174,6 @@ fn is_name_dunder_name(expr: &Expr) -> bool {
 fn is_main_string(expr: &Expr) -> bool {
     matches!(
         expr,
-        Expr::StringLiteral(ExprStringLiteral { value, .. }) if value.to_string() == "__main__"
+        Expr::StringLiteral(ExprStringLiteral { value, .. }) if value.to_str() == "__main__"
     )
 }
