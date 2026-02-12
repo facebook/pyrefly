@@ -34,6 +34,7 @@ import {
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
 let traceOutputChannel: vscode.OutputChannel;
+let runTerminal: vscode.Terminal | undefined;
 
 /// Get a setting at the path, or throw an error if it's not set.
 function requireSetting<T>(path: string): T {
@@ -89,6 +90,65 @@ async function overridePythonPath(
     }),
   );
   return newResult;
+}
+
+function shellQuote(value: string): string {
+  if (value.length === 0) {
+    return "''";
+  }
+  if (process.platform === 'win32') {
+    return `"${value.replace(/"/g, '\\"')}"`;
+  }
+  return "'" + value.replace(/'/g, "'\"'\"'") + "'";
+}
+
+function getRunTerminal(cwd?: string): vscode.Terminal {
+  if (!runTerminal) {
+    runTerminal = vscode.window.createTerminal({
+      name: 'Pyrefly Run',
+      cwd,
+    });
+  }
+  return runTerminal;
+}
+
+async function runTestAtLocation(args: {
+  uri?: string;
+  position?: {line: number; character: number};
+}) {
+  if (!args.uri || !args.position) {
+    return;
+  }
+  const uri = vscode.Uri.parse(args.uri);
+  const document = await vscode.workspace.openTextDocument(uri);
+  const editor = await vscode.window.showTextDocument(document, {preview: false});
+  const position = new vscode.Position(
+    args.position.line,
+    args.position.character,
+  );
+  editor.selection = new vscode.Selection(position, position);
+  editor.revealRange(new vscode.Range(position, position));
+  await vscode.commands.executeCommand('testing.runAtCursor');
+}
+
+async function runMainFile(
+  args: {uri?: string},
+  pythonExtension: PythonExtension,
+) {
+  if (!args.uri) {
+    return;
+  }
+  const uri = vscode.Uri.parse(args.uri);
+  const envPath = await pythonExtension.environments.getActiveEnvironmentPath(
+    uri,
+  );
+  const pythonPath = envPath.path;
+  const interpreter = pythonPath.length > 0 ? pythonPath : 'python';
+  const command = `${shellQuote(interpreter)} ${shellQuote(uri.fsPath)}`;
+  const cwd = vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath;
+  const terminal = getRunTerminal(cwd);
+  terminal.show(true);
+  terminal.sendText(command);
 }
 
 export async function activate(context: ExtensionContext) {
@@ -233,6 +293,18 @@ export async function activate(context: ExtensionContext) {
     }),
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('pyrefly.runTest', async args => {
+      await runTestAtLocation(args as {uri?: string; position?: {line: number; character: number}});
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('pyrefly.runMain', async args => {
+      await runMainFile(args as {uri?: string}, pythonExtension);
+    }),
+  );
+
   // When our extension is activated, make sure ms-python knows
   // TODO(kylei): remove this hack once ms-python has this behavior
   await triggerMsPythonRefreshLanguageServers();
@@ -278,6 +350,10 @@ export function deactivate(): Thenable<void> | undefined {
   }
   if (traceOutputChannel) {
     traceOutputChannel.dispose();
+  }
+  if (runTerminal) {
+    runTerminal.dispose();
+    runTerminal = undefined;
   }
   return client.stop();
 }

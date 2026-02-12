@@ -64,6 +64,16 @@
                 "title": "Unfold All Docstrings",
                 "category": "pyrefly",
                 "command": "pyrefly.unfoldAllDocstrings"
+            },
+            {
+                "title": "Run File",
+                "category": "pyrefly",
+                "command": "pyrefly.runMain"
+            },
+            {
+                "title": "Run Test",
+                "category": "pyrefly",
+                "command": "pyrefly.runTest"
             }
         ],
         "semanticTokenScopes": [

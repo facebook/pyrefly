@@ -220,6 +220,8 @@ pub struct DisabledLanguageServices {
     #[serde(default)]
     pub document_symbol: bool,
     #[serde(default)]
+    pub code_lens: bool,
+    #[serde(default)]
     pub semantic_tokens: bool,
     #[serde(default)]
     pub implementation: bool,
@@ -242,6 +244,7 @@ impl DisabledLanguageServices {
             "textDocument/hover" => self.hover,
             "textDocument/inlayHint" => self.inlay_hint,
             "textDocument/documentSymbol" => self.document_symbol,
+            "textDocument/codeLens" => self.code_lens,
             "textDocument/semanticTokens/full" | "textDocument/semanticTokens/range" => {
                 self.semantic_tokens
             }
