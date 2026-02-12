@@ -192,7 +192,20 @@ async function runTestAtLocation(
       }
       command = `${shellQuote(interpreter)} -m unittest ${shellQuote(target)}`;
     } else {
-      command = `${shellQuote(interpreter)} -m unittest ${shellQuote(uri.fsPath)}`;
+      if (args.position) {
+        const document = await vscode.workspace.openTextDocument(uri);
+        const editor = await vscode.window.showTextDocument(document, {
+          preview: false,
+        });
+        const position = new vscode.Position(
+          args.position.line,
+          args.position.character,
+        );
+        editor.selection = new vscode.Selection(position, position);
+        editor.revealRange(new vscode.Range(position, position));
+        await vscode.commands.executeCommand('testing.runAtCursor');
+      }
+      return;
     }
   } else {
     let nodeId = uri.fsPath;
