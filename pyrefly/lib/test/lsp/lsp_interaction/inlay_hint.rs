@@ -23,45 +23,18 @@ fn test_inlay_hint_default_config() {
             ..Default::default()
         })
         .unwrap();
+    interaction.client.did_open("inlay_hint_test.py");
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([
-            {
-                "label":" -> tuple[Literal[1], Literal[2]]",
-                "position":{"character":21,"line":6},
-                "textEdits":[{
-                    "newText":" -> tuple[Literal[1], Literal[2]]",
-                    "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
-                },
-                {
-                    "newText":"import typing\n",
-                    "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
-                }]
-            },
-            {
-                "label":": tuple[Literal[1], Literal[2]]",
-                "position":{"character":6,"line":11},
-                "textEdits":[{
-                    "newText":": tuple[Literal[1], Literal[2]]",
-                    "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
-                },
-                {
-                    "newText":"import typing\n",
-                    "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
-                }]
-            },
-            {
-                "label":" -> Literal[0]",
-                "position":{"character":15,"line":14},
-                "textEdits":[{
-                    "newText":" -> Literal[0]",
-                    "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
-                },
-                {
-                    "newText":"import typing\n",
-                    "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
-                }]
+    interaction
+        .client
+        .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 3 {
+                return false;
             }
 
             let hint0 = &hints[0];
@@ -231,34 +204,30 @@ fn test_inlay_hint_disable_variables() {
                 return false;
             }
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([{
-            "label":" -> tuple[Literal[1], Literal[2]]",
-            "position":{"character":21,"line":6},
-            "textEdits":[{
-                "newText":" -> tuple[Literal[1], Literal[2]]",
-                "range":{"end":{"character":21,"line":6},"start":{"character":21,"line":6}}
-            },
-            {
-                "newText":"import typing\n",
-                "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
-            }]
-        },
-        {
-            "label":" -> Literal[0]",
-            "position":{"character":15,"line":14},
-            "textEdits":[{
-                "newText":" -> Literal[0]",
-                "range":{"end":{"character":15,"line":14},"start":{"character":15,"line":14}}
-            },
-            {
-                "newText":"import typing\n",
-                "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
-            }]
-        }])),
-        error: None,
-    });
+            let hint0 = &hints[0];
+            if hint0.position.line != 6 || hint0.position.character != 21 {
+                return false;
+            }
+            if !check_inlay_hint_label_values(
+                hint0,
+                &[
+                    (" -> ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            ) {
+                return false;
+            }
 
             let hint1 = &hints[1];
             if hint1.position.line != 14 || hint1.position.character != 15 {
@@ -312,22 +281,30 @@ fn test_inlay_hint_disable_returns() {
                 return false;
             }
 
-    interaction.client.expect_response(Response {
-        id: interaction.server.current_request_id(),
-        result: Some(serde_json::json!([{
-            "label":": tuple[Literal[1], Literal[2]]",
-            "position":{"character":6,"line":11},
-            "textEdits":[{
-                "newText":": tuple[Literal[1], Literal[2]]",
-                "range":{"end":{"character":6,"line":11},"start":{"character":6,"line":11}}
-            },
-            {
-                "newText":"import typing\n",
-                "range":{"end":{"character":0,"line":6},"start":{"character":0,"line":6}}
-            }]
-        }])),
-        error: None,
-    });
+            let hint0 = &hints[0];
+            if hint0.position.line != 11 || hint0.position.character != 6 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint0,
+                &[
+                    (": ", false),
+                    ("tuple", true),
+                    ("[", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("1", false),
+                    ("]", false),
+                    (", ", false),
+                    ("Literal", true),
+                    ("[", false),
+                    ("2", false),
+                    ("]", false),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
 
     interaction.shutdown().unwrap();
 }
