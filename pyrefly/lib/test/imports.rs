@@ -1155,3 +1155,13 @@ X = 10  # E: Cannot assign to `X` because it is imported as final
 Y = 10  # E: Cannot assign to `Y` because it is imported as final
 "#,
 );
+
+testcase!(
+    test_modify_imported_as_final_value,
+    env_final_value(),
+    r#"
+from foo import X as x, Y as y
+x = 10  # E: Cannot assign to `x` because it is imported as final
+y = 10  # E: Cannot assign to `y` because it is imported as final
+"#,
+);
