@@ -29,7 +29,12 @@ fn generate_inlay_hint_report(code: &str, hint_config: InlayHintConfig) -> Strin
         {
             report.push_str(&code_frame_of_source_at_position(code, hint.position));
             report.push_str(" inlay-hint: `");
-            report.push_str(&hint.label);
+            let label = hint
+                .label_parts
+                .iter()
+                .map(|(text, _)| text.as_str())
+                .collect::<String>();
+            report.push_str(&label);
             report.push_str("`\n\n");
         }
         report.push('\n');
