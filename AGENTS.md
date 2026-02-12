@@ -100,6 +100,7 @@ the project root. BUCK files are not exported to GitHub, so:
   you are confident the feature is complete.
 - By default, `test.py` auto-detects the build tool based on BUCK file presence.
   You can override this with `--mode buck` or `--mode cargo`.
+- For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
   `./test.py --no-test --no-conformance`
 
