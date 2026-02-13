@@ -105,6 +105,13 @@ pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<
 }
 
 impl<'a> Transaction<'a> {
+    fn label_parts_for_display(
+        ty: &Type,
+        stdlib: &crate::types::stdlib::Stdlib,
+    ) -> Vec<(String, Option<TextRangeWithModule>)> {
+        ty.get_types_with_locations(Some(stdlib))
+    }
+
     fn render_type_hint(
         &self,
         ty: &Type,
@@ -189,13 +196,9 @@ impl<'a> Transaction<'a> {
         let import_tracker = ast_ref.map(ImportTracker::from_ast);
         let make_type_hint =
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {
-                let type_parts = ty.get_types_with_locations(Some(&stdlib));
+                let type_parts = Self::label_parts_for_display(ty, &stdlib);
                 let label_parts = once((prefix.to_owned(), None))
-                    .chain(
-                        type_parts
-                            .iter()
-                            .map(|(text, loc)| (text.clone(), loc.clone())),
-                    )
+                    .chain(type_parts.into_iter())
                     .collect();
                 let rendered = insertable
                     .then(|| self.render_type_hint(ty, handle, import_tracker.as_ref(), ast_ref));
