@@ -26,6 +26,7 @@ dupe = "0.9.1"
 enum-iterator = "2.3.0"
 faster-hex = "0.6.1"
 fuzzy-matcher = "0.3.7"
+fxhash = "0.2.1"
 indicatif = { version = "0.18.3", features = ["futures", "improved_unicode", "rayon", "tokio"] }
 itertools = "0.14.0"
 lsp-server = "0.7.9"

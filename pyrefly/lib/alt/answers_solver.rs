@@ -10,7 +10,6 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -20,6 +19,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use dupe::IterDupedExt;
+use fxhash::FxHashMap;
 use itertools::Itertools;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::calculation::ProposalResult;
@@ -158,7 +158,7 @@ pub struct CalcStack {
     stack: RefCell<Vec<CalcId>>,
     scc_stack: RefCell<Vec<Scc>>,
     /// Reverse lookup of `stack`, to enable O(1) access for a given CalcId.
-    position_of: RefCell<HashMap<CalcId, Vec1<usize>>>,
+    position_of: RefCell<FxHashMap<CalcId, Vec1<usize>>>,
     /// SCCs that completed during `on_calculation_finished` but haven't been
     /// batch-committed yet. Drained by `get_idx` after each frame completes.
     pending_completed_sccs: RefCell<Vec<Scc>>,
@@ -169,7 +169,7 @@ impl CalcStack {
         Self {
             stack: RefCell::new(Vec::new()),
             scc_stack: RefCell::new(Vec::new()),
-            position_of: RefCell::new(HashMap::new()),
+            position_of: RefCell::new(FxHashMap::default()),
             pending_completed_sccs: RefCell::new(Vec::new()),
         }
     }
