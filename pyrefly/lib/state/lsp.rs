@@ -2772,6 +2772,46 @@ impl<'a> Transaction<'a> {
         import_format: ImportFormat,
         options: CompletionOptions,
     ) -> (Vec<CompletionItem>, bool) {
+        self.completion_with_incomplete_impl(
+            handle,
+            position,
+            import_format,
+            options,
+            None::<fn(&CompletionItem) -> Option<usize>>,
+        )
+    }
+
+    pub fn completion_with_incomplete_mru<F>(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        import_format: ImportFormat,
+        options: CompletionOptions,
+        mru_index: F,
+    ) -> (Vec<CompletionItem>, bool)
+    where
+        F: FnMut(&CompletionItem) -> Option<usize>,
+    {
+        self.completion_with_incomplete_impl(
+            handle,
+            position,
+            import_format,
+            options,
+            Some(mru_index),
+        )
+    }
+
+    fn completion_with_incomplete_impl<F>(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        import_format: ImportFormat,
+        options: CompletionOptions,
+        mru_index: Option<F>,
+    ) -> (Vec<CompletionItem>, bool)
+    where
+        F: FnMut(&CompletionItem) -> Option<usize>,
+    {
         // Check if position is in a disabled range (comments)
         if let Some(module) = self.get_module_info(handle) {
             let disabled_ranges = Self::comment_ranges_for_module(&module);
@@ -2780,8 +2820,13 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        let (mut results, is_incomplete) =
-            self.completion_sorted_opt_with_incomplete(handle, position, import_format, options);
+        let (mut results, is_incomplete) = self.completion_sorted_opt_with_incomplete(
+            handle,
+            position,
+            import_format,
+            options,
+            mru_index,
+        );
         results.sort_by(|item1, item2| {
             item1
                 .sort_text

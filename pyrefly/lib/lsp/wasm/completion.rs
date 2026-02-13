@@ -83,39 +83,45 @@ impl RankedCompletion {
 }
 
 /// All completion ranking logic lives here. Assigns `sort_text` to each item
-/// based on its source classification, name prefix, and compatibility.
-fn assign_sort_text(ranked: &mut RankedCompletion) {
+/// based on its source classification, name prefix, compatibility, and MRU rank.
+fn assign_sort_text(ranked: &mut RankedCompletion, mru_rank: Option<usize>) {
     let is_deprecated = ranked
         .item
         .tags
         .as_ref()
         .is_some_and(|tags| tags.contains(&CompletionItemTag::DEPRECATED));
 
-    if is_deprecated {
-        ranked.item.sort_text = Some("9".to_owned());
-        return;
-    }
-
-    let base = match ranked.source {
-        CompletionSource::AutoimportPrivate => "4b",
-        CompletionSource::AutoimportPublic => "4a",
-        CompletionSource::Reexport => "1",
-        CompletionSource::Local => {
-            if ranked.item.label.starts_with("__") {
-                "3"
-            } else if ranked.item.label.starts_with('_') {
-                "2"
-            } else {
-                "0"
+    let base = if is_deprecated {
+        "9".to_owned()
+    } else {
+        let base = match ranked.source {
+            CompletionSource::AutoimportPrivate => "4b",
+            CompletionSource::AutoimportPublic => "4a",
+            CompletionSource::Reexport => "1",
+            CompletionSource::Local => {
+                if ranked.item.label.starts_with("__") {
+                    "3"
+                } else if ranked.item.label.starts_with('_') {
+                    "2"
+                } else {
+                    "0"
+                }
             }
+        };
+        if ranked.is_incompatible {
+            format!("{base}z")
+        } else {
+            base.to_owned()
         }
     };
 
-    ranked.item.sort_text = Some(if ranked.is_incompatible {
-        format!("{base}z")
+    if let Some(rank) = mru_rank {
+        let rank = rank.min(9999);
+        ranked.item.sort_text = Some(format!("{base}.{rank:04}.{}", ranked.item.label));
+        ranked.item.preselect = if rank == 0 { Some(true) } else { None };
     } else {
-        base.to_owned()
-    });
+        ranked.item.sort_text = Some(base);
+    }
 }
 
 fn autoimport_source(module_name: &str) -> CompletionSource {
@@ -714,13 +720,17 @@ impl Transaction<'_> {
     }
 
     /// Core completion implementation returning items and incomplete flag.
-    pub(crate) fn completion_sorted_opt_with_incomplete(
+    pub(crate) fn completion_sorted_opt_with_incomplete<F>(
         &self,
         handle: &Handle,
         position: TextSize,
         import_format: ImportFormat,
         options: CompletionOptions,
-    ) -> (Vec<CompletionItem>, bool) {
+        mut mru_index: Option<F>,
+    ) -> (Vec<CompletionItem>, bool)
+    where
+        F: FnMut(&CompletionItem) -> Option<usize>,
+    {
         let CompletionOptions {
             supports_completion_item_details,
             complete_function_parens,
@@ -940,7 +950,10 @@ impl Transaction<'_> {
             Self::add_function_call_parens(&mut result, supports_snippet_completions);
         }
         for ranked in &mut result {
-            assign_sort_text(ranked);
+            let mru_rank = mru_index
+                .as_mut()
+                .map(|index| (*index)(&ranked.item).unwrap_or(9999).min(9999));
+            assign_sort_text(ranked, mru_rank);
         }
         (result.into_iter().map(|r| r.item).collect(), is_incomplete)
     }
