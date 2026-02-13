@@ -232,14 +232,6 @@ impl CalcStack {
             SccState::NotInScc | SccState::RevisitingInProgress => {
                 match calculation.propose_calculation() {
                     ProposalResult::Calculated(v) => BindingAction::Calculated(v),
-                    ProposalResult::CycleBroken(_) => {
-                        // Recursive placeholders are never stored in Calculation cells;
-                        // they live only in SCC-local NodeState::HasPlaceholder.
-                        unreachable!(
-                            "CycleBroken should never be returned from propose_calculation \
-                             because record_cycle is never called"
-                        )
-                    }
                     ProposalResult::CycleDetected => {
                         let current_cycle = self.current_cycle().unwrap();
                         match self.on_scc_detected(current_cycle) {
@@ -296,12 +288,6 @@ impl CalcStack {
                         // Participant already computed: no data to store.
                         self.on_calculation_finished(&current, None, None);
                         BindingAction::Calculated(v)
-                    }
-                    ProposalResult::CycleBroken(_) => {
-                        unreachable!(
-                            "CycleBroken should never be returned from propose_calculation \
-                             because record_cycle is never called"
-                        )
                     }
                 }
             }

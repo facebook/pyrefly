@@ -40,13 +40,11 @@ enum Status<T, R> {
 /// The result of proposing a calculation in the current thread. See
 /// `propose_calculation` for more details on how it is used.
 #[derive(Clone, Debug)]
-pub enum ProposalResult<T, R> {
+pub enum ProposalResult<T> {
     /// The current thread may proceed with the calculation.
     Calculatable,
-    /// The current thread has encountered a cycle; no recursive placeholder exists yet.
+    /// The current thread has encountered a cycle.
     CycleDetected,
-    /// The current thread has encountered a cycle, this is the recursive placeholder.
-    CycleBroken(R),
     /// A final result is already available.
     Calculated(T),
 }
@@ -77,18 +75,16 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
             _ => None,
         }
     }
-    /// Look up the current status of the calculation as a `LookupResult`, under
+
+    /// Look up the current status of the calculation as a `ProposalResult`, under
     /// the assumption that the current thread will begin the calculation if
-    /// the result is `Status::Calculatable`.
+    /// the result is `Calculatable`.
     /// - If the calculation can proceed (the current thread has not encountered
     ///   a cycle and no other thread has already computed a result), we will
     ///   mark the current thread as active and return `Calculatable`.
-    /// - If the current thread encountered a cycle and no recursive placeholder
-    ///   is yet recorded, return `CycleDetected`.
-    /// - If the current thread encountered a cycle and a recursive placeholder
-    ///   exists, return `CycleBroken(recursive_placeholder)`.
-    /// - If the calculation has already be completed, return `Calculated(value)`.
-    pub fn propose_calculation(&self) -> ProposalResult<T, R> {
+    /// - If the current thread encountered a cycle, return `CycleDetected`.
+    /// - If the calculation has already been completed, return `Calculated(value)`.
+    pub fn propose_calculation(&self) -> ProposalResult<T> {
         let mut lock = self.0.lock();
         match &mut *lock {
             Status::NotCalculated => {
@@ -96,14 +92,11 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
                 ProposalResult::Calculatable
             }
             Status::Calculating(calc) => {
-                let (rec, threads) = &mut **calc;
+                let (_rec, threads) = &mut **calc;
                 if threads.insert(thread::current().id()) {
                     ProposalResult::Calculatable
                 } else {
-                    match rec {
-                        None => ProposalResult::CycleDetected,
-                        Some(r) => ProposalResult::CycleBroken(r.dupe()),
-                    }
+                    ProposalResult::CycleDetected
                 }
             }
             Status::Calculated(v) => ProposalResult::Calculated(v.dupe()),
@@ -159,7 +152,7 @@ impl<T: Dupe, R: Dupe> Calculation<T, R> {
                 Some(value)
             }
             ProposalResult::Calculated(v) => Some(v.dupe()),
-            ProposalResult::CycleDetected | ProposalResult::CycleBroken(..) => None,
+            ProposalResult::CycleDetected => None,
         }
     }
 }
