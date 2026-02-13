@@ -1685,15 +1685,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         m: &BoundMethod,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Option<Type> {
-        self.bind_function(&m.func.clone().as_type(), &m.obj, is_subset, false)
+        self.bind_function(&m.func.clone().as_type(), &m.obj, false, is_subset)
     }
 
     pub fn bind_dunder_new(&self, t: &Type, cls: ClassType) -> Option<Type> {
         self.bind_function(
             t,
             &self.heap.mk_type_form(self.heap.mk_self_type(cls)),
-            &mut |a, b| self.is_subset_eq(a, b),
             false,
+            &mut |a, b| self.is_subset_eq(a, b),
         )
     }
 
@@ -1701,35 +1701,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Strips the first parameter and sets the return type to the first param's type.
     /// Does not instantiate type variables (they should be inferred at the call site).
     pub fn bind_dunder_init_for_callable(&self, m: &BoundMethod) -> Option<Type> {
-        self.bind_function(
-            &m.func.clone().as_type(),
-            &m.obj,
-            &mut |_, _| false, // Not used when for_constructor=true
-            true,
-        )
+        let mut func_type = m.func.clone().as_type();
+        Self::set_constructor_return_type(&mut func_type);
+        self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)
+    }
+
+    /// For each callable in the type, set its return type to the type of its first
+    /// parameter (i.e. `self`). Used when converting constructors to standalone callables.
+    fn set_constructor_return_type(t: &mut Type) {
+        t.visit_toplevel_callable_mut(&mut |c: &mut Callable| {
+            if let Some(self_type) = c.get_first_param() {
+                c.ret = self_type;
+            }
+        });
     }
 
     /// If this is an unbound callable (i.e., a callable that is not BoundMethod), strip the first parameter.
     /// If it is generic, we use the bound object to instantiate type variables in the first argument.
     ///
-    /// If `for_constructor` is true, skip type variable instantiation and set the return type
-    /// to the first param's type (for converting constructors to callables).
+    /// If `skip_instantiation` is true, skip type variable instantiation (used for converting
+    /// constructors to callables, where type variables should be inferred at the call site).
     fn bind_function(
         &self,
         t: &Type,
         obj: &Type,
+        skip_instantiation: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
-        for_constructor: bool,
     ) -> Option<Type> {
         let mut owner = Owner::new();
         match t {
             Type::Forall(forall) => match &forall.body {
                 Forallable::Callable(c) => c.split_first_param(&mut owner).map(|(param, c)| {
-                    let c = if for_constructor {
-                        Callable {
-                            ret: param.clone(),
-                            ..c
-                        }
+                    let c = if skip_instantiation {
+                        c
                     } else {
                         self.instantiate_callable_self(&forall.tparams, obj, param, c, is_subset)
                     };
@@ -1740,11 +1744,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }),
                 Forallable::Function(f) => {
                     f.signature.split_first_param(&mut owner).map(|(param, c)| {
-                        let c = if for_constructor {
-                            Callable {
-                                ret: param.clone(),
-                                ..c
-                            }
+                        let c = if skip_instantiation {
+                            c
                         } else {
                             self.instantiate_callable_self(
                                 &forall.tparams,
@@ -1765,50 +1766,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Forallable::TypeAlias(_) => None,
             },
-            Type::Callable(callable) => callable.split_first_param(&mut owner).map(|(param, c)| {
-                let c = if for_constructor {
-                    Callable {
-                        ret: param.clone(),
-                        ..c
-                    }
-                } else {
-                    c
-                };
-                self.heap.mk_callable_from(c)
+            Type::Callable(callable) => callable
+                .split_first_param(&mut owner)
+                .map(|(_, c)| self.heap.mk_callable_from(c)),
+            Type::Function(func) => func.signature.split_first_param(&mut owner).map(|(_, c)| {
+                self.heap.mk_function(Function {
+                    signature: c,
+                    metadata: func.metadata.clone(),
+                })
             }),
-            Type::Function(func) => {
-                func.signature
-                    .split_first_param(&mut owner)
-                    .map(|(param, c)| {
-                        let c = if for_constructor {
-                            Callable {
-                                ret: param.clone(),
-                                ..c
-                            }
-                        } else {
-                            c
-                        };
-                        self.heap.mk_function(Function {
-                            signature: c,
-                            metadata: func.metadata.clone(),
-                        })
-                    })
-            }
             Type::Overload(overload) => overload
                 .signatures
                 .try_mapped_ref(|x| match x {
                     OverloadType::Function(f) => f
                         .signature
                         .split_first_param(&mut owner)
-                        .map(|(param, c)| {
-                            let c = if for_constructor {
-                                Callable {
-                                    ret: param.clone(),
-                                    ..c
-                                }
-                            } else {
-                                c
-                            };
+                        .map(|(_, c)| {
                             OverloadType::Function(Function {
                                 signature: c,
                                 metadata: f.metadata.clone(),
@@ -1820,11 +1793,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .signature
                         .split_first_param(&mut owner)
                         .map(|(param, c)| {
-                            let c = if for_constructor {
-                                Callable {
-                                    ret: param.clone(),
-                                    ..c
-                                }
+                            let c = if skip_instantiation {
+                                c
                             } else {
                                 self.instantiate_callable_self(
                                     &forall.tparams,
