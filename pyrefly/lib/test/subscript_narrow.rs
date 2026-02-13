@@ -216,6 +216,20 @@ def use2(mapping: dict[str, int | None]) -> None:
 );
 
 testcase!(
+    test_dict_contains_literal_key_get_narrow,
+    r#"
+from typing import assert_type
+
+def use(options: dict[str, str]) -> None:
+    if "contains" in options:
+        assert_type(options.get("contains"), str)
+        assert_type(options["contains"], str)
+    else:
+        assert_type(options.get("contains"), str | None)
+"#,
+);
+
+testcase!(
     test_typeddict_get_literal_key_narrow,
     TestEnv::new().enable_not_required_key_access_error(),
     r#"

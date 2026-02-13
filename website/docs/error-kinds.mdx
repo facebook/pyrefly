@@ -747,6 +747,27 @@ def two_tups[*Xs, *Ys](xs: tuple[*Xs], ys: tuple[*Ys]) -> None:
   ...
 ```
 
+## invalid-variance
+
+An error caused by a type variable being used in a position incompatible with its declared variance.
+
+For example, a covariant type variable cannot be used in a contravariant position (such as a method parameter), and a contravariant type variable cannot be used in a covariant position (such as a return type).
+
+```python
+from typing import TypeVar, Generic
+
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class BadCovariant(Generic[T_co]):
+    # Error: covariant type variable used in contravariant position
+    def set_value(self, value: T_co) -> None: ...
+
+class BadContravariant(Generic[T_contra]):
+    # Error: contravariant type variable used in covariant position
+    def get_value(self) -> T_contra: ...
+```
+
 ## invalid-yield
 
 This error arises when `yield` is used in a way that is not allowed. For example:
@@ -1317,6 +1338,21 @@ async def bar():
 
 ## unused-ignore
 
-This error is raised when a `# pyre-ignore` comment is not used to suppress an error, and can be safely removed.
+This error is raised when a `# pyrefly: ignore` comment is not used to suppress an error, and can be safely removed.
 
 The default severity of this diagnostic is `ignore`.
+
+## variance-mismatch
+
+The inferred variance of a type variable does not match its declared variance. This warning is raised for protocols where the way a type variable is used implies a different variance than what was declared. For example, if a protocol only uses `T` in covariant positions but `T` is declared as invariant, this warning suggests declaring `T` as covariant.
+
+The default severity of this diagnostic is `warn`.
+
+```python
+from typing import Protocol, TypeVar
+
+T = TypeVar("T")
+
+class A(Protocol[T]):  # variance-mismatch: Type variable `T` in class `A` is declared as invariant, but could be covariant based on its usage
+    def f(self) -> T: ...
+```

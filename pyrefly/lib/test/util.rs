@@ -490,7 +490,7 @@ fn get_batched_lsp_operations_report_helper(
     assert_zero_errors: bool,
     get_report: impl Fn(&State, &Handle, TextSize) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, Require::indexing(), assert_zero_errors);
+    let (handles, state) = mk_multi_file_state(files, Require::Exports, assert_zero_errors);
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");
@@ -530,7 +530,7 @@ pub fn get_batched_lsp_operations_report_no_cursor(
     files: &[(&'static str, &str)],
     get_report: impl Fn(&State, &Handle) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, Require::indexing(), true);
+    let (handles, state) = mk_multi_file_state(files, Require::Exports, true);
     let mut report = String::new();
     for (name, _code) in files {
         report.push_str("# ");

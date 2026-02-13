@@ -1657,6 +1657,10 @@
           "spans": [
             {
               "length": 1,
+              "start": 36
+            },
+            {
+              "length": 1,
               "start": 69
             }
           ],
@@ -2003,6 +2007,16 @@
             "key": "classes.py"
           },
           "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 36
+              },
+              "target": {
+                "id": 0,
+                "key": "classes.T"
+              }
+            },
             {
               "source": {
                 "length": 1,

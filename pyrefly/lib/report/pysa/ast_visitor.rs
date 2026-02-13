@@ -322,10 +322,9 @@ fn visit_statement<V: AstScopedVisitor>(
                 if should_export_decorated_function(&decorated_function, module_context) {
                     Scope::ExportedFunction {
                         function_id: FunctionId::Function {
-                            location: PysaLocation::new(
-                                module_context
-                                    .module_info
-                                    .display_range(function_def.identifier()),
+                            location: PysaLocation::from_text_range(
+                                function_def.identifier().range(),
+                                &module_context.module_info,
                             ),
                         },
                         location: function_def.identifier().range(),

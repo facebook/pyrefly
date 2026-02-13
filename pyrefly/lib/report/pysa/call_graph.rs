@@ -214,12 +214,12 @@ impl ExpressionIdentifier {
     }
 
     fn regular(location: TextRange, module: &pyrefly_python::module::Module) -> Self {
-        ExpressionIdentifier::Regular(PysaLocation::new(module.display_range(location)))
+        ExpressionIdentifier::Regular(PysaLocation::from_text_range(location, module))
     }
 
     fn expr_name(expr: &ExprName, module: &pyrefly_python::module::Module) -> Self {
         ExpressionIdentifier::Identifier {
-            location: PysaLocation::new(module.display_range(expr.range())),
+            location: PysaLocation::from_text_range(expr.range(), module),
             identifier: expr.id.clone(),
         }
     }
@@ -1592,7 +1592,7 @@ impl ResolveCallResult {
 
 impl<'a> CallGraphVisitor<'a> {
     fn pysa_location(&self, location: TextRange) -> PysaLocation {
-        PysaLocation::new(self.module_context.module_info.display_range(location))
+        PysaLocation::from_text_range(location, &self.module_context.module_info)
     }
 
     fn add_callees(
@@ -2004,9 +2004,9 @@ impl<'a> CallGraphVisitor<'a> {
                     TypedDict::TypedDict(inner) => {
                         call_targets_from_method_name_with_class(inner.class_object())
                     }
-                    TypedDict::Anonymous(..) => {
-                        MaybeResolved::Unresolved(UnresolvedReason::UnexpectedDefiningClass)
-                    }
+                    TypedDict::Anonymous(..) => call_targets_from_method_name_with_class(
+                        self.module_context.stdlib.dict_object(),
+                    ),
                 }
             }
             _ => MaybeResolved::Unresolved(UnresolvedReason::UnexpectedDefiningClass),
@@ -2043,7 +2043,10 @@ impl<'a> CallGraphVisitor<'a> {
             /* is_bound_method */ false,
             callee_expr_suffix,
             /* override_implicit_receiver*/ None,
-            /* override_is_direct_call */ None,
+            // override_is_direct_call. Dynamic dispatch only goes up the MRO not down.
+            // Hence any overriding methods cannot be called. For example, `A()` shouldn't
+            // be considered as potentially calling `B.__new__` when B is a subclass of A.
+            Some(true),
             /* unknown_callee_as_direct_call */ true,
             exclude_object_methods,
         )
@@ -2110,7 +2113,12 @@ impl<'a> CallGraphVisitor<'a> {
                                 /* is_bound_method */ true,
                                 callee_expr_suffix,
                                 /* override_implicit_receiver*/ None,
-                                /* override_is_direct_call */ None,
+                                // override_is_direct_call. Dynamic dispatch only goes up the MRO not down.
+                                // Hence any overriding methods cannot be called. For example, `A()` shouldn't
+                                // be considered as potentially calling `B.__new__` when B is a subclass of A.
+                                // TODO: However this is not true for example in `@classmethod def make(cls): cls()`
+                                // where `cls` can be a subclass.
+                                Some(true),
                                 /* unknown_callee_as_direct_call */ true,
                                 exclude_object_methods,
                             )
@@ -2280,7 +2288,11 @@ impl<'a> CallGraphVisitor<'a> {
                     })
                     .unwrap()
             }
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(class_type, _))) => {
+            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(
+                class_type,
+                _,
+                _,
+            ))) => {
                 // Constructing a class instance.
                 let (init_method, new_method) = self
                     .module_context
@@ -2578,12 +2590,13 @@ impl<'a> CallGraphVisitor<'a> {
                          attr_type: callee_type,
                      }| {
                         // TODO(T252263933): Need more precise return types for `__getitem__` in `typed_dict.py`
-                        let return_type =
-                            if let Some(return_type) = callee_type.callable_return_type() {
-                                ScalarTypeProperties::from_type(&return_type, self.module_context)
-                            } else {
-                                ScalarTypeProperties::none()
-                            };
+                        let return_type = if let Some(return_type) =
+                            callee_type.callable_return_type(self.module_context.answers.heap())
+                        {
+                            ScalarTypeProperties::from_type(&return_type, self.module_context)
+                        } else {
+                            ScalarTypeProperties::none()
+                        };
                         DunderAttrCallees {
                             callees: self.resolve_pyrefly_target(
                                 Some(target),
@@ -2698,27 +2711,27 @@ impl<'a> CallGraphVisitor<'a> {
         // Check for global variable accesses
         let (global_targets, go_to_definitions): (Vec<GlobalVariableRef>, Vec<_>) =
             go_to_definitions.into_iter().partition_map(|definition| {
-                let module_id = self
+                if let Some(module_id) = self
                     .module_context
                     .module_ids
                     .get(ModuleKey::from_module(&definition.module))
-                    .unwrap();
-
-                self.global_variables
-                    .get_for_module(module_id)
-                    .and_then(|globals| {
-                        globals.get(ShortIdentifier::from_text_range(
-                            definition.definition_range,
-                        ))
-                    })
-                    .map(|global_var| {
-                        Either::Left(GlobalVariableRef {
-                            module_id,
-                            module_name: definition.module.name(),
-                            name: global_var.name.clone(),
+                    && let Some(global_variable_base) = self
+                        .global_variables
+                        .get_for_module(module_id)
+                        .and_then(|globals| {
+                            globals.get(ShortIdentifier::from_text_range(
+                                definition.definition_range,
+                            ))
                         })
+                {
+                    Either::Left(GlobalVariableRef {
+                        module_id,
+                        module_name: definition.module.name(),
+                        name: global_variable_base.name.clone(),
                     })
-                    .unwrap_or(Either::Right(definition))
+                } else {
+                    Either::Right(definition)
+                }
             });
 
         // Go-to-definition always resolves to the property getters, even when used as a left hand side of an
@@ -2985,7 +2998,7 @@ impl<'a> CallGraphVisitor<'a> {
     // for a call expression, we could simply query its type (e.g., query the type of `c(1)`).
     fn get_return_type_for_callee(&self, callee_type: Option<&Type>) -> ScalarTypeProperties {
         callee_type
-            .and_then(|ty| ty.callable_return_type())
+            .and_then(|ty| ty.callable_return_type(self.module_context.answers.heap()))
             .map(|return_type| ScalarTypeProperties::from_type(&return_type, self.module_context))
             .unwrap_or(ScalarTypeProperties::none())
     }
@@ -3271,7 +3284,9 @@ impl<'a> CallGraphVisitor<'a> {
         } = self.call_targets_from_magic_dunder_attr(
             /* base */
             iter_callee_type
-                .and_then(|iter_callee_type| iter_callee_type.callable_return_type())
+                .and_then(|iter_callee_type| {
+                    iter_callee_type.callable_return_type(self.module_context.answers.heap())
+                })
                 .as_ref(),
             /* attribute */ Some(&next_callee_name),
             iter_range,
@@ -3647,13 +3662,30 @@ impl<'a> CallGraphVisitor<'a> {
             && let Some((return_inner_class, argument_mapping)) =
                 extract_inner_class_and_argument_mapping(return_expression_type)
         {
+            debug_println!(
+                self.debug,
+                "Found function with graphql decorator `{:#?}` and a return expression with (inner) class `{}`",
+                graphql_decorator,
+                return_inner_class
+            );
             let class_context = get_context_from_class(&return_inner_class, self.module_context);
             let has_graphql_decorator = |function_node: &FunctionNode| match function_node {
                 FunctionNode::DecoratedFunction(decorated_function) => decorated_function
                     .undecorated
                     .decorators
                     .iter()
-                    .any(|(ty, _)| graphql_decorator.matches_function_type(ty)),
+                    .any(|(ty, _)| {
+                        let result = graphql_decorator.matches_function_type(ty);
+                        if result {
+                            debug_println!(
+                                self.debug,
+                                "Inner class has method `{:?}` with matching decorator `{:#?}`",
+                                decorated_function.undecorated,
+                                ty
+                            );
+                        }
+                        result
+                    }),
                 _ => false,
             };
             let callees: Vec<CallTarget<FunctionRef>> = return_inner_class
@@ -3680,7 +3712,9 @@ impl<'a> CallGraphVisitor<'a> {
                             /* return_type */
                             ScalarTypeProperties::none(),
                             /* callee_expr_suffix */ None,
-                            /* override_implicit_receiver */ None,
+                            // override_implicit_receiver. Since we rely on `argument_mapping` to match
+                            // argument positions, this should not interfere.
+                            Some(ImplicitReceiver::False),
                             /* override_is_direct_call */ None,
                             /* unknown_callee_as_direct_call */ true,
                         ))
@@ -3778,6 +3812,12 @@ impl<'a> CallGraphVisitor<'a> {
                     self.get_return_type_for_callee(expr_type().as_ref()), // This is the return type when `expr` is called
                 );
                 callees.strip_unresolved_if_called();
+                debug_println!(
+                    self.debug,
+                    "Resolved name `{}` into `{:#?}`",
+                    expr.display_with(self.module_context),
+                    callees
+                );
                 if !callees.is_empty() {
                     self.add_callees(
                         ExpressionIdentifier::expr_name(name, &self.module_context.module_info),
@@ -3803,6 +3843,12 @@ impl<'a> CallGraphVisitor<'a> {
                     assignment_targets(current_statement),
                 );
                 callees.strip_unresolved_if_called();
+                debug_println!(
+                    self.debug,
+                    "Resolved attribute `{}` into `{:#?}`",
+                    expr.display_with(self.module_context),
+                    callees
+                );
                 if !callees.is_empty() {
                     self.add_callees(
                         ExpressionIdentifier::regular(
@@ -3934,7 +3980,7 @@ impl<'a> CallGraphVisitor<'a> {
                 if should_export_decorated_function(&decorated_function, self.module_context) {
                     let return_type = decorated_function
                         .ty
-                        .callable_return_type()
+                        .callable_return_type(self.module_context.answers.heap())
                         .map_or(ScalarTypeProperties::none(), |type_| {
                             ScalarTypeProperties::from_type(&type_, self.module_context)
                         });
@@ -4128,6 +4174,12 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
                         .iter()
                         .find_map(|(callable_decorator, method_decorator)| {
                             if callable_decorator.matches_definition(&go_to_definition) {
+                                debug_println!(
+                                    self.debug,
+                                    "Function has graphql decorator `{:#?}`. We will look for decorator `{:#?}` on the return class",
+                                    callable_decorator,
+                                    method_decorator
+                                );
                                 Some(*method_decorator)
                             } else {
                                 None
@@ -4361,7 +4413,7 @@ pub fn resolve_decorator_callees(
         };
 
         if !callees.is_empty() {
-            let location = PysaLocation::new(context.module_info.display_range(range));
+            let location = PysaLocation::from_text_range(range, &context.module_info);
             assert!(
                 decorator_callees.insert(location, callees).is_none(),
                 "Found multiple decorators at the same location"

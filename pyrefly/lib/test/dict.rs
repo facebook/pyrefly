@@ -15,6 +15,21 @@ dict(x = 1, y = "test")
 );
 
 testcase!(
+    test_anonymous_typed_dict_union_promotion,
+    r#"
+from typing import assert_type
+
+def test(cond: bool):
+    x = {"a": 1, "b": "2"}
+    y = {"a": 1, "b": "2", "c": 3}
+    # we promote anonymous typed dicts when unioning
+    z = x if cond else y
+    assert_type(z["a"], int | str)
+    assert_type(z, dict[str, int | str])
+"#,
+);
+
+testcase!(
     test_unpack_empty,
     r#"
 from typing import assert_type
@@ -48,6 +63,6 @@ def bar(yes: bool) -> None:
     else:
         kwargs = {"goodbye": 1}
 
-    foo(**kwargs)  
+    foo(**kwargs)
 "#,
 );

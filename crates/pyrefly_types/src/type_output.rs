@@ -200,7 +200,6 @@ mod tests {
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::types::TArgs;
-    use crate::types::TParam;
     use crate::types::TParams;
 
     fn fake_class(name: &str, module: &str, range: u32) -> Class {
@@ -322,36 +321,30 @@ mod tests {
         let mut output = OutputWithLocations::new(&context);
 
         // Create TArgs with multiple type arguments
-        let tparam1 = TParam {
-            quantified: Quantified::new(
-                pyrefly_util::uniques::UniqueFactory::new().fresh(),
-                Name::new("T"),
-                QuantifiedKind::TypeVar,
-                None,
-                Restriction::Unrestricted,
-            ),
-            variance: PreInferenceVariance::Invariant,
-        };
-        let tparam2 = TParam {
-            quantified: Quantified::new(
-                pyrefly_util::uniques::UniqueFactory::new().fresh(),
-                Name::new("U"),
-                QuantifiedKind::TypeVar,
-                None,
-                Restriction::Unrestricted,
-            ),
-            variance: PreInferenceVariance::Invariant,
-        };
-        let tparam3 = TParam {
-            quantified: Quantified::new(
-                pyrefly_util::uniques::UniqueFactory::new().fresh(),
-                Name::new("V"),
-                QuantifiedKind::TypeVar,
-                None,
-                Restriction::Unrestricted,
-            ),
-            variance: PreInferenceVariance::Invariant,
-        };
+        let tparam1 = Quantified::new(
+            pyrefly_util::uniques::UniqueFactory::new().fresh(),
+            Name::new("T"),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
+        );
+        let tparam2 = Quantified::new(
+            pyrefly_util::uniques::UniqueFactory::new().fresh(),
+            Name::new("U"),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
+        );
+        let tparam3 = Quantified::new(
+            pyrefly_util::uniques::UniqueFactory::new().fresh(),
+            Name::new("V"),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
+        );
 
         let tparams = Arc::new(TParams::new(vec![tparam1, tparam2, tparam3]));
         let targs = TArgs::new(

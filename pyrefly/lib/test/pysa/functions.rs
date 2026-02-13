@@ -13,7 +13,6 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
 use pyrefly_types::class::ClassType;
-use pyrefly_types::types::Type;
 use ruff_python_ast::name::Name;
 
 use crate::report::pysa::call_graph::Target;
@@ -288,10 +287,13 @@ class MyClass:
                 vec![FunctionParameter::Pos {
                     name: "cls".into(),
                     annotation: PysaType::from_type(
-                        &Type::Type(Box::new(Type::ClassType(ClassType::new(
-                            get_class("test", "MyClass", context),
-                            Default::default(),
-                        )))),
+                        &context
+                            .answers
+                            .heap()
+                            .mk_type(context.answers.heap().mk_class_type(ClassType::new(
+                                get_class("test", "MyClass", context),
+                                Default::default(),
+                            ))),
                         context,
                     ),
                     required: true,
@@ -466,15 +468,16 @@ def foo(x: int) -> int:
     return x
 "#,
     &|context: &ModuleContext| {
+        let heap = context.answers.heap();
         let callable_int_to_int = PysaType::from_type(
-            &Type::Callable(Box::new(Callable::list(
+            &heap.mk_callable_from(Callable::list(
                 ParamList::new(vec![Param::PosOnly(
                     None,
-                    Type::ClassType(context.stdlib.int().clone()),
+                    heap.mk_class_type(context.stdlib.int().clone()),
                     Required::Required,
                 )]),
-                Type::ClassType(context.stdlib.int().clone()),
-            ))),
+                heap.mk_class_type(context.stdlib.int().clone()),
+            )),
             context,
         );
         vec![
@@ -529,14 +532,15 @@ def foo(x: int) -> int:
     return x
 "#,
     &|context: &ModuleContext| {
-        let callable_int_to_int = Type::Callable(Box::new(Callable::list(
+        let heap = context.answers.heap();
+        let callable_int_to_int = heap.mk_callable_from(Callable::list(
             ParamList::new(vec![Param::PosOnly(
                 None,
-                Type::ClassType(context.stdlib.int().clone()),
+                heap.mk_class_type(context.stdlib.int().clone()),
                 Required::Required,
             )]),
-            Type::ClassType(context.stdlib.int().clone()),
-        )));
+            heap.mk_class_type(context.stdlib.int().clone()),
+        ));
         vec![
             create_function_definition(
                 "decorator",
@@ -549,14 +553,14 @@ def foo(x: int) -> int:
                         required: true,
                     }],
                     PysaType::from_type(
-                        &Type::Callable(Box::new(Callable::list(
+                        &context.answers.heap().mk_callable_from(Callable::list(
                             ParamList::new(vec![Param::PosOnly(
                                 None,
                                 callable_int_to_int.clone(),
                                 Required::Required,
                             )]),
                             callable_int_to_int.clone(),
-                        ))),
+                        )),
                         context,
                     ),
                 )],
@@ -603,15 +607,16 @@ def foo(x: int) -> int:
     return x
 "#,
     &|context: &ModuleContext| {
+        let heap = context.answers.heap();
         let callable_int_to_int = PysaType::from_type(
-            &Type::Callable(Box::new(Callable::list(
+            &heap.mk_callable_from(Callable::list(
                 ParamList::new(vec![Param::PosOnly(
                     None,
-                    Type::ClassType(context.stdlib.int().clone()),
+                    heap.mk_class_type(context.stdlib.int().clone()),
                     Required::Required,
                 )]),
-                Type::ClassType(context.stdlib.int().clone()),
-            ))),
+                heap.mk_class_type(context.stdlib.int().clone()),
+            )),
             context,
         );
         vec![
@@ -1138,10 +1143,13 @@ class B(A):
                     vec![FunctionParameter::Pos {
                         name: "cls".into(),
                         annotation: PysaType::from_type(
-                            &Type::Type(Box::new(Type::ClassType(ClassType::new(
-                                get_class("test", "A", context),
-                                Default::default(),
-                            )))),
+                            &context
+                                .answers
+                                .heap()
+                                .mk_type(context.answers.heap().mk_class_type(ClassType::new(
+                                    get_class("test", "A", context),
+                                    Default::default(),
+                                ))),
                             context,
                         ),
                         required: true,
@@ -1161,10 +1169,13 @@ class B(A):
                     vec![FunctionParameter::Pos {
                         name: "cls".into(),
                         annotation: PysaType::from_type(
-                            &Type::Type(Box::new(Type::ClassType(ClassType::new(
-                                get_class("test", "B", context),
-                                Default::default(),
-                            )))),
+                            &context
+                                .answers
+                                .heap()
+                                .mk_type(context.answers.heap().mk_class_type(ClassType::new(
+                                    get_class("test", "B", context),
+                                    Default::default(),
+                                ))),
                             context,
                         ),
                         required: true,
@@ -1337,15 +1348,13 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
                             ),
                             required: true,
                         },
-                        FunctionParameter::Pos {
-                            name: "x".into(),
+                        FunctionParameter::VarArg {
+                            name: None,
                             annotation: PysaType::any_implicit(),
-                            required: true,
                         },
-                        FunctionParameter::Pos {
-                            name: "y".into(),
+                        FunctionParameter::Kwargs {
+                            name: None,
                             annotation: PysaType::any_implicit(),
-                            required: true,
                         },
                     ],
                     PysaType::none(),

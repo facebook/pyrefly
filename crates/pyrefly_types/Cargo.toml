@@ -2,14 +2,14 @@
 
 [package]
 name = "pyrefly_types"
-version = "0.50.1"
+version = "0.52.0"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
 license = "MIT"
 
 [dependencies]
-compact_str = "0.8.0"
+compact_str = { version = "0.8.0", features = ["serde"] }
 dupe = "0.9.1"
 itertools = "0.14.0"
 num-bigint = { version = "0.4.6", features = ["rand"] }
@@ -22,4 +22,4 @@ ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568
 ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "474b00568ad78f02ad8e19b8166cbeb6d69f8511" }
 starlark_map = "0.13.0"
 static_assertions = "1.1.0"
-vec1 = { version = "1", features = ["serde"] }
+vec1 = { version = "1.12.1", features = ["serde"] }

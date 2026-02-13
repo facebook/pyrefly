@@ -63,6 +63,10 @@ Coding style: All code must be clean, documented and minimal. That means:
 - Minimize the number of places `Expr` nodes are passed around and the number of
   times they are parsed. Generally, this means extracting semantic information
   as early as possible.
+- **Imports:** Always add `use` imports at the top of the file rather than using
+  inline qualified paths (e.g., write `use crate::foo::Bar;` and then `Bar`,
+  not `crate::foo::Bar` inline). The only exception is when there is a name
+  collision between two imports, which is rare.
 
 ## Development environments
 
@@ -96,6 +100,7 @@ the project root. BUCK files are not exported to GitHub, so:
   you are confident the feature is complete.
 - By default, `test.py` auto-detects the build tool based on BUCK file presence.
   You can override this with `--mode buck` or `--mode cargo`.
+- For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
   `./test.py --no-test --no-conformance`
 

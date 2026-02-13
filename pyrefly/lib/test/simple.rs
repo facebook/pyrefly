@@ -70,6 +70,19 @@ assert_type(y, int)
 );
 
 testcase!(
+    test_tstring,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from string.templatelib import Template
+from typing import assert_type
+
+v = 99
+template = t"hello{42}world{v}goodbye"
+assert isinstance(template, Template)
+"#,
+);
+
+testcase!(
     test_mypy_demo,
     r#"
 from typing import Any
@@ -354,10 +367,10 @@ testcase!(
 from typing import Final
 
 x: Final[int] = 0
-x = 1  # E: `x` is marked final
+x = 1  # E: Cannot assign to variable `x` because it is marked final
 
 y: Final = "foo"
-y = "bar"  # E: `y` is marked final
+y = "bar"  # E: Cannot assign to variable `y` because it is marked final
 "#,
 );
 
@@ -379,7 +392,7 @@ testcase!(
     r#"
 from typing import Final, TextIO
 x: Final[int] = 0
-x = 1  # E: `x` is marked final
+x = 1  # E: Cannot assign to variable `x` because it is marked final
 x += 1  # E: Cannot assign to variable `x` because it is marked final
 y = x = 3 # E: Cannot assign to variable `x` because it is marked final
 y = (x := 3) # E: Cannot assign to variable `x` because it is marked final

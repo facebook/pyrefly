@@ -774,3 +774,14 @@ class Ok1(Generic[T]):
         pass
 "#,
 );
+
+testcase!(
+    test_class_scoped_typevar_in_decorated_init,
+    r#"
+from typing import Any
+def decorate(f) -> Any: ...
+class A[T]:
+    @decorate
+    def __init__(self: A[T]): ...  # E: self type cannot reference class type parameter `T`
+    "#,
+);
